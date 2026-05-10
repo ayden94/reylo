@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+.vitest-cache/
+coverage/
+
+# Local agent / loop state — not part of the repo
+.claude/

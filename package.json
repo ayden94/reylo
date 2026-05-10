@@ -1,0 +1,51 @@
+{
+  "name": "lando",
+  "version": "0.0.0",
+  "description": "A type-safe ORM and schema kit for Postgres.",
+  "license": "MIT",
+  "author": "Colin McDonnell",
+  "type": "module",
+  "engines": {
+    "node": ">=24",
+    "pnpm": ">=10"
+  },
+  "packageManager": "pnpm@10.15.1",
+  "exports": {
+    ".": "./src/orm/index.ts",
+    "./schema": "./src/schema/index.ts",
+    "./schema-pg": "./src/schema-pg/index.ts",
+    "./cli": "./src/cli/index.ts",
+    "./lando-pg": "./src/lando-pg/index.ts"
+  },
+  "imports": {
+    "#schema": "./src/schema/index.ts",
+    "#schema/*": "./src/schema/*.ts",
+    "#schema-pg": "./src/schema-pg/index.ts",
+    "#schema-pg/*": "./src/schema-pg/*.ts",
+    "#orm": "./src/orm/index.ts",
+    "#orm/*": "./src/orm/*.ts",
+    "#cli": "./src/cli/index.ts",
+    "#cli/*": "./src/cli/*.ts",
+    "#lando-pg": "./src/lando-pg/index.ts",
+    "#lando-pg/*": "./src/lando-pg/*.ts",
+    "#test/*": "./tests/*.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "dependencies": {
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/pg": "^8.11.10",
+    "prettier": "^3.4.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.8"
+  }
+}
