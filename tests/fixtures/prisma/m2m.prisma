@@ -1,0 +1,11 @@
+model Movie {
+  id     Int      @id @default(autoincrement())
+  title  String
+  actors Person[]
+}
+
+model Person {
+  id       Int     @id @default(autoincrement())
+  name     String
+  acted_in Movie[]
+}

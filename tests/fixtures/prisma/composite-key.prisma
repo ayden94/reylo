@@ -1,0 +1,9 @@
+model OrderItem {
+  orderId    Int    @map("order_id")
+  productId  Int    @map("product_id")
+  quantity   Int    @default(1)
+
+  @@id([orderId, productId])
+  @@unique([orderId, productId])
+  @@index([productId])
+}

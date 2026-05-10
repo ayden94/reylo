@@ -151,22 +151,21 @@ function validateFieldType(
       return;
     }
     // The field name must be one of the two named sides of the relation.
-    const expected =
-      modelName === rel.from
-        ? rel.forwardName
-        : modelName === rel.to
-          ? rel.reverseName
-          : null;
-    if (expected === null) {
+    // For self-relations (from === to) either name on the same model is
+    // acceptable.
+    const valid: string[] = [];
+    if (modelName === rel.from) valid.push(rel.forwardName);
+    if (modelName === rel.to) valid.push(rel.reverseName);
+    if (valid.length === 0) {
       errors.push({
         code: ERROR_CODES.L_SCHEMA_RELATION_MISMATCH,
         message: `model "${modelName}" is neither side of relation "${rel.name}"`,
         path,
       });
-    } else if (expected !== field.name) {
+    } else if (!valid.includes(field.name)) {
       errors.push({
         code: ERROR_CODES.L_SCHEMA_RELATION_MISMATCH,
-        message: `field "${modelName}.${field.name}" should be named "${expected}" to match relation "${rel.name}"`,
+        message: `field "${modelName}.${field.name}" should be one of [${valid.join(', ')}] to match relation "${rel.name}"`,
         path,
       });
     }

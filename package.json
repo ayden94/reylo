@@ -28,6 +28,8 @@
     "#cli/*": "./src/cli/*.ts",
     "#lando-pg": "./src/lando-pg/index.ts",
     "#lando-pg/*": "./src/lando-pg/*.ts",
+    "#prisma": "./src/prisma/index.ts",
+    "#prisma/*": "./src/prisma/*.ts",
     "#test/*": "./tests/*.ts"
   },
   "scripts": {
@@ -38,6 +40,7 @@
     "format:check": "prettier --check ."
   },
   "dependencies": {
+    "@mrleebo/prisma-ast": "^0.15.0",
     "pg": "^8.13.1"
   },
   "devDependencies": {

@@ -1,0 +1,7 @@
+model Employee {
+  id        Int        @id @default(autoincrement())
+  name      String
+  managerId Int?       @map("manager_id")
+  manager   Employee?  @relation("Reports", fields: [managerId], references: [id])
+  reports   Employee[] @relation("Reports")
+}

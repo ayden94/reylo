@@ -1,0 +1,756 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`lowerPrisma — fixtures > composite-key: lowers and validates 1`] = `
+{
+  "enums": {},
+  "formatVersion": 1,
+  "metadata": {
+    "checksum": "",
+    "generatedAt": "2026-01-01T00:00:00.000Z",
+    "generatedBy": "lando@0.0.0-fixture",
+    "source": {
+      "kind": "prisma",
+      "path": "<inline>",
+    },
+  },
+  "models": {
+    "OrderItem": {
+      "fields": [
+        {
+          "attributes": {},
+          "columnName": "order_id",
+          "name": "orderId",
+          "nullable": false,
+          "type": {
+            "kind": "scalar",
+            "scalar": "int",
+          },
+        },
+        {
+          "attributes": {},
+          "columnName": "product_id",
+          "name": "productId",
+          "nullable": false,
+          "type": {
+            "kind": "scalar",
+            "scalar": "int",
+          },
+        },
+        {
+          "attributes": {},
+          "columnName": "quantity",
+          "default": {
+            "kind": "literal",
+            "value": 1,
+          },
+          "name": "quantity",
+          "nullable": false,
+          "type": {
+            "kind": "scalar",
+            "scalar": "int",
+          },
+        },
+      ],
+      "indexes": [
+        {
+          "fields": [
+            "productId",
+          ],
+          "unique": false,
+        },
+      ],
+      "name": "OrderItem",
+      "primaryKey": {
+        "fields": [
+          "orderId",
+          "productId",
+        ],
+      },
+      "tableName": "OrderItem",
+      "uniques": [
+        {
+          "fields": [
+            "orderId",
+            "productId",
+          ],
+        },
+      ],
+    },
+  },
+  "relations": [],
+}
+`;
+
+exports[`lowerPrisma — fixtures > enums: lowers and validates 1`] = `
+{
+  "enums": {
+    "Role": {
+      "name": "Role",
+      "values": [
+        "user",
+        "admin",
+        "guest",
+      ],
+    },
+  },
+  "formatVersion": 1,
+  "metadata": {
+    "checksum": "",
+    "generatedAt": "2026-01-01T00:00:00.000Z",
+    "generatedBy": "lando@0.0.0-fixture",
+    "source": {
+      "kind": "prisma",
+      "path": "<inline>",
+    },
+  },
+  "models": {
+    "Account": {
+      "fields": [
+        {
+          "attributes": {},
+          "columnName": "id",
+          "default": {
+            "kind": "uuid",
+          },
+          "name": "id",
+          "nullable": false,
+          "type": {
+            "kind": "scalar",
+            "scalar": "uuid",
+          },
+        },
+        {
+          "attributes": {
+            "maxLength": 255,
+          },
+          "columnName": "email",
+          "name": "email",
+          "nullable": false,
+          "type": {
+            "kind": "scalar",
+            "scalar": "string",
+          },
+        },
+        {
+          "attributes": {},
+          "columnName": "role",
+          "default": {
+            "kind": "literal",
+            "value": "user",
+          },
+          "name": "role",
+          "nullable": false,
+          "type": {
+            "enum": "Role",
+            "kind": "enum",
+          },
+        },
+        {
+          "attributes": {
+            "precision": {
+              "precision": 12,
+              "scale": 2,
+            },
+          },
+          "columnName": "balance",
+          "default": {
+            "kind": "literal",
+            "value": 0,
+          },
+          "name": "balance",
+          "nullable": false,
+          "type": {
+            "kind": "scalar",
+            "scalar": "decimal",
+          },
+        },
+      ],
+      "indexes": [],
+      "name": "Account",
+      "primaryKey": {
+        "fields": [
+          "id",
+        ],
+      },
+      "tableName": "Account",
+      "uniques": [
+        {
+          "fields": [
+            "email",
+          ],
+        },
+      ],
+    },
+  },
+  "relations": [],
+}
+`;
+
+exports[`lowerPrisma — fixtures > m2m: lowers and validates 1`] = `
+{
+  "enums": {},
+  "formatVersion": 1,
+  "metadata": {
+    "checksum": "",
+    "generatedAt": "2026-01-01T00:00:00.000Z",
+    "generatedBy": "lando@0.0.0-fixture",
+    "source": {
+      "kind": "prisma",
+      "path": "<inline>",
+    },
+  },
+  "models": {
+    "Movie": {
+      "fields": [
+        {
+          "attributes": {},
+          "columnName": "id",
+          "default": {
+            "kind": "autoincrement",
+          },
+          "name": "id",
+          "nullable": false,
+          "type": {
+            "kind": "scalar",
+            "scalar": "int",
+          },
+        },
+        {
+          "attributes": {},
+          "columnName": "title",
+          "name": "title",
+          "nullable": false,
+          "type": {
+            "kind": "scalar",
+            "scalar": "string",
+          },
+        },
+        {
+          "attributes": {
+            "array": true,
+          },
+          "columnName": "",
+          "name": "actors",
+          "nullable": false,
+          "type": {
+            "kind": "relation",
+            "relation": "MovieToPerson",
+          },
+        },
+      ],
+      "indexes": [],
+      "name": "Movie",
+      "primaryKey": {
+        "fields": [
+          "id",
+        ],
+      },
+      "tableName": "Movie",
+      "uniques": [],
+    },
+    "Person": {
+      "fields": [
+        {
+          "attributes": {},
+          "columnName": "id",
+          "default": {
+            "kind": "autoincrement",
+          },
+          "name": "id",
+          "nullable": false,
+          "type": {
+            "kind": "scalar",
+            "scalar": "int",
+          },
+        },
+        {
+          "attributes": {},
+          "columnName": "name",
+          "name": "name",
+          "nullable": false,
+          "type": {
+            "kind": "scalar",
+            "scalar": "string",
+          },
+        },
+        {
+          "attributes": {
+            "array": true,
+          },
+          "columnName": "",
+          "name": "acted_in",
+          "nullable": false,
+          "type": {
+            "kind": "relation",
+            "relation": "MovieToPerson",
+          },
+        },
+      ],
+      "indexes": [],
+      "name": "Person",
+      "primaryKey": {
+        "fields": [
+          "id",
+        ],
+      },
+      "tableName": "Person",
+      "uniques": [],
+    },
+  },
+  "relations": [
+    {
+      "fkColumns": [],
+      "forwardName": "actors",
+      "from": "Movie",
+      "kind": "many-to-many",
+      "name": "MovieToPerson",
+      "references": [],
+      "reverseName": "acted_in",
+      "to": "Person",
+    },
+  ],
+}
+`;
+
+exports[`lowerPrisma — fixtures > multiple-relations: lowers and validates 1`] = `
+{
+  "enums": {},
+  "formatVersion": 1,
+  "metadata": {
+    "checksum": "",
+    "generatedAt": "2026-01-01T00:00:00.000Z",
+    "generatedBy": "lando@0.0.0-fixture",
+    "source": {
+      "kind": "prisma",
+      "path": "<inline>",
+    },
+  },
+  "models": {
+    "Post": {
+      "fields": [
+        {
+          "attributes": {},
+          "columnName": "id",
+          "default": {
+            "kind": "autoincrement",
+          },
+          "name": "id",
+          "nullable": false,
+          "type": {
+            "kind": "scalar",
+            "scalar": "int",
+          },
+        },
+        {
+          "attributes": {},
+          "columnName": "author_id",
+          "name": "authorId",
+          "nullable": false,
+          "type": {
+            "kind": "scalar",
+            "scalar": "int",
+          },
+        },
+        {
+          "attributes": {},
+          "columnName": "editor_id",
+          "name": "editorId",
+          "nullable": true,
+          "type": {
+            "kind": "scalar",
+            "scalar": "int",
+          },
+        },
+        {
+          "attributes": {
+            "array": false,
+          },
+          "columnName": "",
+          "name": "author",
+          "nullable": false,
+          "type": {
+            "kind": "relation",
+            "relation": "Author",
+          },
+        },
+        {
+          "attributes": {
+            "array": false,
+          },
+          "columnName": "",
+          "name": "editor",
+          "nullable": true,
+          "type": {
+            "kind": "relation",
+            "relation": "Editor",
+          },
+        },
+      ],
+      "indexes": [],
+      "name": "Post",
+      "primaryKey": {
+        "fields": [
+          "id",
+        ],
+      },
+      "tableName": "Post",
+      "uniques": [],
+    },
+    "User": {
+      "fields": [
+        {
+          "attributes": {},
+          "columnName": "id",
+          "default": {
+            "kind": "autoincrement",
+          },
+          "name": "id",
+          "nullable": false,
+          "type": {
+            "kind": "scalar",
+            "scalar": "int",
+          },
+        },
+        {
+          "attributes": {
+            "array": true,
+          },
+          "columnName": "",
+          "name": "authoredPosts",
+          "nullable": false,
+          "type": {
+            "kind": "relation",
+            "relation": "Author",
+          },
+        },
+        {
+          "attributes": {
+            "array": true,
+          },
+          "columnName": "",
+          "name": "editedPosts",
+          "nullable": false,
+          "type": {
+            "kind": "relation",
+            "relation": "Editor",
+          },
+        },
+      ],
+      "indexes": [],
+      "name": "User",
+      "primaryKey": {
+        "fields": [
+          "id",
+        ],
+      },
+      "tableName": "User",
+      "uniques": [],
+    },
+  },
+  "relations": [
+    {
+      "fkColumns": [
+        "author_id",
+      ],
+      "forwardName": "author",
+      "from": "Post",
+      "kind": "one-to-many",
+      "name": "Author",
+      "references": [
+        "id",
+      ],
+      "reverseName": "authoredPosts",
+      "to": "User",
+    },
+    {
+      "fkColumns": [
+        "editor_id",
+      ],
+      "forwardName": "editor",
+      "from": "Post",
+      "kind": "one-to-many",
+      "name": "Editor",
+      "references": [
+        "id",
+      ],
+      "reverseName": "editedPosts",
+      "to": "User",
+    },
+  ],
+}
+`;
+
+exports[`lowerPrisma — fixtures > self-relation: lowers and validates 1`] = `
+{
+  "enums": {},
+  "formatVersion": 1,
+  "metadata": {
+    "checksum": "",
+    "generatedAt": "2026-01-01T00:00:00.000Z",
+    "generatedBy": "lando@0.0.0-fixture",
+    "source": {
+      "kind": "prisma",
+      "path": "<inline>",
+    },
+  },
+  "models": {
+    "Employee": {
+      "fields": [
+        {
+          "attributes": {},
+          "columnName": "id",
+          "default": {
+            "kind": "autoincrement",
+          },
+          "name": "id",
+          "nullable": false,
+          "type": {
+            "kind": "scalar",
+            "scalar": "int",
+          },
+        },
+        {
+          "attributes": {},
+          "columnName": "name",
+          "name": "name",
+          "nullable": false,
+          "type": {
+            "kind": "scalar",
+            "scalar": "string",
+          },
+        },
+        {
+          "attributes": {},
+          "columnName": "manager_id",
+          "name": "managerId",
+          "nullable": true,
+          "type": {
+            "kind": "scalar",
+            "scalar": "int",
+          },
+        },
+        {
+          "attributes": {
+            "array": false,
+          },
+          "columnName": "",
+          "name": "manager",
+          "nullable": true,
+          "type": {
+            "kind": "relation",
+            "relation": "Reports",
+          },
+        },
+        {
+          "attributes": {
+            "array": true,
+          },
+          "columnName": "",
+          "name": "reports",
+          "nullable": false,
+          "type": {
+            "kind": "relation",
+            "relation": "Reports",
+          },
+        },
+      ],
+      "indexes": [],
+      "name": "Employee",
+      "primaryKey": {
+        "fields": [
+          "id",
+        ],
+      },
+      "tableName": "Employee",
+      "uniques": [],
+    },
+  },
+  "relations": [
+    {
+      "fkColumns": [
+        "manager_id",
+      ],
+      "forwardName": "manager",
+      "from": "Employee",
+      "kind": "one-to-many",
+      "name": "Reports",
+      "references": [
+        "id",
+      ],
+      "reverseName": "reports",
+      "to": "Employee",
+    },
+  ],
+}
+`;
+
+exports[`lowerPrisma — fixtures > simple: lowers and validates 1`] = `
+{
+  "enums": {},
+  "formatVersion": 1,
+  "metadata": {
+    "checksum": "",
+    "generatedAt": "2026-01-01T00:00:00.000Z",
+    "generatedBy": "lando@0.0.0-fixture",
+    "source": {
+      "kind": "prisma",
+      "path": "<inline>",
+    },
+  },
+  "models": {
+    "Post": {
+      "fields": [
+        {
+          "attributes": {},
+          "columnName": "id",
+          "default": {
+            "kind": "autoincrement",
+          },
+          "name": "id",
+          "nullable": false,
+          "type": {
+            "kind": "scalar",
+            "scalar": "int",
+          },
+        },
+        {
+          "attributes": {},
+          "columnName": "title",
+          "name": "title",
+          "nullable": false,
+          "type": {
+            "kind": "scalar",
+            "scalar": "string",
+          },
+        },
+        {
+          "attributes": {},
+          "columnName": "author_id",
+          "name": "authorId",
+          "nullable": false,
+          "type": {
+            "kind": "scalar",
+            "scalar": "int",
+          },
+        },
+        {
+          "attributes": {
+            "array": false,
+          },
+          "columnName": "",
+          "name": "author",
+          "nullable": false,
+          "type": {
+            "kind": "relation",
+            "relation": "PostToUser",
+          },
+        },
+        {
+          "attributes": {},
+          "columnName": "publishedAt",
+          "name": "publishedAt",
+          "nullable": true,
+          "type": {
+            "kind": "scalar",
+            "scalar": "dateTime",
+          },
+        },
+      ],
+      "indexes": [
+        {
+          "fields": [
+            "authorId",
+          ],
+          "unique": false,
+        },
+      ],
+      "name": "Post",
+      "primaryKey": {
+        "fields": [
+          "id",
+        ],
+      },
+      "tableName": "Post",
+      "uniques": [
+        {
+          "fields": [
+            "title",
+            "authorId",
+          ],
+        },
+      ],
+    },
+    "User": {
+      "fields": [
+        {
+          "attributes": {},
+          "columnName": "id",
+          "default": {
+            "kind": "autoincrement",
+          },
+          "name": "id",
+          "nullable": false,
+          "type": {
+            "kind": "scalar",
+            "scalar": "int",
+          },
+        },
+        {
+          "attributes": {},
+          "columnName": "email",
+          "name": "email",
+          "nullable": false,
+          "type": {
+            "kind": "scalar",
+            "scalar": "string",
+          },
+        },
+        {
+          "attributes": {
+            "array": true,
+          },
+          "columnName": "",
+          "name": "posts",
+          "nullable": false,
+          "type": {
+            "kind": "relation",
+            "relation": "PostToUser",
+          },
+        },
+      ],
+      "indexes": [],
+      "name": "User",
+      "primaryKey": {
+        "fields": [
+          "id",
+        ],
+      },
+      "tableName": "users",
+      "uniques": [
+        {
+          "fields": [
+            "email",
+          ],
+        },
+      ],
+    },
+  },
+  "relations": [
+    {
+      "fkColumns": [
+        "author_id",
+      ],
+      "forwardName": "author",
+      "from": "Post",
+      "kind": "one-to-many",
+      "name": "PostToUser",
+      "onDelete": "cascade",
+      "references": [
+        "id",
+      ],
+      "reverseName": "posts",
+      "to": "User",
+    },
+  ],
+}
+`;
