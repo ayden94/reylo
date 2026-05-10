@@ -12,24 +12,21 @@
   "packageManager": "pnpm@10.15.1",
   "exports": {
     ".": "./src/orm/index.ts",
-    "./schema": "./src/schema/index.ts",
-    "./schema-pg": "./src/schema-pg/index.ts",
-    "./cli": "./src/cli/index.ts",
-    "./lando-pg": "./src/lando-pg/index.ts"
+    "./pg": "./src/pg/index.ts"
   },
   "imports": {
     "#schema": "./src/schema/index.ts",
     "#schema/*": "./src/schema/*.ts",
-    "#schema-pg": "./src/schema-pg/index.ts",
-    "#schema-pg/*": "./src/schema-pg/*.ts",
     "#orm": "./src/orm/index.ts",
     "#orm/*": "./src/orm/*.ts",
     "#cli": "./src/cli/index.ts",
     "#cli/*": "./src/cli/*.ts",
-    "#lando-pg": "./src/lando-pg/index.ts",
-    "#lando-pg/*": "./src/lando-pg/*.ts",
     "#prisma": "./src/prisma/index.ts",
     "#prisma/*": "./src/prisma/*.ts",
+    "#config": "./src/config/index.ts",
+    "#config/*": "./src/config/*.ts",
+    "#pg": "./src/pg/index.ts",
+    "#pg/*": "./src/pg/*.ts",
     "#test/*": "./tests/*.ts"
   },
   "scripts": {

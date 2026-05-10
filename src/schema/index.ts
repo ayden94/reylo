@@ -27,6 +27,8 @@ export type {
 } from './types.ts';
 export { FORMAT_VERSION } from './types.ts';
 
+export type { Adapter, AdapterCapabilities } from './adapter.ts';
+
 export type { ErrorCode, ValidationError, ValidationResult } from './errors.ts';
 export { ERROR_CODES, SchemaParseError } from './errors.ts';
 
