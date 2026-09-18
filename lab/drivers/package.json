@@ -1,0 +1,26 @@
+{
+  "name": "drivers",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/bun": "^1.4.2",
+    "@types/node": "^26.6.1",
+    "@types/pg": "^8.23.1",
+    "better-sqlite3": "^13.0.3",
+    "mariadb": "^3.5.4",
+    "mysql2": "^3.24.4",
+    "pg": "^8.23.0",
+    "postgres": "^3.4.9",
+    "typescript": "^7.1.0-dev.20260918.1"
+  }
+}
