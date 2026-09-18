@@ -9,7 +9,7 @@ const user = await getUser.execute(sql, { id: 1 });
 if (user) console.log(`${user.name} (${user.role}) joined ${user.created_at.toISOString()}`);
 
 const posts = await listPosts.execute(sql, { role: "admin" });
-//    ^? { id: number | null; title: string | null; body: string | null; author: string | null }[]
+//    ^? { id: number; title: string; body: string | null; author: string }[]
 for (const post of posts) console.log(`#${post.id} ${post.title} by ${post.author}`);
 
 await sql.end();

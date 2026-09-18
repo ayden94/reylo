@@ -10,7 +10,13 @@ function cachedEntry(path: string, sql: string): CacheEntry | undefined {
   for (let dir = dirname(path); ; dir = dirname(dir)) {
     const cache = join(dir, ".lando", "queries.json");
     if (existsSync(cache)) {
-      const entry = (JSON.parse(readFileSync(cache, "utf8")) as Record<string, CacheEntry>)[relative(dir, path)];
+      let entries: Record<string, CacheEntry>;
+      try {
+        entries = JSON.parse(readFileSync(cache, "utf8"));
+      } catch {
+        return undefined;
+      }
+      const entry = entries[relative(dir, path)];
       return entry && entry.hash === sha1(sql) ? entry : undefined;
     }
     if (dirname(dir) === dir) return undefined;

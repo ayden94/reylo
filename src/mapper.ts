@@ -2,7 +2,7 @@
 // column and parameter types from Parse/Describe through the project's own
 // driver, NOT NULL from the catalog for plain columns, named placeholders,
 // cardinality directives, and SQLSTATE errors mapped into the .sql file.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join, relative } from "node:path";
 import { serve } from "./rpc.ts";
@@ -39,6 +39,17 @@ function readDotenv(dir: string): Record<string, string> {
   return out;
 }
 
+/** The cache as it is on disk; a missing or half-written file is an empty cache. */
+function readCache(projectDir: string): Record<string, CacheEntry> {
+  const path = join(projectDir, ".lando", "queries.json");
+  if (!existsSync(path)) return {};
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
 function directive(sql: string, name: string): string | undefined {
   return new RegExp(`^\\s*--\\s*@${name}\\s+(\\S+)`, "m").exec(sql)?.[1];
 }
@@ -64,8 +75,7 @@ serve({
     const dotenv = readDotenv(projectDir);
     const urlEnv = options.urlEnv ?? "DATABASE_URL";
     const url = options.url ?? process.env[urlEnv] ?? dotenv[urlEnv];
-    const cachePath = join(projectDir, ".lando", "queries.json");
-    const cache = existsSync(cachePath) ? JSON.parse(readFileSync(cachePath, "utf8")) : {};
+    const cache = readCache(projectDir);
     const dialect = options.dialect ?? (url && /^(file:|sqlite:)/.test(url) ? "sqlite" : url && /^(mysql|mariadb):/.test(url) ? "mysql" : "postgres");
     projects.set(p.projectHandle, { projectDir, options, url, dialect, describer: undefined, sqlite: undefined, mysql: undefined, answers: new AnswerCache(), cache });
     const configIdentity = createHash("sha1").update(JSON.stringify([options, url ?? null])).digest("hex");
@@ -73,9 +83,15 @@ serve({
   },
   async transform(params) {
     const p = params as { fileName: string; content: string; projectHandle: string };
-    const project = projects.get(p.projectHandle)!;
     const sql = p.content;
     const diagnostics: ReturnType<typeof diag>[] = [];
+    const project = projects.get(p.projectHandle);
+    if (!project) {
+      // A transform for a project this process never opened: answer, never throw, so the file
+      // keeps its default export instead of becoming an empty module.
+      diagnostics.push(diag(`The content mapper has no project for this file; restart the TypeScript server.`, 0, 1, 9));
+      return { extension: ".ts" as const, diagnostics, text: `import type { Query } from "lando";\nexport type Params = unknown;\nexport type Row = unknown;\ndeclare const query: Query<unknown, unknown, "many", "postgres">;\nexport default query;\n` };
+    }
     const emit = (paramsType: string, rowType: string, cardinality: string, names: string[]) => ({
       extension: ".ts" as const,
       diagnostics,
@@ -85,7 +101,9 @@ serve({
         `export type Row = ${rowType};`,
         `export declare const sql: ${JSON.stringify(sql)};`,
         `export declare const params: readonly [${names.map((n) => JSON.stringify(n)).join(", ")}];`,
-        `declare const query: Query<Params, Row, ${JSON.stringify(cardinality)}, ${JSON.stringify(project.dialect)}>;`,
+        // The literal types go in the Query type directly rather than through the aliases, so a
+        // hover shows the row's shape (`{ id: number; ... } | null`) and not `Row | null`.
+        `declare const query: Query<${paramsType}, ${rowType}, ${JSON.stringify(cardinality)}, ${JSON.stringify(project.dialect)}>;`,
         `export default query;`,
         ``,
       ].join("\n"),
@@ -112,8 +130,13 @@ serve({
     const writeCache = (extra: Partial<CacheEntry> = {}) => {
       const key = relative(project.projectDir, p.fileName);
       project.cache[key] = { hash: createHash("sha1").update(sql).digest("hex"), params: names, cardinality, dialect: project.dialect, ...extra };
-      mkdirSync(join(project.projectDir, ".lando"), { recursive: true });
-      writeFileSync(join(project.projectDir, ".lando", "queries.json"), JSON.stringify(project.cache, null, 2) + "\n");
+      // Two editors on one project run two mappers; each writes the whole file, so the write
+      // is a rename and a reader never sees a half-written cache.
+      const dir = join(project.projectDir, ".lando");
+      mkdirSync(dir, { recursive: true });
+      const tmp = join(dir, `queries.json.${process.pid}.tmp`);
+      writeFileSync(tmp, JSON.stringify(project.cache, null, 2) + "\n");
+      renameSync(tmp, join(dir, "queries.json"));
     };
     if (project.dialect === "mysql") {
       project.mysql ??= openMysqlDescriber(project.projectDir, project.url);
