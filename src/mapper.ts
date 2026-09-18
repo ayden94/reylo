@@ -8,15 +8,18 @@ import { dirname, join, relative } from "node:path";
 import { serve } from "./rpc.ts";
 import { lexPlaceholders, type Placeholder } from "./lex.ts";
 import { openPostgresDescriber, type Describer } from "./describe.ts";
+import { openSqliteDescriber, sqliteType, type SqliteDescriber } from "./sqlite-describe.ts";
 import { PG_TYPE_QUERY, typeText, type PgTypeRow } from "./pgtypes.ts";
 
-type Options = { dialect?: "postgres"; source?: "database"; url?: string; urlEnv?: string };
+type Options = { dialect?: "postgres" | "sqlite"; source?: "database"; url?: string; urlEnv?: string };
 type Project = {
   projectDir: string;
   options: Options;
   url: string | undefined;
+  dialect: "postgres" | "sqlite";
   describer: Promise<Describer> | undefined;
-  cache: Record<string, { hash: string; params: string[]; cardinality: string }>;
+  sqlite: Promise<SqliteDescriber> | undefined;
+  cache: Record<string, { hash: string; params: string[]; cardinality: string; dialect: string }>;
 };
 const projects = new Map<string, Project>();
 
@@ -63,14 +66,15 @@ serve({
     const projectDir = dirname(p.configFileName);
     const options = p.options ?? {};
     const optionDiagnostics: { path: (string | number)[]; messageText: string; code: number }[] = [];
-    if (options.dialect !== undefined && options.dialect !== "postgres") optionDiagnostics.push({ path: ["dialect"], messageText: `Only "postgres" is implemented so far.`, code: 100 });
+    if (options.dialect !== undefined && options.dialect !== "postgres" && options.dialect !== "sqlite") optionDiagnostics.push({ path: ["dialect"], messageText: `Expected "postgres" or "sqlite".`, code: 100 });
     if (options.source !== undefined && options.source !== "database") optionDiagnostics.push({ path: ["source"], messageText: `Only "database" is implemented so far.`, code: 101 });
     const dotenv = readDotenv(projectDir);
     const urlEnv = options.urlEnv ?? "DATABASE_URL";
     const url = options.url ?? process.env[urlEnv] ?? dotenv[urlEnv];
     const cachePath = join(projectDir, ".lando", "queries.json");
     const cache = existsSync(cachePath) ? JSON.parse(readFileSync(cachePath, "utf8")) : {};
-    projects.set(p.projectHandle, { projectDir, options, url, describer: undefined, cache });
+    const dialect = options.dialect ?? (url && /^(file:|sqlite:)/.test(url) ? "sqlite" : "postgres");
+    projects.set(p.projectHandle, { projectDir, options, url, dialect, describer: undefined, sqlite: undefined, cache });
     const configIdentity = createHash("sha1").update(JSON.stringify([options, url ?? null])).digest("hex");
     return { configIdentity, watchedFiles: [join(projectDir, ".env")], optionDiagnostics };
   },
@@ -88,7 +92,7 @@ serve({
         `export type Row = ${rowType};`,
         `export declare const sql: ${JSON.stringify(sql)};`,
         `export declare const params: readonly [${names.map((n) => JSON.stringify(n)).join(", ")}];`,
-        `declare const query: Query<Params, Row, ${JSON.stringify(cardinality)}, "postgres">;`,
+        `declare const query: Query<Params, Row, ${JSON.stringify(cardinality)}, ${JSON.stringify(project.dialect)}>;`,
         `export default query;`,
         ``,
       ].join("\n"),
@@ -109,6 +113,37 @@ serve({
     if (!project.url) {
       diagnostics.push(diag(`No database URL: set ${project.options.urlEnv ?? "DATABASE_URL"} in the environment or .env, or "url" in the content mapper options.`, 0, 1, 4));
       return emit("unknown", "unknown", cardinality, names);
+    }
+    if (project.dialect === "sqlite") {
+      // `-- @param name type` supplies what SQLite cannot: parameter types.
+      const annotated = new Map<string, string>();
+      for (const m of sql.matchAll(/^\s*--\s*@param\s+(\S+)\s+(.+?)\s*$/gm)) annotated.set(m[1]!, m[2]!);
+      project.sqlite ??= openSqliteDescriber(project.url, project.projectDir);
+      let described;
+      try {
+        described = await (await project.sqlite).describe(sql);
+      } catch (e) {
+        project.sqlite = undefined;
+        diagnostics.push(diag((e as Error).message, 0, Math.max(1, sql.trimEnd().length), 6));
+        return emit("unknown", "unknown", cardinality, names);
+      }
+      const columns = described.columns.map((c) => {
+        const t = c.table ? sqliteType(c.declared) : "unknown";
+        return `${/^[A-Za-z_$][\w$]*$/.test(c.name) ? c.name : JSON.stringify(c.name)}: ${t}${described.notNull.has(c.name) ? "" : " | null"}`;
+      });
+      const paramTypes = names.map((name) => {
+        const t = annotated.get(name);
+        if (!t) {
+          const at = placeholders.find((h) => h.name === name)!;
+          diagnostics.push(diag(`SQLite cannot type parameter "${name}"; add "-- @param ${name} <type>" (number, string, Uint8Array, ...).`, at.start, at.end - at.start, 7));
+        }
+        return `${/^[A-Za-z_$][\w$]*$/.test(name) ? name : JSON.stringify(name)}: ${t ?? "unknown"}`;
+      });
+      const key = relative(project.projectDir, p.fileName);
+      project.cache[key] = { hash: createHash("sha1").update(sql).digest("hex"), params: names, cardinality, dialect: project.dialect };
+      mkdirSync(join(project.projectDir, ".lando"), { recursive: true });
+      writeFileSync(join(project.projectDir, ".lando", "queries.json"), JSON.stringify(project.cache, null, 2) + "\n");
+      return emit(names.length ? `{ ${paramTypes.join("; ")} }` : "Record<never, never>", columns.length ? `{ ${columns.join("; ")} }` : "never", cardinality, names);
     }
     project.describer ??= openPostgresDescriber(project.projectDir, project.url);
     let describer: Describer;
@@ -153,7 +188,7 @@ serve({
     const paramsType = named.length ? `{ ${paramTypes.join("; ")} }` : names.length ? `{ ${paramTypes.join("; ")} }` : "Record<never, never>";
     const rowType = columns.length ? `{ ${columns.join("; ")} }` : "never";
     const key = relative(project.projectDir, p.fileName);
-    project.cache[key] = { hash: createHash("sha1").update(sql).digest("hex"), params: names, cardinality };
+    project.cache[key] = { hash: createHash("sha1").update(sql).digest("hex"), params: names, cardinality, dialect: project.dialect };
     mkdirSync(join(project.projectDir, ".lando"), { recursive: true });
     writeFileSync(join(project.projectDir, ".lando", "queries.json"), JSON.stringify(project.cache, null, 2) + "\n");
     return emit(paramsType, rowType, cardinality, names);
@@ -162,6 +197,7 @@ serve({
     const project = projects.get((params as { projectHandle: string }).projectHandle);
     projects.delete((params as { projectHandle: string }).projectHandle);
     if (project?.describer) await (await project.describer).close().catch(() => {});
+    if (project?.sqlite) await (await project.sqlite).close().catch(() => {});
     return {};
   },
 });

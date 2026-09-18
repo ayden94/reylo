@@ -19,3 +19,6 @@ lab/**/dist/
 
 # Mapper cache written into lab projects
 lab/**/.lando/
+
+# SQLite lab database file
+lab/sqlite/lab.db*

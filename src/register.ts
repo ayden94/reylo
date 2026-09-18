@@ -5,7 +5,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { lexPlaceholders } from "./lex.ts";
 
-type CacheEntry = { hash: string; params: string[]; cardinality: string };
+type CacheEntry = { hash: string; params: string[]; cardinality: string; dialect?: string };
 
 // The mapper writes <projectDir>/.lando/queries.json when tsc runs; the loader
 // uses it when the entry matches the file's current content, and otherwise falls
@@ -43,7 +43,7 @@ function moduleSource(sql: string, path: string): string {
     `import { defineQuery } from "lando";`,
     `export const sql = ${JSON.stringify(sql)};`,
     `export const params = ${JSON.stringify(params)};`,
-    `export default defineQuery({ dialect: "postgres", sql, params, cardinality: ${JSON.stringify(cardinality)} });`,
+    `export default defineQuery({ dialect: ${JSON.stringify(cached?.dialect ?? "postgres")}, sql, params, cardinality: ${JSON.stringify(cardinality)} });`,
   ].join("\n");
 }
 
