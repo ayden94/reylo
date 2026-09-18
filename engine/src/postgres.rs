@@ -47,6 +47,9 @@ pub fn analyze(sql: &str, dialect: Dialect, host: &Host) -> Lazy<Analysis> {
         let d = diag("Named and positional parameters cannot be mixed in one statement.", first.start, first.end - first.start, 2);
         return Some(bare(sql, &lexed, dialect, vec![d]));
     }
+    if dialect == Dialect::Sqlite {
+        return crate::sqlite::analyze(sql, &lexed, host);
+    }
     if dialect != Dialect::Postgres {
         return Some(bare(sql, &lexed, dialect, Vec::new()));
     }
@@ -60,8 +63,8 @@ fn diag(message: impl Into<String>, start: usize, length: usize, code: u32) -> D
 
 /// What the engine answers when it cannot describe: every parameter unknown, no columns, the
 /// cardinality the directive names or `many`.
-fn bare(sql: &str, lexed: &Lexed, dialect: Dialect, mut diagnostics: Vec<Diagnostic>) -> Analysis {
-    let target = if dialect == Dialect::Mysql { Target::Question } else { Target::Dollar };
+pub(crate) fn bare(sql: &str, lexed: &Lexed, dialect: Dialect, mut diagnostics: Vec<Diagnostic>) -> Analysis {
+    let target = if dialect == Dialect::Postgres { Target::Dollar } else { Target::Question };
     let rewritten = lex::rewrite(sql, lexed, target);
     let (cardinality, _) = cardinality_directive(lexed, &mut diagnostics).unwrap_or(("many".to_string(), None));
     Analysis {
@@ -79,7 +82,7 @@ fn bare(sql: &str, lexed: &Lexed, dialect: Dialect, mut diagnostics: Vec<Diagnos
 }
 
 /// `-- @returns one|maybeOne|many|none`, when the statement carries one.
-fn cardinality_directive(lexed: &Lexed, diagnostics: &mut Vec<Diagnostic>) -> Option<(String, Option<String>)> {
+pub(crate) fn cardinality_directive(lexed: &Lexed, diagnostics: &mut Vec<Diagnostic>) -> Option<(String, Option<String>)> {
     let d = lexed.directives.iter().find(|d| d.name == "returns")?;
     if ["many", "one", "maybeOne", "none"].contains(&d.value.as_str()) {
         Some((d.value.clone(), None))

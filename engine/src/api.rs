@@ -33,8 +33,27 @@ pub enum Request {
 #[serde(untagged)]
 pub enum Answer {
     Describe { describe: RawDescribe },
+    Sqlite { sqlite: SqliteDescribe },
     Rows { rows: Vec<Vec<Value>> },
     Error { error: DbError },
+}
+
+/// What SQLite's prepare reports: per result column its name, the declared type of the table
+/// column it comes from (none for an expression), and that table and column.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SqliteDescribe {
+    pub columns: Vec<SqliteColumn>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SqliteColumn {
+    pub name: String,
+    #[serde(default)]
+    pub declared: Option<String>,
+    #[serde(default)]
+    pub table: Option<String>,
+    #[serde(default)]
+    pub column: Option<String>,
 }
 
 /// A Parse/Describe result as the driver reports it: parameter type oids in order, and result

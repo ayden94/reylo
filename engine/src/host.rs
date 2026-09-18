@@ -3,7 +3,7 @@
 //! caller goes on with whatever else it can do this round, so one round collects every need
 //! that does not depend on another's answer.
 
-use crate::api::{Answer, DbError, Need, RawDescribe, Scope};
+use crate::api::{Answer, DbError, Need, RawDescribe, Scope, SqliteDescribe};
 use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -41,7 +41,20 @@ impl<'a> Host<'a> {
         match self.answers.get(&id) {
             Some(Answer::Describe { describe }) => Some(Ok(describe.clone())),
             Some(Answer::Error { error }) => Some(Err(error.clone())),
-            Some(Answer::Rows { .. }) => Some(Err(DbError { message: "the host answered a describe with rows".into(), code: None, position: None })),
+            Some(Answer::Rows { .. }) | Some(Answer::Sqlite { .. }) => Some(Err(DbError { message: "the host answered a describe with something else".into(), code: None, position: None })),
+            None => {
+                self.record(Need::Describe { id, sql: sql.to_string() });
+                None
+            }
+        }
+    }
+
+    pub fn describe_sqlite(&self, sql: &str) -> Lazy<Result<SqliteDescribe, DbError>> {
+        let id = format!("describe:{sql}");
+        match self.answers.get(&id) {
+            Some(Answer::Sqlite { sqlite }) => Some(Ok(sqlite.clone())),
+            Some(Answer::Error { error }) => Some(Err(error.clone())),
+            Some(_) => Some(Err(DbError { message: "the host answered a SQLite describe with something else".into(), code: None, position: None })),
             None => {
                 self.record(Need::Describe { id, sql: sql.to_string() });
                 None
@@ -54,7 +67,7 @@ impl<'a> Host<'a> {
         match self.answers.get(&id) {
             Some(Answer::Rows { rows }) => Some(Ok(rows.clone())),
             Some(Answer::Error { error }) => Some(Err(error.clone())),
-            Some(Answer::Describe { .. }) => Some(Err(DbError { message: "the host answered a query with a describe".into(), code: None, position: None })),
+            Some(Answer::Describe { .. }) | Some(Answer::Sqlite { .. }) => Some(Err(DbError { message: "the host answered a query with a describe".into(), code: None, position: None })),
             None => {
                 self.record(Need::Query { id, sql: sql.to_string(), params, scope });
                 None

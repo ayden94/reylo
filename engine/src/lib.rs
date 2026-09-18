@@ -10,8 +10,10 @@ pub mod host;
 pub mod infer;
 pub mod jsonshape;
 pub mod lex;
+pub mod params;
 pub mod pgtypes;
 pub mod postgres;
+pub mod sqlite;
 pub mod types;
 
 /// One request in, one response out, both JSON text. The only entry point.
