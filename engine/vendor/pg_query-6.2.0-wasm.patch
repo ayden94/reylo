@@ -1,21 +1,57 @@
-diff --color -ruN --ex pgq-upstream/pg_query-6.2.0/.cargo-ok engine-lab/pg_query-vendored/.cargo-ok
---- pgq-upstream/pg_query-6.2.0/.cargo-ok	1969-12-31 16:00:00
-+++ engine-lab/pg_query-vendored/.cargo-ok	2026-09-18 15:10:54
-@@ -0,0 +1 @@
-+{"v":1}
-\ No newline at end of file
-diff --color -ruN --ex pgq-upstream/pg_query-6.2.0/.cargo_vcs_info.json engine-lab/pg_query-vendored/.cargo_vcs_info.json
---- pgq-upstream/pg_query-6.2.0/.cargo_vcs_info.json	2006-07-23 18:21:28
-+++ engine-lab/pg_query-vendored/.cargo_vcs_info.json	1969-12-31 16:00:00
-@@ -1,6 +0,0 @@
--{
--  "git": {
--    "sha1": "0e382742b36ee9592438c6791b91ce14f32f6233"
--  },
--  "path_in_vcs": ""
--}
-\ No newline at end of file
-diff --color -ruN --ex pgq-upstream/pg_query-6.2.0/build.rs engine-lab/pg_query-vendored/build.rs
+diff --color -ruN --color=never --exclude=Cargo.lock --exclude=target --exclude=.cargo* pgq-upstream/pg_query-6.2.0/Cargo.toml.orig engine-lab/pg_query-vendored/Cargo.toml.orig
+--- pgq-upstream/pg_query-6.2.0/Cargo.toml.orig	2006-07-23 18:21:28
++++ engine-lab/pg_query-vendored/Cargo.toml.orig	1969-12-31 16:00:00
+@@ -1,49 +0,0 @@
+-[package]
+-name = "pg_query"
+-description = "PostgreSQL parser that uses the actual PostgreSQL server source to parse SQL queries and return the internal PostgreSQL parse tree."
+-version = "6.2.0"
+-edition = "2021"
+-documentation = "https://docs.rs/pg_query"
+-license = "MIT"
+-repository = "https://github.com/pganalyze/pg_query.rs"
+-include = [
+-    # pg_query.rs
+-    "README.md", "build.rs", "src/**/*.rs",
+-    # libpg_query
+-    "Makefile",
+-    "libpg_query/*.h",
+-    "libpg_query/{src,vendor}/**/*.{c,h}",
+-    "libpg_query/protobuf/pg_query.pb-c.{c,h}",
+-    "libpg_query/protobuf/pg_query.proto",
+-]
+-
+-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+-
+-[dependencies]
+-itertools = "0.10.3"
+-prost = "0.13.5"
+-serde = { version = "1.0.139", features = ["derive"] }
+-serde_json = "1.0.82"
+-thiserror = "1.0.31"
+-
+-[build-dependencies]
+-bindgen = "0.66.1"
+-clippy = { version = "0.0.302", optional = true }
+-prost-build = "0.13.5"
+-fs_extra = "1.2.0"
+-cc = "1.0.83"
+-glob = "0.3.1"
+-
+-[dev-dependencies]
+-brunch = "0.11"
+-easy-parallel = "3.2.0"
+-pretty_assertions = "1.4.0"
+-regex = "1.6.0"
+-
+-[[bench]]
+-name = "parse_vs_summary"
+-harness = false
+-
+-[[bench]]
+-name = "parse_very_large_query"
+-harness = false
+diff --color -ruN --color=never --exclude=Cargo.lock --exclude=target --exclude=.cargo* pgq-upstream/pg_query-6.2.0/build.rs engine-lab/pg_query-vendored/build.rs
 --- pgq-upstream/pg_query-6.2.0/build.rs	2006-07-23 18:21:28
 +++ engine-lab/pg_query-vendored/build.rs	2026-09-18 15:10:55
 @@ -73,6 +73,17 @@
@@ -36,7 +72,7 @@ diff --color -ruN --ex pgq-upstream/pg_query-6.2.0/build.rs engine-lab/pg_query-
      // Only generate protobuf bindings if protoc is available
      let protoc_exists = Command::new("protoc").arg("--version").status().is_ok();
      // If the package is being built by docs.rs, we don't want to regenerate the protobuf bindings
-diff --color -ruN --ex pgq-upstream/pg_query-6.2.0/extern_block.rs engine-lab/pg_query-vendored/extern_block.rs
+diff --color -ruN --color=never --exclude=Cargo.lock --exclude=target --exclude=.cargo* pgq-upstream/pg_query-6.2.0/extern_block.rs engine-lab/pg_query-vendored/extern_block.rs
 --- pgq-upstream/pg_query-6.2.0/extern_block.rs	1969-12-31 16:00:00
 +++ engine-lab/pg_query-vendored/extern_block.rs	2026-09-18 15:10:54
 @@ -0,0 +1,128 @@
