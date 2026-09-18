@@ -12,6 +12,8 @@ export interface Describer {
   readonly driver: "postgres" | "pg";
   describe(sql: string): Promise<Described>;
   query(sql: string, params?: unknown[]): Promise<Record<string, unknown>[]>;
+  /** Rows as arrays of values, in column order: what the engine's catalog queries read. */
+  values(sql: string, params?: unknown[]): Promise<unknown[][]>;
   close(): Promise<void>;
 }
 
@@ -33,6 +35,7 @@ export async function openPostgresDescriber(projectDir: string, url: string): Pr
         };
       },
       query: (text, params = []) => sql.unsafe(text, params as any[]),
+      values: (text, params = []) => sql.unsafe(text, params as any[]).values(),
       close: () => sql.end(),
     };
   }
@@ -82,6 +85,7 @@ export async function openPostgresDescriber(projectDir: string, url: string): Pr
         });
       },
       query: async (text, params = []) => (await client.query(text, params)).rows,
+      values: async (text, params = []) => (await client.query({ text, values: params, rowMode: "array" })).rows,
       close: () => client.end(),
     };
   }

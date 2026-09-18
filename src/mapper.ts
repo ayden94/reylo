@@ -60,8 +60,11 @@ function diag(messageText: string, start: number, length: number, code = 1) {
 }
 
 serve({
-  initialize() {
-    return { positionEncoding: "utf-8", diagnosticSource: "lando" };
+  initialize(params) {
+    // Builds from 2026-09-18 on send `protocolVersion: 1` and refuse a mapper that does not
+    // answer with the version it speaks; the npm nightly of the same day does not send it yet.
+    const { protocolVersion } = (params ?? {}) as { protocolVersion?: number };
+    return { protocolVersion: protocolVersion ?? 1, positionEncoding: "utf-8", diagnosticSource: "lando" };
   },
   openProject(params) {
     const p = params as { projectHandle: string; options?: Options; configFileName: string };
