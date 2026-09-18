@@ -16,3 +16,6 @@ coverage/
 
 # Lab emit output
 lab/**/dist/
+
+# Mapper cache written into lab projects
+lab/**/.lando/
