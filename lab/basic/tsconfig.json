@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "esnext",
+    "module": "nodenext",
+    "lib": ["esnext"],
+    "types": [],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "contentMappers": [
+    {
+      "package": "lando",
+      "extensions": [".sql"],
+      "options": { "dialect": "postgres", "nested": { "n": 1 } }
+    }
+  ],
+  "include": ["."]
+}

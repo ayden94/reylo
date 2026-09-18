@@ -1,3 +1,6 @@
+# Pre-rewrite ORM prototype and design docs, kept locally for reference only.
+internal/
+
 node_modules/
 dist/
 .env
@@ -5,8 +8,8 @@ dist/
 !.env.example
 *.log
 .DS_Store
-.vitest-cache/
 coverage/
 
 # Local agent / loop state — not part of the repo
 .claude/
+.frizz/

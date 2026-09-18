@@ -1,8 +1,0 @@
-{
-  "name": "with-lando-dir-fixture",
-  "version": "0.0.0",
-  "private": true,
-  "lando": {
-    "dir": "./generated"
-  }
-}
