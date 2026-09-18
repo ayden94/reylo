@@ -9,16 +9,18 @@ import { serve } from "./rpc.ts";
 import { lexPlaceholders, type Placeholder } from "./lex.ts";
 import { openPostgresDescriber, type Describer } from "./describe.ts";
 import { openSqliteDescriber, sqliteType, type SqliteDescriber } from "./sqlite-describe.ts";
+import { mysqlNotNull, mysqlType, openMysqlDescriber, type MysqlDescriber } from "./mysql-describe.ts";
 import { PG_TYPE_QUERY, typeText, type PgTypeRow } from "./pgtypes.ts";
 
-type Options = { dialect?: "postgres" | "sqlite"; source?: "database"; url?: string; urlEnv?: string };
+type Options = { dialect?: "postgres" | "sqlite" | "mysql"; source?: "database"; url?: string; urlEnv?: string };
 type Project = {
   projectDir: string;
   options: Options;
   url: string | undefined;
-  dialect: "postgres" | "sqlite";
+  dialect: "postgres" | "sqlite" | "mysql";
   describer: Promise<Describer> | undefined;
   sqlite: Promise<SqliteDescriber> | undefined;
+  mysql: Promise<MysqlDescriber> | undefined;
   cache: Record<string, { hash: string; params: string[]; cardinality: string; dialect: string }>;
 };
 const projects = new Map<string, Project>();
@@ -66,15 +68,15 @@ serve({
     const projectDir = dirname(p.configFileName);
     const options = p.options ?? {};
     const optionDiagnostics: { path: (string | number)[]; messageText: string; code: number }[] = [];
-    if (options.dialect !== undefined && options.dialect !== "postgres" && options.dialect !== "sqlite") optionDiagnostics.push({ path: ["dialect"], messageText: `Expected "postgres" or "sqlite".`, code: 100 });
+    if (options.dialect !== undefined && !["postgres", "sqlite", "mysql"].includes(options.dialect)) optionDiagnostics.push({ path: ["dialect"], messageText: `Expected "postgres", "sqlite" or "mysql".`, code: 100 });
     if (options.source !== undefined && options.source !== "database") optionDiagnostics.push({ path: ["source"], messageText: `Only "database" is implemented so far.`, code: 101 });
     const dotenv = readDotenv(projectDir);
     const urlEnv = options.urlEnv ?? "DATABASE_URL";
     const url = options.url ?? process.env[urlEnv] ?? dotenv[urlEnv];
     const cachePath = join(projectDir, ".lando", "queries.json");
     const cache = existsSync(cachePath) ? JSON.parse(readFileSync(cachePath, "utf8")) : {};
-    const dialect = options.dialect ?? (url && /^(file:|sqlite:)/.test(url) ? "sqlite" : "postgres");
-    projects.set(p.projectHandle, { projectDir, options, url, dialect, describer: undefined, sqlite: undefined, cache });
+    const dialect = options.dialect ?? (url && /^(file:|sqlite:)/.test(url) ? "sqlite" : url && /^(mysql|mariadb):/.test(url) ? "mysql" : "postgres");
+    projects.set(p.projectHandle, { projectDir, options, url, dialect, describer: undefined, sqlite: undefined, mysql: undefined, cache });
     const configIdentity = createHash("sha1").update(JSON.stringify([options, url ?? null])).digest("hex");
     return { configIdentity, watchedFiles: [join(projectDir, ".env")], optionDiagnostics };
   },
@@ -114,10 +116,51 @@ serve({
       diagnostics.push(diag(`No database URL: set ${project.options.urlEnv ?? "DATABASE_URL"} in the environment or .env, or "url" in the content mapper options.`, 0, 1, 4));
       return emit("unknown", "unknown", cardinality, names);
     }
+    const annotated = new Map<string, string>();
+    for (const m of sql.matchAll(/^\s*--\s*@param\s+(\S+)\s+(.+?)\s*$/gm)) annotated.set(m[1]!, m[2]!);
+    const writeCache = () => {
+      const key = relative(project.projectDir, p.fileName);
+      project.cache[key] = { hash: createHash("sha1").update(sql).digest("hex"), params: names, cardinality, dialect: project.dialect };
+      mkdirSync(join(project.projectDir, ".lando"), { recursive: true });
+      writeFileSync(join(project.projectDir, ".lando", "queries.json"), JSON.stringify(project.cache, null, 2) + "\n");
+    };
+    const ident = (name: string) => (/^[A-Za-z_$][\w$]*$/.test(name) ? name : JSON.stringify(name));
+    if (project.dialect === "mysql") {
+      project.mysql ??= openMysqlDescriber(project.projectDir, project.url);
+      let described;
+      try {
+        // MySQL has only `?`; a repeated name repeats the placeholder.
+        let text = "";
+        let last = 0;
+        for (const h of placeholders) { text += sql.slice(last, h.start) + "?"; last = h.end; }
+        described = await (await project.mysql).describe(text + sql.slice(last));
+      } catch (e) {
+        const err = e as Error & { sqlState?: string; errno?: number };
+        if (!err.sqlState) project.mysql = undefined;
+        diagnostics.push(diag(`${err.message}${err.sqlState ? ` (${err.sqlState})` : ""}`, 0, Math.max(1, sql.trimEnd().length), 6));
+        return emit("unknown", "unknown", cardinality, names);
+      }
+      const columns = described.columns.map((c) => `${ident(c.name)}: ${mysqlType(c)}${mysqlNotNull(c.flags) ? "" : " | null"}`);
+      // MySQL 8.4's prepare infers a type per `?` from context (LONGLONG against an
+      // int column, VAR_STRING against a varchar); an annotation overrides it, and a
+      // diagnostic asks for one only when the server offers nothing usable.
+      const paramTypes = names.map((name) => {
+        const t = annotated.get(name);
+        if (t) return `${ident(name)}: ${t}`;
+        const index = placeholders.findIndex((h) => h.name === name);
+        const guess = described.params[index];
+        const inferred = guess ? mysqlType({ type: guess.type }) : "unknown";
+        if (inferred === "unknown") {
+          const at = placeholders[index]!;
+          diagnostics.push(diag(`MySQL could not type parameter "${name}"; add "-- @param ${name} <type>".`, at.start, at.end - at.start, 7));
+        }
+        return `${ident(name)}: ${inferred}`;
+      });
+      writeCache();
+      return emit(names.length ? `{ ${paramTypes.join("; ")} }` : "Record<never, never>", columns.length ? `{ ${columns.join("; ")} }` : "never", cardinality, names);
+    }
     if (project.dialect === "sqlite") {
       // `-- @param name type` supplies what SQLite cannot: parameter types.
-      const annotated = new Map<string, string>();
-      for (const m of sql.matchAll(/^\s*--\s*@param\s+(\S+)\s+(.+?)\s*$/gm)) annotated.set(m[1]!, m[2]!);
       project.sqlite ??= openSqliteDescriber(project.url, project.projectDir);
       let described;
       try {
@@ -139,10 +182,7 @@ serve({
         }
         return `${/^[A-Za-z_$][\w$]*$/.test(name) ? name : JSON.stringify(name)}: ${t ?? "unknown"}`;
       });
-      const key = relative(project.projectDir, p.fileName);
-      project.cache[key] = { hash: createHash("sha1").update(sql).digest("hex"), params: names, cardinality, dialect: project.dialect };
-      mkdirSync(join(project.projectDir, ".lando"), { recursive: true });
-      writeFileSync(join(project.projectDir, ".lando", "queries.json"), JSON.stringify(project.cache, null, 2) + "\n");
+      writeCache();
       return emit(names.length ? `{ ${paramTypes.join("; ")} }` : "Record<never, never>", columns.length ? `{ ${columns.join("; ")} }` : "never", cardinality, names);
     }
     project.describer ??= openPostgresDescriber(project.projectDir, project.url);
@@ -187,10 +227,7 @@ serve({
     }
     const paramsType = named.length ? `{ ${paramTypes.join("; ")} }` : names.length ? `{ ${paramTypes.join("; ")} }` : "Record<never, never>";
     const rowType = columns.length ? `{ ${columns.join("; ")} }` : "never";
-    const key = relative(project.projectDir, p.fileName);
-    project.cache[key] = { hash: createHash("sha1").update(sql).digest("hex"), params: names, cardinality, dialect: project.dialect };
-    mkdirSync(join(project.projectDir, ".lando"), { recursive: true });
-    writeFileSync(join(project.projectDir, ".lando", "queries.json"), JSON.stringify(project.cache, null, 2) + "\n");
+    writeCache();
     return emit(paramsType, rowType, cardinality, names);
   },
   async closeProject(params) {
@@ -198,6 +235,7 @@ serve({
     projects.delete((params as { projectHandle: string }).projectHandle);
     if (project?.describer) await (await project.describer).close().catch(() => {});
     if (project?.sqlite) await (await project.sqlite).close().catch(() => {});
+    if (project?.mysql) await (await project.mysql).close().catch(() => {});
     return {};
   },
 });
