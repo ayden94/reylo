@@ -20,4 +20,6 @@ Edit `queries/get_user.sql` (rename a column, add a parameter) and run `nub run 
 3. Accept "Use Workspace Version" when prompted (or run "TypeScript: Select TypeScript Version"), so the editor uses the 7.1 nightly in `node_modules/typescript`.
 4. Open `src/main.ts` and hover `user` or `posts`. Go to `queries/get_user.sql`, change `name` to `nam`, and watch the error appear in the `.sql` file at the column position.
 
+**Cursor.** The TypeScript 7 extension is not in Cursor's marketplace ([forum thread](https://forum.cursor.com/t/tsgo-is-needed-extension-not-available-in-cursor/110694)). Download the VSIX from the Visual Studio Marketplace for your platform and use "Extensions: Install from VSIX" ([step-by-step gist](https://gist.github.com/Loskir/7541f26c8df183bf7c07acc86c3e5397)); the rest is the same.
+
 `.vscode/settings.json` turns on `js/ts.contentMappers.enabled` (the default) and points `typescript.native-preview.tsdk` at the workspace TypeScript. The mapper reads `DATABASE_URL` from `.env` in this folder.
