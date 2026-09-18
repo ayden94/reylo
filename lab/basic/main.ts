@@ -12,7 +12,7 @@ type ExpectedRow = {
   tags: string[];
   created_at: Date;
   big: string | null;
-  next_id: number | null;
+  next_id: number;
 };
 type ExpectedParams = { id: number; name: string };
 const a: ExpectedRow = null! as Row;
@@ -27,3 +27,23 @@ const h: { created_at: string; big: string | null } | null = query["~lando"].jso
 await query.execute(pool, { id: "1", name: "ada" });
 // @ts-expect-error a sqlite client cannot run a postgres query
 await query.execute({ prepare: (s: string) => ({ all: () => [] }) }, { id: 1, name: "ada" });
+
+// The engine's inference, without directives: cardinality from the primary key, an aggregate, a
+// left join; nested JSON shapes from the constructors; expression nullability from the rules.
+import nested from "./nested.sql";
+import count from "./count.sql";
+import joined from "./joined.sql";
+type ExpectedNested = {
+  id: number;
+  name: string;
+  posts: { id: number; title: string; body: string | null; at: string | null }[];
+  row: { id: number; name: string; email: string | null; role: "admin" | "member"; tags: string[]; created_at: string; big: number | null };
+  post_count: string;
+};
+const n1: ExpectedNested | null = null! as Awaited<ReturnType<typeof nested.execute>>;
+const n2: Awaited<ReturnType<typeof nested.execute>> = null! as ExpectedNested | null;
+const c1: { n: string; latest: Date | null } = null! as Awaited<ReturnType<typeof count.execute>>;
+const c2: Awaited<ReturnType<typeof count.execute>> = null! as { n: string; latest: Date | null };
+const j1: { id: number; title: string; author: string | null; email: string | null }[] = null! as Awaited<ReturnType<typeof joined.execute>>;
+const j2: Awaited<ReturnType<typeof joined.execute>> = null! as { id: number; title: string; author: string | null; email: string | null }[];
+const cardinalities: ["maybeOne", "maybeOne", "one", "many"] = [query.cardinality, nested.cardinality, count.cardinality, joined.cardinality];

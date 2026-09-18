@@ -42,6 +42,9 @@ export type QueryDefinition = {
   dialect: Dialect;
   sql: string;
   params: readonly string[];
+  /** The mapper's rewritten statement and its binding order, when the mapper's cache had them. */
+  text?: string;
+  order?: readonly string[];
   cardinality?: Cardinality;
   jsonSchema?: { input: Record<string, unknown>; output: Record<string, unknown> };
 };
@@ -53,10 +56,12 @@ export function defineQuery<Params, Row, C extends Cardinality, D extends Dialec
   const missingSchema = () => {
     throw new Error(`No JSON Schema is available for this query yet; run tsc --runExternalCode so the mapper can compute it.`);
   };
-  const query: Query<Params, Row, C, D> = {
+  const query: Query<Params, Row, C, D> & { text?: string | undefined; order?: readonly string[] | undefined } = {
     dialect: def.dialect,
     sql: def.sql,
     params: def.params,
+    text: def.text,
+    order: def.order,
     cardinality,
     "~standard": {
       version: 1,

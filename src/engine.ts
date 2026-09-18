@@ -63,13 +63,19 @@ type Response =
 
 const WASM_PATH = new URL("../engine/lando_engine.wasm", import.meta.url);
 
+// The WebAssembly namespace is a global in every runtime Lando supports; it is typed here
+// rather than through the DOM lib.
+type Memory = { buffer: ArrayBuffer };
+type Instance = { exports: Record<string, unknown> };
+const WA = (globalThis as unknown as { WebAssembly: { compile(bytes: Uint8Array): Promise<unknown>; instantiate(module: unknown, imports: object): Promise<Instance> } }).WebAssembly;
+
 export class Engine {
-  #memory: WebAssembly.Memory;
+  #memory: Memory;
   #alloc: (len: number) => number;
   #free: (ptr: number, len: number) => void;
   #call: (ptr: number, len: number) => number;
 
-  private constructor(instance: WebAssembly.Instance) {
+  private constructor(instance: Instance) {
     const e = instance.exports as Record<string, any>;
     this.#memory = e.memory;
     this.#alloc = e.lando_alloc;
@@ -78,10 +84,10 @@ export class Engine {
   }
 
   static async load(path: URL | string = WASM_PATH): Promise<Engine> {
-    const module = await WebAssembly.compile(readFileSync(path));
+    const module = await WA.compile(readFileSync(path));
     const wasi = new WASI({ version: "preview1", args: ["lando-engine"], env: {} });
-    const instance = await WebAssembly.instantiate(module, wasi.getImportObject());
-    wasi.initialize(instance);
+    const instance = await WA.instantiate(module, wasi.getImportObject());
+    wasi.initialize(instance as never);
     return new Engine(instance);
   }
 
@@ -125,7 +131,10 @@ async function fulfil(need: Need, io: EngineIo): Promise<Answer> {
     return { rows: await io.query(need.sql, need.params) };
   } catch (e) {
     const err = e as Error & { code?: string; position?: string | number };
-    return { error: { message: err.message, code: err.code, position: err.position === undefined ? undefined : Number(err.position) } };
+    const error: DbError = { message: err.message };
+    if (err.code) error.code = err.code;
+    if (err.position !== undefined) error.position = Number(err.position);
+    return { error };
   }
 }
 

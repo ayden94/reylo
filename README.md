@@ -12,12 +12,11 @@ Status: pre-alpha. Design notes and experiments live in this repository while th
 
 ## Examples
 
-Parameters are written `:name` in every dialect. Lando lexes them out and rewrites to the engine's own placeholder (`$1` for Postgres, `?` for MySQL, `:name` stays for SQLite) both when the mapper describes the statement and when `execute` runs it, so the parameter object is `{ name: ... }` everywhere. Positional `$1` / `?` are accepted too; mixing the two styles in one statement is an error. Comment directives carry what the engine cannot infer: `-- @returns one | maybeOne | many` for cardinality, `-- @param name type` for a parameter type the engine does not report.
+Parameters are written `:name` in every dialect (`$name` and `@name` work too). The engine lexes them out and rewrites to the database's own placeholder (`$1` for Postgres, `?` for MySQL, `:name` stays for SQLite) when the mapper describes the statement; the rewritten text and its binding order land in `.lando/queries.json`, and `execute` binds through them, so the parameter object is `{ name: ... }` everywhere. Positional `$1` / `?` are accepted too; mixing the two styles in one statement is an error. On Postgres the engine infers the row count from the statement and the catalog (a primary-key equality is `maybeOne`, an ungrouped aggregate `one`, a one-row `INSERT … RETURNING` `one`); `-- @returns one | maybeOne | many | none` overrides it, and `-- @param name type` supplies a parameter type where the database reports none.
 
 ### Postgres
 
 ```sql
--- @returns maybeOne
 select id, name, email, role, tags, created_at, id + 1 as next_id
 from lando_users
 where id = :id and name = :name
@@ -26,10 +25,27 @@ where id = :id and name = :name
 ```ts
 import getUser from "./get_user.sql";
 const user = await getUser.execute(sql, { id: 1, name: "ada" });
-//    ^? { id: number; name: string; email: string | null; role: "admin" | "member"; tags: string[]; created_at: Date; next_id: number | null } | null
+//    ^? { id: number; name: string; email: string | null; role: "admin" | "member"; tags: string[]; created_at: Date; next_id: number } | null
 ```
 
-Parameter types come from the server (`id: number`, `name: string`); `role` is an enum, `tags` a `text[]`, `email` nullable from the catalog, `next_id` an expression and therefore nullable until the engine's expression rules land; `int8` would arrive as `string` because that is what `pg` and `postgres` decode.
+Parameter types come from the server (`id: number`, `name: string`); `role` is an enum, `tags` a `text[]`, `email` nullable from the catalog, `next_id` non-null because `id` is and the built-in `+` never returns NULL for non-null operands; `| null` on the row because `id` is the primary key, so the `WHERE` matches at most one row. `int8` arrives as `string` because that is what `pg` and `postgres` decode.
+
+Nested JSON keeps its shape. The engine reads the constructors out of the parse tree, has the database type their arguments as ordinary columns, and folds the catalog's `NOT NULL` and the outer joins back in:
+
+```sql
+select u.id, u.name,
+  coalesce((select jsonb_agg(jsonb_build_object('id', p.id, 'title', p.title, 'body', p.body, 'at', p.published_at)) from lando_posts p where p.user_id = u.id), '[]') as posts,
+  to_jsonb(u) as row,
+  (select count(*) from lando_posts p where p.user_id = u.id) as post_count
+from lando_users u
+where u.id = :id
+```
+
+```ts
+//    ^? { id: number; name: string; posts: { id: number; title: string; body: string | null; at: string | null }[]; row: { id: number; name: string; email: string | null; role: "admin" | "member"; tags: string[]; created_at: string; big: number | null }; post_count: string } | null
+```
+
+Inside JSON the values are what the database serialized (`created_at` is a string there, `big` a number), which is what `Json<T>` in the type model spells out.
 
 ### SQLite
 

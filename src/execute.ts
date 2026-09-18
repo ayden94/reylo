@@ -41,6 +41,10 @@ export type QueryModule<D extends Dialect = Dialect> = {
   readonly sql: string;
   /** Parameter names in placeholder order, so an object of params binds positionally. */
   readonly params: readonly string[];
+  /** The statement as the mapper's engine rewrote it for the database, when the mapper ran. */
+  readonly text?: string | undefined;
+  /** The binding order for `text`: one name per placeholder of the rewritten statement. */
+  readonly order?: readonly string[] | undefined;
 };
 
 export async function execute<D extends Dialect>(
@@ -57,19 +61,27 @@ export async function execute<D extends Dialect>(
     }
     case "mysql": {
       // MySQL has only `?`, so a repeated name is repeated in the value list.
-      const { text, values } = rewriteRepeating(query, params);
+      const { text, values } = query.text && query.order ? bind(query.text, query.order, params) : rewriteRepeating(query, params);
       if (typeof c.unsafe === "function") return await c.unsafe(text, values);
       if (typeof c.batch === "function") return (await c.query!(text, values)) as unknown as unknown[];
       return (await c.execute!(text, values))[0] as unknown[];
     }
     case "postgres": {
-      const { text, values } = rewrite(query, params, (i) => `$${i + 1}`);
+      const { text, values } = query.text && query.order ? bind(query.text, query.order, params) : rewrite(query, params, (i) => `$${i + 1}`);
       if (typeof c.unsafe === "function") return await c.unsafe(text, values);
       return (await c.query!(text, values) as { rows: unknown[] }).rows;
     }
   }
 }
 
+/** The mapper already rewrote the statement; only the values need ordering. */
+function bind(text: string, order: readonly string[], params: Record<string, unknown>) {
+  return { text, values: order.map((name) => params[name]) };
+}
+
+// Without the mapper's cache the runtime lexes the placeholders itself (`lex.ts`); the
+// engine's lexer is the authoritative one, and the two agree on every statement the
+// runtime fallback is meant for.
 function rewrite(query: QueryModule, params: Record<string, unknown>, placeholder: (index: number) => string) {
   const { placeholders } = lexPlaceholders(query.sql);
   let text = "";

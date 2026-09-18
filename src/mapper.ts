@@ -6,11 +6,12 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join, relative } from "node:path";
 import { serve } from "./rpc.ts";
-import { lexPlaceholders, type Placeholder } from "./lex.ts";
+import { lexPlaceholders } from "./lex.ts";
+import { engine, AnswerCache } from "./engine.ts";
+import { ident, renderType } from "./render.ts";
 import { openPostgresDescriber, type Describer } from "./describe.ts";
 import { openSqliteDescriber, sqliteType, type SqliteDescriber } from "./sqlite-describe.ts";
 import { mysqlNotNull, mysqlType, openMysqlDescriber, type MysqlDescriber } from "./mysql-describe.ts";
-import { PG_TYPE_QUERY, typeText, type PgTypeRow } from "./pgtypes.ts";
 
 type Options = { dialect?: "postgres" | "sqlite" | "mysql"; source?: "database"; url?: string; urlEnv?: string };
 type Project = {
@@ -21,8 +22,10 @@ type Project = {
   describer: Promise<Describer> | undefined;
   sqlite: Promise<SqliteDescriber> | undefined;
   mysql: Promise<MysqlDescriber> | undefined;
-  cache: Record<string, { hash: string; params: string[]; cardinality: string; dialect: string }>;
+  answers: AnswerCache;
+  cache: Record<string, CacheEntry>;
 };
+type CacheEntry = { hash: string; params: string[]; cardinality: string; dialect: string; text?: string; order?: string[] };
 const projects = new Map<string, Project>();
 
 function readDotenv(dir: string): Record<string, string> {
@@ -34,21 +37,6 @@ function readDotenv(dir: string): Record<string, string> {
     if (m) out[m[1]!] = m[2]!.replace(/^(["'])(.*)\1$/, "$2");
   }
   return out;
-}
-
-function rewriteToDollar(sql: string, placeholders: Placeholder[], params: string[]): { text: string; toOriginal: (pos: number) => number } {
-  let text = "";
-  let last = 0;
-  const shifts: { at: number; delta: number }[] = [];
-  for (const p of placeholders) {
-    const replacement = `$${params.indexOf(p.name) + 1}`;
-    text += sql.slice(last, p.start) + replacement;
-    shifts.push({ at: text.length, delta: p.end - p.start - replacement.length });
-    last = p.end;
-  }
-  text += sql.slice(last);
-  const toOriginal = (pos: number) => shifts.reduce((acc, s) => (pos > s.at ? acc + s.delta : acc), pos);
-  return { text, toOriginal };
 }
 
 function directive(sql: string, name: string): string | undefined {
@@ -79,7 +67,7 @@ serve({
     const cachePath = join(projectDir, ".lando", "queries.json");
     const cache = existsSync(cachePath) ? JSON.parse(readFileSync(cachePath, "utf8")) : {};
     const dialect = options.dialect ?? (url && /^(file:|sqlite:)/.test(url) ? "sqlite" : url && /^(mysql|mariadb):/.test(url) ? "mysql" : "postgres");
-    projects.set(p.projectHandle, { projectDir, options, url, dialect, describer: undefined, sqlite: undefined, mysql: undefined, cache });
+    projects.set(p.projectHandle, { projectDir, options, url, dialect, describer: undefined, sqlite: undefined, mysql: undefined, answers: new AnswerCache(), cache });
     const configIdentity = createHash("sha1").update(JSON.stringify([options, url ?? null])).digest("hex");
     return { configIdentity, watchedFiles: [join(projectDir, ".env")], optionDiagnostics };
   },
@@ -121,22 +109,24 @@ serve({
     }
     const annotated = new Map<string, string>();
     for (const m of sql.matchAll(/^\s*--\s*@param\s+(\S+)\s+(.+?)\s*$/gm)) annotated.set(m[1]!, m[2]!);
-    const writeCache = () => {
+    const writeCache = (extra: Partial<CacheEntry> = {}) => {
       const key = relative(project.projectDir, p.fileName);
-      project.cache[key] = { hash: createHash("sha1").update(sql).digest("hex"), params: names, cardinality, dialect: project.dialect };
+      project.cache[key] = { hash: createHash("sha1").update(sql).digest("hex"), params: names, cardinality, dialect: project.dialect, ...extra };
       mkdirSync(join(project.projectDir, ".lando"), { recursive: true });
       writeFileSync(join(project.projectDir, ".lando", "queries.json"), JSON.stringify(project.cache, null, 2) + "\n");
     };
-    const ident = (name: string) => (/^[A-Za-z_$][\w$]*$/.test(name) ? name : JSON.stringify(name));
     if (project.dialect === "mysql") {
       project.mysql ??= openMysqlDescriber(project.projectDir, project.url);
       let described;
+      let mysqlText = "";
       try {
         // MySQL has only `?`; a repeated name repeats the placeholder.
         let text = "";
         let last = 0;
         for (const h of placeholders) { text += sql.slice(last, h.start) + "?"; last = h.end; }
-        described = await (await project.mysql).describe(text + sql.slice(last));
+        text += sql.slice(last);
+        mysqlText = text;
+        described = await (await project.mysql).describe(text);
       } catch (e) {
         const err = e as Error & { sqlState?: string; errno?: number };
         if (!err.sqlState) project.mysql = undefined;
@@ -159,7 +149,7 @@ serve({
         }
         return `${ident(name)}: ${inferred}`;
       });
-      writeCache();
+      writeCache({ text: mysqlText, order: placeholders.map((h) => h.name) });
       return emit(names.length ? `{ ${paramTypes.join("; ")} }` : "Record<never, never>", columns.length ? `{ ${columns.join("; ")} }` : "never", cardinality, names);
     }
     if (project.dialect === "sqlite") {
@@ -197,41 +187,36 @@ serve({
       diagnostics.push(diag(`Cannot connect to the database: ${(e as Error).message}`, 0, 1, 5));
       return emit("unknown", "unknown", cardinality, names);
     }
-    const { text, toOriginal } = rewriteToDollar(sql, placeholders, names);
-    let described;
+    // The engine owns the analysis: it names what it needs (a describe, a catalog query),
+    // the project's driver answers, and the engine settles types, nullability, nested JSON
+    // shapes and the row count.
+    let analysis;
     try {
-      described = await describer.describe(text);
+      analysis = await (await engine()).analyze(sql, "postgres", {
+        describe: (text) => describer.describe(text),
+        query: (text, params) => describer.values(text, params),
+      }, project.answers);
     } catch (e) {
-      const err = e as Error & { code?: string; position?: string | number };
-      const pos = err.position ? toOriginal(Number(err.position) - 1) : 0;
-      diagnostics.push(diag(`${err.message}${err.code ? ` (${err.code})` : ""}`, pos, Math.max(1, /^[\w."]+/.exec(sql.slice(pos))?.[0].length ?? 1), 6));
+      const err = e as Error & { code?: string };
+      // A dead connection is reopened on the next transform; a server error is reported.
+      if (!err.code) project.describer = undefined;
+      diagnostics.push(diag(err.message, 0, 1, 5));
       return emit("unknown", "unknown", cardinality, names);
     }
-    const lookup = async (oids: number[]) => (await describer.query(PG_TYPE_QUERY, [oids])) as PgTypeRow[];
-    const tableOids = [...new Set(described.columns.map((c) => c.table).filter((t) => t > 0))];
-    const notNull = new Set<string>();
-    if (tableOids.length) {
-      const rows = (await describer.query(`select attrelid::int as attrelid, attnum::int as attnum from pg_attribute where attrelid = any($1::oid[]) and attnotnull`, [tableOids])) as { attrelid: number; attnum: number }[];
-      for (const r of rows) notNull.add(`${r.attrelid}:${r.attnum}`);
+    diagnostics.push(...analysis.diagnostics.map((d) => diag(d.message, d.start, d.length, d.code)));
+    const inferred = directive(sql, "returns") ? cardinality : analysis.cardinality;
+    if (analysis.diagnostics.some((d) => d.code === 6) || analysis.kind === "") {
+      return emit("unknown", "unknown", inferred, analysis.rewritten.order);
     }
-    // Until the engine's join analysis lands, a plain column is non-null only when the
-    // statement has no join, set operation or outer reference that could null it.
-    const simpleShape = !/\b(join|union|except|intersect)\b/i.test(sql);
-    const columns: string[] = [];
-    for (const c of described.columns) {
-      const t = await typeText(c.oid, lookup);
-      const nonNull = simpleShape && c.table > 0 && notNull.has(`${c.table}:${c.attnum}`);
-      columns.push(`${/^[A-Za-z_$][\w$]*$/.test(c.name) ? c.name : JSON.stringify(c.name)}: ${t}${nonNull ? "" : " | null"}`);
-    }
-    const paramTypes: string[] = [];
-    for (const [i, name] of names.entries()) {
-      const t = await typeText(described.params[i]?.oid ?? 0, lookup);
-      paramTypes.push(`${/^[A-Za-z_$][\w$]*$/.test(name) ? name : JSON.stringify(name)}: ${t}`);
-    }
-    const paramsType = named.length ? `{ ${paramTypes.join("; ")} }` : names.length ? `{ ${paramTypes.join("; ")} }` : "Record<never, never>";
-    const rowType = columns.length ? `{ ${columns.join("; ")} }` : "never";
-    writeCache();
-    return emit(paramsType, rowType, cardinality, names);
+    const columns = analysis.columns.map((c) => `${ident(c.name)}: ${renderType(c.type)}${c.nullable ? " | null" : ""}`);
+    const paramTypes = analysis.params.map((q) => `${ident(q.name)}: ${renderType(q.type)}`);
+    writeCache({ cardinality: inferred, text: analysis.rewritten.sql, order: analysis.rewritten.order });
+    return emit(
+      paramTypes.length ? `{ ${paramTypes.join("; ")} }` : "Record<never, never>",
+      columns.length ? `{ ${columns.join("; ")} }` : "never",
+      inferred,
+      analysis.rewritten.order,
+    );
   },
   async closeProject(params) {
     const project = projects.get((params as { projectHandle: string }).projectHandle);
