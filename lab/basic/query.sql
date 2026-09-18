@@ -1,1 +1,4 @@
-select id, name from users where id = $1
+-- @returns maybeOne
+select id, name, email, role, tags, created_at, big, id + 1 as next_id
+from lando_users
+where id = :id and name = :name

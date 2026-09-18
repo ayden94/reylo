@@ -30,6 +30,7 @@
   ],
   "exclude": [
     "run.ts",
+    "setup.sql",
     "node_modules"
   ]
 }
