@@ -13,3 +13,6 @@ coverage/
 # Local agent / loop state — not part of the repo
 .claude/
 .frizz/
+
+# Lab emit output
+lab/**/dist/
