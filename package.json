@@ -11,8 +11,9 @@
   "exports": {
     ".": "./src/index.ts",
     "./register": "./src/register.ts",
-    "./unplugin": "./src/unplugin.ts",
-    "./turbopack-loader": "./src/turbopack-loader.ts",
+    "./vite": "./src/vite.ts",
+    "./esbuild": "./src/esbuild.ts",
+    "./webpack-loader": "./src/webpack-loader.ts",
     "./mapper": "./src/mapper.ts"
   },
   "typescript": {
@@ -32,12 +33,6 @@
   "devDependencies": {
     "@types/node": "^26.6.1",
     "esbuild": "^0.28.2",
-    "typescript": "^7.1.0-dev.20260918.1",
-    "unplugin": "^3.4.0"
-  },
-  "peerDependenciesMeta": {
-    "unplugin": {
-      "optional": true
-    }
+    "typescript": "^7.1.0-dev.20260918.1"
   }
 }

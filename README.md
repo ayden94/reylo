@@ -10,6 +10,10 @@ Lando is a TypeScript 7.1 content mapper that parses the SQL, reconciles it agai
 
 Status: pre-alpha. Design notes and experiments live in this repository while the shape settles.
 
+## Bundlers
+
+`lando/vite` is a Vite, Rollup and Rolldown plugin; `lando/esbuild` is an esbuild plugin that `Bun.build` and `Bun.plugin` take as is; `lando/webpack-loader` is a loader for webpack, Rspack and Turbopack. Each turns a `.sql` import into the same module the runtime preload builds, so a bundled app needs no preload.
+
 ## Examples
 
 Parameters are written `:name` in every dialect (`$name` and `@name` work too). The engine lexes them out and rewrites to the database's own placeholder (`$1` for Postgres, `?` for MySQL, `:name` stays for SQLite) when the mapper describes the statement; the rewritten text and its binding order land in `.lando/queries.json`, and `execute` binds through them, so the parameter object is `{ name: ... }` everywhere. Positional `$1` / `?` are accepted too; mixing the two styles in one statement is an error. On Postgres the engine infers the row count from the statement and the catalog (a primary-key equality is `maybeOne`, an ungrouped aggregate `one`, a one-row `INSERT … RETURNING` `one`); `-- @returns one | maybeOne | many | none` overrides it, and `-- @param name type` supplies a parameter type where the database reports none.
