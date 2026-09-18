@@ -1,0 +1,4 @@
+{
+  "js/ts.contentMappers.enabled": true,
+  "typescript.native-preview.tsdk": "node_modules/typescript/lib"
+}
