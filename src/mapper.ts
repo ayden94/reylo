@@ -86,9 +86,9 @@ serve({
       `import type { Query } from "lando";`,
       `export declare const sql: ${JSON.stringify(p.content)};`,
       `export type Row = ${rowType};`,
-      `export type Params = [id: number];`,
+      `export type Params = { id: number };`,
       `export declare const probe: ${JSON.stringify(probe)};`,
-      `declare const query: Query<Params, Row>;`,
+      `declare const query: Query<Params, Row, "many", "postgres">;`,
       `export default query;`,
       ``,
     ].join("\n");

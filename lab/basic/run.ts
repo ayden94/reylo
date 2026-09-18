@@ -1,2 +1,2 @@
-import q, { probe } from "./query.sql";
-console.log(JSON.stringify({ sql: q.sql.trim(), probe }));
+import query from "./query.sql";
+console.log(JSON.stringify({ sql: query.sql.trim(), params: query.params, cardinality: query.cardinality, vendor: query["~standard"].vendor }));

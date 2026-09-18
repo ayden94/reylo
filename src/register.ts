@@ -2,12 +2,14 @@
 // `nub --import lando/register`, `bun --preload lando/register` (or bunfig.toml).
 // Bun exposes Bun.plugin; Node and nub expose module.registerHooks.
 import { readFileSync } from "node:fs";
+import { lexPlaceholders } from "./lex.ts";
 
-function moduleSource(sql: string, path: string): string {
+function moduleSource(sql: string): string {
+  const { params } = lexPlaceholders(sql);
   return [
+    `import { defineQuery } from "lando";`,
     `export const sql = ${JSON.stringify(sql)};`,
-    `export const probe = ${JSON.stringify({ runtime: typeof Bun === "undefined" ? "node-registerHooks" : "bun-plugin", path })};`,
-    `export default { sql };`,
+    `export default defineQuery({ dialect: "postgres", sql, params: ${JSON.stringify(params)} });`,
   ].join("\n");
 }
 
@@ -17,7 +19,7 @@ if (typeof Bun !== "undefined") {
   Bun.plugin({
     name: "lando-sql",
     setup(build) {
-      build.onLoad({ filter: /\.sql$/ }, (args) => ({ loader: "js", contents: moduleSource(readFileSync(args.path, "utf8"), args.path) }));
+      build.onLoad({ filter: /\.sql$/ }, (args) => ({ loader: "js", contents: moduleSource(readFileSync(args.path, "utf8")) }));
     },
   });
 } else {
@@ -26,8 +28,7 @@ if (typeof Bun !== "undefined") {
   registerHooks({
     load(url, context, nextLoad) {
       if (!url.endsWith(".sql")) return nextLoad(url, context);
-      const path = fileURLToPath(url);
-      return { format: "module", source: moduleSource(readFileSync(path, "utf8"), path), shortCircuit: true };
+      return { format: "module", source: moduleSource(readFileSync(fileURLToPath(url), "utf8")), shortCircuit: true };
     },
   });
 }

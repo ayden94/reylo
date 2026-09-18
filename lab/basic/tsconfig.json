@@ -2,18 +2,34 @@
   "compilerOptions": {
     "target": "esnext",
     "module": "nodenext",
-    "lib": ["esnext"],
+    "lib": [
+      "esnext"
+    ],
     "types": [],
     "strict": true,
     "noEmit": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true
   },
   "contentMappers": [
     {
       "package": "lando",
-      "extensions": [".sql"],
-      "options": { "dialect": "postgres", "nested": { "n": 1 } }
+      "extensions": [
+        ".sql"
+      ],
+      "options": {
+        "dialect": "postgres",
+        "nested": {
+          "n": 1
+        }
+      }
     }
   ],
-  "include": ["."]
+  "include": [
+    "."
+  ],
+  "exclude": [
+    "run.ts",
+    "node_modules"
+  ]
 }
