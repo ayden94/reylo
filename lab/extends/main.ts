@@ -1,5 +1,2 @@
-import * as q from "./query.sql";
-
-// Force the checker to print what the mapper saw.
-const printed: never = q.probe;
-const sql: never = q.sql;
+import query from "./query.sql";
+const r: { id: number; name: string } | null = null! as Awaited<ReturnType<typeof query.execute>>;
