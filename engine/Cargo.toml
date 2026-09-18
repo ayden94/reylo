@@ -1,0 +1,26 @@
+[package]
+name = "lando-engine"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Lando's SQL analysis engine: parse, placeholder lexing, cardinality, expression nullability and nested JSON shapes, built to one WebAssembly artifact."
+
+[lib]
+name = "lando_engine"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pg_query = "6.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+indexmap = { version = "2", features = ["serde"] }
+
+# The crates.io sources plus the WebAssembly patch in `vendor/`; `build.sh` prepares the copy.
+[patch.crates-io]
+pg_query = { path = ".patched/pg_query" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
