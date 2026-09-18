@@ -1,2 +1,7 @@
+import postgres from "postgres";
 import query from "./query.sql";
-console.log(JSON.stringify({ sql: query.sql.trim(), params: query.params, cardinality: query.cardinality, vendor: query["~standard"].vendor }));
+const sql = postgres("postgres://localhost:5432/postgres");
+const ada = await query.execute(sql, { id: 1, name: "ada" });
+const nobody = await query.execute(sql, { id: 999, name: "x" });
+console.log(JSON.stringify({ params: query.params, cardinality: query.cardinality, ada, nobody, keys: Object.keys(query["~standard"]) }));
+await sql.end();

@@ -3,6 +3,8 @@
 // Each interface is the smallest slice of the real driver that execution needs,
 // and the query's dialect selects which clients are accepted at compile time.
 
+import { lexPlaceholders } from "./lex.ts";
+
 export type Dialect = "postgres" | "mysql" | "sqlite";
 
 /** node-postgres Pool/Client, PGlite: query(text, values) → { rows }. */
@@ -46,18 +48,48 @@ export async function execute<D extends Dialect>(
   query: QueryModule<D>,
   params: Record<string, unknown> = {},
 ): Promise<unknown[]> {
-  const values = query.params.map((name) => params[name]);
   const c = client as Partial<PgLikeClient & UnsafeClient & Mysql2LikeClient & MariadbLikeClient & SqliteLikeClient>;
   switch (query.dialect) {
-    case "sqlite":
-      return c.prepare!(query.sql).all(...values);
-    case "mysql":
-      if (typeof c.unsafe === "function") return await c.unsafe(query.sql, values);
-      // mariadb also has execute(), so its batch() marker is checked first.
-      if (typeof c.batch === "function") return (await c.query!(query.sql, values)) as unknown as unknown[];
-      return (await c.execute!(query.sql, values))[0] as unknown[];
-    case "postgres":
-      if (typeof c.unsafe === "function") return await c.unsafe(query.sql, values);
-      return (await c.query!(query.sql, values) as { rows: unknown[] }).rows;
+    case "sqlite": {
+      // SQLite binds names natively; positional ones are passed in order.
+      const { text, values } = rewrite(query, params, (i) => `?${i + 1}`);
+      return c.prepare!(text).all(...values);
+    }
+    case "mysql": {
+      // MySQL has only `?`, so a repeated name is repeated in the value list.
+      const { text, values } = rewriteRepeating(query, params);
+      if (typeof c.unsafe === "function") return await c.unsafe(text, values);
+      if (typeof c.batch === "function") return (await c.query!(text, values)) as unknown as unknown[];
+      return (await c.execute!(text, values))[0] as unknown[];
+    }
+    case "postgres": {
+      const { text, values } = rewrite(query, params, (i) => `$${i + 1}`);
+      if (typeof c.unsafe === "function") return await c.unsafe(text, values);
+      return (await c.query!(text, values) as { rows: unknown[] }).rows;
+    }
   }
+}
+
+function rewrite(query: QueryModule, params: Record<string, unknown>, placeholder: (index: number) => string) {
+  const { placeholders } = lexPlaceholders(query.sql);
+  let text = "";
+  let last = 0;
+  for (const p of placeholders) {
+    text += query.sql.slice(last, p.start) + placeholder(query.params.indexOf(p.name));
+    last = p.end;
+  }
+  return { text: text + query.sql.slice(last), values: query.params.map((name) => params[name]) };
+}
+
+function rewriteRepeating(query: QueryModule, params: Record<string, unknown>) {
+  const { placeholders } = lexPlaceholders(query.sql);
+  let text = "";
+  let last = 0;
+  const values: unknown[] = [];
+  for (const p of placeholders) {
+    text += query.sql.slice(last, p.start) + "?";
+    values.push(params[p.name]);
+    last = p.end;
+  }
+  return { text: text + query.sql.slice(last), values };
 }
