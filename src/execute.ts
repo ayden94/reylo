@@ -55,8 +55,9 @@ export async function execute<D extends Dialect>(
   const c = client as Partial<PgLikeClient & UnsafeClient & Mysql2LikeClient & MariadbLikeClient & SqliteLikeClient>;
   switch (query.dialect) {
     case "sqlite": {
-      // SQLite binds names natively; positional ones are passed in order.
-      const { text, values } = rewrite(query, params, (i) => `?${i + 1}`);
+      // The mapper's text has one `?` per placeholder, bound in order; without it, SQLite's
+      // own numbered form.
+      const { text, values } = query.text && query.order ? bind(query.text, query.order, params) : rewrite(query, params, (i) => `?${i + 1}`);
       return c.prepare!(text).all(...values);
     }
     case "mysql": {

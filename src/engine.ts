@@ -44,12 +44,18 @@ export type Need =
   | { kind: "query"; id: string; sql: string; params: unknown[]; scope: "session" | "statement" };
 
 export type Described = { params: { oid: number }[]; columns: { name: string; oid: number; table: number; attnum: number }[] };
+export type SqliteDescribed = { columns: { name: string; declared: string | null; table: string | null; column: string | null }[] };
 export type DbError = { message: string; code?: string; position?: number };
-export type Answer = { describe: { params: number[]; columns: Described["columns"] } } | { rows: unknown[][] } | { error: DbError };
+export type Answer =
+  | { describe: { params: number[]; columns: Described["columns"] } }
+  | { sqlite: SqliteDescribed }
+  | { rows: unknown[][] }
+  | { error: DbError };
 
 /** What the host does for the engine: describe a statement, run a catalog query. */
 export interface EngineIo {
-  describe(sql: string): Promise<Described>;
+  /** Postgres: Parse/Describe. SQLite: prepare and read the column metadata. */
+  describe(sql: string): Promise<Described | SqliteDescribed>;
   /** Rows as arrays of values, in column order. */
   query(sql: string, params: unknown[]): Promise<unknown[][]>;
 }
@@ -126,7 +132,8 @@ async function fulfil(need: Need, io: EngineIo): Promise<Answer> {
   try {
     if (need.kind === "describe") {
       const d = await io.describe(need.sql);
-      return { describe: { params: d.params.map((p) => p.oid), columns: d.columns } };
+      if ("params" in d) return { describe: { params: d.params.map((p) => p.oid), columns: d.columns } };
+      return { sqlite: d };
     }
     return { rows: await io.query(need.sql, need.params) };
   } catch (e) {

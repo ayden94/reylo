@@ -10,7 +10,7 @@ import { lexPlaceholders } from "./lex.ts";
 import { engine, AnswerCache } from "./engine.ts";
 import { ident, renderType } from "./render.ts";
 import { openPostgresDescriber, type Describer } from "./describe.ts";
-import { openSqliteDescriber, sqliteType, type SqliteDescriber } from "./sqlite-describe.ts";
+import { openSqliteDescriber, type SqliteDescriber } from "./sqlite-describe.ts";
 import { mysqlNotNull, mysqlType, openMysqlDescriber, type MysqlDescriber } from "./mysql-describe.ts";
 
 type Options = { dialect?: "postgres" | "sqlite" | "mysql"; source?: "database"; url?: string; urlEnv?: string };
@@ -176,30 +176,39 @@ serve({
       return emit(names.length ? `{ ${paramTypes.join("; ")} }` : "Record<never, never>", columns.length ? `{ ${columns.join("; ")} }` : "never", cardinality, names);
     }
     if (project.dialect === "sqlite") {
-      // `-- @param name type` supplies what SQLite cannot: parameter types.
       project.sqlite ??= openSqliteDescriber(project.url, project.projectDir);
-      let described;
+      let sqlite: SqliteDescriber;
       try {
-        described = await (await project.sqlite).describe(sql);
+        sqlite = await project.sqlite;
       } catch (e) {
         project.sqlite = undefined;
-        diagnostics.push(diag((e as Error).message, 0, Math.max(1, sql.trimEnd().length), 6));
+        diagnostics.push(diag(`Cannot open the database: ${(e as Error).message}`, 0, 1, 5));
         return emit("unknown", "unknown", cardinality, names);
       }
-      const columns = described.columns.map((c) => {
-        const t = c.table ? sqliteType(c.declared) : "unknown";
-        return `${/^[A-Za-z_$][\w$]*$/.test(c.name) ? c.name : JSON.stringify(c.name)}: ${t}${described.notNull.has(c.name) ? "" : " | null"}`;
-      });
-      const paramTypes = names.map((name) => {
-        const t = annotated.get(name);
+      let analysis;
+      try {
+        analysis = await (await engine()).analyze(sql, "sqlite", { describe: (text) => sqlite.describe(text), query: (text, params) => sqlite.values(text, params) }, project.answers);
+      } catch (e) {
+        project.sqlite = undefined;
+        diagnostics.push(diag((e as Error).message, 0, 1, 5));
+        return emit("unknown", "unknown", cardinality, names);
+      }
+      diagnostics.push(...analysis.diagnostics.map((d) => diag(d.message, d.start, d.length, d.code)));
+      const inferred = directive(sql, "returns") ? cardinality : analysis.cardinality;
+      if (analysis.diagnostics.some((d) => d.code === 6)) return emit("unknown", "unknown", inferred, analysis.rewritten.order);
+      const columns = analysis.columns.map((c) => `${ident(c.name)}: ${renderType(c.type, false, "sqlite")}${c.nullable ? " | null" : ""}`);
+      // The engine types a parameter from its context; `-- @param name type` overrides it and
+      // covers the ones no context names.
+      const paramTypes = analysis.params.map((q) => {
+        const t = annotated.get(q.name) ?? (q.type.kind === "unknown" ? undefined : renderType(q.type, false, "sqlite"));
         if (!t) {
-          const at = placeholders.find((h) => h.name === name)!;
-          diagnostics.push(diag(`SQLite cannot type parameter "${name}"; add "-- @param ${name} <type>" (number, string, Uint8Array, ...).`, at.start, at.end - at.start, 7));
+          const at = placeholders.find((h) => h.name === q.name)!;
+          diagnostics.push(diag(`Nothing in the statement types parameter "${q.name}"; add "-- @param ${q.name} <type>" (number, string, Uint8Array, ...).`, at.start, at.end - at.start, 7));
         }
-        return `${/^[A-Za-z_$][\w$]*$/.test(name) ? name : JSON.stringify(name)}: ${t ?? "unknown"}`;
+        return `${ident(q.name)}: ${t ?? "unknown"}`;
       });
-      writeCache();
-      return emit(names.length ? `{ ${paramTypes.join("; ")} }` : "Record<never, never>", columns.length ? `{ ${columns.join("; ")} }` : "never", cardinality, names);
+      writeCache({ cardinality: inferred, text: analysis.rewritten.sql, order: analysis.rewritten.order });
+      return emit(names.length ? `{ ${paramTypes.join("; ")} }` : "Record<never, never>", columns.length ? `{ ${columns.join("; ")} }` : "never", inferred, names);
     }
     project.describer ??= openPostgresDescriber(project.projectDir, project.url);
     let describer: Describer;

@@ -50,19 +50,19 @@ Inside JSON the values are what the database serialized (`created_at` is a strin
 ### SQLite
 
 ```sql
--- @returns maybeOne
--- @param id number
-select id, name, email, score, avatar, created_at, id + 1 as next_id
-from users
-where id = :id
+select u.id, u.name, p.title, cast(:min as integer) as min_score
+from users u left join posts p on p.user_id = u.id
+where u.name like :q and u.score >= :min
+order by u.id limit :n offset :o
 ```
 
 ```ts
-const user = await getUser.execute(db, { id: 1 });
-//    ^? { id: number; name: string; email: string | null; score: number | null; avatar: Uint8Array | null; created_at: string; next_id: unknown } | null
+import search from "./search.sql";
+const rows = await search.execute(db, { q: "a%", min: 1, n: 5, o: 0 });
+//    ^? { id: number; name: string; title: string | null; min_score: number | null }[]
 ```
 
-SQLite types plain table columns from their declared type and NOT NULL, leaves expressions `unknown`, and never types parameters, so the `-- @param` line is required (the mapper reports the placeholder when it is missing).
+SQLite cannot describe a parameter, so the engine reads each one off the statement: `:q` is text because `LIKE` takes text, `:min` is the type of `u.score` (and the cast agrees), `:n` and `:o` are integers because `LIMIT` and `OFFSET` take integers; an `INSERT … VALUES` or `UPDATE … SET` types a placeholder from the column it feeds, a comparison from the column on the other side, `coalesce` from its siblings. Columns carry their declared affinity (`INTEGER`, `REAL` → `number`; `TEXT` → `string`; `BLOB` → `Uint8Array`) and `NOT NULL`; `p.title` is nullable because of the left join. The row count comes from the keys: `where id = :id` on an `INTEGER PRIMARY KEY` or a unique index is `| null`, a one-row `INSERT … RETURNING` is one row. `-- @param name type` still overrides a parameter, for the ones no context names.
 
 ### MySQL
 

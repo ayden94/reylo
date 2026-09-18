@@ -9,13 +9,30 @@ type ExpectedRow = {
   score: number | null;
   avatar: Uint8Array | null;
   created_at: string;
-  next_id: unknown;
+  next_id: number | null;
+  total: number;
 };
 const a: ExpectedRow = null! as Row;
 const b: Row = null! as ExpectedRow;
-const c: { id: number } = null! as Params;
-const d: Params = null! as { id: number };
-const e: Row | null = await query.execute(db, { id: 1 });
-const f: readonly ["id"] = q.params;
+const c: { id: number; pattern: string } = null! as Params;
+const d: Params = null! as { id: number; pattern: string };
+const e: Row | null = await query.execute(db, { id: 1, pattern: "a%" });
+const f: readonly ["id", "pattern"] = q.params;
 // @ts-expect-error a postgres pool cannot run a sqlite query
-await query.execute({ query: async () => ({ rows: [] }) }, { id: 1 });
+await query.execute({ query: async () => ({ rows: [] }) }, { id: 1, pattern: "a%" });
+
+// Inference without directives: parameter types from context, cardinality from the keys,
+// nullability from the schema and the joins.
+import insert from "./insert.sql";
+import byEmail from "./by_email.sql";
+import search from "./search.sql";
+const i1: { id: number; name: string; created_at: string } = null! as Awaited<ReturnType<typeof insert.execute>>;
+const i2: Awaited<ReturnType<typeof insert.execute>> = null! as { id: number; name: string; created_at: string };
+const i3: { name: string; email: string } = null! as Parameters<typeof insert.execute>[1];
+const b1: { id: number; name: string } | null = null! as Awaited<ReturnType<typeof byEmail.execute>>;
+const b2: Awaited<ReturnType<typeof byEmail.execute>> = null! as { id: number; name: string } | null;
+const s1: { id: number; name: string; title: string | null; min_score: number | null }[] = null! as Awaited<ReturnType<typeof search.execute>>;
+const s2: Awaited<ReturnType<typeof search.execute>> = null! as { id: number; name: string; title: string | null; min_score: number | null }[];
+const s3: { min: number; q: string; n: number; o: number } = null! as Parameters<typeof search.execute>[1];
+const s4: Parameters<typeof search.execute>[1] = null! as { min: number; q: string; n: number; o: number };
+const cards: ["one", "maybeOne", "many"] = [insert.cardinality, byEmail.cardinality, search.cardinality];
