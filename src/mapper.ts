@@ -9,7 +9,7 @@ import { serve } from "./rpc.ts";
 import { lexPlaceholders } from "./lex.ts";
 import { engine, AnswerCache } from "./engine.ts";
 import { conversion, defaultRepr, ident, renderType, type Conversion, type Repr } from "./render.ts";
-import { mysqlConversion, mysqlNotNull, mysqlType, openMysqlDescriber, type MysqlDescriber } from "./mysql-describe.ts";
+import { openMysqlDescriber, type MysqlDescriber } from "./mysql-describe.ts";
 import { openPostgresDescriber, type Describer } from "./describe.ts";
 import { openSqliteDescriber, type SqliteDescriber } from "./sqlite-describe.ts";
 
@@ -148,42 +148,54 @@ serve({
     };
     if (project.dialect === "mysql") {
       project.mysql ??= openMysqlDescriber(project.projectDir, project.url);
-      let described;
-      let mysqlText = "";
+      let mysql: MysqlDescriber;
       try {
-        // MySQL has only `?`; a repeated name repeats the placeholder.
-        let text = "";
-        let last = 0;
-        for (const h of placeholders) { text += sql.slice(last, h.start) + "?"; last = h.end; }
-        text += sql.slice(last);
-        mysqlText = text;
-        described = await (await project.mysql).describe(text);
+        mysql = await project.mysql;
       } catch (e) {
-        const err = e as Error & { sqlState?: string; errno?: number };
-        if (!err.sqlState) project.mysql = undefined;
-        diagnostics.push(diag(`${err.message}${err.sqlState ? ` (${err.sqlState})` : ""}`, 0, Math.max(1, sql.trimEnd().length), 6));
+        project.mysql = undefined;
+        diagnostics.push(diag(`Cannot connect to the database: ${(e as Error).message}`, 0, 1, 5));
         return emit("unknown", "unknown", cardinality, names);
       }
-      const columns = described.columns.map((c) => `${ident(c.name)}: ${mysqlType(c, project.repr)}${mysqlNotNull(c.flags) ? "" : " | null"}`);
-      const convert: Record<string, Conversion> = {};
-      for (const c of described.columns) { const cls = mysqlConversion(c); if (cls) convert[c.name] = cls; }
-      // MySQL 8.4's prepare infers a type per `?` from context (LONGLONG against an
-      // int column, VAR_STRING against a varchar); an annotation overrides it, and a
-      // diagnostic asks for one only when the server offers nothing usable.
-      const paramTypes = names.map((name) => {
-        const t = annotated.get(name);
-        if (t) return `${ident(name)}: ${t}`;
-        const index = placeholders.findIndex((h) => h.name === name);
-        const guess = described.params[index];
-        const inferred = guess ? mysqlType({ type: guess.type }) : "unknown";
-        if (inferred === "unknown") {
-          const at = placeholders[index]!;
-          diagnostics.push(diag(`MySQL could not type parameter "${name}"; add "-- @param ${name} <type>".`, at.start, at.end - at.start, 7));
+      // The server's prepare is the type source (each column's type and NOT NULL, a type per
+      // `?` from its context); the engine reads it and proves the row count over its own parse
+      // and the tables' unique keys.
+      let analysis;
+      try {
+        analysis = await (await engine()).analyze(sql, "mysql", {
+          describe: async (text) => {
+            try {
+              return await mysql.describe(text);
+            } catch (e) {
+              // A server error carries a SQLSTATE; anything else is the connection, reopened next time.
+              if (!(e as { sqlState?: string }).sqlState) project.mysql = undefined;
+              throw e;
+            }
+          },
+          query: (text, params) => mysql.values(text, params),
+        }, project.answers);
+      } catch (e) {
+        project.mysql = undefined;
+        diagnostics.push(diag((e as Error).message, 0, 1, 5));
+        return emit("unknown", "unknown", cardinality, names);
+      }
+      diagnostics.push(...analysis.diagnostics.map((d) => diag(d.message, d.start, d.length, d.code)));
+      const inferred = directive(sql, "returns") ? cardinality : analysis.cardinality;
+      if (analysis.diagnostics.some((d) => d.code === 6)) return emit("unknown", "unknown", inferred, names);
+      const columns = analysis.columns.map((c) => `${ident(c.name)}: ${renderType(c.type, false, "mysql", project.repr)}${c.nullable ? " | null" : ""}`);
+      // The server types a `?` from its context (LONGLONG against an int column, VAR_STRING
+      // against a varchar); `-- @param name type` overrides it and covers the ones it leaves untyped.
+      const paramTypes = analysis.params.map((q) => {
+        const t = annotated.get(q.name) ?? (q.type.kind === "unknown" ? undefined : renderType(q.type, false, "mysql", project.repr));
+        if (!t) {
+          const at = placeholders.find((h) => h.name === q.name)!;
+          diagnostics.push(diag(`MySQL could not type parameter "${q.name}"; add "-- @param ${q.name} <type>".`, at.start, at.end - at.start, 7));
         }
-        return `${ident(name)}: ${inferred}`;
+        return `${ident(q.name)}: ${t ?? "unknown"}`;
       });
-      writeCache({ text: mysqlText, order: placeholders.map((h) => h.name) }, convert);
-      return emit(names.length ? `{ ${paramTypes.join("; ")} }` : "Record<never, never>", columns.length ? `{ ${columns.join("; ")} }` : "never", cardinality, names);
+      const convert: Record<string, Conversion> = {};
+      for (const c of analysis.columns) { const cls = conversion(c.type); if (cls) convert[c.name] = cls; }
+      writeCache({ cardinality: inferred, text: analysis.rewritten.sql, order: analysis.rewritten.order }, convert);
+      return emit(names.length ? `{ ${paramTypes.join("; ")} }` : "Record<never, never>", columns.length ? `{ ${columns.join("; ")} }` : "never", inferred, names);
     }
     if (project.dialect === "sqlite") {
       project.sqlite ??= openSqliteDescriber(project.url, project.projectDir);

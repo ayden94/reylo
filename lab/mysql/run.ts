@@ -1,5 +1,12 @@
 import mysql from "mysql2/promise";
 import query from "./query.sql";
+import count from "./count.sql";
+import insert from "./insert.sql";
+import nested from "./nested.sql";
 const conn = await mysql.createConnection(process.env.DATABASE_URL ?? "mysql://root:lando@127.0.0.1:33306/lando");
-console.log(JSON.stringify({ dialect: query.dialect, ada: await query.execute(conn, { id: 1, skip: "" }), nobody: await query.execute(conn, { id: 99, skip: "" }) }));
+await conn.beginTransaction();
+const inserted = await insert.execute(conn, { name: "eve", email: "eve@example.com" });
+const after = await count.execute(conn, { pattern: "%" });
+await conn.rollback();
+console.log(JSON.stringify({ dialect: query.dialect, ada: await query.execute(conn, { id: 1, skip: "" }), nobody: await query.execute(conn, { id: 99, skip: "" }), count: await count.execute(conn, { pattern: "a%" }), inserted, after, nested: await nested.execute(conn, { id: 1 }) }));
 await conn.end();

@@ -44,16 +44,19 @@ export type Need =
   | { kind: "query"; id: string; sql: string; params: unknown[]; scope: "session" | "statement" };
 
 export type Described = { params: { oid: number }[]; columns: { name: string; oid: number; table: number; attnum: number }[] };
+/** MySQL's prepare metadata: the protocol type code, the flags (bit 1 is NOT NULL) and the charset (63 is binary). */
+export type MysqlDescribed = { kind: "mysql"; columns: { name: string; type: number; flags: number; charset: number }[]; params: { type: number; flags: number; charset: number }[] };
 export type DbError = { message: string; code?: string; position?: number };
 export type Answer =
   | { describe: { params: number[]; columns: Described["columns"] } }
+  | { mysql: { columns: MysqlDescribed["columns"]; params: MysqlDescribed["params"] } }
   | { rows: unknown[][] }
   | { error: DbError };
 
 /** What the host does for the engine: describe a statement, run a catalog query. */
 export interface EngineIo {
-  /** Postgres: Parse/Describe. SQLite needs none: the engine prepares inside its own SQLite. */
-  describe(sql: string): Promise<Described>;
+  /** Postgres: Parse/Describe. MySQL: a server prepare. SQLite needs none: the engine prepares inside its own SQLite. */
+  describe(sql: string): Promise<Described | MysqlDescribed>;
   /** Rows as arrays of values, in column order. */
   query(sql: string, params: unknown[]): Promise<unknown[][]>;
 }
@@ -130,6 +133,7 @@ async function fulfil(need: Need, io: EngineIo): Promise<Answer> {
   try {
     if (need.kind === "describe") {
       const d = await io.describe(need.sql);
+      if ("kind" in d) return { mysql: { columns: d.columns, params: d.params } };
       return { describe: { params: d.params.map((p) => p.oid), columns: d.columns } };
     }
     return { rows: await io.query(need.sql, need.params) };

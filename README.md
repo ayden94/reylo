@@ -16,7 +16,7 @@ Status: pre-alpha. Design notes and experiments live in this repository while th
 
 ## Examples
 
-Parameters are written `:name` in every dialect (`$name` and `@name` work too). The engine lexes them out and rewrites to the database's own placeholder (`$1` for Postgres, `?` for MySQL, `:name` stays for SQLite) when the mapper describes the statement; the rewritten text and its binding order land in `.lando/queries.json`, and `execute` binds through them, so the parameter object is `{ name: ... }` everywhere. Positional `$1` / `?` are accepted too; mixing the two styles in one statement is an error. On Postgres the engine infers the row count from the statement and the catalog (a primary-key equality is `maybeOne`, an ungrouped aggregate `one`, a one-row `INSERT … RETURNING` `one`); `-- @returns one | maybeOne | many | none` overrides it, and `-- @param name type` supplies a parameter type where the database reports none.
+Parameters are written `:name` in every dialect (`$name` and `@name` work too). The engine lexes them out and rewrites to the database's own placeholder (`$1` for Postgres, `?` for MySQL, `:name` stays for SQLite) when the mapper describes the statement; the rewritten text and its binding order land in `.lando/queries.json`, and `execute` binds through them, so the parameter object is `{ name: ... }` everywhere. Positional `$1` / `?` are accepted too; mixing the two styles in one statement is an error. The engine infers the row count from the statement and the schema on every dialect (a primary-key equality is `maybeOne`, an ungrouped aggregate `one`, a one-row `INSERT … RETURNING` `one`, a data-modifying statement without RETURNING `none`); `-- @returns one | maybeOne | many | none` overrides it, and `-- @param name type` supplies a parameter type where the database reports none.
 
 ### Postgres
 
@@ -71,7 +71,6 @@ SQLite has no describe for a parameter or an expression, so the engine carries S
 ### MySQL
 
 ```sql
--- @returns maybeOne
 select id, name, email, big, n, at, j, flag, id + 1 as next_id
 from users
 where id = :id and name <> :skip
@@ -82,7 +81,16 @@ const user = await getUser.execute(conn, { id: 1, skip: "" });
 //    ^? { id: number; name: string; email: string | null; big: string; n: string; at: string; j: unknown; flag: number; next_id: string } | null
 ```
 
-MySQL 8.4's prepare reports column types, NOT NULL and provenance, and infers a type per parameter from context, so no annotation is needed here; `bigint` and `datetime` follow the `bigint` and `dates` options (strings by default; mysql2 decodes a `bigint` as a lossy `number`, which the runtime turns into text) and `decimal` is a string.
+MySQL 8.4's prepare reports column types, NOT NULL and provenance, and infers a type per parameter from context, so no annotation is needed; `bigint` and `datetime` follow the `bigint` and `dates` options (strings by default; mysql2 decodes a `bigint` as a lossy `number`, which the runtime turns into text) and `decimal` is a string. The engine adds what the server does not say: the row count (`id` is the primary key, so `maybeOne`; an ungrouped aggregate is `one`; an `insert`, `update` or `delete` is `none`, MySQL having no RETURNING), and the shape of a `json_object` / `json_arrayagg` column, typed from its arguments:
+
+```sql
+select u.id,
+  (select coalesce(json_arrayagg(json_object('id', p.id, 'title', p.title)), json_array())
+   from posts p where p.user_id = u.id) as posts
+from users u
+where u.id = :id
+-- { id: number; posts: { id: number; title: string }[] } | null
+```
 
 ## Dates and 64-bit integers
 
