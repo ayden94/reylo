@@ -401,6 +401,9 @@ impl Reader<'_> {
             }
             Some(NodeEnum::BoolExpr(b)) if !b.args.is_empty() => Expr::Every(b.args.iter().map(|a| self.read(a)).collect(), bool_ty),
             Some(NodeEnum::NullTest(_)) | Some(NodeEnum::BooleanTest(_)) => Expr::NonNull(Some(oid::BOOL)),
+            // `ARRAY[...]` always builds an array, whatever its elements hold; the describe already
+            // names the element type.
+            Some(NodeEnum::AArrayExpr(_)) => Expr::NonNull(None),
             Some(NodeEnum::CoalesceExpr(c)) if !c.args.is_empty() => Expr::Any(c.args.iter().map(|a| self.read(a)).collect(), Ty::Shared),
             Some(NodeEnum::CaseExpr(c)) => {
                 let mut results = Vec::with_capacity(c.args.len() + 1);

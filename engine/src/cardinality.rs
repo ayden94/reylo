@@ -177,8 +177,12 @@ pub fn at_most_one(sql: &str, dialect: Dialect, trust: &Trust, catalog: &Catalog
         // cannot read. An OFFSET alone only ever removes rows, so it is left to the key proof.
         return Err("a LIMIT of more than one row, or one the build cannot read, bounds nothing".into());
     }
+    let grouped = !s.group_clause.is_empty() && s.larg.is_none() && s.rarg.is_none() && s.values_lists.is_empty() && s.into_clause.is_none();
     if let Some(why) = not_key_shaped(&s) {
-        return Err(why.to_string());
+        // A GROUP BY has its own proof below; every other shape ends here.
+        if !grouped {
+            return Err(why.to_string());
+        }
     }
     if dialect == Dialect::Postgres {
         let at_this_level = s.target_list.iter().chain(&s.sort_clause).chain(&s.distinct_clause).chain(&s.window_clause);
@@ -186,7 +190,70 @@ pub fn at_most_one(sql: &str, dialect: Dialect, trust: &Trust, catalog: &Catalog
             return Err(why);
         }
     }
+    if grouped {
+        return one_group_by_key(&s, catalog);
+    }
     one_row_by_key(&s, catalog)
+}
+
+/// The grouped form of the key proof: the `WHERE` pins a unique key of one relation to values
+/// that read no column, so every input row carries the same row of that relation, and every
+/// `GROUP BY` column belongs to it, so the rows fall into one group at most. What else is joined
+/// does not matter: it can multiply the input rows, never the groups. `HAVING` only drops the
+/// group. This is `SELECT u.*, count(p.id) FROM users u LEFT JOIN posts p ON ... WHERE u.id = $1
+/// GROUP BY u.id`.
+fn one_group_by_key(s: &SelectStmt, catalog: &Catalog) -> Result<(), String> {
+    let mut relations = Vec::new();
+    for item in &s.from_clause {
+        range_vars(item, &mut relations);
+    }
+    // With one plain relation a bare column can only be its own; among several, a bare GROUP BY
+    // column is taken as this relation's only when it names a column of one of its unique keys
+    // (Postgres rejects an ambiguous bare column before the engine sees the statement).
+    let single = relations.len() == 1 && s.from_clause.len() == 1 && matches!(s.from_clause[0].node.as_ref(), Some(NodeEnum::RangeVar(_)));
+    for rv in &relations {
+        let relation = rv.relname.as_str();
+        if s.with_clause.as_ref().is_some_and(|with| with.ctes.iter().any(|c| cte_name(c).is_some_and(|n| n == relation))) {
+            continue;
+        }
+        let Some(keys) = catalog.unique_keys.get(relation).filter(|k| !k.is_empty()) else { continue };
+        let alias = rv.alias.as_ref().map(|a| a.aliasname.as_str()).unwrap_or(relation);
+        let equated = match s.where_clause.as_deref() {
+            Some(w) => equated_columns(w, alias, true),
+            None => HashSet::new(),
+        };
+        if !keys.iter().any(|key| key.iter().all(|c| equated.contains(c))) {
+            continue;
+        }
+        let own = s.group_clause.iter().all(|g| match own_column(g, alias) {
+            Some(col) => single || is_qualified(g) || keys.iter().flatten().any(|k| *k == col),
+            None => false,
+        });
+        if own {
+            return Ok(());
+        }
+    }
+    Err("GROUP BY returns one row per group; the engine proves one group only when the WHERE pins a unique key of a relation to values and every GROUP BY column belongs to that relation".into())
+}
+
+/// The base relations of a FROM item, through its joins; a subquery or a function is skipped.
+fn range_vars<'a>(item: &'a protobuf::Node, out: &mut Vec<&'a protobuf::RangeVar>) {
+    match item.node.as_ref() {
+        Some(NodeEnum::RangeVar(rv)) => out.push(rv),
+        Some(NodeEnum::JoinExpr(j)) => {
+            if let Some(l) = j.larg.as_deref() {
+                range_vars(l, out);
+            }
+            if let Some(r) = j.rarg.as_deref() {
+                range_vars(r, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_qualified(node: &protobuf::Node) -> bool {
+    matches!(node.node.as_ref(), Some(NodeEnum::ColumnRef(c)) if c.fields.len() == 2)
 }
 
 /// Which of the key proof's structural conditions a statement breaks, if it breaks one. A shape
@@ -241,7 +308,7 @@ fn key_bounds(
     };
     let alias = rv.alias.as_ref().map(|a| a.aliasname.as_str()).unwrap_or(&relation);
     let equated = match where_clause {
-        Some(w) => equated_columns(w, alias),
+        Some(w) => equated_columns(w, alias, false),
         None => HashSet::new(),
     };
     match keys.iter().find(|key| key.iter().all(|c| equated.contains(c))) {
@@ -316,7 +383,7 @@ fn cte_name(cte: &protobuf::Node) -> Option<&String> {
 /// `AND`s only: an `OR` beside them widens the match, and anything else is not a restriction the
 /// build reads. The other side must name no column of this relation, because `x = y` between two
 /// of its own columns restricts nothing a unique key covers.
-fn equated_columns(where_clause: &protobuf::Node, alias: &str) -> HashSet<String> {
+fn equated_columns(where_clause: &protobuf::Node, alias: &str, strict: bool) -> HashSet<String> {
     let mut out = HashSet::new();
     let mut stack = vec![where_clause];
     while let Some(node) = stack.pop() {
@@ -328,7 +395,9 @@ fn equated_columns(where_clause: &protobuf::Node, alias: &str) -> HashSet<String
                 let (Some(l), Some(r)) = (e.lexpr.as_deref(), e.rexpr.as_deref()) else { continue };
                 for (column, other) in [(l, r), (r, l)] {
                     if let Some(name) = own_column(column, alias) {
-                        if !reads_relation(other, alias) {
+                        // Strict: the other side reads no column of any relation, so it is a value
+                        // (a parameter, a literal, a call on those). Otherwise: no column of this one.
+                        if if strict { !reads_any_column(other) } else { !reads_relation(other, alias) } {
                             out.insert(name);
                         }
                     }
@@ -357,6 +426,19 @@ fn own_column(node: &protobuf::Node, alias: &str) -> Option<String> {
         [qualifier, column] if *qualifier == alias => Some((*column).to_string()),
         _ => None,
     }
+}
+
+/// Whether this expression reads a column of any relation, at any depth.
+fn reads_any_column(node: &protobuf::Node) -> bool {
+    let Ok(tree) = serde_json::to_value(node) else { return true };
+    fn walk(v: &Value) -> bool {
+        match v {
+            Value::Object(map) => map.iter().any(|(key, child)| key == "ColumnRef" || walk(child)),
+            Value::Array(items) => items.iter().any(walk),
+            _ => false,
+        }
+    }
+    walk(&tree)
 }
 
 /// Whether this expression reads any column of `alias`, qualified or bare.
@@ -539,3 +621,36 @@ fn walk(v: &Value, calls: &mut Calls) {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn catalog() -> Catalog {
+        let mut c = Catalog::default();
+        c.unique_keys.insert("users".into(), vec![vec!["id".into()], vec!["email".into()]]);
+        c.unique_keys.insert("posts".into(), vec![vec!["id".into()]]);
+        c.functions.insert("count".into());
+        c
+    }
+
+    fn at_most(sql: &str) -> Result<(), String> {
+        at_most_one(sql, Dialect::Postgres, &Trust::default(), &catalog())
+    }
+
+    #[test]
+    fn grouped_by_a_pinned_relation_is_one_group() {
+        assert!(at_most("select u.id, count(p.id) from users u left join posts p on p.user_id = u.id where u.id = $1 group by u.id").is_ok());
+        assert!(at_most("select u.id, u.name, count(*) from users u join posts p on p.user_id = u.id where u.id = $1 and p.title = $2 group by u.id, u.name having count(*) > 1").is_ok());
+        assert!(at_most("select id, count(*) from users where email = $1 group by id").is_ok());
+        assert!(at_most("select u.id, count(*) from users u join posts p on p.user_id = u.id where email = $1 group by id").is_ok());
+    }
+
+    #[test]
+    fn grouped_by_another_relation_or_pinned_to_a_column_is_many() {
+        assert!(at_most("select u.id, p.title, count(*) from users u join posts p on p.user_id = u.id where u.id = $1 group by u.id, p.title").is_err());
+        assert!(at_most("select u.id, count(*) from users u join posts p on true where u.id = p.user_id group by u.id").is_err());
+        assert!(at_most("select u.id, count(*) from users u join posts p on p.user_id = u.id where u.name = $1 group by u.id").is_err());
+        assert!(at_most("select u.id, count(*) from users u join posts p on p.user_id = u.id where u.id = $1 group by title").is_err());
+        assert!(at_most("select u.id, count(*) from users u join posts p on p.user_id = u.id where u.id = $1 group by u.id union all select 1, 2").is_err());
+    }
+}
