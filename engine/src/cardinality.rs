@@ -852,7 +852,6 @@ mod tests {
             ("SELECT t.title FROM todos t JOIN users u ON u.id = t.owner_id WHERE t.id = $1", "only a plain table"),
             ("SELECT x.title FROM (SELECT * FROM todos) x WHERE x.id = $1", "only a plain table"),
             ("SELECT title FROM todos WHERE id = $1 UNION SELECT title FROM todos", "a set operation"),
-            ("SELECT count(*) AS n FROM todos WHERE id = $1 GROUP BY owner_id", "GROUP BY"),
             // A LIMIT above one, or one the build cannot read, bounds nothing.
             ("SELECT title FROM todos WHERE id = $1 LIMIT 2", "bounds nothing"),
             ("SELECT title FROM todos WHERE id = $1 LIMIT $2", "bounds nothing"),
@@ -861,6 +860,8 @@ mod tests {
         ] {
             refused(pg_most(sql), fragment, sql);
         }
+        // The key pins one row of `todos` and the GROUP BY reads only its columns: one group at most.
+        assert_eq!(pg_most("SELECT count(*) AS n FROM todos WHERE id = $1 GROUP BY owner_id"), Ok(()));
     }
 
     #[test]
