@@ -148,6 +148,7 @@ dependencies = [
  "indexmap",
  "jsonschema",
  "jsonwebtoken",
+ "lando-engine",
  "libc",
  "notify",
  "opentelemetry",

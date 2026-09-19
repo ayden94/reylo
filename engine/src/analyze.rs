@@ -377,3 +377,126 @@ fn clean_parse_error(msg: &str) -> String {
     msg.trim_start_matches("Error { message: \"").trim_end_matches("\" }").to_string()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn select_is_query() {
+        let a = analyze("SELECT id FROM todos WHERE owner_id = $1").unwrap();
+        assert_eq!(a.kind, StatementKind::Query);
+        assert_eq!(a.read_set, vec!["todos"]);
+        assert!(a.write_set.is_empty());
+    }
+
+    #[test]
+    fn insert_is_mutation_with_returning() {
+        let a = analyze("INSERT INTO todos (title) VALUES ($1) RETURNING id").unwrap();
+        assert_eq!(a.kind, StatementKind::Mutation);
+        assert!(a.has_returning);
+        assert_eq!(a.write_set, vec!["todos"]);
+    }
+
+    #[test]
+    fn cte_write_makes_select_a_mutation() {
+        let a = analyze("WITH ins AS (INSERT INTO audit (x) VALUES ($1) RETURNING id) SELECT id FROM ins").unwrap();
+        assert_eq!(a.kind, StatementKind::Mutation);
+        assert!(a.write_set.contains(&"audit".to_string()));
+    }
+
+    #[test]
+    fn locking_clause_detected() {
+        let a = analyze("SELECT id FROM todos FOR UPDATE").unwrap();
+        assert!(a.has_locking);
+    }
+
+    #[test]
+    fn coalesce_in_limit_marks_optional_with_default() {
+        let a = analyze("SELECT id FROM todos LIMIT coalesce($1::int, 50)").unwrap();
+        let p = a.params.get(&1).expect("param 1 analyzed");
+        assert!(p.coalesce);
+        assert_eq!(p.coalesce_default, Some(serde_json::json!(50)));
+    }
+
+    #[test]
+    fn coalesce_without_literal_default_is_still_optional() {
+        let a = analyze("SELECT id FROM todos WHERE created_at > coalesce($1::timestamptz, now() - interval '1 day')")
+            .unwrap();
+        let p = a.params.get(&1).unwrap();
+        assert!(p.coalesce);
+        assert_eq!(p.coalesce_default, None);
+    }
+
+    #[test]
+    fn null_guard_marks_optional() {
+        let a = analyze("SELECT id FROM t WHERE ($1::text IS NULL OR title ILIKE '%' || $1 || '%')").unwrap();
+        assert!(a.params.get(&1).unwrap().null_guarded);
+    }
+
+    #[test]
+    fn input_cte_null_guard_traces_through() {
+        let a = analyze(
+            "WITH input AS (SELECT coalesce($1::int, 50) AS lim, $2::text AS q)
+             SELECT id FROM todos, input WHERE (input.q IS NULL OR title ILIKE '%' || input.q || '%')
+             LIMIT (SELECT lim FROM input)",
+        )
+        .unwrap();
+        assert_eq!(a.params.get(&1).unwrap().coalesce_default, Some(serde_json::json!(50)));
+        assert!(a.params.get(&2).unwrap().null_guarded);
+    }
+
+    #[test]
+    fn nullable_side_of_outer_joins() {
+        let a = analyze("SELECT p.id, u.name FROM posts p LEFT JOIN users u ON u.id = p.author_id").unwrap();
+        assert_eq!(a.nullable_tables, vec!["users"]);
+        let b = analyze("SELECT * FROM a RIGHT JOIN b ON true").unwrap();
+        assert_eq!(b.nullable_tables, vec!["a"]);
+        let c = analyze("SELECT * FROM a FULL JOIN b ON true").unwrap();
+        assert_eq!(c.nullable_tables, vec!["b", "a"]);
+        let d = analyze("SELECT * FROM a JOIN b ON true").unwrap();
+        assert!(d.nullable_tables.is_empty());
+    }
+
+    #[test]
+    fn outer_join_and_repeated_table_flags() {
+        let a = analyze("SELECT a.id FROM a LEFT JOIN b ON b.a_id = a.id").unwrap();
+        assert!(a.has_outer_join);
+        let b = analyze("SELECT x.id FROM t x JOIN t y ON y.parent = x.id").unwrap();
+        assert!(b.has_repeated_table);
+        let c = analyze("SELECT 1 UNION SELECT 2").unwrap();
+        assert!(c.has_set_op);
+        assert!(analyze("SELECT owner_id, count(*) FROM todos GROUP BY ROLLUP (owner_id)").unwrap().has_grouping_sets);
+        assert!(analyze("SELECT x FROM (SELECT a AS x FROM t GROUP BY CUBE (a)) s").unwrap().has_grouping_sets);
+        assert!(!analyze("SELECT owner_id, count(*) FROM todos GROUP BY owner_id").unwrap().has_grouping_sets);
+    }
+
+    #[test]
+    fn parameters_at_an_error_position() {
+        // Postgres points "operator does not exist" at the operator, a datatype mismatch at the
+        // expression, and "function does not exist" at the function name.
+        let sql = "SELECT id FROM todos WHERE title = $1::int4 AND lower($2::int4) = 'x'";
+        let pos = |needle: &str| sql.find(needle).unwrap() + 1;
+        assert_eq!(params_at_position(sql, pos("= $1")), vec![1]);
+        assert_eq!(params_at_position(sql, pos("$1")), vec![1]);
+        assert_eq!(params_at_position(sql, pos("::int4 AND")), vec![1]);
+        assert_eq!(params_at_position(sql, pos("lower")), vec![2]);
+        assert!(params_at_position(sql, pos("todos")).is_empty());
+        let both = "SELECT $1::int4 = $2::text";
+        assert_eq!(params_at_position(both, both.find("= $2").unwrap() + 1), vec![1, 2]);
+        assert!(params_at_position("SELECT (", 3).is_empty());
+    }
+
+    #[test]
+    fn two_statements_rejected() {
+        assert!(matches!(analyze("SELECT 1; SELECT 2"), Err(AnalyzeError::NotOneStatement(2))));
+    }
+
+    #[test]
+    fn functions_collected_everywhere() {
+        // greatest()/least() parse as MinMaxExpr, not FuncCall; abs() is a real call in LIMIT.
+        let a = analyze("SELECT count(*), lower(title) FROM todos LIMIT abs($1::int)").unwrap();
+        assert!(a.functions.contains(&"count".to_string()));
+        assert!(a.functions.contains(&"lower".to_string()));
+        assert!(a.functions.contains(&"abs".to_string()));
+    }
+}

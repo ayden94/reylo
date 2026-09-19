@@ -46,7 +46,7 @@ use crate::types::DescribedColumn;
 use crate::jsonshape::{as_select, last_string, select_text, single_target, top_context};
 use crate::pgtypes::oid;
 use pg_query::protobuf::{self, node::Node as NodeEnum, Node, ParseResult, RawStmt, SelectStmt};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// The operators whose Postgres built-ins return a value for every pair of non-null operands (or
 /// raise: a division by zero is an error, never NULL). `!=` parses as `<>`.
@@ -152,6 +152,9 @@ pub struct Trust {
     /// The built-in type names a cast may target and keep its argument's nullability. `None`
     /// trusts every name, which is what SQLite gets: nothing there can define a cast.
     pub cast_targets: Option<HashSet<String>>,
+    /// Functions the host registers on its own connection, by name, with the type oid each
+    /// returns: NULL only when an argument is NULL. Anti's `anti_html` on SQLite is one.
+    pub total: HashMap<String, u32>,
 }
 
 impl Trust {
@@ -441,7 +444,10 @@ impl Reader<'_> {
             (Dialect::Sqlite, "total", 1) => Expr::Nullable(Box::new(Expr::NonNull(Some(oid::FLOAT8)))),
             // "The ifnull() function is equivalent to coalesce() with two arguments."
             (Dialect::Sqlite, "ifnull", 2) => Expr::Any(f.args.iter().map(|a| self.read(a)).collect(), Ty::Shared),
-            _ => Expr::Unknown,
+            _ => match self.trust.total.get(name.as_str()) {
+                Some(&ty) => Expr::Every(f.args.iter().map(|a| self.read(a)).collect(), Ty::Is(ty)),
+                None => Expr::Unknown,
+            },
         }
     }
 
@@ -619,3 +625,236 @@ pub fn dollar_placeholders(sql: &str) -> String {
     out
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pg(sql: &str) -> Plan {
+        plan(sql, Dialect::Postgres, &Trust::default())
+    }
+
+    fn lite(sql: &str) -> Plan {
+        plan(sql, Dialect::Sqlite, &Trust::default())
+    }
+
+    /// The first column's answer with no leaf probe.
+    fn first(p: &Plan) -> Fact {
+        resolve(p.head[0].as_ref().expect("a claim"), None)
+    }
+
+    fn col(nullable: bool, type_oid: u32) -> DescribedColumn {
+        DescribedColumn { name: "a".into(), type_oid, type_name: String::new(), nullable }
+    }
+
+    #[test]
+    fn a_count_is_never_null_and_other_aggregates_are() {
+        assert_eq!(first(&pg("SELECT count(*) AS n FROM todos")), Fact { non_null: true, type_oid: Some(oid::INT8) });
+        assert!(first(&pg("SELECT count(t.id) FROM todos t GROUP BY t.owner_id")).non_null);
+        assert!(first(&pg("SELECT count(DISTINCT t.id) FILTER (WHERE t.done) FROM todos t")).non_null);
+        assert!(first(&pg("SELECT count(*) OVER (ORDER BY id ROWS BETWEEN 5 FOLLOWING AND 6 FOLLOWING) FROM todos")).non_null);
+        // Every other aggregate is NULL over no rows.
+        for sql in ["SELECT sum(n) FROM t", "SELECT max(n) FROM t", "SELECT min(n) FROM t", "SELECT avg(n) FROM t", "SELECT json_agg(n) FROM t"] {
+            assert!(!first(&pg(sql)).non_null, "{sql}");
+        }
+        // A count cast keeps the count's answer.
+        assert!(first(&pg("SELECT CAST(count(*) AS integer) AS total FROM todos")).non_null);
+        assert!(first(&pg("SELECT count(*)::int FROM todos")).non_null);
+    }
+
+    #[test]
+    fn literals_are_non_null_and_null_is_not() {
+        assert!(first(&pg("SELECT 'ok'")).non_null);
+        assert!(first(&pg("SELECT 1")).non_null);
+        assert!(first(&pg("SELECT true")).non_null);
+        assert!(!first(&pg("SELECT NULL")).non_null);
+        assert!(!first(&pg("SELECT NULL::int")).non_null);
+        assert_eq!(first(&lite("SELECT 'ok'")).type_oid, Some(oid::TEXT));
+        assert_eq!(first(&lite("SELECT 1")).type_oid, Some(oid::INT4));
+        assert_eq!(first(&lite("SELECT 9999999999")).type_oid, Some(oid::INT8));
+        assert_eq!(first(&lite("SELECT 1.5")).type_oid, Some(oid::FLOAT8));
+        assert_eq!(first(&lite("SELECT true")).type_oid, Some(oid::BOOL));
+    }
+
+    #[test]
+    fn coalesce_needs_one_non_null_argument_and_case_needs_every_branch() {
+        assert!(first(&pg("SELECT coalesce(NULL, 0)")).non_null);
+        assert!(!first(&pg("SELECT coalesce(NULL, NULL::int)")).non_null);
+        assert!(first(&pg("SELECT CASE WHEN true THEN 1 ELSE 2 END")).non_null);
+        assert!(!first(&pg("SELECT CASE WHEN true THEN 1 ELSE NULL END")).non_null);
+        // No `ELSE` is `ELSE NULL`.
+        assert!(!first(&pg("SELECT CASE WHEN true THEN 1 END")).non_null);
+        assert!(!first(&pg("SELECT CASE 1 WHEN 1 THEN 'a' END")).non_null);
+    }
+
+    #[test]
+    fn tests_and_exists_are_never_null_and_nullif_is_not_an_operator() {
+        assert!(first(&pg("SELECT EXISTS (SELECT 1 FROM todos)")).non_null);
+        assert!(first(&pg("SELECT NULL IS NULL")).non_null);
+        assert!(first(&pg("SELECT NULL::bool IS NOT TRUE")).non_null);
+        assert!(first(&pg("SELECT NULL IS DISTINCT FROM 1")).non_null);
+        assert!(!first(&pg("SELECT nullif(1, 1)")).non_null);
+        assert!(!first(&pg("SELECT 1 IN (1, NULL)")).non_null);
+        assert!(!first(&pg("SELECT 'a' LIKE 'b'")).non_null, "LIKE is outside the accepted set");
+    }
+
+    #[test]
+    fn operators_are_non_null_on_non_null_operands() {
+        assert!(first(&pg("SELECT 1 + 2 * 3")).non_null);
+        assert!(first(&pg("SELECT 'a' || 'b'")).non_null);
+        assert!(first(&pg("SELECT 1 <> 2 AND NOT false")).non_null);
+        assert!(first(&pg("SELECT -1")).non_null);
+        assert!(!first(&pg("SELECT 1 + NULL")).non_null);
+        // Only built-in names: a qualified operator is somebody else's.
+        assert!(!first(&pg("SELECT 1 OPERATOR(myschema.+) 2")).non_null);
+        assert!(first(&pg("SELECT 1 OPERATOR(pg_catalog.+) 2")).non_null);
+        // `!=` parses as `<>`.
+        assert!(first(&pg("SELECT 1 != 2")).non_null);
+    }
+
+    #[test]
+    fn sqlite_has_no_total_arithmetic() {
+        // `1/0` and `1e999 - 1e999` are both NULL on SQLite.
+        assert!(!first(&lite("SELECT 1 / 0")).non_null);
+        assert!(!first(&lite("SELECT 1 + 2")).non_null);
+        assert_eq!(first(&lite("SELECT 'a' || 1")), Fact { non_null: true, type_oid: Some(oid::TEXT) });
+        assert_eq!(first(&lite("SELECT 1 < 2")), Fact { non_null: true, type_oid: Some(oid::BOOL) });
+        // `total()` is a float that a NaN makes NULL; `sum` has no type, since a column declared
+        // INTEGER may still hold a real.
+        assert_eq!(first(&lite("SELECT total(n) FROM t")), Fact { non_null: false, type_oid: Some(oid::FLOAT8) });
+        assert_eq!(first(&lite("SELECT sum(n) FROM t")), Fact { non_null: false, type_oid: None });
+        assert_eq!(first(&lite("SELECT count(*) AS total FROM todos WHERE owner_id = ?1")), Fact { non_null: true, type_oid: Some(oid::INT8) });
+        assert_eq!(first(&lite("SELECT ifnull(NULL, 'x')")), Fact { non_null: true, type_oid: None });
+    }
+
+    #[test]
+    fn a_cast_carries_its_argument_and_on_sqlite_its_target() {
+        assert_eq!(first(&lite("SELECT CAST(count(*) AS INTEGER) AS n FROM t")), Fact { non_null: true, type_oid: Some(oid::INT4) });
+        assert_eq!(first(&lite("SELECT CAST(1 AS REAL)")), Fact { non_null: true, type_oid: Some(oid::FLOAT8) });
+        assert_eq!(first(&lite("SELECT CAST(1 AS TEXT)")), Fact { non_null: true, type_oid: Some(oid::TEXT) });
+        assert_eq!(first(&lite("SELECT CAST(1 AS BIGINT)")), Fact { non_null: true, type_oid: Some(oid::INT8) });
+        // A class SQLite may answer either way is neither typed nor proven.
+        assert_eq!(first(&lite("SELECT CAST(1 AS NUMERIC)")), Fact { non_null: false, type_oid: None });
+        assert!(!first(&lite("SELECT CAST(NULL AS INTEGER)")).non_null);
+        // On Postgres a cast needs a target the catalog says only the built-ins reach.
+        let shadowed = Trust { shadowed: HashSet::new(), cast_targets: Some(["text".to_string()].into_iter().collect()), ..Default::default() };
+        assert!(first(&plan("SELECT 1::text", Dialect::Postgres, &shadowed)).non_null);
+        assert!(!first(&plan("SELECT 1::int4", Dialect::Postgres, &shadowed)).non_null);
+        assert!(!first(&pg("SELECT '{}'::uuid[]")).non_null, "an array cast is outside the set");
+    }
+
+    #[test]
+    fn a_shadowed_name_proves_nothing() {
+        let trust = Trust { shadowed: ["count".to_string(), "=".to_string()].into_iter().collect(), cast_targets: None, ..Default::default() };
+        assert!(!first(&plan("SELECT count(*) FROM t", Dialect::Postgres, &trust)).non_null);
+        assert!(!first(&plan("SELECT 1 = 1", Dialect::Postgres, &trust)).non_null);
+        assert!(first(&plan("SELECT 1 + 1", Dialect::Postgres, &trust)).non_null);
+    }
+
+    #[test]
+    fn a_scalar_subquery_is_non_null_only_as_an_ungrouped_aggregate() {
+        assert!(first(&pg("SELECT (SELECT count(*) FROM todos t WHERE t.owner_id = o.id) AS n FROM owners o")).non_null);
+        assert!(first(&pg("SELECT (SELECT coalesce(max(t.n), 0) FROM todos t) AS n")).non_null);
+        // Not an aggregate: it may match no row.
+        assert!(!first(&pg("SELECT (SELECT 1 FROM todos LIMIT 1) AS n")).non_null);
+        // An aggregate whose one row a clause can take away.
+        for sql in [
+            "SELECT (SELECT count(*) FROM todos GROUP BY owner_id) AS n",
+            "SELECT (SELECT count(*) FROM todos HAVING false) AS n",
+            "SELECT (SELECT count(*) FROM todos LIMIT 0) AS n",
+            "SELECT (SELECT count(*) FROM todos OFFSET 1) AS n",
+        ] {
+            assert!(!first(&pg(sql)).non_null, "{sql}");
+        }
+        // A window call is not an aggregate, and neither is SQLite's two-argument `max`.
+        assert!(!first(&pg("SELECT (SELECT coalesce(count(*) OVER (), 0) FROM todos) AS n")).non_null);
+        assert!(!first(&lite("SELECT (SELECT coalesce(max(a, b), 0) FROM t) AS n")).non_null);
+        // A non-null aggregate still needs a non-null value.
+        assert!(!first(&pg("SELECT (SELECT max(n) FROM todos) AS n")).non_null);
+    }
+
+    #[test]
+    fn a_column_reference_in_an_expression_is_a_leaf_over_the_same_from() {
+        let p = pg("SELECT t.title || ' by ' || u.name AS label, t.id FROM todos t LEFT JOIN users u ON u.id = t.owner_id");
+        assert_eq!(p.leaves.as_deref(), Some("SELECT t.title AS a0, u.name AS a1 FROM todos t LEFT JOIN users u ON u.id = t.owner_id"));
+        assert!(p.reads_leaves());
+        assert_eq!(p.head[1], None, "a plain column reference is the describe tier's");
+        let label = p.head[0].as_ref().unwrap();
+        assert!(resolve(label, Some(&[col(false, oid::TEXT), col(false, oid::TEXT)])).non_null);
+        assert!(!resolve(label, Some(&[col(false, oid::TEXT), col(true, oid::TEXT)])).non_null);
+        assert!(!resolve(label, None).non_null, "no probe, no proof");
+        // On SQLite a leaf carries its described type through a function the host registered.
+        let host = Trust { total: [("anti_html".to_string(), oid::TEXT)].into_iter().collect(), ..Default::default() };
+        let h = plan("SELECT id, anti_html(title) AS title_html FROM todos WHERE owner_id = ?1 ORDER BY title", Dialect::Sqlite, &host);
+        assert_eq!(h.leaves.as_deref(), Some("SELECT title AS a0 FROM todos"));
+        assert_eq!(resolve(h.head[1].as_ref().unwrap(), Some(&[col(false, oid::TEXT)])), Fact { non_null: true, type_oid: Some(oid::TEXT) });
+        // RETURNING reads the written relation.
+        let r = pg("UPDATE todos SET done = true WHERE id = $1 RETURNING title || '!' AS shout");
+        assert_eq!(r.leaves.as_deref(), Some("SELECT title AS a0 FROM todos"));
+    }
+
+    #[test]
+    fn a_grouping_set_takes_the_leaves_away() {
+        let p = pg("SELECT owner_id || '' AS o, count(*) AS n FROM todos GROUP BY ROLLUP (owner_id)");
+        assert_eq!(p.leaves, None);
+        assert!(!resolve(p.head[0].as_ref().unwrap(), None).non_null);
+        assert!(resolve(p.head[1].as_ref().unwrap(), None).non_null, "a count is still a count");
+    }
+
+    #[test]
+    fn a_star_splits_the_claims_around_it() {
+        let p = pg("SELECT 'a' AS x, t.*, count(*) OVER () AS total FROM todos t");
+        assert!(p.star);
+        let claims = p.claims(5);
+        assert!(claims[0].is_some() && claims[1].is_none() && claims[3].is_none() && claims[4].is_some());
+        // A describe with fewer columns than the plan names claims nothing.
+        assert!(pg("SELECT 'a', 'b'").claims(3).iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn a_set_operation_plans_its_arms() {
+        let p = pg("WITH d AS (SELECT id FROM todos) SELECT id, title FROM todos WHERE done UNION ALL SELECT id, title FROM todos WHERE id IN (SELECT id FROM d)");
+        let set = p.set_op.expect("a set operation");
+        assert_eq!(set.kind, SetKind::Union);
+        assert_eq!(set.left, "WITH d AS (SELECT id FROM todos) SELECT id, title FROM todos WHERE done");
+        assert_eq!(set.right, "WITH d AS (SELECT id FROM todos) SELECT id, title FROM todos WHERE id IN (SELECT id FROM d)");
+        assert!(p.head.is_empty());
+        // Nested operations nest: the left arm is itself a set operation.
+        let n = pg("SELECT 1 UNION SELECT 2 EXCEPT SELECT 3");
+        assert_eq!(n.set_op.map(|s| (s.kind, s.left)), Some((SetKind::Except, "SELECT 1 UNION SELECT 2".to_string())));
+        assert_eq!(lite("SELECT ?1 AS a INTERSECT SELECT 'x'").set_op.map(|s| s.left), Some("SELECT $1 AS a".to_string()));
+    }
+
+    #[test]
+    fn set_operation_columns_combine_per_arm() {
+        let (nn, nul) = (col(false, oid::UUID), col(true, oid::UUID));
+        let facts = |kind, l: &DescribedColumn, r: &DescribedColumn| combine(kind, &[l.clone()], &[r.clone()]).unwrap()[0].non_null;
+        assert!(facts(SetKind::Union, &nn, &nn));
+        assert!(!facts(SetKind::Union, &nn, &nul), "one nullable arm makes a UNION column nullable");
+        assert!(!facts(SetKind::Union, &nul, &nn));
+        assert!(facts(SetKind::Intersect, &nul, &nn));
+        assert!(!facts(SetKind::Intersect, &nul, &nul));
+        assert!(facts(SetKind::Except, &nn, &nul));
+        assert!(!facts(SetKind::Except, &nul, &nn));
+        assert!(combine(SetKind::Union, &[nn.clone()], &[]).is_none());
+    }
+
+    #[test]
+    fn a_values_arm_is_non_null_where_every_row_is() {
+        let p = pg("VALUES (1, 'a'), (2, NULL)");
+        assert!(resolve(p.head[0].as_ref().unwrap(), None).non_null);
+        assert!(!resolve(p.head[1].as_ref().unwrap(), None).non_null);
+    }
+
+    #[test]
+    fn placeholders_are_parameters_and_prove_nothing() {
+        assert!(!first(&pg("SELECT $1::uuid AS id")).non_null);
+        assert!(!first(&lite("SELECT ?1 || 'x' AS id")).non_null);
+        assert_eq!(dollar_placeholders("SELECT ?1, '?2', \"?3\" -- ?4\n, ?10 /* ?5 */"), "SELECT $1, '?2', \"?3\" -- ?4\n, $10 /* ?5 */");
+    }
+
+    #[test]
+    fn what_does_not_parse_claims_nothing() {
+        assert_eq!(pg("SELEKT 1"), Plan::default());
+        assert_eq!(lite("SELECT json_extract('not json', '$') AS boom").head, vec![Some(Expr::Unknown)]);
+    }
+}

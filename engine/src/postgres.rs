@@ -240,7 +240,7 @@ impl<'a> Engine<'a> {
         let operators: Vec<Value> = infer::POSTGRES_OPERATORS.iter().map(|s| json!(s)).collect();
         let functions: Vec<Value> = infer::FUNCTIONS.iter().map(|s| json!(s)).collect();
         let rows = self.host.query(TRUST_QUERY, vec![json!(operators), json!(functions)], Scope::Session)?;
-        let mut trust = Trust { shadowed: HashSet::new(), cast_targets: Some(HashSet::new()) };
+        let mut trust = Trust { shadowed: HashSet::new(), cast_targets: Some(HashSet::new()), ..Default::default() };
         if let Ok(rows) = rows {
             for row in rows {
                 let (Some(cast), Some(name)) = (row.first().and_then(as_bool), row.get(1).and_then(as_str)) else { continue };

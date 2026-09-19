@@ -12,6 +12,7 @@ pub mod oid {
     pub const INT4: u32 = 23;
     pub const TEXT: u32 = 25;
     pub const JSON: u32 = 114;
+    pub const UUID: u32 = 2950;
     pub const FLOAT4: u32 = 700;
     pub const FLOAT8: u32 = 701;
     pub const VARCHAR: u32 = 1043;

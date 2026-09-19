@@ -28,6 +28,13 @@ fn main() {
         .define("SQLITE_OMIT_DEPRECATED", None)
         .define("SQLITE_OMIT_SHARED_CACHE", None)
         .define("SQLITE_TEMP_STORE", "3");
+    if !target.starts_with("wasm32") {
+        // A native consumer of this rlib may link its own SQLite (Anti links rusqlite's bundled
+        // one), so the amalgamation's public API stays private to this translation unit: only
+        // `lando_sqlite_analyze` and `lando_sqlite_free` are exported, and nothing here is
+        // reachable from, or shadows, the other copy.
+        build.define("SQLITE_API", "static").define("SQLITE_EXTERN", "");
+    }
     if target.starts_with("wasm32") {
         build
             .define("SQLITE_OMIT_WAL", None)
