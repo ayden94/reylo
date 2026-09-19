@@ -10,7 +10,7 @@ type ExpectedRow = {
   big: bigint | null;
   day: Temporal.PlainDate;
   local: Temporal.PlainDateTime;
-  stamps: Temporal.Instant[] | null; // the engine has no non-null rule for an ARRAY constructor yet
+  stamps: Temporal.Instant[];
   n: bigint;
 };
 const a: ExpectedRow = null! as Row;
@@ -20,4 +20,4 @@ const d: Params = null! as { id: number };
 declare const pool: { query(text: string, values?: unknown[]): Promise<{ rows: unknown[] }> };
 const e: ExpectedRow | null = await query.execute(pool, { id: 1 });
 // JSON.stringify turns every Temporal value and bigint into text.
-const j: { id: number; created_at: string; big: string | null; day: string; local: string; stamps: string[] | null; n: string } | null = query["~lando"].json;
+const j: { id: number; created_at: string; big: string | null; day: string; local: string; stamps: string[]; n: string } | null = query["~lando"].json;

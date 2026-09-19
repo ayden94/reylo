@@ -47,3 +47,9 @@ const c2: Awaited<ReturnType<typeof count.execute>> = null! as { n: string; late
 const j1: { id: number; title: string; author: string | null; email: string | null }[] = null! as Awaited<ReturnType<typeof joined.execute>>;
 const j2: Awaited<ReturnType<typeof joined.execute>> = null! as { id: number; title: string; author: string | null; email: string | null }[];
 const cardinalities: ["maybeOne", "maybeOne", "one", "many"] = [query.cardinality, nested.cardinality, count.cardinality, joined.cardinality];
+// A GROUP BY on the pinned relation's columns is one group at most, whatever is joined; an
+// ARRAY constructor is never null.
+import grouped from "./grouped.sql";
+const g1: { id: number; name: string; posts: string; ids: number[] } | null = null! as Awaited<ReturnType<typeof grouped.execute>>;
+const g2: Awaited<ReturnType<typeof grouped.execute>> = null! as { id: number; name: string; posts: string; ids: number[] } | null;
+const g3: "maybeOne" = grouped.cardinality;
