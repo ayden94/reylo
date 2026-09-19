@@ -1,6 +1,7 @@
 // The runtime query object behind `import query from "./file.sql"`.
 // Types come from the content mapper; values come from the runtime loader.
 import { execute as run, type ClientFor, type Dialect } from "./execute.ts";
+import { convertRows, type Conversion, type Repr } from "./convert.ts";
 import type { StandardJSONSchemaV1, StandardTypedV1 } from "./standard.ts";
 
 export type { ClientFor, Dialect } from "./execute.ts";
@@ -9,8 +10,8 @@ export type Cardinality = "many" | "one" | "maybeOne";
 
 export type Materialize<Row, C extends Cardinality> = C extends "many" ? Row[] : C extends "one" ? Row : Row | null;
 
-/** The JSON.stringify shape of a driver-decoded value. */
-export type Json<T> = T extends Date | bigint | Uint8Array
+/** The JSON.stringify shape of a row value: a Date, a Temporal value, a BigInt or a byte array becomes text. */
+export type Json<T> = T extends Date | bigint | Uint8Array | { toJSON(): string }
   ? string
   : T extends readonly (infer U)[]
     ? Json<U>[]
@@ -45,6 +46,10 @@ export type QueryDefinition = {
   /** The mapper's rewritten statement and its binding order, when the mapper's cache had them. */
   text?: string;
   order?: readonly string[];
+  /** The columns whose wire value `execute` converts, and the representation the mapper chose. */
+  convert?: Record<string, Conversion>;
+  dates?: Repr["dates"];
+  bigint?: Repr["bigint"];
   cardinality?: Cardinality;
   jsonSchema?: { input: Record<string, unknown>; output: Record<string, unknown> };
 };
@@ -74,6 +79,7 @@ export function defineQuery<Params, Row, C extends Cardinality, D extends Dialec
     "~lando": undefined as unknown as LandoTypes<Params, Row, C>,
     async execute(client, params) {
       const rows = (await run(client, query, params as Record<string, unknown>)) as Row[];
+      if (def.convert) convertRows(rows, def.convert, { dates: def.dates ?? "string", bigint: def.bigint ?? "string" });
       switch (cardinality) {
         case "many":
           return rows as Materialize<Row, C>;

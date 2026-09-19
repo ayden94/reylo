@@ -29,10 +29,10 @@ where id = :id and name = :name
 ```ts
 import getUser from "./get_user.sql";
 const user = await getUser.execute(sql, { id: 1, name: "ada" });
-//    ^? { id: number; name: string; email: string | null; role: "admin" | "member"; tags: string[]; created_at: Date; next_id: number } | null
+//    ^? { id: number; name: string; email: string | null; role: "admin" | "member"; tags: string[]; created_at: string; next_id: number } | null
 ```
 
-Parameter types come from the server (`id: number`, `name: string`); `role` is an enum, `tags` a `text[]`, `email` nullable from the catalog, `next_id` non-null because `id` is and the built-in `+` never returns NULL for non-null operands; `| null` on the row because `id` is the primary key, so the `WHERE` matches at most one row. `int8` arrives as `string` because that is what `pg` and `postgres` decode.
+Parameter types come from the server (`id: number`, `name: string`); `role` is an enum, `tags` a `text[]`, `email` nullable from the catalog, `next_id` non-null because `id` is and the built-in `+` never returns NULL for non-null operands; `| null` on the row because `id` is the primary key, so the `WHERE` matches at most one row. `created_at` is an ISO 8601 `string` and an `int8` a `string` because those are the default representations (see [Dates and 64-bit integers](#dates-and-64-bit-integers)).
 
 Nested JSON keeps its shape. The engine reads the constructors out of the parse tree, has the database type their arguments as ordinary columns, and folds the catalog's `NOT NULL` and the outer joins back in:
 
@@ -79,7 +79,29 @@ where id = :id and name <> :skip
 
 ```ts
 const user = await getUser.execute(conn, { id: 1, skip: "" });
-//    ^? { id: number; name: string; email: string | null; big: number; n: string; at: Date; j: unknown; flag: number; next_id: number } | null
+//    ^? { id: number; name: string; email: string | null; big: string; n: string; at: string; j: unknown; flag: number; next_id: string } | null
 ```
 
-MySQL 8.4's prepare reports column types, NOT NULL and provenance, and infers a type per parameter from context, so no annotation is needed here; `bigint` is a lossy `number` under mysql2's defaults and `decimal` a string.
+MySQL 8.4's prepare reports column types, NOT NULL and provenance, and infers a type per parameter from context, so no annotation is needed here; `bigint` and `datetime` follow the `bigint` and `dates` options (strings by default; mysql2 decodes a `bigint` as a lossy `number`, which the runtime turns into text) and `decimal` is a string.
+
+## Dates and 64-bit integers
+
+Every Postgres and MySQL driver decodes a timestamp as a `Date`, and they disagree on 64-bit integers: `pg`, `postgres` and Bun.sql return a string, mysql2 and the SQLite drivers a number that is lossy above 2^53, mariadb a BigInt (the measurements are in [docs/dates.md](./docs/dates.md)). Two mapper options name one representation; the rendered type follows it, and `execute` produces it whatever the driver returned:
+
+```jsonc
+"contentMappers": [{ "package": "lando", "extensions": [".sql"], "options": { "dates": "string", "bigint": "string" } }]
+```
+
+| Option | Value | `timestamptz` | `timestamp`, MySQL `datetime` / `timestamp` | `date` | `int8`, MySQL `bigint` |
+| --- | --- | --- | --- | --- | --- |
+| `dates` | `"string"` (default) | ISO 8601 with `Z`: `2026-01-02T03:04:05.678Z` | the stored wall clock, no zone: `2026-01-02T03:04:05.678` | `2026-01-02` | |
+| `dates` | `"Date"` | the driver's `Date` | the driver's `Date` | the driver's `Date` | |
+| `dates` | `"temporal"` | `Temporal.Instant` | `Temporal.PlainDateTime` | `Temporal.PlainDate` | |
+| `bigint` | `"string"` (default), `"number"`, `"bigint"` | | | | `string`, `number` or `bigint` |
+
+- The default is text on both because it is never lossy, `JSON.stringify(row)` round-trips, and the wire type then equals the JSON twin that `Json<T>` describes.
+- A zone-less `timestamp` or `date` reaches Lando as a `Date` the driver built from wall-clock fields (local time in `pg`, `postgres`, PGlite, Bun.sql, mysql2 and mariadb; a `date` is UTC midnight in `postgres`, PGlite and Bun.sql), and Lando reads the fields back in that frame, so the text is the stored wall clock. A driver configured to return the text form (`pg` `types.setTypeParser`, `postgres` `types`, PGlite `parsers`, mysql2 and mariadb `dateStrings`) passes through under `"string"` and is parsed under `"temporal"`.
+- `"temporal"` makes the generated module import `lando/temporal`, which declares the global `Temporal` namespace from `temporal-spec`. At runtime Node 26 has a global `Temporal`; Bun does not, so assign a polyfill to `globalThis.Temporal` or `execute` throws with that instruction.
+- `"bigint"` gives a `bigint`; `JSON.stringify` has no rule for one, so add a `BigInt.prototype.toJSON` or a replacer. A value above 2^53 that the driver already decoded as a number is lost before Lando sees it: mysql2 takes `supportBigNumbers: true, bigNumberStrings: true`, better-sqlite3 and bun:sqlite `safeIntegers`, node:sqlite `readBigInts`.
+- Inside a nested JSON shape the database serialized the value already, so the options do not apply there; SQLite has no date type and its integers follow the driver, so neither option changes a SQLite type.
+- The runtime reads the column classes from the mapper's cache (`.lando/queries.json`); before the first `tsc --runExternalCode` run it returns the driver's values unchanged.

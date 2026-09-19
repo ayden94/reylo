@@ -8,24 +8,25 @@ import { dirname, join, relative } from "node:path";
 import { serve } from "./rpc.ts";
 import { lexPlaceholders } from "./lex.ts";
 import { engine, AnswerCache } from "./engine.ts";
-import { ident, renderType } from "./render.ts";
+import { conversion, defaultRepr, ident, renderType, type Conversion, type Repr } from "./render.ts";
+import { mysqlConversion, mysqlNotNull, mysqlType, openMysqlDescriber, type MysqlDescriber } from "./mysql-describe.ts";
 import { openPostgresDescriber, type Describer } from "./describe.ts";
 import { openSqliteDescriber, type SqliteDescriber } from "./sqlite-describe.ts";
-import { mysqlNotNull, mysqlType, openMysqlDescriber, type MysqlDescriber } from "./mysql-describe.ts";
 
-type Options = { dialect?: "postgres" | "sqlite" | "mysql"; source?: "database"; url?: string; urlEnv?: string };
+type Options = { dialect?: "postgres" | "sqlite" | "mysql"; source?: "database"; url?: string; urlEnv?: string; dates?: Repr["dates"]; bigint?: Repr["bigint"] };
 type Project = {
   projectDir: string;
   options: Options;
   url: string | undefined;
   dialect: "postgres" | "sqlite" | "mysql";
+  repr: Repr;
   describer: Promise<Describer> | undefined;
   sqlite: Promise<SqliteDescriber> | undefined;
   mysql: Promise<MysqlDescriber> | undefined;
   answers: AnswerCache;
   cache: Record<string, CacheEntry>;
 };
-type CacheEntry = { hash: string; params: string[]; cardinality: string; dialect: string; text?: string; order?: string[] };
+type CacheEntry = { hash: string; params: string[]; cardinality: string; dialect: string; text?: string; order?: string[]; convert?: Record<string, Conversion>; dates?: Repr["dates"]; bigint?: Repr["bigint"] };
 const projects = new Map<string, Project>();
 
 function readDotenv(dir: string): Record<string, string> {
@@ -72,12 +73,15 @@ serve({
     const optionDiagnostics: { path: (string | number)[]; messageText: string; code: number }[] = [];
     if (options.dialect !== undefined && !["postgres", "sqlite", "mysql"].includes(options.dialect)) optionDiagnostics.push({ path: ["dialect"], messageText: `Expected "postgres", "sqlite" or "mysql".`, code: 100 });
     if (options.source !== undefined && options.source !== "database") optionDiagnostics.push({ path: ["source"], messageText: `Only "database" is implemented so far.`, code: 101 });
+    if (options.dates !== undefined && !["string", "Date", "temporal"].includes(options.dates)) optionDiagnostics.push({ path: ["dates"], messageText: `Expected "string" (ISO 8601 text, the default), "Date" or "temporal".`, code: 102 });
+    if (options.bigint !== undefined && !["string", "number", "bigint"].includes(options.bigint)) optionDiagnostics.push({ path: ["bigint"], messageText: `Expected "string" (the default), "number" or "bigint".`, code: 103 });
+    const repr: Repr = { dates: ["string", "Date", "temporal"].includes(options.dates as string) ? options.dates! : defaultRepr.dates, bigint: ["string", "number", "bigint"].includes(options.bigint as string) ? options.bigint! : defaultRepr.bigint };
     const dotenv = readDotenv(projectDir);
     const urlEnv = options.urlEnv ?? "DATABASE_URL";
     const url = options.url ?? process.env[urlEnv] ?? dotenv[urlEnv];
     const cache = readCache(projectDir);
     const dialect = options.dialect ?? (url && /^(file:|sqlite:)/.test(url) ? "sqlite" : url && /^(mysql|mariadb):/.test(url) ? "mysql" : "postgres");
-    projects.set(p.projectHandle, { projectDir, options, url, dialect, describer: undefined, sqlite: undefined, mysql: undefined, answers: new AnswerCache(), cache });
+    projects.set(p.projectHandle, { projectDir, options, url, dialect, repr, describer: undefined, sqlite: undefined, mysql: undefined, answers: new AnswerCache(), cache });
     const configIdentity = createHash("sha1").update(JSON.stringify([options, url ?? null])).digest("hex");
     return { configIdentity, watchedFiles: [join(projectDir, ".env")], optionDiagnostics };
   },
@@ -97,6 +101,8 @@ serve({
       diagnostics,
       text: [
         `import type { Query } from "lando";`,
+        // The Temporal types are not in TypeScript's libs yet; `lando/temporal` declares them.
+        ...(project.repr.dates === "temporal" ? [`import "lando/temporal";`] : []),
         `export type Params = ${paramsType};`,
         `export type Row = ${rowType};`,
         `export declare const sql: ${JSON.stringify(sql)};`,
@@ -127,9 +133,11 @@ serve({
     }
     const annotated = new Map<string, string>();
     for (const m of sql.matchAll(/^\s*--\s*@param\s+(\S+)\s+(.+?)\s*$/gm)) annotated.set(m[1]!, m[2]!);
-    const writeCache = (extra: Partial<CacheEntry> = {}) => {
+    const writeCache = (extra: Partial<CacheEntry> = {}, convert: Record<string, Conversion> = {}) => {
       const key = relative(project.projectDir, p.fileName);
-      project.cache[key] = { hash: createHash("sha1").update(sql).digest("hex"), params: names, cardinality, dialect: project.dialect, ...extra };
+      // The runtime converts only the columns named here, to the representation named here.
+      const conversions = Object.keys(convert).length ? { convert, dates: project.repr.dates, bigint: project.repr.bigint } : {};
+      project.cache[key] = { hash: createHash("sha1").update(sql).digest("hex"), params: names, cardinality, dialect: project.dialect, ...extra, ...conversions };
       // Two editors on one project run two mappers; each writes the whole file, so the write
       // is a rename and a reader never sees a half-written cache.
       const dir = join(project.projectDir, ".lando");
@@ -156,7 +164,9 @@ serve({
         diagnostics.push(diag(`${err.message}${err.sqlState ? ` (${err.sqlState})` : ""}`, 0, Math.max(1, sql.trimEnd().length), 6));
         return emit("unknown", "unknown", cardinality, names);
       }
-      const columns = described.columns.map((c) => `${ident(c.name)}: ${mysqlType(c)}${mysqlNotNull(c.flags) ? "" : " | null"}`);
+      const columns = described.columns.map((c) => `${ident(c.name)}: ${mysqlType(c, project.repr)}${mysqlNotNull(c.flags) ? "" : " | null"}`);
+      const convert: Record<string, Conversion> = {};
+      for (const c of described.columns) { const cls = mysqlConversion(c); if (cls) convert[c.name] = cls; }
       // MySQL 8.4's prepare infers a type per `?` from context (LONGLONG against an
       // int column, VAR_STRING against a varchar); an annotation overrides it, and a
       // diagnostic asks for one only when the server offers nothing usable.
@@ -172,7 +182,7 @@ serve({
         }
         return `${ident(name)}: ${inferred}`;
       });
-      writeCache({ text: mysqlText, order: placeholders.map((h) => h.name) });
+      writeCache({ text: mysqlText, order: placeholders.map((h) => h.name) }, convert);
       return emit(names.length ? `{ ${paramTypes.join("; ")} }` : "Record<never, never>", columns.length ? `{ ${columns.join("; ")} }` : "never", cardinality, names);
     }
     if (project.dialect === "sqlite") {
@@ -240,9 +250,11 @@ serve({
     if (analysis.diagnostics.some((d) => d.code === 6) || analysis.kind === "") {
       return emit("unknown", "unknown", inferred, analysis.rewritten.order);
     }
-    const columns = analysis.columns.map((c) => `${ident(c.name)}: ${renderType(c.type)}${c.nullable ? " | null" : ""}`);
-    const paramTypes = analysis.params.map((q) => `${ident(q.name)}: ${renderType(q.type)}`);
-    writeCache({ cardinality: inferred, text: analysis.rewritten.sql, order: analysis.rewritten.order });
+    const columns = analysis.columns.map((c) => `${ident(c.name)}: ${renderType(c.type, false, "postgres", project.repr)}${c.nullable ? " | null" : ""}`);
+    const paramTypes = analysis.params.map((q) => `${ident(q.name)}: ${renderType(q.type, false, "postgres", project.repr)}`);
+    const convert: Record<string, Conversion> = {};
+    for (const c of analysis.columns) { const cls = conversion(c.type); if (cls) convert[c.name] = cls; }
+    writeCache({ cardinality: inferred, text: analysis.rewritten.sql, order: analysis.rewritten.order }, convert);
     return emit(
       paramTypes.length ? `{ ${paramTypes.join("; ")} }` : "Record<never, never>",
       columns.length ? `{ ${columns.join("; ")} }` : "never",

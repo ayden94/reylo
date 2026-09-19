@@ -6,13 +6,13 @@ type ExpectedRow = {
   id: number;
   name: string;
   email: string | null;
-  big: number;
+  big: string;
   n: string;
-  at: Date;
+  at: string;
   j: unknown;
   flag: number;
   raw: Uint8Array | null;
-  next_id: number;
+  next_id: string;
 };
 const a: ExpectedRow = null! as Row;
 const b: Row = null! as ExpectedRow;
