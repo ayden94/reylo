@@ -9,7 +9,7 @@ type ExpectedRow = {
   score: number | null;
   avatar: Uint8Array | null;
   created_at: string;
-  next_id: number | null;
+  next_id: number;
   total: number;
 };
 const a: ExpectedRow = null! as Row;
@@ -36,3 +36,16 @@ const s2: Awaited<ReturnType<typeof search.execute>> = null! as { id: number; na
 const s3: { min: number; q: string; n: number; o: number } = null! as Parameters<typeof search.execute>[1];
 const s4: Parameters<typeof search.execute>[1] = null! as { min: number; q: string; n: number; o: number };
 const cards: ["one", "maybeOne", "many"] = [insert.cardinality, byEmail.cardinality, search.cardinality];
+// SQLite-only syntax parses, because the engine prepares the statement with SQLite itself:
+// `limit o, n` (offset first, as SQLite reads it), `glob`, `insert or ignore`, `on conflict do nothing`.
+// A statement without RETURNING is cardinality `none` and `execute` resolves to void.
+import page from "./page.sql";
+import upsert from "./upsert.sql";
+import ignore from "./ignore.sql";
+const p1: { id: number; name: string }[] = null! as Awaited<ReturnType<typeof page.execute>>;
+const p2: { g: string; n: number; o: number } = null! as Parameters<typeof page.execute>[1];
+const p3: Parameters<typeof page.execute>[1] = null! as { g: string; n: number; o: number };
+const u1: { id: number } | null = null! as Awaited<ReturnType<typeof upsert.execute>>;
+const u2: Awaited<ReturnType<typeof upsert.execute>> = null! as { id: number } | null;
+const more: ["many", "maybeOne", "none"] = [page.cardinality, upsert.cardinality, ignore.cardinality];
+const v: void = await ignore.execute(db, { email: "x", name: "y" });

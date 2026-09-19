@@ -123,9 +123,9 @@ serve({
       return emit("never", "never", "many", names);
     }
     const cardinality = directive(sql, "returns") ?? "many";
-    if (!["many", "one", "maybeOne"].includes(cardinality)) {
+    if (!["many", "one", "maybeOne", "none"].includes(cardinality)) {
       const at = sql.indexOf(cardinality);
-      diagnostics.push(diag(`Unknown @returns value "${cardinality}"; expected many, one or maybeOne.`, at, cardinality.length, 3));
+      diagnostics.push(diag(`Unknown @returns value "${cardinality}"; expected many, one, maybeOne or none.`, at, cardinality.length, 3));
     }
     if (!project.url) {
       diagnostics.push(diag(`No database URL: set ${project.options.urlEnv ?? "DATABASE_URL"} in the environment or .env, or "url" in the content mapper options.`, 0, 1, 4));
@@ -197,7 +197,9 @@ serve({
       }
       let analysis;
       try {
-        analysis = await (await engine()).analyze(sql, "sqlite", { describe: (text) => sqlite.describe(text), query: (text, params) => sqlite.values(text, params) }, project.answers);
+        // The engine prepares the statement inside its own SQLite against the schema it reads
+        // through `values`; it never asks this side to describe.
+        analysis = await (await engine()).analyze(sql, "sqlite", { describe: () => Promise.reject(new Error("SQLite is described inside the engine")), query: (text, params) => sqlite.values(text, params) }, project.answers);
       } catch (e) {
         project.sqlite = undefined;
         diagnostics.push(diag((e as Error).message, 0, 1, 5));

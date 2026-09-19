@@ -1,16 +1,12 @@
-// SQLite describe through node:sqlite (built into Node ≥ 22.5, so no peer
-// dependency). SQLite reports, per result column, the declared type of the table column it
-// comes from and nothing for an expression or a parameter; the engine reads the rest off the
-// statement and the `pragma` tables it asks for through `values`.
+// The SQLite side of the host: node:sqlite (built into Node ≥ 22.5, so no peer dependency)
+// opens the project's database read-only and runs the one query the engine asks for, the schema
+// DDL from `sqlite_schema`. The engine replays that DDL into its embedded SQLite and prepares the
+// statement there, so no describe goes through this file.
 import { fileURLToPath } from "node:url";
 import { isAbsolute, resolve } from "node:path";
 
-export type SqliteColumn = { name: string; declared: string | null; table: string | null; column: string | null };
-export type SqliteDescribed = { columns: SqliteColumn[] };
-
 export interface SqliteDescriber {
-  describe(sql: string): Promise<SqliteDescribed>;
-  /** Rows as arrays of values, in column order: the engine's `pragma` queries. */
+  /** Rows as arrays of values, in column order: the engine's schema query. */
   values(sql: string, params?: unknown[]): Promise<unknown[][]>;
   close(): Promise<void>;
 }
@@ -27,10 +23,6 @@ export async function openSqliteDescriber(url: string, baseDir: string): Promise
   const path = sqlitePath(url, baseDir);
   const db = new DatabaseSync(path, { readOnly: path !== ":memory:" });
   return {
-    async describe(sql) {
-      const stmt = db.prepare(sql);
-      return { columns: stmt.columns().map((c) => ({ name: c.name, declared: c.type, table: c.table, column: c.column })) };
-    },
     async values(sql, params = []) {
       const stmt = db.prepare(sql);
       const names = stmt.columns().map((c) => c.name);

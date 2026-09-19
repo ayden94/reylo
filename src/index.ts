@@ -6,9 +6,10 @@ import type { StandardJSONSchemaV1, StandardTypedV1 } from "./standard.ts";
 
 export type { ClientFor, Dialect } from "./execute.ts";
 
-export type Cardinality = "many" | "one" | "maybeOne";
+/** How many rows a statement returns: `none` is a data-modifying statement without RETURNING. */
+export type Cardinality = "many" | "one" | "maybeOne" | "none";
 
-export type Materialize<Row, C extends Cardinality> = C extends "many" ? Row[] : C extends "one" ? Row : Row | null;
+export type Materialize<Row, C extends Cardinality> = C extends "many" ? Row[] : C extends "one" ? Row : C extends "none" ? void : Row | null;
 
 /** The JSON.stringify shape of a row value: a Date, a Temporal value, a BigInt or a byte array becomes text. */
 export type Json<T> = T extends Date | bigint | Uint8Array | { toJSON(): string }
@@ -81,6 +82,8 @@ export function defineQuery<Params, Row, C extends Cardinality, D extends Dialec
       const rows = (await run(client, query, params as Record<string, unknown>)) as Row[];
       if (def.convert) convertRows(rows, def.convert, { dates: def.dates ?? "string", bigint: def.bigint ?? "string" });
       switch (cardinality) {
+        case "none":
+          return undefined as Materialize<Row, C>;
         case "many":
           return rows as Materialize<Row, C>;
         case "one":
