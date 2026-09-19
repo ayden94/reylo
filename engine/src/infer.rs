@@ -57,6 +57,29 @@ const SQLITE_OPERATORS: &[&str] = &["||", "=", "==", "<>", "!=", "<", ">", "<=",
 /// The functions a rule reads by name: `count`, plus the aggregates that make a subquery
 /// return exactly one row.
 pub const FUNCTIONS: &[&str] = &["count", "sum", "avg", "min", "max", "json_agg", "jsonb_agg"];
+
+/// Postgres built-ins that answer NULL only for a NULL argument: a non-null input never yields
+/// NULL (an invalid one raises an error instead). Nothing here answers NULL for a valid input
+/// the way `nullif`, `substring` with no match or `array_length` of an empty array do, and no
+/// aggregate is here: an aggregate over no rows is NULL.
+pub const POSTGRES_TOTAL: &[&str] = &[
+    "lower", "upper", "initcap", "length", "char_length", "character_length", "octet_length", "btrim", "ltrim", "rtrim", "md5",
+    "reverse", "repeat", "replace", "left", "right", "lpad", "rpad", "translate", "ascii", "chr", "split_part", "strpos", "starts_with",
+    "regexp_replace", "quote_ident", "quote_literal", "encode", "decode", "to_char", "to_hex", "to_timestamp", "to_date",
+    "abs", "round", "floor", "ceil", "ceiling", "trunc", "sign", "sqrt", "cbrt", "exp", "ln", "log", "power", "mod",
+    "date_trunc", "date_part", "extract", "age", "make_date", "make_timestamp", "make_timestamptz",
+    "cardinality", "array_to_string", "array_append", "array_prepend", "array_cat", "array_remove",
+    "to_json", "to_jsonb", "row_to_json", "json_typeof", "jsonb_typeof", "jsonb_strip_nulls", "jsonb_pretty",
+];
+/// Postgres built-ins that never answer NULL, whatever their arguments: the clock and random
+/// functions, and the constructors that turn a NULL argument into an empty string or a JSON null.
+pub const POSTGRES_NEVER_NULL: &[&str] = &[
+    "now", "clock_timestamp", "statement_timestamp", "transaction_timestamp", "gen_random_uuid", "random",
+    "concat", "concat_ws", "quote_nullable", "num_nulls", "num_nonnulls",
+    "json_build_object", "json_build_array", "jsonb_build_object", "jsonb_build_array",
+];
+/// Postgres built-ins that answer NULL only when every argument is NULL.
+pub const POSTGRES_ANY: &[&str] = &["greatest", "least"];
 /// SQLite's cast targets with a type of their own, by the name libpg_query gives them
 /// (`INTEGER` parses as `int4`, `REAL` as `float4`). A cast to anything else still carries its
 /// argument's nullability on SQLite, but not a type: `CAST(x AS NUMERIC)` may be either class.
@@ -155,6 +178,11 @@ pub struct Trust {
     /// Functions the host registers on its own connection, by name, with the type oid each
     /// returns: NULL only when an argument is NULL. Anti's `anti_html` on SQLite is one.
     pub total: HashMap<String, u32>,
+    /// Whether a parameter is a non-null value. A host whose callers cannot pass null (Lando
+    /// types a parameter without it) sets this; by default a placeholder proves nothing.
+    pub non_null_params: bool,
+    /// The parameter numbers that may be null all the same.
+    pub nullable_params: HashSet<i32>,
 }
 
 impl Trust {
@@ -354,6 +382,10 @@ impl Reader<'_> {
                 }
                 _ => Expr::Unknown,
             },
+            // `ROW(a, b)` and `(a, b)` build a row whatever their fields hold, and a cast of one
+            // to a composite type only relabels it: no cast can be defined from `record`.
+            Some(NodeEnum::RowExpr(_)) if self.dialect == Dialect::Postgres => Expr::NonNull(None),
+            Some(NodeEnum::TypeCast(t)) if self.dialect == Dialect::Postgres && matches!(t.arg.as_deref().and_then(|a| a.node.as_ref()), Some(NodeEnum::RowExpr(_))) => Expr::NonNull(None),
             Some(NodeEnum::TypeCast(t)) => {
                 let (Some(arg), Some(target)) = (t.arg.as_deref(), t.type_name.as_ref()) else { return Expr::Unknown };
                 if !target.array_bounds.is_empty() || target.setof || target.pct_type {
@@ -426,6 +458,10 @@ impl Reader<'_> {
             }
             Some(NodeEnum::FuncCall(f)) => self.call(f),
             Some(NodeEnum::SubLink(s)) => self.sublink(s),
+            // `current_timestamp`, `current_user` and the rest of the SQL value functions.
+            Some(NodeEnum::SqlvalueFunction(_)) => Expr::NonNull(None),
+            // Where the host types its parameters without null, a parameter is a non-null value.
+            Some(NodeEnum::ParamRef(p)) if self.trust.non_null_params && !self.trust.nullable_params.contains(&p.number) => Expr::NonNull(None),
             _ => Expr::Unknown,
         }
     }
@@ -444,6 +480,9 @@ impl Reader<'_> {
             (Dialect::Sqlite, "total", 1) => Expr::Nullable(Box::new(Expr::NonNull(Some(oid::FLOAT8)))),
             // "The ifnull() function is equivalent to coalesce() with two arguments."
             (Dialect::Sqlite, "ifnull", 2) => Expr::Any(f.args.iter().map(|a| self.read(a)).collect(), Ty::Shared),
+            (Dialect::Postgres, n, _) if POSTGRES_NEVER_NULL.contains(&n) && self.trust.builtin(n) => Expr::NonNull(None),
+            (Dialect::Postgres, n, _) if POSTGRES_ANY.contains(&n) && self.trust.builtin(n) => Expr::Any(f.args.iter().map(|a| self.read(a)).collect(), Ty::Shared),
+            (Dialect::Postgres, n, _) if POSTGRES_TOTAL.contains(&n) && self.trust.builtin(n) => Expr::Every(f.args.iter().map(|a| self.read(a)).collect(), Ty::Unknown),
             _ => match self.trust.total.get(name.as_str()) {
                 Some(&ty) => Expr::Every(f.args.iter().map(|a| self.read(a)).collect(), Ty::Is(ty)),
                 None => Expr::Unknown,
@@ -454,6 +493,10 @@ impl Reader<'_> {
     fn sublink(&mut self, s: &protobuf::SubLink) -> Expr {
         if s.sub_link_type == protobuf::SubLinkType::ExistsSublink as i32 {
             return Expr::NonNull(Some(oid::BOOL));
+        }
+        // `ARRAY(SELECT …)` is an array whatever the subquery returns: empty for no rows.
+        if s.sub_link_type == protobuf::SubLinkType::ArraySublink as i32 {
+            return Expr::NonNull(None);
         }
         if s.sub_link_type != protobuf::SubLinkType::ExprSublink as i32 {
             return Expr::Unknown;
@@ -846,9 +889,22 @@ mod tests {
     }
 
     #[test]
+    fn a_row_constructor_is_never_null() {
+        let p = pg("SELECT ROW(a, b) AS r, (a, b)::pair AS typed, (a, b) AS bare FROM t");
+        for claim in &p.head {
+            assert!(resolve(claim.as_ref().unwrap(), None).non_null);
+        }
+    }
+
+    #[test]
     fn placeholders_are_parameters_and_prove_nothing() {
         assert!(!first(&pg("SELECT $1::uuid AS id")).non_null);
         assert!(!first(&lite("SELECT ?1 || 'x' AS id")).non_null);
+        // A host that types its parameters without null says so, and names the exceptions.
+        let typed = Trust { non_null_params: true, nullable_params: [2].into_iter().collect(), ..Default::default() };
+        let p = plan("SELECT $1::uuid AS id, $2::uuid AS other", Dialect::Postgres, &typed);
+        assert!(resolve(p.head[0].as_ref().unwrap(), None).non_null);
+        assert!(!resolve(p.head[1].as_ref().unwrap(), None).non_null);
         assert_eq!(dollar_placeholders("SELECT ?1, '?2', \"?3\" -- ?4\n, ?10 /* ?5 */"), "SELECT $1, '?2', \"?3\" -- ?4\n, $10 /* ?5 */");
     }
 

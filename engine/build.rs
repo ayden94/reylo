@@ -2,10 +2,43 @@
 // the tree serializer in `csrc/lando_sqlite.c`, for the native and the wasm32-wasip1 target alike.
 // `build.sh` fetches the amalgamation and applies `csrc/patch-sqlite.py`; this script only compiles.
 use std::env;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+/// FNV-1a over the engine's sources, file by file in name order: the same on every platform
+/// and toolchain, which a std hasher does not promise.
+fn fingerprint(root: &Path) -> String {
+    let mut files: Vec<PathBuf> = vec![root.join("Cargo.toml")];
+    for dir in ["src", "csrc"] {
+        let mut entries: Vec<PathBuf> = fs::read_dir(root.join(dir)).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_file()).collect();
+        entries.sort();
+        files.extend(entries);
+    }
+    let mut hash: u64 = 0xcbf29ce484222325;
+    let mut eat = |bytes: &[u8]| {
+        for b in bytes {
+            if *b == b'\r' {
+                continue;
+            }
+            hash ^= u64::from(*b);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+    };
+    for file in &files {
+        eat(file.strip_prefix(root).unwrap_or(file).to_string_lossy().replace('\\', "/").as_bytes());
+        eat(&[0]);
+        eat(&fs::read(file).unwrap_or_default());
+        eat(&[0]);
+    }
+    format!("{hash:016x}")
+}
 
 fn main() {
     let root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    println!("cargo:rustc-env=LANDO_ENGINE_FINGERPRINT={}", fingerprint(&root));
+    println!("cargo:rerun-if-changed=src");
+    println!("cargo:rerun-if-changed=csrc");
+    println!("cargo:rerun-if-changed=Cargo.toml");
     let patched = root.join(".sqlite/sqlite3-patched.c");
     if !patched.exists() {
         panic!("{} is missing: run `engine/build.sh --prepare` (fetches the SQLite amalgamation and applies csrc/patch-sqlite.py)", patched.display());

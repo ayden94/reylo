@@ -16,11 +16,11 @@ use crate::host::{as_bool, as_str, as_strings, as_u32, Host, Lazy};
 use crate::infer::{self, Trust};
 use crate::jsonshape;
 use crate::lex::{self, Lexed, Rewritten, Style, Target};
-use crate::pgtypes::{TypeRegistry, TYPE_QUERY};
+use crate::pgtypes::{TypeRegistry, RELATION_TYPES_QUERY, TYPE_QUERY};
 use crate::types::{DescribedColumn, DescribedStatement, Type};
 use serde_json::{json, Value};
 use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// How many statements one analysis may synthesize to settle its columns: one per set-operation
 /// arm, one per statement whose expressions read a column, one per JSON constructor context.
@@ -29,13 +29,19 @@ const MAX_PROBES: usize = 8;
 const ATTNOTNULL_QUERY: &str = "SELECT a.attrelid::int8, a.attnum::int4 FROM pg_attribute a \
     JOIN unnest($1::oid[], $2::int2[]) AS u(rel, att) ON a.attrelid = u.rel AND a.attnum = u.att WHERE a.attnotnull";
 const RELNAMES_QUERY: &str = "SELECT c.oid::int8, c.relname::text FROM pg_class c WHERE c.oid = ANY($1::oid[])";
+/// Every column of the relations the parse names, by name, so provenance and `NOT NULL` are
+/// settled without a second round for the tables the statement itself reads.
+const RELATION_COLUMNS_QUERY: &str = "SELECT c.oid::int8, c.relname::text, a.attnum::int4, a.attnotnull, \
+    CASE WHEN c.relkind IN ('v', 'm') AND a.attnum = 1 THEN pg_catalog.pg_get_viewdef(c.oid) END \
+    FROM pg_class c JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped \
+    WHERE c.relname = ANY($1::text[]) AND pg_catalog.pg_table_is_visible(c.oid)";
 /// Which of the names the expression rules read a user or an extension has defined, and which
 /// built-in types a cast may target (see [`crate::infer::Trust`]).
 const TRUST_QUERY: &str = "SELECT false, o.oprname::text FROM pg_operator o WHERE o.oid >= 16384 AND o.oprname::text = ANY($1::text[]) \
     UNION ALL SELECT false, p.proname::text FROM pg_proc p WHERE p.oid >= 16384 AND p.proname::text = ANY($2::text[]) \
     UNION ALL SELECT true, t.typname::text FROM pg_type t WHERE t.oid < 16384 AND t.typnamespace = 'pg_catalog'::regnamespace \
       AND NOT EXISTS (SELECT 1 FROM pg_type u WHERE u.oid >= 16384 AND u.typname = t.typname) \
-      AND NOT EXISTS (SELECT 1 FROM pg_cast c WHERE c.oid >= 16384 AND c.casttarget = t.oid)";
+      AND NOT EXISTS (SELECT 1 FROM pg_cast c WHERE c.oid >= 16384 AND c.casttarget = t.oid AND c.castmethod = 'f')";
 
 pub fn analyze(sql: &str, dialect: Dialect, host: &Host) -> Lazy<Analysis> {
     let lexed = match lex::lex(sql, dialect) {
@@ -95,6 +101,11 @@ pub(crate) fn cardinality_directive(lexed: &Lexed, diagnostics: &mut Vec<Diagnos
 struct Engine<'a> {
     host: &'a Host<'a>,
     registry: RefCell<TypeRegistry>,
+    /// The parse-named relations' columns: relation oid → (name, attnum → NOT NULL).
+    relations: RefCell<HashMap<u32, (String, HashMap<i32, bool>)>>,
+    /// The defining SELECT of each of those that is a view or a materialized view. The catalog
+    /// holds no NOT NULL for a view's columns, so they are settled from this statement instead.
+    views: RefCell<HashMap<u32, String>>,
     /// Per placeholder of the main statement, the cast a probe pins on it.
     casts: RefCell<Vec<Option<String>>>,
     budget: Cell<usize>,
@@ -102,17 +113,53 @@ struct Engine<'a> {
 
 impl<'a> Engine<'a> {
     fn new(host: &'a Host<'a>) -> Engine<'a> {
-        Engine { host, registry: RefCell::new(TypeRegistry::default()), casts: RefCell::new(Vec::new()), budget: Cell::new(MAX_PROBES) }
+        Engine { host, registry: RefCell::new(TypeRegistry::with_builtins()), relations: RefCell::new(HashMap::new()), views: RefCell::new(HashMap::new()), casts: RefCell::new(Vec::new()), budget: Cell::new(MAX_PROBES) }
     }
 
     fn run(&self, sql: &str, lexed: &Lexed) -> Lazy<Analysis> {
         let mut diagnostics = Vec::new();
         let rewritten = lex::rewrite(sql, lexed, Target::Dollar);
-        // The session facts and the describe are independent: ask for both in the first round.
-        let trust = self.trust();
+        let parsed = match analyze::analyze(&rewritten.sql) {
+            Ok(p) => Some(p),
+            // A statement the engine does not type (a cursor, a DO block, DDL) says so on the
+            // whole statement, rather than coming back as `unknown` with no word.
+            Err(e @ analyze::AnalyzeError::UnsupportedStatement) => {
+                diagnostics.push(diag(e.to_string(), 0, sql.trim_end().len(), 10));
+                None
+            }
+            Err(_) => None,
+        };
+        // The first round asks for everything at once: the session facts, the describe, and
+        // what the parse alone names — the relations' columns, column types and unique keys,
+        // the functions, and every probe that carries no placeholder. Only what depends on the
+        // describe (a type it reports that no named relation holds, a probe that pins a
+        // parameter's type) waits for a second round.
+        let trust = self.trust().map(|mut trust| {
+            // A parameter's TypeScript type carries no null, so a parameter is a non-null value,
+            // unless its `-- @param` annotation says the caller may pass null.
+            trust.non_null_params = true;
+            trust.nullable_params = nullable_params(lexed);
+            trust
+        });
         let operators = self.set_returning_operators();
         let raw = self.host.describe(&rewritten.sql);
-        let (Some(raw), Some(trust), Some(operators)) = (raw, trust, operators) else { return None };
+        let relations = relations_of(parsed.as_ref());
+        let prefetched = self.prefetch(&relations);
+        let catalog_rows = self.catalog_rows(parsed.as_ref(), &relations);
+        for probe in &jsonshape::plan(&rewritten.sql).probes {
+            self.prewarm(&probe.sql);
+        }
+        if let Some(trust) = &trust {
+            let plan = infer::plan(&rewritten.sql, Dialect::Postgres, trust);
+            if let Some(set) = &plan.set_op {
+                self.prewarm(&set.left);
+                self.prewarm(&set.right);
+            }
+            if let (Some(leaves), true) = (&plan.leaves, plan.reads_leaves()) {
+                self.prewarm(leaves);
+            }
+        }
+        let (Some(raw), Some(trust), Some(operators), Some(()), Some(catalog_rows)) = (raw, trust, operators, prefetched, catalog_rows) else { return None };
         let raw = match raw {
             Ok(r) => r,
             Err(e) => {
@@ -120,16 +167,15 @@ impl<'a> Engine<'a> {
                 return Some(bare(sql, lexed, Dialect::Postgres, diagnostics));
             }
         };
-        let parsed = analyze::analyze(&rewritten.sql).ok();
         // Types for the parameters and the columns, and the casts probes pin on the parameters.
         let mut oids: Vec<u32> = raw.params.clone();
         oids.extend(raw.columns.iter().map(|c| c.oid));
         let types = self.types(&oids);
         // The catalog the row-count proof reads.
-        let catalog = self.catalog(parsed.as_ref(), &operators);
+        let catalog = build_catalog(parsed.as_ref(), &operators, catalog_rows);
         // Nullability from provenance, then from the SQL.
-        let settled = self.settle(&raw, parsed.as_ref());
-        let (Some(()), Some(catalog), Some(mut described)) = (types, catalog, settled) else { return None };
+        let settled = self.settle(&raw, parsed.as_ref(), &trust);
+        let (Some(()), Some(mut described)) = (types, settled) else { return None };
         *self.casts.borrow_mut() = raw.params.iter().map(|o| self.registry.borrow().get(*o).map(|t| t.cast_name.clone()).filter(|c| !c.is_empty())).collect();
         self.refine(&rewritten.sql, &mut described, &trust)?;
 
@@ -212,7 +258,9 @@ impl<'a> Engine<'a> {
 
     fn cardinality(&self, sql: &str, parsed: Option<&Parsed>, described: &DescribedStatement, trust: &Trust, catalog: &Catalog) -> (String, Option<String>) {
         let Some(parsed) = parsed else { return ("many".into(), Some("the statement did not parse locally".into())) };
-        if parsed.kind == analyze::StatementKind::Mutation {
+        // By the top statement, not `kind`: a SELECT over a data-modifying WITH is a mutation,
+        // and its rows are still a SELECT's.
+        if parsed.statement != "select" {
             if !parsed.has_returning || described.columns.is_empty() {
                 return ("none".into(), None);
             }
@@ -238,7 +286,7 @@ impl<'a> Engine<'a> {
 
     fn trust(&self) -> Lazy<Trust> {
         let operators: Vec<Value> = infer::POSTGRES_OPERATORS.iter().map(|s| json!(s)).collect();
-        let functions: Vec<Value> = infer::FUNCTIONS.iter().map(|s| json!(s)).collect();
+        let functions: Vec<Value> = infer::FUNCTIONS.iter().chain(infer::POSTGRES_TOTAL).chain(infer::POSTGRES_NEVER_NULL).chain(infer::POSTGRES_ANY).map(|s| json!(s)).collect();
         let rows = self.host.query(TRUST_QUERY, vec![json!(operators), json!(functions)], Scope::Session)?;
         let mut trust = Trust { shadowed: HashSet::new(), cast_targets: Some(HashSet::new()), ..Default::default() };
         if let Ok(rows) = rows {
@@ -289,15 +337,10 @@ impl<'a> Engine<'a> {
         }
     }
 
-    fn catalog(&self, parsed: Option<&Parsed>, operators: &HashSet<String>) -> Lazy<Catalog> {
-        let mut catalog = Catalog { set_returning_operators: operators.clone(), ..Catalog::default() };
-        let Some(parsed) = parsed else { return Some(catalog) };
-        let mut relations: Vec<String> = parsed.read_set.clone();
-        for w in &parsed.write_set {
-            if !relations.contains(w) {
-                relations.push(w.clone());
-            }
-        }
+    /// The rows the row-count proof's catalog is built from: the unique keys of the relations
+    /// the parse names, and which of the functions it calls return a set.
+    fn catalog_rows(&self, parsed: Option<&Parsed>, relations: &[String]) -> Lazy<(Vec<Vec<Value>>, Vec<Vec<Value>>)> {
+        let Some(parsed) = parsed else { return Some((Vec::new(), Vec::new())) };
         let keys = if relations.is_empty() { Some(Ok(Vec::new())) } else { self.host.query(cardinality::UNIQUE_KEYS_QUERY, vec![json!(relations)], Scope::Statement) };
         let functions = if parsed.functions.is_empty() {
             Some(Ok(Vec::new()))
@@ -305,20 +348,36 @@ impl<'a> Engine<'a> {
             self.host.query(cardinality::FUNCTIONS_QUERY, vec![json!(parsed.functions)], Scope::Statement)
         };
         let (Some(keys), Some(functions)) = (keys, functions) else { return None };
-        for row in keys.unwrap_or_default() {
-            if let (Some(rel), Some(cols)) = (row.first().and_then(as_str), row.get(1).and_then(as_strings)) {
-                catalog.unique_keys.entry(rel.to_string()).or_default().push(cols);
+        Some((keys.unwrap_or_default(), functions.unwrap_or_default()))
+    }
+
+    /// Every column and every column type of the named relations, in one round, so `settle`
+    /// and `types` have their answers before the describe is back.
+    fn prefetch(&self, relations: &[String]) -> Lazy<()> {
+        if relations.is_empty() {
+            return Some(());
+        }
+        let columns = self.host.query(RELATION_COLUMNS_QUERY, vec![json!(relations)], Scope::Statement);
+        let types = self.host.query(RELATION_TYPES_QUERY, vec![json!(relations)], Scope::Statement);
+        let (Some(columns), Some(types)) = (columns, types) else { return None };
+        let mut known = self.relations.borrow_mut();
+        for row in columns.unwrap_or_default() {
+            let (Some(oid), Some(name), Some(attnum), Some(not_null)) = (row.first().and_then(as_u32), row.get(1).and_then(as_str), row.get(2).and_then(as_u32), row.get(3).and_then(as_bool)) else { continue };
+            known.entry(oid).or_insert_with(|| (name.to_string(), HashMap::new())).1.insert(attnum as i32, not_null);
+            if let Some(definition) = row.get(4).and_then(as_str) {
+                self.views.borrow_mut().insert(oid, definition.trim_end().trim_end_matches(';').to_string());
             }
         }
-        for row in functions.unwrap_or_default() {
-            if let (Some(name), Some(retset)) = (row.first().and_then(as_str), row.get(1).and_then(as_bool)) {
-                if retset {
-                    catalog.set_returning.insert(name.to_string());
-                }
-                catalog.functions.insert(name.to_string());
-            }
+        self.registry.borrow_mut().insert_rows(&types.unwrap_or_default());
+        Some(())
+    }
+
+    /// Ask for a probe's describe ahead of the round that reads it, when nothing has to be
+    /// pinned on it first: `probe` finds the answer waiting.
+    fn prewarm(&self, sql: &str) {
+        if lex::lex(sql, Dialect::Postgres).is_ok_and(|l| l.placeholders.is_empty()) {
+            let _ = self.host.describe(sql);
         }
-        Some(catalog)
     }
 
     // -----------------------------------------------------------------------------------------
@@ -328,8 +387,34 @@ impl<'a> Engine<'a> {
     /// A described statement's columns with their nullability from provenance: the catalog's
     /// `NOT NULL`, unless the column's table sits on the nullable side of an outer join, or the
     /// statement's shape hides which relation produced a column.
-    fn settle(&self, raw: &crate::api::RawDescribe, parsed: Option<&Parsed>) -> Lazy<DescribedStatement> {
-        let pairs: Vec<(u32, i32)> = raw.columns.iter().filter(|c| c.table != 0 && c.attnum > 0).map(|c| (c.table, c.attnum)).collect();
+    fn settle(&self, raw: &crate::api::RawDescribe, parsed: Option<&Parsed>, trust: &Trust) -> Lazy<DescribedStatement> {
+        // A column of a view: the view's own statement is settled like any other (its columns
+        // trace to the base tables, its joins null a side, its expressions follow the rules),
+        // and column `attnum` of the view is column `attnum - 1` of that result.
+        let mut view_columns: HashMap<u32, Option<Vec<DescribedColumn>>> = HashMap::new();
+        let definitions: Vec<(u32, String)> = {
+            let views = self.views.borrow();
+            let mut oids: Vec<u32> = raw.columns.iter().map(|c| c.table).filter(|t| views.contains_key(t)).collect();
+            oids.sort_unstable();
+            oids.dedup();
+            oids.into_iter().map(|o| (o, views[&o].clone())).collect()
+        };
+        let mut pending = false;
+        for (oid, definition) in definitions {
+            match self.probe(&definition, trust) {
+                Some(outcome) => {
+                    view_columns.insert(oid, outcome.map(|d| d.columns));
+                }
+                None => pending = true,
+            }
+        }
+        if pending {
+            return None;
+        }
+        // The parse-named relations were prefetched; a column from any other relation (a view's
+        // base table, a relation the parse could not name) is asked for by oid.
+        let known = self.relations.borrow();
+        let pairs: Vec<(u32, i32)> = raw.columns.iter().filter(|c| c.table != 0 && c.attnum > 0 && !known.contains_key(&c.table)).map(|c| (c.table, c.attnum)).collect();
         let rels: Vec<u32> = {
             let mut r: Vec<u32> = pairs.iter().map(|(r, _)| *r).collect();
             r.sort_unstable();
@@ -350,12 +435,12 @@ impl<'a> Engine<'a> {
             self.host.query(RELNAMES_QUERY, vec![json!(rels)], Scope::Statement)
         };
         let (Some(not_null), Some(relnames)) = (not_null, relnames) else { return None };
-        let not_null: HashSet<(u32, i32)> = not_null
+        let mut not_null: HashSet<(u32, i32)> = not_null
             .unwrap_or_default()
             .iter()
             .filter_map(|r| Some((as_u32(r.first()?)?, as_u32(r.get(1)?)? as i32)))
             .collect();
-        let nulled_rels: HashSet<u32> = relnames
+        let mut nulled_rels: HashSet<u32> = relnames
             .unwrap_or_default()
             .iter()
             .filter_map(|r| {
@@ -363,6 +448,16 @@ impl<'a> Engine<'a> {
                 nullable_tables.iter().any(|t| t == name).then_some(o)
             })
             .collect();
+        for col in &raw.columns {
+            if let Some((name, atts)) = known.get(&col.table) {
+                if atts.get(&col.attnum).copied().unwrap_or(false) {
+                    not_null.insert((col.table, col.attnum));
+                }
+                if nullable_tables.iter().any(|t| t == name) {
+                    nulled_rels.insert(col.table);
+                }
+            }
+        }
         // Without a parse tree nothing degrades and nothing is nulled by a join, which is
         // wrong in the unsafe direction, so a statement libpg_query cannot read keeps every
         // column nullable.
@@ -376,7 +471,11 @@ impl<'a> Engine<'a> {
             .iter()
             .map(|col| {
                 let nullable = if col.table != 0 && col.attnum > 0 && !degraded {
-                    !not_null.contains(&(col.table, col.attnum)) || nulled_rels.contains(&col.table)
+                    let own = match view_columns.get(&col.table) {
+                        Some(columns) => columns.as_ref().and_then(|c| c.get(col.attnum as usize - 1)).is_none_or(|c| c.nullable),
+                        None => !not_null.contains(&(col.table, col.attnum)),
+                    };
+                    own || nulled_rels.contains(&col.table)
                 } else {
                     true
                 };
@@ -442,7 +541,7 @@ impl<'a> Engine<'a> {
         let mut oids: Vec<u32> = raw.columns.iter().map(|c| c.oid).collect();
         oids.extend(raw.params.iter().copied());
         let types = self.types(&oids);
-        let settled = self.settle(&raw, parsed.as_ref());
+        let settled = self.settle(&raw, parsed.as_ref(), trust);
         let (Some(()), Some(mut described)) = (types, settled) else { return None };
         self.refine(sql, &mut described, trust)?;
         Some(Some(described))
@@ -465,6 +564,56 @@ impl<'a> Engine<'a> {
         })
         .sql
     }
+}
+
+/// The numbers of the parameters a `-- @param name type` annotation types with `null` or
+/// `undefined`: `$1` is the first name in `lexed.params`.
+fn nullable_params(lexed: &Lexed) -> HashSet<i32> {
+    let mut out = HashSet::new();
+    for d in lexed.directives.iter().filter(|d| d.name == "param") {
+        let Some((name, ty)) = d.value.trim().split_once(char::is_whitespace) else { continue };
+        let admits_null = ty.split(|c: char| !c.is_ascii_alphanumeric()).any(|word| word == "null" || word == "undefined");
+        if !admits_null {
+            continue;
+        }
+        if let Some(i) = lexed.params.iter().position(|p| p == name) {
+            out.insert(i as i32 + 1);
+        }
+    }
+    out
+}
+
+/// The relations a statement reads or writes, as the parse names them.
+fn relations_of(parsed: Option<&Parsed>) -> Vec<String> {
+    let Some(parsed) = parsed else { return Vec::new() };
+    let mut relations: Vec<String> = parsed.read_set.clone();
+    for w in &parsed.write_set {
+        if !relations.contains(w) {
+            relations.push(w.clone());
+        }
+    }
+    relations
+}
+
+fn build_catalog(parsed: Option<&Parsed>, operators: &HashSet<String>, rows: (Vec<Vec<Value>>, Vec<Vec<Value>>)) -> Catalog {
+    let mut catalog = Catalog { set_returning_operators: operators.clone(), ..Catalog::default() };
+    if parsed.is_none() {
+        return catalog;
+    }
+    for row in rows.0 {
+        if let (Some(rel), Some(cols)) = (row.first().and_then(as_str), row.get(1).and_then(as_strings)) {
+            catalog.unique_keys.entry(rel.to_string()).or_default().push(cols);
+        }
+    }
+    for row in rows.1 {
+        if let (Some(name), Some(retset)) = (row.first().and_then(as_str), row.get(1).and_then(as_bool)) {
+            if retset {
+                catalog.set_returning.insert(name.to_string());
+            }
+            catalog.functions.insert(name.to_string());
+        }
+    }
+    catalog
 }
 
 /// A failed describe as a diagnostic on the author's text: the server's message, at the

@@ -6,6 +6,7 @@ pub mod analyze;
 pub mod api;
 pub mod cardinality;
 pub mod dialect;
+pub mod extension;
 pub mod host;
 pub mod infer;
 pub mod jsonshape;
@@ -17,6 +18,11 @@ pub mod postgres;
 pub mod sqlite;
 pub mod sqlite_tree;
 pub mod types;
+
+/// A fingerprint of the sources this engine was built from (`build.rs`). Two engines with the
+/// same fingerprint give the same answer, which is how a client decides whether the engine
+/// inside a server's `lando` extension may answer for it ([`extension`]).
+pub const FINGERPRINT: &str = env!("LANDO_ENGINE_FINGERPRINT");
 
 /// One request in, one response out, both JSON text. The only entry point.
 pub fn call(request: &str) -> String {

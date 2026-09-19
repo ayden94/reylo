@@ -55,7 +55,117 @@ pub const TYPE_QUERY: &str = "SELECT t.oid::int8, t.typname::text, t.typtype::te
     pg_catalog.format_type(t.oid, NULL) \
     FROM pg_type t WHERE t.oid = ANY($1::oid[])";
 
+/// The same rows for every column type of the named relations, with the element and base types
+/// those name, so a statement over plain columns has its types before it is described. `$1` is
+/// `text[]` of relation names.
+pub const RELATION_TYPES_QUERY: &str = "WITH cols AS (SELECT a.atttypid AS oid FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid \
+      WHERE c.relname = ANY($1::text[]) AND pg_catalog.pg_table_is_visible(c.oid) AND a.attnum > 0 AND NOT a.attisdropped), \
+    wanted AS (SELECT oid FROM cols \
+      UNION SELECT t.typelem FROM pg_type t JOIN cols ON cols.oid = t.oid WHERE t.typelem <> 0 \
+      UNION SELECT t.typbasetype FROM pg_type t JOIN cols ON cols.oid = t.oid WHERE t.typbasetype <> 0) \
+    SELECT t.oid::int8, t.typname::text, t.typtype::text, t.typelem::int8, t.typbasetype::int8, \
+    CASE WHEN t.typtype = 'e' THEN (SELECT array_agg(e.enumlabel::text ORDER BY e.enumsortorder) FROM pg_enum e WHERE e.enumtypid = t.oid) END, \
+    pg_catalog.format_type(t.oid, NULL) \
+    FROM pg_type t WHERE t.oid IN (SELECT oid FROM wanted)";
+
+/// The `pg_catalog` types with fixed oids the registry starts with, as `pg_type` reports them on
+/// 14 (`oid, typname, typtype, typelem, typbasetype, format_type`), so a statement over plain
+/// columns and built-in expressions needs no type query at all. An oid below 10000 is assigned
+/// in `pg_type.dat` and does not change between releases.
+const BUILTINS: &[(u32, &str, &str, u32, u32, &str)] = &[
+    (16, "bool", "b", 0, 0, "boolean"),
+    (17, "bytea", "b", 0, 0, "bytea"),
+    (18, "char", "b", 0, 0, "\"char\""),
+    (19, "name", "b", 18, 0, "name"),
+    (20, "int8", "b", 0, 0, "bigint"),
+    (21, "int2", "b", 0, 0, "smallint"),
+    (23, "int4", "b", 0, 0, "integer"),
+    (25, "text", "b", 0, 0, "text"),
+    (26, "oid", "b", 0, 0, "oid"),
+    (114, "json", "b", 0, 0, "json"),
+    (142, "xml", "b", 0, 0, "xml"),
+    (143, "_xml", "b", 142, 0, "xml[]"),
+    (199, "_json", "b", 114, 0, "json[]"),
+    (650, "cidr", "b", 0, 0, "cidr"),
+    (651, "_cidr", "b", 650, 0, "cidr[]"),
+    (700, "float4", "b", 0, 0, "real"),
+    (701, "float8", "b", 0, 0, "double precision"),
+    (705, "unknown", "p", 0, 0, "unknown"),
+    (790, "money", "b", 0, 0, "money"),
+    (791, "_money", "b", 790, 0, "money[]"),
+    (829, "macaddr", "b", 0, 0, "macaddr"),
+    (869, "inet", "b", 0, 0, "inet"),
+    (1000, "_bool", "b", 16, 0, "boolean[]"),
+    (1001, "_bytea", "b", 17, 0, "bytea[]"),
+    (1002, "_char", "b", 18, 0, "\"char\"[]"),
+    (1003, "_name", "b", 19, 0, "name[]"),
+    (1005, "_int2", "b", 21, 0, "smallint[]"),
+    (1007, "_int4", "b", 23, 0, "integer[]"),
+    (1009, "_text", "b", 25, 0, "text[]"),
+    (1014, "_bpchar", "b", 1042, 0, "character[]"),
+    (1015, "_varchar", "b", 1043, 0, "character varying[]"),
+    (1016, "_int8", "b", 20, 0, "bigint[]"),
+    (1021, "_float4", "b", 700, 0, "real[]"),
+    (1022, "_float8", "b", 701, 0, "double precision[]"),
+    (1028, "_oid", "b", 26, 0, "oid[]"),
+    (1040, "_macaddr", "b", 829, 0, "macaddr[]"),
+    (1041, "_inet", "b", 869, 0, "inet[]"),
+    (1042, "bpchar", "b", 0, 0, "character"),
+    (1043, "varchar", "b", 0, 0, "character varying"),
+    (1082, "date", "b", 0, 0, "date"),
+    (1083, "time", "b", 0, 0, "time without time zone"),
+    (1114, "timestamp", "b", 0, 0, "timestamp without time zone"),
+    (1115, "_timestamp", "b", 1114, 0, "timestamp without time zone[]"),
+    (1182, "_date", "b", 1082, 0, "date[]"),
+    (1183, "_time", "b", 1083, 0, "time without time zone[]"),
+    (1184, "timestamptz", "b", 0, 0, "timestamp with time zone"),
+    (1185, "_timestamptz", "b", 1184, 0, "timestamp with time zone[]"),
+    (1186, "interval", "b", 0, 0, "interval"),
+    (1187, "_interval", "b", 1186, 0, "interval[]"),
+    (1231, "_numeric", "b", 1700, 0, "numeric[]"),
+    (1266, "timetz", "b", 0, 0, "time with time zone"),
+    (1270, "_timetz", "b", 1266, 0, "time with time zone[]"),
+    (1560, "bit", "b", 0, 0, "bit"),
+    (1562, "varbit", "b", 0, 0, "bit varying"),
+    (1700, "numeric", "b", 0, 0, "numeric"),
+    (2205, "regclass", "b", 0, 0, "regclass"),
+    (2206, "regtype", "b", 0, 0, "regtype"),
+    (2210, "_regclass", "b", 2205, 0, "regclass[]"),
+    (2211, "_regtype", "b", 2206, 0, "regtype[]"),
+    (2249, "record", "p", 0, 0, "record"),
+    (2278, "void", "p", 0, 0, "void"),
+    (2950, "uuid", "b", 0, 0, "uuid"),
+    (2951, "_uuid", "b", 2950, 0, "uuid[]"),
+    (3614, "tsvector", "b", 0, 0, "tsvector"),
+    (3615, "tsquery", "b", 0, 0, "tsquery"),
+    (3802, "jsonb", "b", 0, 0, "jsonb"),
+    (3807, "_jsonb", "b", 3802, 0, "jsonb[]"),
+    (3904, "int4range", "r", 0, 0, "int4range"),
+    (3905, "_int4range", "b", 3904, 0, "int4range[]"),
+    (3906, "numrange", "r", 0, 0, "numrange"),
+    (3907, "_numrange", "b", 3906, 0, "numrange[]"),
+    (3908, "tsrange", "r", 0, 0, "tsrange"),
+    (3909, "_tsrange", "b", 3908, 0, "tsrange[]"),
+    (3910, "tstzrange", "r", 0, 0, "tstzrange"),
+    (3911, "_tstzrange", "b", 3910, 0, "tstzrange[]"),
+    (3912, "daterange", "r", 0, 0, "daterange"),
+    (3913, "_daterange", "b", 3912, 0, "daterange[]"),
+    (3926, "int8range", "r", 0, 0, "int8range"),
+    (3927, "_int8range", "b", 3926, 0, "int8range[]"),
+];
+
 impl TypeRegistry {
+    /// A registry holding [`BUILTINS`].
+    pub fn with_builtins() -> TypeRegistry {
+        let mut registry = TypeRegistry::default();
+        let rows: Vec<Vec<Value>> = BUILTINS
+            .iter()
+            .map(|(oid, name, typtype, elem, base, cast)| vec![Value::from(*oid), Value::from(*name), Value::from(*typtype), Value::from(*elem), Value::from(*base), Value::Null, Value::from(*cast)])
+            .collect();
+        registry.insert_rows(&rows);
+        registry
+    }
+
     /// Rows of [`TYPE_QUERY`] as the host hands them back; a driver may decode `int8` as a
     /// string, so every number is read leniently.
     pub fn insert_rows(&mut self, rows: &[Vec<Value>]) {
@@ -148,6 +258,9 @@ impl TypeRegistry {
                 (TypeKind::Array, Some(e), _) => return Type::Array { of: Box::new(self.render(e)) },
                 (TypeKind::Domain, _, Some(b)) => cur = b,
                 (TypeKind::Enum, _, _) => return Type::Enum { name: t.name.clone(), labels: t.labels.clone() },
+                // A row value: no driver parses one, so it reaches the caller as its text form,
+                // and so does an array of them.
+                (TypeKind::Composite, _, _) => return Type::Scalar { name: "record".into() },
                 (TypeKind::Base, _, _) if matches!(t.oid, oid::JSON | oid::JSONB) => return Type::Json,
                 _ => return Type::Scalar { name: t.name.clone() },
             }

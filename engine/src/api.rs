@@ -112,7 +112,7 @@ pub enum Scope {
     Statement,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Diagnostic {
     pub message: String,
     /// Byte offset in the original text.
@@ -121,7 +121,7 @@ pub struct Diagnostic {
     pub code: u32,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Param {
     pub name: String,
     #[serde(rename = "type")]
@@ -130,7 +130,7 @@ pub struct Param {
     pub type_name: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Column {
     pub name: String,
     #[serde(rename = "type")]
@@ -162,26 +162,47 @@ pub struct Analysis {
 #[derive(Debug, Serialize)]
 #[serde(tag = "status", rename_all = "camelCase")]
 pub enum Response {
-    Ok { version: String },
+    Ok { version: String, fingerprint: String },
     Lexed { lexed: lex::Lexed },
     Need { needs: Vec<Need> },
     Analysis { analysis: Analysis },
     Error { message: String },
 }
 
+/// One round of the replay, through the server's `lando` extension where there is one
+/// ([`crate::extension`]): the whole analysis from a server with this engine inside, a round's
+/// needs in one query from a server with another build, and the needs as they are otherwise.
+fn analyze(sql: &str, dialect: Dialect, answers: &HashMap<String, Answer>) -> Response {
+    use crate::extension::{self, Server};
+    let host = crate::host::Host::new(answers);
+    let server = if dialect == Dialect::Postgres { extension::server(&host) } else { Some(Server::Absent) };
+    if server == Some(Server::Same) {
+        match extension::analyze(sql, &host) {
+            Some(Some(analysis)) => return Response::Analysis { analysis },
+            Some(None) => {}
+            None => return Response::Need { needs: host.needs() },
+        }
+    }
+    match crate::postgres::analyze(sql, dialect, &host) {
+        Some(analysis) => Response::Analysis { analysis },
+        None => {
+            let needs = host.needs();
+            let bundled = matches!(server, Some(Server::Same) | Some(Server::Other { answers: true })) && !extension::bundle_failed(&needs, answers);
+            Response::Need { needs: if bundled { extension::bundle(needs) } else { needs } }
+        }
+    }
+}
+
 pub fn call(request: &str) -> String {
     let response = match serde_json::from_str::<Request>(request) {
-        Ok(Request::Ping) => Response::Ok { version: env!("CARGO_PKG_VERSION").to_string() },
+        Ok(Request::Ping) => Response::Ok { version: env!("CARGO_PKG_VERSION").to_string(), fingerprint: crate::FINGERPRINT.to_string() },
         Ok(Request::Lex { sql, dialect }) => match lex::lex(&sql, dialect) {
             Ok(lexed) => Response::Lexed { lexed },
             Err(e) => Response::Error { message: e.message },
         },
-        Ok(Request::Analyze { sql, dialect, answers }) => {
-            let host = crate::host::Host::new(&answers);
-            match crate::postgres::analyze(&sql, dialect, &host) {
-                Some(analysis) => Response::Analysis { analysis },
-                None => Response::Need { needs: host.needs() },
-            }
+        Ok(Request::Analyze { sql, dialect, mut answers }) => {
+            crate::extension::unbundle(&mut answers);
+            analyze(&sql, dialect, &answers)
         }
         Err(e) => Response::Error { message: format!("bad request: {e}") },
     };

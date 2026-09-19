@@ -146,6 +146,9 @@ pub fn analyze(sql: &str) -> Result<Analysis, AnalyzeError> {
             }
         }
         "GroupingSet" => has_grouping_sets = true,
+        // A write anywhere makes the statement a mutation, a data-modifying WITH under a SELECT
+        // included: `kind` is what a caller routes and wraps in a transaction by. The rows such
+        // a statement returns are still the outer SELECT's, which is what `statement` is for.
         "InsertStmt" | "UpdateStmt" | "DeleteStmt" | "MergeStmt" => {
             kind = StatementKind::Mutation;
             if node.get("returning_list").and_then(|l| l.as_array()).is_some_and(|l| !l.is_empty()) {
@@ -224,6 +227,19 @@ pub fn analyze(sql: &str) -> Result<Analysis, AnalyzeError> {
         _ => {}
     });
 
+    // A strict predicate in the top-level WHERE on a column of an outer-joined table matches
+    // only rows where that table's row exists, so its columns keep the catalog's nullability:
+    // `LEFT JOIN posts p … WHERE p.id IS NOT NULL` (or `p.views > 0`) is an inner join in effect.
+    // This is the planner's own outer-join reduction, read off the text.
+    if let NodeEnum::SelectStmt(s) = top {
+        if let Some(w) = s.where_clause.as_deref() {
+            let aliases = alias_map(&s.from_clause);
+            let mut strict = Vec::new();
+            strict_qualifiers(w, &mut strict);
+            nullable_tables.retain(|rel| !strict.iter().any(|q| q == rel || aliases.get(q).is_some_and(|r| r == rel)));
+        }
+    }
+
     let read_set = parsed.select_tables();
     let write_set = parsed.dml_tables();
 
@@ -288,6 +304,72 @@ pub fn params_at_position(sql: &str, position: usize) -> Vec<i32> {
 }
 
 /// Every table name referenced below a node.
+/// The name each FROM item goes by → the relation it is, for the plain tables of a FROM.
+fn alias_map(from: &[protobuf::Node]) -> HashMap<String, String> {
+    fn walk(node: &protobuf::Node, out: &mut HashMap<String, String>) {
+        match node.node.as_ref() {
+            Some(NodeEnum::RangeVar(rv)) => {
+                let alias = rv.alias.as_ref().map(|a| a.aliasname.clone()).unwrap_or_else(|| rv.relname.clone());
+                out.insert(alias, rv.relname.clone());
+            }
+            Some(NodeEnum::JoinExpr(j)) => {
+                if let Some(l) = j.larg.as_deref() {
+                    walk(l, out);
+                }
+                if let Some(r) = j.rarg.as_deref() {
+                    walk(r, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = HashMap::new();
+    for item in from {
+        walk(item, &mut out);
+    }
+    out
+}
+
+/// The qualifiers of the columns a WHERE tests strictly at its top level: under AND, an
+/// `IS NOT NULL`, or a comparison operator, which is never true of NULL.
+fn strict_qualifiers(node: &protobuf::Node, out: &mut Vec<String>) {
+    const COMPARISONS: &[&str] = &["=", "<>", "!=", "<", ">", "<=", ">="];
+    match node.node.as_ref() {
+        Some(NodeEnum::BoolExpr(b)) if b.boolop == protobuf::BoolExprType::AndExpr as i32 => b.args.iter().for_each(|a| strict_qualifiers(a, out)),
+        Some(NodeEnum::NullTest(t)) if t.nulltesttype == protobuf::NullTestType::IsNotNull as i32 => {
+            if let Some(q) = t.arg.as_deref().and_then(qualifier) {
+                out.push(q);
+            }
+        }
+        Some(NodeEnum::AExpr(e)) if e.kind == protobuf::AExprKind::AexprOp as i32 => {
+            let op = e.name.last().and_then(|n| match n.node.as_ref() {
+                Some(NodeEnum::String(s)) => Some(s.sval.as_str()),
+                _ => None,
+            });
+            if op.is_some_and(|o| COMPARISONS.contains(&o)) {
+                for side in [e.lexpr.as_deref(), e.rexpr.as_deref()].into_iter().flatten() {
+                    if let Some(q) = qualifier(side) {
+                        out.push(q);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// `alias` of a qualified column reference `alias.column`.
+fn qualifier(node: &protobuf::Node) -> Option<String> {
+    let Some(NodeEnum::ColumnRef(c)) = node.node.as_ref() else { return None };
+    if c.fields.len() < 2 {
+        return None;
+    }
+    match c.fields[0].node.as_ref() {
+        Some(NodeEnum::String(s)) => Some(s.sval.clone()),
+        _ => None,
+    }
+}
+
 fn relnames_in(v: &Value) -> Vec<String> {
     let mut out = Vec::new();
     visit(v, &mut |key, node| {

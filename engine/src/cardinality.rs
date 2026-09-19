@@ -134,6 +134,13 @@ fn exactly_one_select(s: &SelectStmt, dialect: Dialect, trust: &Trust, catalog: 
     if aggregates {
         return Ok(());
     }
+    if let Some(through) = cte_passthrough(s, dialect, trust, catalog) {
+        return match through {
+            Ok(Cardinality::One) if s.where_clause.is_none() => Ok(()),
+            Ok(_) => Err("a WHERE over the WITH query can remove its row".into()),
+            Err(why) => Err(why),
+        };
+    }
     if !s.from_clause.is_empty() {
         return Err("a FROM returns a row per row it matches, and only an aggregate with no GROUP BY collapses them to one".into());
     }
@@ -164,12 +171,16 @@ fn exactly_one_select(s: &SelectStmt, dialect: Dialect, trust: &Trust, catalog: 
 /// contract mismatch the deploy reports, rather than a shape that quietly drifts.
 pub fn at_most_one(sql: &str, dialect: Dialect, trust: &Trust, catalog: &Catalog) -> Result<(), String> {
     let s = one_select(sql, dialect)?;
-    if let Some(n) = const_limit(&s) {
+    at_most_one_select(&s, dialect, trust, catalog)
+}
+
+fn at_most_one_select(s: &SelectStmt, dialect: Dialect, trust: &Trust, catalog: &Catalog) -> Result<(), String> {
+    if let Some(n) = const_limit(s) {
         if n <= 1 {
             return Ok(());
         }
     }
-    if exactly_one_select(&s, dialect, trust, catalog).is_ok() {
+    if exactly_one_select(s, dialect, trust, catalog).is_ok() {
         return Ok(());
     }
     if s.limit_count.is_some() {
@@ -178,7 +189,7 @@ pub fn at_most_one(sql: &str, dialect: Dialect, trust: &Trust, catalog: &Catalog
         return Err("a LIMIT of more than one row, or one the build cannot read, bounds nothing".into());
     }
     let grouped = !s.group_clause.is_empty() && s.larg.is_none() && s.rarg.is_none() && s.values_lists.is_empty() && s.into_clause.is_none();
-    if let Some(why) = not_key_shaped(&s) {
+    if let Some(why) = not_key_shaped(s) {
         // A GROUP BY has its own proof below; every other shape ends here.
         if !grouped {
             return Err(why.to_string());
@@ -191,9 +202,51 @@ pub fn at_most_one(sql: &str, dialect: Dialect, trust: &Trust, catalog: &Catalog
         }
     }
     if grouped {
-        return one_group_by_key(&s, catalog);
+        return one_group_by_key(s, catalog);
     }
-    one_row_by_key(&s, catalog)
+    if let Some(through) = cte_passthrough(s, dialect, trust, catalog) {
+        return through.map(|_| ());
+    }
+    one_row_by_key(s, catalog)
+}
+
+/// `WITH x AS (…) SELECT … FROM x [WHERE …]`: the rows are the WITH query's, at most. The WITH
+/// query is an INSERT, UPDATE or DELETE with RETURNING, proven by shape, or a SELECT, proven
+/// like any other. `None` when the statement is not that shape.
+fn cte_passthrough(s: &SelectStmt, dialect: Dialect, trust: &Trust, catalog: &Catalog) -> Option<Result<Cardinality, String>> {
+    let [only] = s.from_clause.as_slice() else { return None };
+    let Some(NodeEnum::RangeVar(rv)) = only.node.as_ref() else { return None };
+    let with = s.with_clause.as_ref()?;
+    let cte = with.ctes.iter().find(|c| cte_name(c) == Some(&rv.relname))?;
+    let Some(NodeEnum::CommonTableExpr(cte)) = cte.node.as_ref() else { return None };
+    if with.recursive || !s.group_clause.is_empty() || s.having_clause.is_some() || s.larg.is_some() || s.rarg.is_some() || !s.distinct_clause.is_empty() {
+        return None;
+    }
+    if dialect == Dialect::Postgres {
+        let at_this_level = s.target_list.iter().chain(&s.sort_clause).chain(&s.distinct_clause).chain(&s.window_clause);
+        if let Some(why) = calls_at_this_level(at_this_level).set_returning(catalog) {
+            return Some(Err(why));
+        }
+    }
+    let body = cte.ctequery.as_deref()?.node.as_ref()?;
+    let inner = match body {
+        NodeEnum::SelectStmt(inner) => match exactly_one_select(inner, dialect, trust, catalog) {
+            Ok(()) => Ok(Cardinality::One),
+            Err(why) => match at_most_one_select(inner, dialect, trust, catalog) {
+                Ok(()) => Ok(Cardinality::AtMostOne),
+                Err(_) => Err(format!("the WITH query `{}` returns any number of rows: {why}", rv.relname)),
+            },
+        },
+        NodeEnum::InsertStmt(_) | NodeEnum::UpdateStmt(_) | NodeEnum::DeleteStmt(_) => match dml_node(body, catalog) {
+            Some(r) => r.map_err(|why| format!("the WITH query `{}` returns any number of rows: {why}", rv.relname)),
+            None => return None,
+        },
+        _ => return None,
+    };
+    Some(match inner {
+        Ok(Cardinality::One) if s.where_clause.is_some() => Ok(Cardinality::AtMostOne),
+        other => other,
+    })
 }
 
 /// The grouped form of the key proof: the `WHERE` pins a unique key of one relation to values
@@ -330,7 +383,12 @@ pub fn dml(sql: &str, catalog: &Catalog) -> Option<Result<Cardinality, String>> 
     if stmts.len() != 1 {
         return None;
     }
-    Some(match stmts.pop().and_then(|s| s.stmt).and_then(|n| n.node)? {
+    let node = stmts.pop().and_then(|s| s.stmt).and_then(|n| n.node)?;
+    dml_node(&node, catalog)
+}
+
+fn dml_node(node: &NodeEnum, catalog: &Catalog) -> Option<Result<Cardinality, String>> {
+    Some(match node {
         NodeEnum::InsertStmt(i) => {
             let rows = match i.select_stmt.as_deref().and_then(|n| n.node.as_ref()) {
                 Some(NodeEnum::SelectStmt(s)) if s.values_lists.len() == 1 && s.from_clause.is_empty() => 1,
@@ -847,7 +905,7 @@ mod tests {
             // A table with no unique index the build can read.
             ("SELECT body FROM events WHERE id = $1", "no unique index"),
             // A WITH query of the same name is not the table.
-            ("WITH todos AS (SELECT 1 AS id) SELECT id FROM todos WHERE id = $1", "the WITH query of that name"),
+            ("WITH todos AS (SELECT id FROM events) SELECT id FROM todos WHERE id = $1", "the WITH query `todos`"),
             // A join, a derived table, and a set operation are shapes no key speaks for.
             ("SELECT t.title FROM todos t JOIN users u ON u.id = t.owner_id WHERE t.id = $1", "only a plain table"),
             ("SELECT x.title FROM (SELECT * FROM todos) x WHERE x.id = $1", "only a plain table"),
@@ -862,6 +920,22 @@ mod tests {
         }
         // The key pins one row of `todos` and the GROUP BY reads only its columns: one group at most.
         assert_eq!(pg_most("SELECT count(*) AS n FROM todos WHERE id = $1 GROUP BY owner_id"), Ok(()));
+    }
+
+    #[test]
+    fn a_select_over_one_with_query_returns_that_querys_rows_at_most() {
+        // One row in, one row out; a WHERE over it can only remove the row.
+        assert_eq!(pg("WITH one AS (SELECT 1 AS id) SELECT id FROM one"), Ok(()));
+        refused(pg("WITH one AS (SELECT 1 AS id) SELECT id FROM one WHERE id = $1"), "can remove its row", "a WHERE over a one-row WITH");
+        assert_eq!(pg_most("WITH one AS (SELECT 1 AS id) SELECT id FROM one WHERE id = $1"), Ok(()));
+        // A one-row INSERT with RETURNING, and a write by key.
+        assert_eq!(pg("WITH ins AS (INSERT INTO todos (title) VALUES ($1) RETURNING id) SELECT id FROM ins"), Ok(()));
+        assert_eq!(pg_most("WITH gone AS (DELETE FROM todos WHERE id = $1 RETURNING id) SELECT id FROM gone"), Ok(()));
+        refused(pg_most("WITH gone AS (DELETE FROM todos WHERE owner_id = $1 RETURNING id) SELECT id FROM gone"), "the WITH query `gone`", "a write that is not by key");
+        // A key read through the WITH query.
+        assert_eq!(pg_most("WITH mine AS (SELECT * FROM todos WHERE id = $1) SELECT title FROM mine"), Ok(()));
+        // The GROUP BY proof over a joined relation still refuses a column of the other side.
+        refused(pg_most("SELECT t.title, count(*) AS n FROM users u JOIN todos t ON t.owner_id = u.id WHERE u.id = $1 GROUP BY t.title"), "GROUP BY", "a GROUP BY on the joined relation");
     }
 
     #[test]
