@@ -19,12 +19,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 indexmap = { version = "2", features = ["serde"] }
 
-# The crates.io sources plus the WebAssembly patch in `vendor/`; `build.sh` prepares the copy.
-[patch.crates-io]
-pg_query = { path = ".patched/pg_query" }
-
-[profile.release]
-opt-level = "s"
-lto = true
-codegen-units = 1
-panic = "abort"
+# The crates.io `pg_query` source plus the WebAssembly patch in `vendor/` is applied by `build.sh`;
+# the `[patch]` that points cargo at the copy, and the release profile, are the workspace's
+# (`../Cargo.toml`).

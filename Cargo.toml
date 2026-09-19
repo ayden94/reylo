@@ -1,0 +1,24 @@
+# One Cargo workspace over both Rust crates: `engine/` (lando-engine, the pure SQL analysis engine
+# built to WebAssembly for the mapper and usable as an rlib) and `anti/engine/` (the Anti binary,
+# which is to consume lando-engine for its analysis). One lockfile, one `target/`.
+#
+# The `[patch]` is lando-engine's: the crates.io `pg_query` 6.2.0 source with the WebAssembly patch
+# from `engine/vendor/` applied by `engine/build.sh --prepare`, which also fetches the SQLite
+# amalgamation `engine/build.rs` compiles. Run it once before any cargo command here; cargo refuses to
+# resolve the workspace while the patched copy is missing.
+[workspace]
+resolver = "2"
+members = ["engine", "anti/engine"]
+
+[patch.crates-io]
+pg_query = { path = "engine/.patched/pg_query" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[profile.dev]
+# libpg_query is large; keep dev builds tolerable.
+debug = 1

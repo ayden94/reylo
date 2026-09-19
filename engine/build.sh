@@ -5,7 +5,8 @@
 # or unpack it under `.wasi-sdk/`). The `pg_query` crate is the crates.io 6.2.0 source with the
 # patch from `vendor/` applied into `.patched/pg_query`, and SQLite is the 3.53.4 amalgamation
 # fetched into `.sqlite/` with the five hooks of `csrc/patch-sqlite.py` applied; this script
-# prepares both. `./build.sh --prepare` stops after that, which is what a native `cargo test` needs.
+# prepares both. `./build.sh --prepare` stops after that, which is what a native `cargo test` needs,
+# and what any cargo command in the workspace needs first (the workspace `[patch]` points at the copy).
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -48,6 +49,8 @@ export CFLAGS_wasm32_wasip1="--sysroot=$SYSROOT -I $STUBS -include $STUBS/wasi_e
 export BINDGEN_EXTRA_CLANG_ARGS_wasm32_wasip1="--sysroot=$SYSROOT --target=wasm32-wasip1 -I $STUBS"
 export CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="-C link-arg=-L$SYSROOT/lib/wasm32-wasip1 -C link-arg=-lwasi-emulated-signal -C link-arg=-lwasi-emulated-process-clocks -C link-arg=-lwasi-emulated-mman -C link-arg=-lwasi-emulated-getpid -C link-arg=-lsetjmp"
 
+# The crate is a member of the workspace in `..`, so the artifact lands in the workspace's `target/`.
+TARGET_DIR="${CARGO_TARGET_DIR:-$(cd .. && pwd)/target}"
 cargo build --release --target wasm32-wasip1 --lib
-cp target/wasm32-wasip1/release/lando_engine.wasm lando_engine.wasm
+cp "$TARGET_DIR/wasm32-wasip1/release/lando_engine.wasm" lando_engine.wasm
 ls -l lando_engine.wasm
