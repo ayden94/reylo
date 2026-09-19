@@ -25,5 +25,5 @@ Edit `queries/get_user.sql` (rename a column, add a parameter) and run `nub run 
 
 ```sh
 cp -R ~/.cursor/extensions/typescriptteam.native-preview-0.20260918.1-darwin-arm64 /tmp/native-preview
-cd /tmp/native-preview && npx @vscode/vsce package --target darwin-arm64 --no-dependencies --allow-missing-repository --skip-license -o native-preview.vsix
+cd /tmp/native-preview && npx @vscode/vsce package --target darwin-arm64 --no-dependencies --allow-missing-repository --allow-unused-files-pattern --skip-license -o native-preview.vsix
 ```
