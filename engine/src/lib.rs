@@ -10,6 +10,8 @@ pub mod host;
 pub mod infer;
 pub mod jsonshape;
 pub mod lex;
+pub mod mysql;
+pub mod mysql_shape;
 pub mod pgtypes;
 pub mod postgres;
 pub mod sqlite;

@@ -33,12 +33,39 @@ pub enum Request {
 #[serde(untagged)]
 pub enum Answer {
     Describe { describe: RawDescribe },
+    Mysql { mysql: MysqlDescribe },
     Rows { rows: Vec<Vec<Value>> },
     Error { error: DbError },
 }
 
 /// What SQLite's prepare reports: per result column its name, the declared type of the table
 /// column it comes from (none for an expression), and that table and column.
+/// MySQL's prepare metadata as mysql2 reports it: the protocol type code, the flags (bit 1 is
+/// NOT NULL) and the charset (63 is binary) per result column, and the server's type guess per `?`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MysqlDescribe {
+    pub columns: Vec<MysqlColumn>,
+    pub params: Vec<MysqlParam>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MysqlColumn {
+    pub name: String,
+    pub r#type: u32,
+    pub flags: u32,
+    #[serde(default)]
+    pub charset: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MysqlParam {
+    pub r#type: u32,
+    #[serde(default)]
+    pub flags: u32,
+    #[serde(default)]
+    pub charset: u32,
+}
+
 /// A Parse/Describe result as the driver reports it: parameter type oids in order, and result
 /// columns with their type and, for a plain column, the table oid and attribute number.
 #[derive(Debug, Clone, Deserialize)]

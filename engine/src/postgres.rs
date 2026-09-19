@@ -50,8 +50,8 @@ pub fn analyze(sql: &str, dialect: Dialect, host: &Host) -> Lazy<Analysis> {
     if dialect == Dialect::Sqlite {
         return crate::sqlite::analyze(sql, &lexed, host);
     }
-    if dialect != Dialect::Postgres {
-        return Some(bare(sql, &lexed, dialect, Vec::new()));
+    if dialect == Dialect::Mysql {
+        return crate::mysql::analyze(sql, &lexed, host);
     }
     let engine = Engine::new(host);
     engine.run(sql, &lexed)
