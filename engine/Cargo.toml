@@ -3,11 +3,14 @@ name = "lando-engine"
 version = "0.0.0"
 edition = "2021"
 publish = false
-description = "Lando's SQL analysis engine: parse, placeholder lexing, cardinality, expression nullability and nested JSON shapes, built to one WebAssembly artifact."
+description = "Lando's SQL analysis engine: parse (pg_query for Postgres, SQLite's own resolved tree for SQLite), placeholder lexing, cardinality, expression nullability and nested JSON shapes, built to one WebAssembly artifact."
 
 [lib]
 name = "lando_engine"
 crate-type = ["cdylib", "rlib"]
+
+[build-dependencies]
+cc = "1"
 
 [dependencies]
 pg_query = "6.2"

@@ -3,9 +3,26 @@
 #
 # Inputs: a Rust toolchain with the `wasm32-wasip1` target, and wasi-sdk 34 (set WASI_SDK_PATH,
 # or unpack it under `.wasi-sdk/`). The `pg_query` crate is the crates.io 6.2.0 source with the
-# patch from `vendor/` applied into `.patched/pg_query`, which this script prepares.
+# patch from `vendor/` applied into `.patched/pg_query`, and SQLite is the 3.53.4 amalgamation
+# fetched into `.sqlite/` with the five hooks of `csrc/patch-sqlite.py` applied; this script
+# prepares both. `./build.sh --prepare` stops after that, which is what a native `cargo test` needs.
 set -euo pipefail
 cd "$(dirname "$0")"
+
+SQLITE_ZIP="sqlite-amalgamation-3530400.zip"
+SQLITE_URL="https://sqlite.org/2026/$SQLITE_ZIP"
+if [ ! -f .sqlite/sqlite-amalgamation-3530400/sqlite3.c ]; then
+  mkdir -p .sqlite
+  echo "fetching $SQLITE_URL"
+  curl -fsSL -o ".sqlite/$SQLITE_ZIP" "$SQLITE_URL"
+  (cd .sqlite && unzip -q -o "$SQLITE_ZIP")
+fi
+if [ ! -f .sqlite/sqlite3-patched.c ] || [ csrc/patch-sqlite.py -nt .sqlite/sqlite3-patched.c ]; then
+  python3 csrc/patch-sqlite.py .sqlite/sqlite-amalgamation-3530400/sqlite3.c .sqlite/sqlite3-patched.c
+fi
+if [ "${1:-}" = "--prepare" ]; then
+  exit 0
+fi
 
 if [ -z "${WASI_SDK_PATH:-}" ]; then
   WASI_SDK_PATH=$(ls -d .wasi-sdk/wasi-sdk-* 2>/dev/null | head -1 || true)

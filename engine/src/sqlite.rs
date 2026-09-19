@@ -1,38 +1,747 @@
-//! The SQLite analysis.
-//!
-//! SQLite prepares a statement and reports, per result column, the declared type of the table
-//! column it comes from, and nothing for an expression or a parameter. The parse tree fills the
-//! rest in: a parameter's context ([`crate::params`]), an expression's type from what it is
-//! built of, nullability from the table's `NOT NULL` and the outer joins, and the row count from
-//! the unique indexes. Every catalog fact comes through the host as a `pragma` query.
+//! The SQLite analysis, over SQLite's own resolved tree ([`crate::sqlite_tree`], produced by
+//! `csrc/lando_sqlite.c` from a patched amalgamation). SQLite resolves the names, the join sides,
+//! every parameter's context and the DML target columns itself, and reports each expression's
+//! affinity. What SQLite has no facts for stays here, as explicit tables: the result type and
+//! nullability of the built-in functions, the type a function gives its arguments, the arithmetic
+//! rule, and the row-count proof from the unique keys. The host runs one query for the schema DDL;
+//! everything else happens inside the engine.
 
-use crate::analyze::{self, Analysis as Parsed};
-use crate::api::{Analysis, Column, Diagnostic, Param, Scope, SqliteDescribe};
-use crate::cardinality::{self, Catalog};
+use crate::api::{Analysis, Column, Diagnostic, Param, Scope};
 use crate::dialect::Dialect;
-use crate::host::{as_bool, as_str, as_u32, Host, Lazy};
-use crate::infer::{self, Trust};
+use crate::host::{as_str, Host, Lazy};
 use crate::lex::{self, Lexed, Target};
-use crate::params::{self, ColumnInfo, Hint, Tables};
-use crate::pgtypes::oid;
-use crate::types::{DescribedColumn, DescribedStatement, Type};
-use serde_json::{json, Value};
-use std::cell::Cell;
-use std::collections::{HashMap, HashSet};
+use crate::sqlite_tree::{self as tree, From, Node, Sel, Tree};
+use crate::types::Type;
+use std::collections::HashSet;
 
-const MAX_PROBES: usize = 8;
-const TABLE_INFO: &str = "select name, type, \"notnull\", pk from pragma_table_info(?) order by cid";
-const INDEX_LIST: &str = "select name, \"unique\", origin, partial from pragma_index_list(?)";
-const INDEX_INFO: &str = "select name from pragma_index_info(?) order by seqno";
+/// The schema, as SQLite stores it; replayed into the engine's in-memory copy.
+const DDL_QUERY: &str = "select sql from sqlite_schema where sql is not null and type in ('table', 'view', 'index') order by rowid";
 
-/// SQLite's affinity of a declared type, as the name the type model carries.
+pub fn analyze(sql: &str, lexed: &Lexed, host: &Host) -> Lazy<Analysis> {
+    let rows = host.query(DDL_QUERY, Vec::new(), Scope::Session)?;
+    let ddl: Vec<String> = match rows {
+        Ok(rows) => rows.iter().filter_map(|r| r.first().and_then(as_str)).map(String::from).collect(),
+        Err(e) => return Some(crate::postgres::bare(sql, lexed, Dialect::Sqlite, vec![diag(format!("Cannot read the schema: {}", e.message), 0, 1, 5)])),
+    };
+    let t = match tree::analyze(&ddl, sql) {
+        Ok(t) => t,
+        Err(message) => return Some(crate::postgres::bare(sql, lexed, Dialect::Sqlite, vec![diag(message, 0, sql.trim_end().len(), 6)])),
+    };
+    let mut diagnostics = Vec::new();
+    if let Some(err) = &t.error {
+        let start = usize::try_from(err.offset).unwrap_or(0).min(sql.len());
+        diagnostics.push(diag(err.message.clone(), start, if err.offset >= 0 { token_len(&sql[start..]) } else { sql.trim_end().len() }, 6));
+        // A statement that fails against the replayed schema often fails because a replay step did.
+        for e in &t.schema_errors {
+            diagnostics.push(diag(format!("The schema replay skipped statement {}: {}", e.index + 1, e.message), 0, 1, 8));
+        }
+        return Some(crate::postgres::bare(sql, lexed, Dialect::Sqlite, diagnostics));
+    }
+    let a = Analyzer { tree: &t };
+    let (columns, kind) = a.columns();
+    let params = a.params(lexed);
+    let (cardinality, reason) = match crate::postgres::cardinality_directive(lexed, &mut diagnostics) {
+        Some(c) => c,
+        None => a.cardinality(),
+    };
+    Some(Analysis {
+        kind,
+        params,
+        columns,
+        cardinality,
+        cardinality_reason: reason,
+        rewritten: lex::rewrite(sql, lexed, Target::Question),
+        style: lexed.style,
+        directives: lexed.directives.clone(),
+        diagnostics,
+        unresolved: Vec::new(),
+    })
+}
+
+fn diag(message: impl Into<String>, start: usize, length: usize, code: u32) -> Diagnostic {
+    Diagnostic { message: message.into(), start, length: length.max(1), code }
+}
+
+fn token_len(rest: &str) -> usize {
+    rest.trim_start().chars().take_while(|c| c.is_alphanumeric() || *c == '_' || *c == ':' || *c == '$' || *c == '@' || *c == '?').count().max(1)
+}
+
+/// What an expression is: its affinity as the type model, and whether it can be NULL.
+#[derive(Debug, Clone)]
+struct Fact {
+    ty: Type,
+    non_null: bool,
+}
+
+impl Fact {
+    fn new(aff: &str, non_null: bool) -> Fact {
+        Fact { ty: affinity_type(aff), non_null }
+    }
+    fn unknown() -> Fact {
+        Fact { ty: Type::Unknown, non_null: false }
+    }
+}
+
+/// An affinity name as the type model; `none` is unknown.
+fn affinity_type(aff: &str) -> Type {
+    match aff {
+        "integer" | "real" | "text" | "blob" | "numeric" => Type::Scalar { name: aff.to_string() },
+        _ => Type::Unknown,
+    }
+}
+
+fn scalar_name(t: &Type) -> Option<&str> {
+    match t {
+        Type::Scalar { name } => Some(name.as_str()),
+        _ => None,
+    }
+}
+
+fn is_numeric(t: &Type) -> bool {
+    matches!(scalar_name(t), Some("integer" | "real" | "numeric"))
+}
+
+/// The type several arms share: one type when they agree, `real` for a mix of numbers, unknown otherwise.
+fn shared(facts: &[&Fact]) -> Type {
+    let known: Vec<&Type> = facts.iter().map(|f| &f.ty).filter(|t| !matches!(t, Type::Unknown)).collect();
+    let Some(first) = known.first() else { return Type::Unknown };
+    if known.iter().all(|t| t == first) {
+        return (*first).clone();
+    }
+    if known.iter().all(|t| is_numeric(t)) {
+        return Type::Scalar { name: "real".into() };
+    }
+    Type::Unknown
+}
+
+/// The FROM lists in scope, innermost last: a column reference names a cursor of one of them.
+type ScopeStack<'a> = Vec<&'a [From]>;
+
+struct Analyzer<'a> {
+    tree: &'a Tree,
+}
+
+/// When a function's result can be NULL.
+#[derive(Clone, Copy)]
+enum Nulls {
+    /// Never, whatever the arguments.
+    Never,
+    /// Only when an argument can be.
+    IfArgs,
+    /// Always possibly (an aggregate over no rows, a lookup that can miss).
+    Always,
+}
+
+impl Analyzer<'_> {
+    // ---- result columns ---------------------------------------------------------------------
+
+    fn columns(&self) -> (Vec<Column>, String) {
+        let t = self.tree;
+        let kind = t.dml.as_ref().map(|d| if d.kind == "upsert" { "insert".to_string() } else { d.kind.clone() }).unwrap_or_else(|| if t.statement.is_some() { "select".into() } else { String::new() });
+        let facts: Vec<Fact> = if let Some(returning) = &t.returning {
+            returning.iter().map(|c| self.type_of(&c.expr, &Vec::new())).collect()
+        } else if let (Some(sel), None) = (&t.statement, &t.dml) {
+            (0..sel.columns.len()).map(|i| self.select_column(sel, i, &Vec::new())).collect()
+        } else {
+            Vec::new()
+        };
+        let columns = t
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(i, public)| {
+                let fact = facts.get(i).cloned().unwrap_or_else(Fact::unknown);
+                // A column SQLite could not type but names from a table: its declared affinity.
+                let fact = match (&fact.ty, &public.declared) {
+                    (Type::Unknown, Some(declared)) => Fact { ty: affinity_type(affinity(declared)), non_null: fact.non_null },
+                    _ => fact,
+                };
+                let type_name = scalar_name(&fact.ty).unwrap_or("").to_string();
+                Column { name: public.name.clone(), ty: fact.ty, nullable: !fact.non_null, type_name }
+            })
+            .collect();
+        (columns, kind)
+    }
+
+    /// Column `i` of a select: for a compound, the leftmost arm's type and any arm's nullability.
+    fn select_column(&self, sel: &Sel, i: usize, scope: &ScopeStack) -> Fact {
+        let mut arms: Vec<&Sel> = Vec::new();
+        let mut s = Some(sel);
+        while let Some(arm) = s {
+            arms.push(arm);
+            s = arm.prior.as_deref();
+        }
+        arms.reverse();
+        let facts: Vec<Fact> = arms
+            .iter()
+            .map(|arm| {
+                let mut inner = scope.clone();
+                inner.push(&arm.from);
+                arm.columns.get(i).map(|c| self.type_of(&c.expr, &inner)).unwrap_or_else(Fact::unknown)
+            })
+            .collect();
+        let Some(first) = facts.first() else { return Fact::unknown() };
+        let ty = if facts.iter().all(|f| f.ty == first.ty) { first.ty.clone() } else { shared(&facts.iter().collect::<Vec<_>>()) };
+        Fact { ty, non_null: facts.iter().all(|f| f.non_null) }
+    }
+
+    /// A column reference: through the cursor to a subquery's column, or the table column itself.
+    fn column_ref(&self, n: &Node, scope: &ScopeStack) -> Fact {
+        for froms in scope.iter().rev() {
+            if let Some(f) = froms.iter().find(|f| f.cursor == n.cursor) {
+                if let Some(sub) = &f.subquery {
+                    let inner = self.select_column(sub, n.index.max(0) as usize, scope);
+                    return Fact { ty: inner.ty, non_null: inner.non_null && !f.outer && !n.outer };
+                }
+                break;
+            }
+        }
+        let aff = n.affinity.as_deref().unwrap_or(&n.aff);
+        Fact::new(aff, (n.not_null || n.rowid) && !n.outer)
+    }
+
+    // ---- expressions -------------------------------------------------------------------------
+
+    fn type_of(&self, n: &Node, scope: &ScopeStack) -> Fact {
+        let arg = |x: &Option<Box<Node>>| x.as_deref().map(|x| self.type_of(x, scope)).unwrap_or_else(Fact::unknown);
+        match n.op.as_str() {
+            "column" => self.column_ref(n, scope),
+            "integer" | "truefalse" => Fact::new("integer", true),
+            "float" => Fact::new("real", true),
+            "string" => Fact::new("text", true),
+            "blob" => Fact::new("blob", true),
+            "null" => Fact::unknown(),
+            "variable" => Fact::unknown(),
+            "function" => {
+                let args: Vec<Fact> = n.args.iter().map(|a| self.type_of(a, scope)).collect();
+                self.function(n, &args)
+            }
+            "+" | "-" | "*" => {
+                let (l, r) = (arg(&n.left), arg(&n.right));
+                Fact { ty: arithmetic(&l.ty, &r.ty), non_null: l.non_null && r.non_null }
+            }
+            "/" | "%" => {
+                // A zero divisor gives NULL; a literal divisor is one the statement rules out.
+                let (l, r) = (arg(&n.left), arg(&n.right));
+                let literal_divisor = n.right.as_deref().is_some_and(|d| matches!(d.op.as_str(), "integer" | "float") && d.value.as_deref().and_then(|v| v.parse::<f64>().ok()).is_some_and(|v| v != 0.0));
+                Fact { ty: arithmetic(&l.ty, &r.ty), non_null: l.non_null && r.non_null && literal_divisor }
+            }
+            "||" => {
+                let (l, r) = (arg(&n.left), arg(&n.right));
+                Fact::new("text", l.non_null && r.non_null)
+            }
+            "=" | "!=" | "<" | "<=" | ">" | ">=" | "and" | "or" | "in" | "between" | "&" | "|" | "<<" | ">>" => {
+                let (l, r) = (arg(&n.left), arg(&n.right));
+                let list_non_null = n.list.iter().all(|x| self.type_of(x, scope).non_null);
+                let right_non_null = if n.right.is_some() { r.non_null } else { list_non_null && n.select.is_none() };
+                Fact::new("integer", l.non_null && right_non_null)
+            }
+            "is" | "is not" | "isnull" | "notnull" | "exists" => Fact::new("integer", true),
+            "not" | "~" => {
+                let l = arg(&n.left);
+                Fact::new("integer", l.non_null)
+            }
+            "neg" | "pos" => {
+                let l = arg(&n.left);
+                Fact { ty: if is_numeric(&l.ty) { l.ty } else { Type::Scalar { name: "real".into() } }, non_null: l.non_null }
+            }
+            "cast" => {
+                let l = arg(&n.left);
+                Fact::new(n.affinity.as_deref().unwrap_or("none"), l.non_null)
+            }
+            "collate" => arg(&n.left),
+            "case" => {
+                // `list` alternates WHEN and THEN; an odd tail is the ELSE.
+                let results: Vec<Fact> = n.list.chunks(2).filter_map(|pair| if pair.len() == 2 { Some(self.type_of(&pair[1], scope)) } else { None }).collect();
+                let otherwise = if n.list.len() % 2 == 1 { n.list.last().map(|e| self.type_of(e, scope)) } else { None };
+                let mut all: Vec<&Fact> = results.iter().collect();
+                if let Some(o) = &otherwise {
+                    all.push(o);
+                }
+                Fact { ty: shared(&all), non_null: otherwise.is_some() && all.iter().all(|f| f.non_null) }
+            }
+            "select" => {
+                // A scalar subquery: its first column, NULL when it finds no row.
+                let ty = n.select.as_deref().map(|s| self.select_column(s, 0, scope).ty).unwrap_or(Type::Unknown);
+                Fact { ty, non_null: false }
+            }
+            _ => Fact::unknown(),
+        }
+    }
+
+    /// The built-in functions: their result type, and when it is NULL.
+    fn function(&self, n: &Node, args: &[Fact]) -> Fact {
+        let name = n.name.as_deref().unwrap_or("");
+        let all_non_null = args.iter().all(|a| a.non_null);
+        let first = args.first().cloned().unwrap_or_else(Fact::unknown);
+        let done = |aff: &str, nulls: Nulls| {
+            let non_null = match nulls {
+                Nulls::Never => true,
+                Nulls::IfArgs => all_non_null,
+                Nulls::Always => false,
+            };
+            Fact::new(aff, non_null)
+        };
+        let typed = |ty: Type, nulls: Nulls| Fact { ty, non_null: matches!(nulls, Nulls::Never) || (matches!(nulls, Nulls::IfArgs) && all_non_null) };
+        if n.window {
+            return match name {
+                "row_number" | "rank" | "dense_rank" | "ntile" => done("integer", Nulls::Never),
+                "percent_rank" | "cume_dist" => done("real", Nulls::Never),
+                "count" => done("integer", Nulls::Never),
+                "total" => done("real", Nulls::Never),
+                "sum" => typed(if is_numeric(&first.ty) { first.ty.clone() } else { Type::Scalar { name: "real".into() } }, Nulls::Always),
+                "avg" => done("real", Nulls::Always),
+                "min" | "max" | "lag" | "lead" | "first_value" | "last_value" | "nth_value" => typed(first.ty.clone(), Nulls::Always),
+                "group_concat" | "string_agg" => done("text", Nulls::Always),
+                _ => Fact::unknown(),
+            };
+        }
+        if n.agg {
+            return match name {
+                "count" => done("integer", Nulls::Never),
+                "total" => done("real", Nulls::Never),
+                "sum" => typed(if is_numeric(&first.ty) { first.ty.clone() } else { Type::Scalar { name: "real".into() } }, Nulls::Always),
+                "avg" => done("real", Nulls::Always),
+                "min" | "max" => typed(first.ty.clone(), Nulls::Always),
+                "group_concat" | "string_agg" => done("text", Nulls::Always),
+                "json_group_array" | "jsonb_group_array" | "json_group_object" | "jsonb_group_object" => done("text", Nulls::Never),
+                _ => Fact::unknown(),
+            };
+        }
+        match name {
+            "coalesce" | "ifnull" => Fact { ty: shared(&args.iter().collect::<Vec<_>>()), non_null: args.iter().any(|a| a.non_null) },
+            "nullif" => Fact { ty: first.ty.clone(), non_null: false },
+            "iif" | "if" => {
+                let arms: Vec<&Fact> = args.iter().skip(1).collect();
+                Fact { ty: shared(&arms), non_null: arms.len() >= 2 && arms.iter().all(|a| a.non_null) }
+            }
+            "min" | "max" => Fact { ty: shared(&args.iter().collect::<Vec<_>>()), non_null: all_non_null },
+            "abs" => typed(if is_numeric(&first.ty) { first.ty.clone() } else { Type::Scalar { name: "real".into() } }, Nulls::IfArgs),
+            "round" | "julianday" | "timediff_seconds" => done("real", Nulls::IfArgs),
+            "length" | "instr" | "unicode" | "unixepoch" | "json_array_length" | "json_valid" | "octet_length" | "sign" => done("integer", Nulls::IfArgs),
+            "like" | "glob" | "regexp" | "match" | "likely" | "unlikely" | "likelihood" => {
+                if matches!(name, "likely" | "unlikely" | "likelihood") { first.clone() } else { done("integer", Nulls::IfArgs) }
+            }
+            "upper" | "lower" | "trim" | "ltrim" | "rtrim" | "substr" | "substring" | "replace" | "char" | "printf" | "format" | "concat" | "concat_ws"
+            | "date" | "time" | "datetime" | "strftime" | "timediff" | "json" | "jsonb" | "json_array" | "json_object" | "json_insert" | "json_replace" | "json_set"
+            | "json_remove" | "json_patch" | "json_quote" | "json_pretty" | "json_type" => done("text", Nulls::IfArgs),
+            "hex" | "quote" | "typeof" => done("text", Nulls::Never),
+            "sqlite_version" | "sqlite_source_id" => done("text", Nulls::Never),
+            "random" | "last_insert_rowid" | "changes" | "total_changes" => done("integer", Nulls::Never),
+            "randomblob" | "zeroblob" => done("blob", Nulls::IfArgs),
+            "json_extract" | "jsonb_extract" | "->" | "->>" => Fact::unknown(),
+            "acos" | "acosh" | "asin" | "asinh" | "atan" | "atan2" | "atanh" | "ceil" | "ceiling" | "cos" | "cosh" | "degrees" | "exp" | "floor" | "ln" | "log"
+            | "log10" | "log2" | "mod" | "pow" | "power" | "radians" | "sin" | "sinh" | "sqrt" | "tan" | "tanh" | "trunc" => done("real", Nulls::IfArgs),
+            "pi" => done("real", Nulls::Never),
+            _ => Fact::unknown(),
+        }
+    }
+
+    // ---- parameters --------------------------------------------------------------------------
+
+    /// Every parameter, typed by the context SQLite placed it in; the first typed context wins.
+    fn params(&self, lexed: &Lexed) -> Vec<Param> {
+        let mut found: Vec<(String, Fact)> = Vec::new();
+        let t = self.tree;
+        if let Some(sel) = &t.statement {
+            let targets: Vec<Option<Fact>> = match &t.dml {
+                // The SELECT that feeds an INSERT: its columns type from the target columns.
+                Some(dml) if dml.kind == "insert" => dml.columns.iter().map(|c| c.as_deref().and_then(|c| self.table_column(&dml.table, c))).collect(),
+                _ => Vec::new(),
+            };
+            self.walk_select(sel, &Vec::new(), &targets, &mut found);
+        }
+        if let Some(dml) = &t.dml {
+            let scope: ScopeStack = Vec::new();
+            if let Some(values) = &dml.values {
+                for (i, v) in values.iter().enumerate() {
+                    let target = dml.columns.get(i).and_then(|c| c.as_deref()).and_then(|c| self.table_column(&dml.table, c));
+                    self.walk(v, Ctx::Typed(target), &scope, &mut found);
+                }
+            }
+            for item in dml.set.iter().chain(dml.upsert.iter().flat_map(|u| u.set.iter())) {
+                let target = item.column.as_deref().and_then(|c| self.table_column(&dml.table, c));
+                self.walk(&item.expr, Ctx::Typed(target), &scope, &mut found);
+            }
+            if let Some(w) = &dml.where_ {
+                self.walk(w, Ctx::Bool, &scope, &mut found);
+            }
+            if let Some(w) = dml.upsert.as_ref().and_then(|u| u.where_.as_ref()) {
+                self.walk(w, Ctx::Bool, &scope, &mut found);
+            }
+        }
+        if let Some(returning) = &t.returning {
+            for c in returning {
+                self.walk(&c.expr, Ctx::None, &Vec::new(), &mut found);
+            }
+        }
+        // The engine's names for the parameters, in the lexer's order: `:id` is `id`, `?` is `?1`.
+        lexed
+            .params
+            .iter()
+            .map(|name| {
+                let fact = found
+                    .iter()
+                    .filter(|(n, _)| same_param(n, name))
+                    .map(|(_, f)| f)
+                    .find(|f| !matches!(f.ty, Type::Unknown))
+                    .cloned()
+                    .unwrap_or_else(Fact::unknown);
+                let type_name = scalar_name(&fact.ty).unwrap_or("").to_string();
+                Param { name: name.clone(), ty: fact.ty, type_name }
+            })
+            .collect()
+    }
+
+    fn table_column(&self, table: &str, column: &str) -> Option<Fact> {
+        let info = self.tree.tables.get(table)?;
+        let col = info.columns.iter().find(|c| c.name.eq_ignore_ascii_case(column))?;
+        Some(Fact::new(&col.affinity, col.not_null || info.rowid_alias.as_deref().is_some_and(|a| a.eq_ignore_ascii_case(column))))
+    }
+
+    fn walk_select(&self, sel: &Sel, scope: &ScopeStack, targets: &[Option<Fact>], found: &mut Vec<(String, Fact)>) {
+        let mut inner = scope.clone();
+        inner.push(&sel.from);
+        for (i, c) in sel.columns.iter().enumerate() {
+            self.walk(&c.expr, Ctx::Typed(targets.get(i).cloned().flatten()), &inner, found);
+        }
+        for f in &sel.from {
+            if let Some(sub) = &f.subquery {
+                self.walk_select(sub, &inner, &[], found);
+            }
+            if let Some(on) = &f.on {
+                self.walk(on, Ctx::Bool, &inner, found);
+            }
+        }
+        if let Some(w) = &sel.where_ {
+            self.walk(w, Ctx::Bool, &inner, found);
+        }
+        for g in &sel.group_by {
+            self.walk(g, Ctx::None, &inner, found);
+        }
+        if let Some(h) = &sel.having {
+            self.walk(h, Ctx::Bool, &inner, found);
+        }
+        for o in &sel.order_by {
+            self.walk(o, Ctx::None, &inner, found);
+        }
+        for l in sel.limit.iter().chain(sel.offset.iter()) {
+            self.walk(l, Ctx::Typed(Some(Fact::new("integer", true))), &inner, found);
+        }
+        if let Some(prior) = &sel.prior {
+            self.walk_select(prior, scope, targets, found);
+        }
+    }
+
+    /// Visits every node; a variable takes the type its context gives it.
+    fn walk(&self, n: &Node, ctx: Ctx, scope: &ScopeStack, found: &mut Vec<(String, Fact)>) {
+        if n.op == "variable" {
+            let fact = match ctx {
+                Ctx::Typed(Some(f)) => f,
+                Ctx::Typed(None) | Ctx::None => Fact::unknown(),
+                Ctx::Bool => Fact::new("integer", false),
+            };
+            found.push((n.name.clone().unwrap_or_default(), fact));
+            return;
+        }
+        let sibling = |other: &Option<Box<Node>>| other.as_deref().map(|o| self.type_of(o, scope));
+        let child_ctx = |slot: Slot| -> Ctx {
+            match n.op.as_str() {
+                "=" | "!=" | "<" | "<=" | ">" | ">=" | "is" | "is not" => Ctx::Typed(match slot {
+                    Slot::Left => sibling(&n.right),
+                    Slot::Right => sibling(&n.left),
+                    _ => None,
+                }),
+                "in" => Ctx::Typed(match slot {
+                    Slot::Left => n.list.first().map(|x| self.type_of(x, scope)).or_else(|| n.select.as_deref().map(|s| self.select_column(s, 0, scope))),
+                    Slot::List(_) => sibling(&n.left),
+                    _ => None,
+                }),
+                "between" => Ctx::Typed(match slot {
+                    Slot::Left => n.list.first().map(|x| self.type_of(x, scope)),
+                    Slot::List(_) => sibling(&n.left),
+                    _ => None,
+                }),
+                "cast" => Ctx::Typed(Some(Fact::new(n.affinity.as_deref().unwrap_or("none"), true))),
+                "+" | "-" | "*" | "/" | "%" => {
+                    let other = match slot {
+                        Slot::Left => sibling(&n.right),
+                        _ => sibling(&n.left),
+                    };
+                    Ctx::Typed(Some(match other {
+                        Some(f) if is_numeric(&f.ty) => f,
+                        _ => Fact::new("real", true),
+                    }))
+                }
+                "||" => Ctx::Typed(Some(Fact::new("text", true))),
+                "neg" | "pos" | "~" | "&" | "|" | "<<" | ">>" => Ctx::Typed(Some(Fact::new("real", true))),
+                "and" | "or" | "not" => Ctx::Bool,
+                "case" => match slot {
+                    // A WHEN compares with the base when there is one, else it is a condition; a
+                    // THEN or ELSE shares the other results' type.
+                    Slot::List(i) if i % 2 == 0 && i + 1 < n.list.len() => match &n.left {
+                        Some(base) => Ctx::Typed(Some(self.type_of(base, scope))),
+                        None => Ctx::Bool,
+                    },
+                    Slot::List(_) => {
+                        let others: Vec<Fact> = n.list.iter().enumerate().filter(|(j, _)| j % 2 == 1 || (*j == n.list.len() - 1 && n.list.len() % 2 == 1)).map(|(_, x)| self.type_of(x, scope)).collect();
+                        let refs: Vec<&Fact> = others.iter().collect();
+                        let ty = shared(&refs);
+                        Ctx::Typed(if matches!(ty, Type::Unknown) { None } else { Some(Fact { ty, non_null: true }) })
+                    }
+                    Slot::Left => Ctx::None,
+                    _ => Ctx::None,
+                },
+                "function" => match slot {
+                    Slot::Arg(i) => self.argument(n, i, scope),
+                    _ => Ctx::None,
+                },
+                _ => Ctx::None,
+            }
+        };
+        if let Some(l) = &n.left {
+            self.walk(l, child_ctx(Slot::Left), scope, found);
+        }
+        if let Some(r) = &n.right {
+            self.walk(r, child_ctx(Slot::Right), scope, found);
+        }
+        for (i, x) in n.list.iter().enumerate() {
+            self.walk(x, child_ctx(Slot::List(i)), scope, found);
+        }
+        for (i, x) in n.args.iter().enumerate() {
+            self.walk(x, child_ctx(Slot::Arg(i)), scope, found);
+        }
+        if let Some(s) = &n.select {
+            self.walk_select(s, scope, &[], found);
+        }
+    }
+
+    /// The type a built-in function gives its argument `i`, for a parameter written there.
+    fn argument(&self, n: &Node, i: usize, scope: &ScopeStack) -> Ctx {
+        let name = n.name.as_deref().unwrap_or("");
+        let text = || Ctx::Typed(Some(Fact::new("text", true)));
+        let integer = || Ctx::Typed(Some(Fact::new("integer", true)));
+        let real = || Ctx::Typed(Some(Fact::new("real", true)));
+        let others = || {
+            let facts: Vec<Fact> = n.args.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, a)| self.type_of(a, scope)).collect();
+            let refs: Vec<&Fact> = facts.iter().collect();
+            let ty = shared(&refs);
+            Ctx::Typed(if matches!(ty, Type::Unknown) { None } else { Some(Fact { ty, non_null: true }) })
+        };
+        match name {
+            "like" | "glob" | "regexp" | "match" | "upper" | "lower" | "trim" | "ltrim" | "rtrim" | "length" | "hex" | "unicode" | "quote" | "instr" | "replace"
+            | "printf" | "format" | "concat" | "concat_ws" | "date" | "time" | "datetime" | "strftime" | "julianday" | "unixepoch" | "timediff" | "json"
+            | "json_extract" | "json_type" | "json_valid" | "json_array_length" | "json_quote" | "json_pretty" | "json_insert" | "json_replace" | "json_set"
+            | "json_remove" | "json_patch" | "->" | "->>" => text(),
+            "substr" | "substring" => {
+                if i == 0 { text() } else { integer() }
+            }
+            "zeroblob" | "randomblob" | "char" => integer(),
+            "abs" | "round" | "acos" | "acosh" | "asin" | "asinh" | "atan" | "atan2" | "atanh" | "ceil" | "ceiling" | "cos" | "cosh" | "degrees" | "exp"
+            | "floor" | "ln" | "log" | "log10" | "log2" | "mod" | "pow" | "power" | "radians" | "sin" | "sinh" | "sqrt" | "tan" | "tanh" | "trunc" => real(),
+            "coalesce" | "ifnull" | "nullif" | "min" | "max" => others(),
+            "iif" | "if" => {
+                if i == 0 { Ctx::Bool } else { others() }
+            }
+            "sum" | "avg" | "total" => real(),
+            _ => Ctx::None,
+        }
+    }
+
+    // ---- the row count -----------------------------------------------------------------------
+
+    fn cardinality(&self) -> (String, Option<String>) {
+        let t = self.tree;
+        if let Some(dml) = &t.dml {
+            if t.returning.is_none() {
+                return ("none".into(), None);
+            }
+            return match dml.kind.as_str() {
+                "insert" => {
+                    if dml.rows == 1 {
+                        let can_skip = dml.on_error == "ignore" || dml.upsert.as_ref().is_some_and(|u| !u.do_update);
+                        if can_skip { ("maybeOne".into(), Some("ON CONFLICT DO NOTHING (or OR IGNORE) can insert no row".into())) } else { ("one".into(), None) }
+                    } else if dml.rows > 1 {
+                        ("many".into(), Some(format!("a VALUES list of {} rows returns {} rows", dml.rows, dml.rows)))
+                    } else {
+                        ("many".into(), Some("an INSERT ... SELECT returns a row per row it reads".into()))
+                    }
+                }
+                _ => {
+                    // UPDATE or DELETE: the WHERE pins a unique key of the target, or any number.
+                    match self.pinned_by_name(&dml.table, dml.where_.as_ref()) {
+                        Ok(()) => ("maybeOne".into(), None),
+                        Err(why) => ("many".into(), Some(why)),
+                    }
+                }
+            };
+        }
+        let Some(sel) = &t.statement else { return ("none".into(), None) };
+        match self.exactly_one(sel) {
+            Ok(()) => ("one".into(), None),
+            Err(one_why) => match self.at_most_one(sel) {
+                Ok(()) => ("maybeOne".into(), Some(one_why)),
+                Err(why) => ("many".into(), Some(why)),
+            },
+        }
+    }
+
+    fn exactly_one(&self, sel: &Sel) -> Result<(), String> {
+        if sel.prior.is_some() {
+            return Err("a set operation (UNION, INTERSECT, EXCEPT) returns any number of rows".into());
+        }
+        if sel.values {
+            return Ok(());
+        }
+        if !sel.group_by.is_empty() {
+            return Err("GROUP BY returns one row per group, and none when nothing matches".into());
+        }
+        if sel.having.is_some() {
+            return Err("HAVING can remove the row".into());
+        }
+        if sel.limit.is_some() || sel.offset.is_some() {
+            return Err("a LIMIT or an OFFSET can remove the row (LIMIT 0, OFFSET 1)".into());
+        }
+        if sel.columns.iter().any(|c| has_aggregate(&c.expr)) {
+            return Ok(());
+        }
+        if sel.from.is_empty() && sel.where_.is_none() {
+            return Ok(());
+        }
+        Err("a FROM returns a row per row it matches, and only an aggregate with no GROUP BY collapses them to one".into())
+    }
+
+    fn at_most_one(&self, sel: &Sel) -> Result<(), String> {
+        if let Some(limit) = &sel.limit {
+            if limit.op == "integer" && limit.value.as_deref().and_then(|v| v.parse::<i64>().ok()).is_some_and(|n| n <= 1) {
+                return Ok(());
+            }
+            return Err("a LIMIT of more than one row, or one the build cannot read, bounds nothing".into());
+        }
+        if sel.prior.is_some() {
+            return Err("a set operation (UNION, INTERSECT, EXCEPT) returns any number of rows".into());
+        }
+        if sel.values {
+            return Err("a VALUES list returns a row per row it lists".into());
+        }
+        let equated = self.equated(sel.where_.as_ref());
+        if !sel.group_by.is_empty() {
+            // One group at most: the WHERE pins a unique key of a relation to values, and every
+            // GROUP BY column belongs to that relation, whatever else is joined.
+            for f in &sel.from {
+                let Some(table) = f.table.as_deref().filter(|_| f.subquery.is_none() && !f.tab_func) else { continue };
+                if !self.key_pinned(table, f.cursor, &equated) {
+                    continue;
+                }
+                if sel.group_by.iter().all(|g| g.op == "column" && g.cursor == f.cursor) {
+                    return Ok(());
+                }
+            }
+            return Err("GROUP BY returns one row per group; the engine proves one group only when the WHERE pins a unique key of a relation to values and every GROUP BY column belongs to that relation".into());
+        }
+        if sel.having.is_some() {
+            return Err("HAVING leaves a row per group".into());
+        }
+        let [only] = sel.from.as_slice() else {
+            return Err(match sel.from.len() {
+                0 => "a SELECT with no FROM and a WHERE can return no row or one, and the engine proves that only through a LIMIT".into(),
+                _ => "a join returns a row per pair it matches, and the engine proves a single row only for one relation".into(),
+            });
+        };
+        let Some(table) = only.table.as_deref().filter(|_| only.subquery.is_none() && !only.tab_func) else {
+            return Err("only a plain table in the FROM is matched against a unique key".into());
+        };
+        if self.key_pinned(table, only.cursor, &equated) {
+            return Ok(());
+        }
+        let keys = self.tree.tables.get(table).map(|t| t.unique_keys.clone()).unwrap_or_default();
+        if keys.is_empty() {
+            return Err(format!("`{table}` has no unique index the engine can read, so nothing bounds the rows a WHERE matches"));
+        }
+        let shown: Vec<String> = keys.iter().map(|k| format!("({})", k.join(", "))).collect();
+        Err(format!("the WHERE does not equate every column of a unique key of `{table}` — it has {}", shown.join(", ")))
+    }
+
+    /// Whether some unique key of `table` (read through `cursor`) has every column equated to a value.
+    fn key_pinned(&self, table: &str, cursor: i64, equated: &HashSet<(i64, String)>) -> bool {
+        let Some(info) = self.tree.tables.get(table) else { return false };
+        info.unique_keys.iter().any(|key| !key.is_empty() && key.iter().all(|c| equated.iter().any(|(cur, name)| *cur == cursor && name.eq_ignore_ascii_case(c))))
+    }
+
+    /// The DML form: the target table's columns have no stable cursor, so they match by name.
+    fn pinned_by_name(&self, table: &str, where_: Option<&Node>) -> Result<(), String> {
+        let equated = self.equated(where_);
+        let Some(info) = self.tree.tables.get(table) else { return Err(format!("`{table}` is not a table the engine can read")) };
+        let names: HashSet<String> = equated.iter().map(|(_, n)| n.to_ascii_lowercase()).collect();
+        if info.unique_keys.iter().any(|key| !key.is_empty() && key.iter().all(|c| names.contains(&c.to_ascii_lowercase()))) {
+            return Ok(());
+        }
+        if info.unique_keys.is_empty() {
+            return Err(format!("`{table}` has no unique index the engine can read, so nothing bounds the rows a WHERE matches"));
+        }
+        let shown: Vec<String> = info.unique_keys.iter().map(|k| format!("({})", k.join(", "))).collect();
+        Err(format!("the WHERE does not equate every column of a unique key of `{table}` — it has {}", shown.join(", ")))
+    }
+
+    /// The columns the WHERE equates to a value: `col = <no column anywhere>` under ANDs.
+    fn equated(&self, where_: Option<&Node>) -> HashSet<(i64, String)> {
+        let mut out = HashSet::new();
+        let mut stack: Vec<&Node> = where_.into_iter().collect();
+        while let Some(n) = stack.pop() {
+            match n.op.as_str() {
+                "and" => {
+                    stack.extend(n.left.as_deref());
+                    stack.extend(n.right.as_deref());
+                }
+                "=" => {
+                    if let (Some(l), Some(r)) = (n.left.as_deref(), n.right.as_deref()) {
+                        for (col, other) in [(l, r), (r, l)] {
+                            if col.op == "column" && !reads_column(other) {
+                                if let Some(name) = &col.column {
+                                    out.insert((col.cursor, name.clone()));
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+}
+
+/// The type of `a op b` for `+`, `-`, `*`, `/`, `%`: integer stays integer, anything else is real.
+fn arithmetic(l: &Type, r: &Type) -> Type {
+    match (scalar_name(l), scalar_name(r)) {
+        (Some("integer"), Some("integer")) => Type::Scalar { name: "integer".into() },
+        _ => Type::Scalar { name: "real".into() },
+    }
+}
+
+fn has_aggregate(n: &Node) -> bool {
+    if n.op == "function" && n.agg && !n.window {
+        return true;
+    }
+    n.left.as_deref().is_some_and(has_aggregate) || n.right.as_deref().is_some_and(has_aggregate) || n.list.iter().any(has_aggregate) || n.args.iter().any(has_aggregate)
+}
+
+/// Whether an expression reads any column, at any depth (a subquery's columns included).
+fn reads_column(n: &Node) -> bool {
+    if n.op == "column" {
+        return true;
+    }
+    n.left.as_deref().is_some_and(reads_column) || n.right.as_deref().is_some_and(reads_column) || n.list.iter().any(reads_column) || n.args.iter().any(reads_column) || n.select.is_some()
+}
+
+/// SQLite's five affinity rules over a declared type.
 pub fn affinity(declared: &str) -> &'static str {
     let d = declared.to_ascii_uppercase();
-    if d.contains("INT") || d.contains("BOOL") {
+    if d.contains("INT") {
         "integer"
     } else if d.contains("CHAR") || d.contains("CLOB") || d.contains("TEXT") {
         "text"
-    } else if d.is_empty() || d.contains("BLOB") {
+    } else if d.contains("BLOB") || d.is_empty() {
         "blob"
     } else if d.contains("REAL") || d.contains("FLOA") || d.contains("DOUB") {
         "real"
@@ -41,311 +750,127 @@ pub fn affinity(declared: &str) -> &'static str {
     }
 }
 
-fn scalar(name: &str) -> Type {
-    Type::Scalar { name: name.to_string() }
+/// `:id`, `$id`, `@id` are the lexer's `id`; `?` and `?3` are its `?1`, `?3`.
+fn same_param(tree_name: &str, lexed_name: &str) -> bool {
+    let stripped = tree_name.trim_start_matches([':', '$', '@']);
+    stripped == lexed_name || tree_name == lexed_name
 }
 
-/// A parameter hint as the type model.
-fn hint_type(hint: &Hint) -> Type {
-    match hint {
-        Hint::Column(declared) => scalar(affinity(declared)),
-        Hint::Cast(name) => scalar(match name.as_str() {
-            "int2" | "int4" | "int8" | "bool" => "integer",
-            "float4" | "float8" => "real",
-            "text" | "varchar" | "bpchar" => "text",
-            "bytea" => "blob",
-            other => affinity(other),
-        }),
-        Hint::Integer => scalar("integer"),
-        Hint::Real => scalar("real"),
-        Hint::Text => scalar("text"),
-    }
+/// A parameter's context while walking.
+enum Ctx {
+    Typed(Option<Fact>),
+    Bool,
+    None,
 }
 
-/// An expression rule's Postgres oid as a SQLite affinity.
-fn oid_affinity(o: u32) -> Option<&'static str> {
-    match o {
-        oid::INT2 | oid::INT4 | oid::INT8 | oid::BOOL => Some("integer"),
-        oid::FLOAT4 | oid::FLOAT8 => Some("real"),
-        oid::TEXT | oid::VARCHAR => Some("text"),
-        _ => None,
-    }
+enum Slot {
+    Left,
+    Right,
+    List(usize),
+    Arg(usize),
 }
 
-pub fn analyze(sql: &str, lexed: &Lexed, host: &Host) -> Lazy<Analysis> {
-    Engine { host, budget: Cell::new(MAX_PROBES) }.run(sql, lexed)
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-struct Engine<'a> {
-    host: &'a Host<'a>,
-    budget: Cell<usize>,
-}
-
-impl Engine<'_> {
-    fn run(&self, sql: &str, lexed: &Lexed) -> Lazy<Analysis> {
-        let mut diagnostics = Vec::new();
-        // SQLite reads every placeholder style natively, so the statement is described as
-        // written; libpg_query reads it with `$n`, and the runtime binds `?` by position.
-        let dollar = lex::rewrite(sql, lexed, Target::Dollar);
-        let raw = self.host.describe_sqlite(sql)?;
-        let raw = match raw {
-            Ok(r) => r,
-            Err(e) => {
-                diagnostics.push(Diagnostic { message: e.message, start: 0, length: sql.trim_end().len().max(1), code: 6 });
-                return Some(crate::postgres::bare(sql, lexed, Dialect::Sqlite, diagnostics));
-            }
-        };
-        let parsed = analyze::analyze(&dollar.sql).ok();
-        let tree = pg_query::parse(&dollar.sql).ok().and_then(|p| serde_json::to_value(&p.protobuf).ok());
-        let mut names: Vec<String> = tree.as_ref().map(params::tables_mentioned).unwrap_or_default();
-        for c in &raw.columns {
-            if let Some(t) = &c.table {
-                if !names.contains(t) {
-                    names.push(t.clone());
-                }
-            }
-        }
-        let (tables, catalog) = self.catalog(&names)?;
-        let mut described = self.settle(&raw, parsed.as_ref(), &tables);
-        let trust = Trust::default();
-        self.refine(&dollar.sql, &mut described, &trust)?;
-
-        // Expression columns: the type the SQL states, where the rules left none.
-        let stated: Vec<Option<Hint>> = tree.as_ref().map(|t| params::result_types(t, &tables)).unwrap_or_default();
-        let columns = described
-            .columns
-            .iter()
-            .enumerate()
-            .map(|(i, col)| {
-                // Provenance first (the declared type), then what the rules typed, then what
-                // the SQL states about the expression.
-                let ty = match (raw.columns.get(i).and_then(|c| c.declared.as_deref()), col.type_oid, stated.get(i).and_then(Option::as_ref)) {
-                    (Some(declared), _, _) => scalar(affinity(declared)),
-                    (None, o, _) if o != oid::UNKNOWN && o != 0 => scalar(oid_affinity(o).unwrap_or("numeric")),
-                    (None, _, Some(hint)) => hint_type(hint),
-                    (None, _, None) => Type::Unknown,
-                };
-                Column { name: col.name.clone(), ty, nullable: col.nullable, type_name: col.type_name.clone() }
-            })
-            .collect();
-
-        let hints = tree.as_ref().map(|t| params::infer(t, &tables)).unwrap_or_default();
-        let params = lexed
-            .params
-            .iter()
-            .enumerate()
-            .map(|(i, name)| {
-                let hint = hints.get(&(i as i32 + 1));
-                Param { name: name.clone(), ty: hint.map(hint_type).unwrap_or(Type::Unknown), type_name: hint.map(|h| format!("{h:?}")).unwrap_or_default() }
-            })
-            .collect();
-
-        let (cardinality, reason) = match crate::postgres::cardinality_directive(lexed, &mut diagnostics) {
-            Some(c) => c,
-            None => self.cardinality(&dollar.sql, parsed.as_ref(), &described, &trust, &catalog),
-        };
-        let rewritten = lex::rewrite(sql, lexed, Target::Question);
-        Some(Analysis {
-            kind: parsed.as_ref().map(|p| p.statement.to_string()).unwrap_or_default(),
-            params,
-            columns,
-            cardinality,
-            cardinality_reason: reason,
-            rewritten,
-            style: lexed.style,
-            directives: lexed.directives.clone(),
-            diagnostics,
-            unresolved: Vec::new(),
-        })
+    fn tree(sql: &str) -> Tree {
+        let ddl = vec![
+            "create table users (id integer primary key, name text not null, email text unique, score real, avatar blob, created_at text not null default current_timestamp)".to_string(),
+            "create table posts (id integer primary key, user_id integer not null references users(id), title text not null, body text)".to_string(),
+        ];
+        tree::analyze(&ddl, sql).unwrap()
     }
 
-    fn cardinality(&self, sql: &str, parsed: Option<&Parsed>, described: &DescribedStatement, trust: &Trust, catalog: &Catalog) -> (String, Option<String>) {
-        let Some(parsed) = parsed else { return ("many".into(), Some("the statement did not parse locally".into())) };
-        if parsed.kind == analyze::StatementKind::Mutation {
-            if !parsed.has_returning || described.columns.is_empty() {
-                return ("none".into(), None);
-            }
-            return match cardinality::dml(sql, catalog) {
-                Some(Ok(cardinality::Cardinality::One)) => ("one".into(), None),
-                Some(Ok(cardinality::Cardinality::AtMostOne)) => ("maybeOne".into(), None),
-                Some(Err(why)) => ("many".into(), Some(why)),
-                None => ("many".into(), None),
-            };
-        }
-        match cardinality::exactly_one(sql, Dialect::Sqlite, trust, catalog) {
-            Ok(()) => ("one".into(), None),
-            Err(_) => match cardinality::at_most_one(sql, Dialect::Sqlite, trust, catalog) {
-                Ok(()) => ("maybeOne".into(), None),
-                Err(why) => ("many".into(), Some(why)),
-            },
-        }
+    fn analysis(sql: &str) -> Analysis {
+        let lexed = lex::lex(sql, Dialect::Sqlite).unwrap();
+        let answers = std::collections::HashMap::from([(
+            format!("query:{DDL_QUERY}|[]"),
+            crate::api::Answer::Rows { rows: tree("select 1").tables.keys().map(|_| Vec::new()).collect() },
+        )]);
+        let _ = answers;
+        let t = tree(sql);
+        let a = Analyzer { tree: &t };
+        let (columns, kind) = a.columns();
+        let params = a.params(&lexed);
+        let (cardinality, reason) = a.cardinality();
+        Analysis { kind, params, columns, cardinality, cardinality_reason: reason, rewritten: lex::rewrite(sql, &lexed, Target::Question), style: lexed.style, directives: vec![], diagnostics: vec![], unresolved: vec![] }
     }
 
-    /// The columns of every table named, and the unique keys the row-count proof reads: the
-    /// unique, non-partial indexes plus the primary key, which for an `INTEGER PRIMARY KEY` has
-    /// no index of its own.
-    fn catalog(&self, names: &[String]) -> Lazy<(Tables, Catalog)> {
-        let mut tables = Tables::new();
-        let mut catalog = Catalog::default();
-        let mut pending = false;
-        let mut index_names: Vec<(String, String)> = Vec::new();
-        for name in names {
-            let info = self.host.query(TABLE_INFO, vec![json!(name)], Scope::Statement);
-            let indexes = self.host.query(INDEX_LIST, vec![json!(name)], Scope::Statement);
-            let (Some(info), Some(indexes)) = (info, indexes) else {
-                pending = true;
-                continue;
-            };
-            let mut columns = Vec::new();
-            let mut pk: Vec<(u32, String)> = Vec::new();
-            for row in info.unwrap_or_default() {
-                let (Some(col), Some(declared)) = (row.first().and_then(as_str), row.get(1).and_then(as_str)) else { continue };
-                let not_null = row.get(2).and_then(as_bool).or_else(|| row.get(2).and_then(as_u32).map(|n| n != 0)).unwrap_or(false);
-                let pk_pos = row.get(3).and_then(as_u32).unwrap_or(0);
-                if pk_pos > 0 {
-                    pk.push((pk_pos, col.to_string()));
-                }
-                columns.push(ColumnInfo { name: col.to_string(), declared: declared.to_string(), not_null, pk: pk_pos > 0 });
-            }
-            if !pk.is_empty() {
-                pk.sort();
-                catalog.unique_keys.entry(name.clone()).or_default().push(pk.into_iter().map(|(_, c)| c).collect());
-            }
-            tables.insert(name.clone(), columns);
-            for row in indexes.unwrap_or_default() {
-                let unique = row.get(1).and_then(as_bool).or_else(|| row.get(1).and_then(as_u32).map(|n| n != 0)).unwrap_or(false);
-                let partial = row.get(3).and_then(as_bool).or_else(|| row.get(3).and_then(as_u32).map(|n| n != 0)).unwrap_or(false);
-                if let (Some(index), true, false) = (row.first().and_then(as_str), unique, partial) {
-                    index_names.push((name.clone(), index.to_string()));
-                }
-            }
-        }
-        for (table, index) in &index_names {
-            let Some(cols) = self.host.query(INDEX_INFO, vec![json!(index)], Scope::Statement) else {
-                pending = true;
-                continue;
-            };
-            let key: Vec<Option<String>> = cols.unwrap_or_default().iter().map(|r| r.first().and_then(as_str).map(String::from)).collect();
-            if let Some(key) = key.into_iter().collect::<Option<Vec<String>>>() {
-                let keys = catalog.unique_keys.entry(table.clone()).or_default();
-                if !keys.contains(&key) {
-                    keys.push(key);
-                }
-            }
-        }
-        if pending {
-            return None;
-        }
-        Some((tables, catalog))
+    fn col(a: &Analysis, name: &str) -> (String, bool) {
+        let c = a.columns.iter().find(|c| c.name == name).unwrap_or_else(|| panic!("no column {name}"));
+        (scalar_name(&c.ty).unwrap_or("unknown").to_string(), c.nullable)
     }
 
-    /// Nullability from the table: `NOT NULL`, or an `INTEGER PRIMARY KEY` (the rowid, never
-    /// null; any other primary key column may hold NULL unless declared `NOT NULL`), unless the
-    /// column's table sits on the nullable side of an outer join or the shape hides its origin.
-    fn settle(&self, raw: &SqliteDescribe, parsed: Option<&Parsed>, tables: &Tables) -> DescribedStatement {
-        let nullable_tables: &[String] = parsed.map(|p| p.nullable_tables.as_slice()).unwrap_or(&[]);
-        let degraded = match parsed {
-            Some(p) => (p.has_repeated_table && !p.nullable_tables.is_empty()) || p.has_set_op || p.has_grouping_sets,
-            None => true,
-        };
-        let columns = raw
-            .columns
-            .iter()
-            .map(|col| {
-                let info = match (&col.table, &col.column) {
-                    (Some(t), Some(c)) => tables.get(t).and_then(|cols| cols.iter().find(|x| x.name.eq_ignore_ascii_case(c))).map(|x| (t, x)),
-                    _ => None,
-                };
-                let nullable = match info {
-                    Some((table, x)) if !degraded => {
-                        let rowid = x.pk && x.declared.eq_ignore_ascii_case("INTEGER") && tables.get(table).is_some_and(|cols| cols.iter().filter(|c| c.pk).count() == 1);
-                        !(x.not_null || rowid) || nullable_tables.iter().any(|n| n == table)
-                    }
-                    _ => true,
-                };
-                let type_oid = if col.table.is_some() { 0 } else { oid::UNKNOWN };
-                DescribedColumn { name: col.name.clone(), type_oid, type_name: col.declared.clone().unwrap_or_default(), nullable }
-            })
-            .collect();
-        DescribedStatement { param_oids: Vec::new(), columns }
+    fn param(a: &Analysis, name: &str) -> String {
+        let p = a.params.iter().find(|p| p.name == name).unwrap_or_else(|| panic!("no param {name}"));
+        scalar_name(&p.ty).unwrap_or("unknown").to_string()
     }
 
-    /// The expression rules, with a probe described through SQLite the way the statement was.
-    fn refine(&self, sql: &str, described: &mut DescribedStatement, trust: &Trust) -> Lazy<()> {
-        let plan = infer::plan(sql, Dialect::Sqlite, trust);
-        let facts: Vec<Option<infer::Fact>> = match &plan.set_op {
-            Some(set) => {
-                let left = self.probe(&set.left, trust);
-                let right = self.probe(&set.right, trust);
-                let (Some(left), Some(right)) = (left, right) else { return None };
-                let (Some(left), Some(right)) = (left, right) else { return Some(()) };
-                let Some(facts) = infer::combine(set.kind, &left.columns, &right.columns) else { return Some(()) };
-                facts.into_iter().map(Some).collect()
-            }
-            None => {
-                let claims = plan.claims(described.columns.len());
-                let open = claims.iter().zip(&described.columns).any(|(claim, col)| claim.is_some() && (col.nullable || col.type_oid == oid::UNKNOWN));
-                if !open {
-                    return Some(());
-                }
-                let leaves = match &plan.leaves {
-                    Some(probe) if plan.reads_leaves() => match self.probe(probe, trust) {
-                        Some(outcome) => outcome.map(|d| d.columns),
-                        None => return None,
-                    },
-                    _ => None,
-                };
-                claims.iter().map(|claim| claim.map(|e| infer::resolve(e, leaves.as_deref()))).collect()
-            }
-        };
-        if facts.len() != described.columns.len() {
-            return Some(());
-        }
-        for (col, fact) in described.columns.iter_mut().zip(facts) {
-            let Some(fact) = fact else { continue };
-            if fact.non_null {
-                col.nullable = false;
-            }
-            if let (oid::UNKNOWN, Some(type_oid)) = (col.type_oid, fact.type_oid) {
-                col.type_oid = type_oid;
-            }
-        }
-        Some(())
+    #[test]
+    fn columns_from_provenance_and_rules() {
+        let a = analysis("select id, name, email, score, length(email) as l, coalesce(email, 'x') as e, id * 2 as d, id / 2 as h, count(*) as n from users");
+        assert_eq!(col(&a, "id"), ("integer".into(), false));
+        assert_eq!(col(&a, "name"), ("text".into(), false));
+        assert_eq!(col(&a, "email"), ("text".into(), true));
+        assert_eq!(col(&a, "score"), ("real".into(), true));
+        assert_eq!(col(&a, "l"), ("integer".into(), true));
+        assert_eq!(col(&a, "e"), ("text".into(), false));
+        assert_eq!(col(&a, "d"), ("integer".into(), false));
+        assert_eq!(col(&a, "h"), ("integer".into(), false));
+        assert_eq!(col(&a, "n"), ("integer".into(), false));
+        assert_eq!(a.cardinality, "one");
     }
 
-    fn probe(&self, sql: &str, trust: &Trust) -> Lazy<Option<DescribedStatement>> {
-        if self.budget.get() == 0 {
-            return Some(None);
-        }
-        self.budget.set(self.budget.get() - 1);
-        let raw = self.host.describe_sqlite(sql)?;
-        let Ok(raw) = raw else { return Some(None) };
-        let parsed = analyze::analyze(sql).ok();
-        let mut names: Vec<String> = Vec::new();
-        for c in &raw.columns {
-            if let Some(t) = &c.table {
-                if !names.contains(t) {
-                    names.push(t.clone());
-                }
-            }
-        }
-        let (tables, _) = self.catalog(&names)?;
-        let mut described = self.settle(&raw, parsed.as_ref(), &tables);
-        // A leaf probe's columns carry their declared types; the rules read them as oids.
-        for (col, raw_col) in described.columns.iter_mut().zip(&raw.columns) {
-            if let Some(declared) = &raw_col.declared {
-                col.type_oid = match affinity(declared) {
-                    "integer" => oid::INT8,
-                    "real" => oid::FLOAT8,
-                    "text" => oid::TEXT,
-                    _ => oid::UNKNOWN,
-                };
-            }
-        }
-        self.refine(sql, &mut described, trust)?;
-        Some(Some(described))
+    #[test]
+    fn outer_join_and_subquery_provenance() {
+        let a = analysis("select u.id, p.title from users u left join posts p on p.user_id = u.id");
+        assert_eq!(col(&a, "title"), ("text".into(), true));
+        let a = analysis("select t.id, t.name from (select id, name from users) t where t.id = :id");
+        assert_eq!(col(&a, "id"), ("integer".into(), false));
+        assert_eq!(col(&a, "name"), ("text".into(), false));
+        assert_eq!(param(&a, "id"), "integer");
+    }
+
+    #[test]
+    fn parameters_from_context() {
+        let a = analysis("select id from users where email = :email and score >= :min and id in (:a, :b) and created_at between :from and :to and name like :q and lower(name) = :n limit :lim offset :off");
+        assert_eq!(param(&a, "email"), "text");
+        assert_eq!(param(&a, "min"), "real");
+        assert_eq!(param(&a, "a"), "integer");
+        assert_eq!(param(&a, "from"), "text");
+        assert_eq!(param(&a, "q"), "text");
+        assert_eq!(param(&a, "n"), "text");
+        assert_eq!(param(&a, "lim"), "integer");
+        assert_eq!(param(&a, "off"), "integer");
+        let a = analysis("insert into users (email, name, score) values (:e, upper(:n), :s * 2) returning id");
+        assert_eq!(param(&a, "e"), "text");
+        assert_eq!(param(&a, "n"), "text");
+        assert_eq!(param(&a, "s"), "integer");
+        assert_eq!(a.cardinality, "one");
+        let a = analysis("update users set name = :name, score = :score where id = :id returning id");
+        assert_eq!(param(&a, "name"), "text");
+        assert_eq!(param(&a, "score"), "real");
+        assert_eq!(param(&a, "id"), "integer");
+        assert_eq!(a.cardinality, "maybeOne");
+    }
+
+    #[test]
+    fn cardinality_by_keys() {
+        assert_eq!(analysis("select id from users where email = :email").cardinality, "maybeOne");
+        assert_eq!(analysis("select id from users where name = :name").cardinality, "many");
+        assert_eq!(analysis("select u.id, count(p.id) as n from users u left join posts p on p.user_id = u.id where u.id = :id group by u.id").cardinality, "maybeOne");
+        assert_eq!(analysis("select id from users limit 1").cardinality, "maybeOne");
+        assert_eq!(analysis("insert or ignore into users (email, name) values (:e, :n) returning id").cardinality, "maybeOne");
+        assert_eq!(analysis("insert into users (email, name) values (:e, :n)").cardinality, "none");
+        assert_eq!(analysis("delete from users where id = :id returning id").cardinality, "maybeOne");
+        assert_eq!(analysis("select id from users union all select user_id from posts").cardinality, "many");
+    }
+
+    #[test]
+    fn sqlite_only_syntax_parses() {
+        let a = analysis("select id from users limit :n, :m");
+        assert_eq!(param(&a, "n"), "integer");
+        assert_eq!(analysis("insert or replace into users (id, name) values (:id, :name) returning id").cardinality, "one");
     }
 }
-
-#[allow(dead_code)]
-fn unused(_: &HashMap<(), ()>, _: &HashSet<()>, _: &Value) {}
