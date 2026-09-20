@@ -8,7 +8,7 @@
 # resolve the workspace while the patched copy is missing.
 [workspace]
 resolver = "2"
-members = ["engine", "anti/engine"]
+members = ["engine", "anti/engine", "pg-extension"]
 
 [patch.crates-io]
 pg_query = { path = "engine/.patched/pg_query" }
@@ -18,6 +18,16 @@ opt-level = "s"
 lto = true
 codegen-units = 1
 panic = "abort"
+
+# `pg-extension/` hosts the engine inside a Postgres backend (`cargo build -p lando-pg --profile pg`).
+# There a panic has to unwind to the FFI boundary and come back as an SQL error; an abort would
+# take the server down with it. Speed over size: the library is loaded once per backend.
+[profile.pg]
+inherits = "release"
+panic = "unwind"
+opt-level = 2
+lto = "thin"
+codegen-units = 16
 
 [profile.dev]
 # libpg_query is large; keep dev builds tolerable.
