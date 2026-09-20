@@ -80,6 +80,27 @@ pub const POSTGRES_NEVER_NULL: &[&str] = &[
 ];
 /// Postgres built-ins that answer NULL only when every argument is NULL.
 pub const POSTGRES_ANY: &[&str] = &["greatest", "least"];
+/// Postgres aggregates that answer NULL only over no rows or over nothing but NULLs. Under a
+/// plain `GROUP BY` a group is never empty, so there they are non-null on a non-null argument.
+pub const POSTGRES_GROUPED: &[&str] = &["sum", "avg", "min", "max", "bit_and", "bit_or", "bool_and", "bool_or", "every", "string_agg"];
+/// Postgres aggregates that answer NULL only over no rows: a group's `array_agg` is an array,
+/// NULL elements and all.
+pub const POSTGRES_GROUPED_NEVER_NULL: &[&str] = &["array_agg"];
+
+/// Every function name a Postgres rule reads, which is what a host asks the catalog about: a
+/// name a user or an extension has also defined is shadowed, and its rule proves nothing
+/// ([`Trust::shadowed`]).
+pub fn postgres_function_names() -> Vec<&'static str> {
+    let mut names: Vec<&'static str> = Vec::new();
+    for list in [FUNCTIONS, POSTGRES_TOTAL, POSTGRES_NEVER_NULL, POSTGRES_ANY, POSTGRES_GROUPED, POSTGRES_GROUPED_NEVER_NULL] {
+        for name in list {
+            if !names.contains(name) {
+                names.push(name);
+            }
+        }
+    }
+    names
+}
 /// SQLite's cast targets with a type of their own, by the name libpg_query gives them
 /// (`INTEGER` parses as `int4`, `REAL` as `float4`). A cast to anything else still carries its
 /// argument's nullability on SQLite, but not a type: `CAST(x AS NUMERIC)` may be either class.
@@ -108,6 +129,10 @@ pub enum Expr {
     Nullable(Box<Expr>),
     /// Column `n` of the leaf probe: a column reference, answered by its provenance.
     Leaf(usize),
+    /// Column `n` of the leaf probe, read as the whole row of this relation: non-null when the
+    /// probe says it is that relation's row type (and so not a column that shares the alias's
+    /// name), because a row of a table that no outer join nulls always exists.
+    Row(usize, String),
     /// Non-null when every operand is: an operator, a cast, a `CASE` with an `ELSE`.
     Every(Vec<Expr>, Ty),
     /// Non-null when any operand is: `coalesce`.
@@ -223,7 +248,12 @@ pub fn plan(sql: &str, dialect: Dialect, trust: &Trust) -> Plan {
     // A grouping set nulls a grouping column in its super-aggregate rows, which a probe over the
     // `FROM` alone would never show: a leaf there proves nothing.
     let grouped = matches!(top, NodeEnum::SelectStmt(s) if s.group_clause.iter().any(|g| matches!(g.node, Some(NodeEnum::GroupingSet(_)))));
-    let mut reader = Reader { dialect, trust, leaves: (!grouped).then(Vec::new) };
+    let scope = match top {
+        NodeEnum::SelectStmt(s) if dialect == Dialect::Postgres && !grouped => Some(Scope::of(s, trust)),
+        _ => None,
+    };
+    let plain_group_by = matches!(top, NodeEnum::SelectStmt(s) if !grouped && !s.group_clause.is_empty());
+    let mut reader = Reader { dialect, trust, leaves: (!grouped).then(Vec::new), grouped: plain_group_by };
     let mut plan = Plan::default();
     for target in &targets {
         let Some(NodeEnum::ResTarget(rt)) = target.node.as_ref() else { continue };
@@ -233,8 +263,12 @@ pub fn plan(sql: &str, dialect: Dialect, trust: &Trust) -> Plan {
             plan.tail.clear();
             continue;
         }
-        // A plain column reference is the describe tier's to answer.
-        let claim = if matches!(val.node, Some(NodeEnum::ColumnRef(_))) { None } else { Some(reader.read(val)) };
+        // A plain column reference is the describe tier's to answer, but for what the SELECT
+        // around it proves: a strict WHERE on it, or that it is a table's whole row.
+        let claim = match val.node.as_ref() {
+            Some(NodeEnum::ColumnRef(c)) => scope.as_ref().and_then(|scope| scope.column(c, val, &mut reader)),
+            _ => Some(reader.read(val)),
+        };
         if plan.star {
             plan.tail.push(claim);
         } else {
@@ -277,6 +311,10 @@ pub fn resolve(expr: &Expr, leaves: Option<&[DescribedColumn]>) -> Fact {
         Expr::Nullable(inner) => Fact { non_null: false, ..resolve(inner, leaves) },
         Expr::Leaf(i) => match leaves.and_then(|l| l.get(*i)) {
             Some(col) => Fact { non_null: !col.nullable, type_oid: (col.type_oid != oid::UNKNOWN).then_some(col.type_oid) },
+            None => NOTHING,
+        },
+        Expr::Row(i, relation) => match leaves.and_then(|l| l.get(*i)) {
+            Some(col) => Fact { non_null: !col.nullable || col.type_name == *relation, type_oid: (col.type_oid != oid::UNKNOWN).then_some(col.type_oid) },
             None => NOTHING,
         },
         Expr::Every(operands, ty) => {
@@ -331,7 +369,7 @@ pub fn single_row(select: &SelectStmt) -> bool {
 /// the `SELECT` holding it an aggregate query: the reading `single_row` leans on, for a caller that
 /// proves a row count (`cardinality`) rather than a nullability.
 pub fn aggregates(expr: &Node, dialect: Dialect, trust: &Trust) -> bool {
-    Reader { dialect, trust, leaves: None }.aggregates(expr)
+    Reader { dialect, trust, leaves: None, grouped: false }.aggregates(expr)
 }
 
 impl Ty {
@@ -356,6 +394,8 @@ struct Reader<'a> {
     trust: &'a Trust,
     /// The column references read so far, in leaf order; `None` where a reference proves nothing.
     leaves: Option<Vec<Node>>,
+    /// Whether the expressions belong to a SELECT with a plain `GROUP BY`, where no group is empty.
+    grouped: bool,
 }
 
 impl Reader<'_> {
@@ -480,6 +520,16 @@ impl Reader<'_> {
             (Dialect::Sqlite, "total", 1) => Expr::Nullable(Box::new(Expr::NonNull(Some(oid::FLOAT8)))),
             // "The ifnull() function is equivalent to coalesce() with two arguments."
             (Dialect::Sqlite, "ifnull", 2) => Expr::Any(f.args.iter().map(|a| self.read(a)).collect(), Ty::Shared),
+            // Under a plain GROUP BY every group has a row, so an aggregate that is NULL only over
+            // no rows or only NULLs follows its argument. A FILTER can leave it no rows, a window
+            // frame can be empty, and SQLite's sum of `1e999` and `-1e999` is NaN, stored as NULL.
+            (Dialect::Postgres, n, 1 | 2) if self.grouped && f.over.is_none() && f.agg_filter.is_none() && self.trust.builtin(n) && (POSTGRES_GROUPED.contains(&n) || POSTGRES_GROUPED_NEVER_NULL.contains(&n)) => {
+                if POSTGRES_GROUPED_NEVER_NULL.contains(&n) {
+                    Expr::NonNull(None)
+                } else {
+                    Expr::Every(f.args.iter().take(1).map(|a| self.read(a)).collect(), Ty::Unknown)
+                }
+            }
             (Dialect::Postgres, n, _) if POSTGRES_NEVER_NULL.contains(&n) && self.trust.builtin(n) => Expr::NonNull(None),
             (Dialect::Postgres, n, _) if POSTGRES_ANY.contains(&n) && self.trust.builtin(n) => Expr::Any(f.args.iter().map(|a| self.read(a)).collect(), Ty::Shared),
             (Dialect::Postgres, n, _) if POSTGRES_TOTAL.contains(&n) && self.trust.builtin(n) => Expr::Every(f.args.iter().map(|a| self.read(a)).collect(), Ty::Unknown),
@@ -505,7 +555,7 @@ impl Reader<'_> {
         let Some(inner) = single_target(select).and_then(|rt| rt.val.as_deref()) else { return Expr::Unknown };
         // The leaf probe selects over the outer `FROM`, which a reference inside a subquery does
         // not read, so the inner expression is read without leaves.
-        let mut inner_reader = Reader { dialect: self.dialect, trust: self.trust, leaves: None };
+        let mut inner_reader = Reader { dialect: self.dialect, trust: self.trust, leaves: None, grouped: false };
         let value = inner_reader.read(inner);
         if single_row(select) && self.aggregates(inner) {
             value
@@ -554,9 +604,216 @@ impl Reader<'_> {
     }
 }
 
+/// A result column that is a bare reference to a column of one of the statement's own WITH
+/// queries. Its provenance still names the table behind the WITH query, but the catalog's word
+/// on that column is not the last one: the WITH query may filter it (`WHERE x IS NOT NULL`),
+/// compute it, or null it with a join, so its nullability is the WITH query's own result's.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WithRead {
+    /// The WITH query's name.
+    pub query: String,
+    pub column: String,
+}
+
+/// One WITH query as a statement of its own, the statement's WITH clause still in front of it:
+/// an earlier WITH query, or for a recursive one its own name, resolves as it did in place.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WithQuery {
+    pub sql: String,
+    /// The column names the WITH clause gives it, `t(a, b)`; the rest keep the query's own.
+    pub columns: Vec<String>,
+}
+
+/// Per result column, the WITH query column it reads, and the WITH queries read. `None` when the
+/// statement is not a plain SELECT with a WITH clause, or when a `*` hides which result column
+/// is which.
+pub fn with_reads(sql: &str) -> Option<(Vec<Option<WithRead>>, HashMap<String, WithQuery>)> {
+    let parsed = pg_query::parse(sql).ok()?;
+    let version = parsed.protobuf.version;
+    let top = parsed.protobuf.stmts.first().and_then(|s| s.stmt.as_deref()).and_then(|n| n.node.as_ref())?;
+    let NodeEnum::SelectStmt(select) = top else { return None };
+    if set_kind(select).is_some() || !select.values_lists.is_empty() {
+        return None;
+    }
+    let with = select.with_clause.as_ref()?;
+    // The FROM items that are WITH queries, by the name each goes by, and how many FROM items
+    // there are at all: a bare column name says which item it reads only when there is one.
+    let mut tables = HashMap::new();
+    let mut names = Vec::new();
+    let mut outer_join = false;
+    for item in &select.from_clause {
+        from_names(item, &mut tables, &mut names, &mut outer_join);
+    }
+    // `public.pub` is the table, whatever the WITH clause calls `pub`.
+    fn qualified(item: &Node, out: &mut Vec<String>) {
+        match item.node.as_ref() {
+            Some(NodeEnum::RangeVar(rv)) if !rv.schemaname.is_empty() => out.push(rv.alias.as_ref().map(|a| a.aliasname.clone()).unwrap_or_else(|| rv.relname.clone())),
+            Some(NodeEnum::JoinExpr(j)) => [j.larg.as_deref(), j.rarg.as_deref()].into_iter().flatten().for_each(|side| qualified(side, out)),
+            _ => {}
+        }
+    }
+    let mut schema_qualified = Vec::new();
+    select.from_clause.iter().for_each(|item| qualified(item, &mut schema_qualified));
+    tables.retain(|name, _| !schema_qualified.contains(name));
+    let mut queries: HashMap<String, WithQuery> = HashMap::new();
+    for cte in &with.ctes {
+        let Some(NodeEnum::CommonTableExpr(cte)) = cte.node.as_ref() else { continue };
+        let Some(body) = cte.ctequery.as_deref().and_then(as_select) else { continue };
+        let Some(text) = arm_text(version, body, Some(with)) else { continue };
+        let columns = cte.aliascolnames.iter().filter_map(|n| match n.node.as_ref() {
+            Some(NodeEnum::String(s)) => Some(s.sval.clone()),
+            _ => None,
+        }).collect();
+        queries.insert(cte.ctename.clone(), WithQuery { sql: text, columns });
+    }
+    let mut reads = Vec::with_capacity(select.target_list.len());
+    for target in &select.target_list {
+        let Some(NodeEnum::ResTarget(rt)) = target.node.as_ref() else { return None };
+        let val = rt.val.as_deref()?;
+        if is_star(val) {
+            return None;
+        }
+        let Some(NodeEnum::ColumnRef(c)) = val.node.as_ref() else {
+            reads.push(None);
+            continue;
+        };
+        let fields: Option<Vec<&str>> = c.fields.iter().map(|f| match f.node.as_ref() {
+            Some(NodeEnum::String(s)) => Some(s.sval.as_str()),
+            _ => None,
+        }).collect();
+        let from = match fields.as_deref() {
+            Some([name, column]) => tables.get(*name).map(|relation| (relation, *column)),
+            Some([column]) if names.len() == 1 => tables.get(&names[0]).map(|relation| (relation, *column)),
+            _ => None,
+        };
+        reads.push(from.filter(|(relation, _)| queries.contains_key(*relation)).map(|(relation, column)| WithRead { query: relation.clone(), column: column.to_string() }));
+    }
+    if reads.iter().all(Option::is_none) {
+        return None;
+    }
+    queries.retain(|name, _| reads.iter().flatten().any(|r| &r.query == name));
+    Some((reads, queries))
+}
+
+/// What a SELECT says about a plain column reference in its own target list.
+struct Scope {
+    /// The plain tables of the FROM by the name each goes by; empty when an outer join sits
+    /// anywhere in it, since a nulled table's whole row is NULL.
+    tables: HashMap<String, String>,
+    /// Every name a FROM item goes by, tables or not.
+    names: Vec<String>,
+    /// The columns the WHERE tests strictly at its top level, as written.
+    strict: Vec<Vec<String>>,
+}
+
+impl Scope {
+    fn of(s: &SelectStmt, trust: &Trust) -> Scope {
+        let mut tables = HashMap::new();
+        let mut names = Vec::new();
+        let mut outer_join = false;
+        for item in &s.from_clause {
+            from_names(item, &mut tables, &mut names, &mut outer_join);
+        }
+        if outer_join {
+            tables.clear();
+        }
+        let mut strict = Vec::new();
+        if let Some(w) = s.where_clause.as_deref() {
+            strict_columns(w, trust, &mut strict);
+        }
+        Scope { tables, names, strict }
+    }
+
+    /// The claim for a target that is a bare column reference, if the SELECT proves one.
+    fn column(&self, c: &protobuf::ColumnRef, node: &Node, reader: &mut Reader) -> Option<Expr> {
+        let fields: Vec<String> = c.fields.iter().map(|f| match f.node.as_ref() {
+            Some(NodeEnum::String(s)) => Some(s.sval.clone()),
+            _ => None,
+        }).collect::<Option<_>>()?;
+        if self.strict.iter().any(|tested| self.same_column(tested, &fields)) {
+            return Some(Expr::NonNull(None));
+        }
+        let [name] = fields.as_slice() else { return None };
+        let relation = self.tables.get(name)?;
+        let leaves = reader.leaves.as_mut()?;
+        leaves.push(node.clone());
+        Some(Expr::Row(leaves.len() - 1, relation.clone()))
+    }
+
+    /// Whether two references written in this SELECT name one column: the same text, or one of
+    /// them bare and the other qualified by a FROM item of this SELECT. A bare name that
+    /// resolves at all resolves to exactly one FROM item's column, so that is the one.
+    fn same_column(&self, a: &[String], b: &[String]) -> bool {
+        if a == b {
+            return true;
+        }
+        let (bare, qualified) = match (a.len(), b.len()) {
+            (1, 2) => (a, b),
+            (2, 1) => (b, a),
+            _ => return false,
+        };
+        bare[0] == qualified[1] && self.names.contains(&qualified[0])
+    }
+}
+
+/// The names a FROM item's relations go by, through its joins.
+fn from_names(item: &Node, tables: &mut HashMap<String, String>, names: &mut Vec<String>, outer_join: &mut bool) {
+    match item.node.as_ref() {
+        Some(NodeEnum::RangeVar(rv)) => {
+            let name = rv.alias.as_ref().map(|a| a.aliasname.clone()).unwrap_or_else(|| rv.relname.clone());
+            tables.insert(name.clone(), rv.relname.clone());
+            names.push(name);
+        }
+        Some(NodeEnum::JoinExpr(j)) => {
+            if j.jointype != protobuf::JoinType::JoinInner as i32 {
+                *outer_join = true;
+            }
+            for side in [j.larg.as_deref(), j.rarg.as_deref()].into_iter().flatten() {
+                from_names(side, tables, names, outer_join);
+            }
+        }
+        Some(NodeEnum::RangeSubselect(r)) => names.extend(r.alias.as_ref().map(|a| a.aliasname.clone())),
+        Some(NodeEnum::RangeFunction(r)) => names.extend(r.alias.as_ref().map(|a| a.aliasname.clone())),
+        _ => {}
+    }
+}
+
+/// The column references a WHERE tests strictly at its top level: under AND, an `IS NOT NULL`,
+/// or a built-in comparison, which is never true of NULL. A row the SELECT returns passed the
+/// test, so in its result that column is not NULL.
+fn strict_columns(node: &Node, trust: &Trust, out: &mut Vec<Vec<String>>) {
+    const COMPARISONS: &[&str] = &["=", "<>", "<", ">", "<=", ">="];
+    let mut push = |n: &Node| {
+        if let Some(NodeEnum::ColumnRef(c)) = n.node.as_ref() {
+            let fields: Option<Vec<String>> = c.fields.iter().map(|f| match f.node.as_ref() {
+                Some(NodeEnum::String(s)) => Some(s.sval.clone()),
+                _ => None,
+            }).collect();
+            out.extend(fields);
+        }
+    };
+    match node.node.as_ref() {
+        Some(NodeEnum::BoolExpr(b)) if b.boolop == protobuf::BoolExprType::AndExpr as i32 => b.args.iter().for_each(|a| strict_columns(a, trust, out)),
+        Some(NodeEnum::NullTest(t)) if t.nulltesttype == protobuf::NullTestType::IsNotNull as i32 => {
+            if let Some(arg) = t.arg.as_deref() {
+                push(arg);
+            }
+        }
+        Some(NodeEnum::AExpr(e)) if e.kind == protobuf::AExprKind::AexprOp as i32 => {
+            let Some(op) = builtin_name(&e.name) else { return };
+            if COMPARISONS.contains(&op.as_str()) && trust.builtin(&op) {
+                for side in [e.lexpr.as_deref(), e.rexpr.as_deref()].into_iter().flatten() {
+                    push(side);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 /// A bare `VALUES (…), (…)` arm: a column is non-null when it is in every row.
 fn values_plan(s: &SelectStmt, dialect: Dialect, trust: &Trust) -> Plan {
-    let mut reader = Reader { dialect, trust, leaves: None };
+    let mut reader = Reader { dialect, trust, leaves: None, grouped: false };
     let mut rows: Vec<Vec<Expr>> = Vec::new();
     for row in &s.values_lists {
         let Some(NodeEnum::List(list)) = row.node.as_ref() else { return Plan::default() };
@@ -619,7 +876,7 @@ fn is_star(node: &Node) -> bool {
 
 fn reads_leaf(expr: &Expr) -> bool {
     match expr {
-        Expr::Leaf(_) => true,
+        Expr::Leaf(_) | Expr::Row(..) => true,
         Expr::Nullable(inner) => reads_leaf(inner),
         Expr::Every(operands, _) | Expr::Any(operands, _) => operands.iter().any(reads_leaf),
         Expr::NonNull(_) | Expr::Unknown => false,
@@ -886,6 +1143,77 @@ mod tests {
         let p = pg("VALUES (1, 'a'), (2, NULL)");
         assert!(resolve(p.head[0].as_ref().unwrap(), None).non_null);
         assert!(!resolve(p.head[1].as_ref().unwrap(), None).non_null);
+    }
+
+    #[test]
+    fn a_group_is_never_empty_so_its_aggregate_follows_the_argument() {
+        let p = pg("SELECT user_id, sum(views) AS total, max(views) AS top, array_agg(title) AS titles, sum(views) FILTER (WHERE views > 0) AS some, sum(views) OVER () AS running FROM posts GROUP BY user_id");
+        // One leaf per column reference read: five of `views` here.
+        let views = [col(false, oid::INT4), col(false, oid::INT4), col(false, oid::INT4), col(false, oid::INT4), col(false, oid::INT4)];
+        assert_eq!(p.head[0], None);
+        assert!(resolve(p.head[1].as_ref().unwrap(), Some(&views)).non_null);
+        assert!(resolve(p.head[2].as_ref().unwrap(), Some(&views)).non_null);
+        assert!(resolve(p.head[3].as_ref().unwrap(), Some(&views)).non_null);
+        // A FILTER can leave the group no rows, and a window frame can be empty.
+        assert!(!resolve(p.head[4].as_ref().unwrap(), Some(&views)).non_null);
+        assert!(!resolve(p.head[5].as_ref().unwrap(), Some(&views)).non_null);
+        // A nullable argument, no GROUP BY, a grouping set, or SQLite (a sum can be NaN, which it stores as NULL).
+        assert!(!resolve(p.head[1].as_ref().unwrap(), Some(&[col(true, oid::INT4)])).non_null);
+        assert!(!first(&pg("SELECT sum(views) AS total FROM posts")).non_null);
+        assert!(!resolve(pg("SELECT sum(views) AS total FROM posts GROUP BY ROLLUP (user_id)").head[0].as_ref().unwrap(), Some(&views)).non_null);
+        assert!(!resolve(lite("SELECT sum(views) AS total FROM posts GROUP BY user_id").head[0].as_ref().unwrap(), Some(&views)).non_null);
+    }
+
+    #[test]
+    fn a_strict_where_proves_the_column_it_tests() {
+        let p = pg("SELECT id, email, p.title, body FROM users u JOIN posts p ON p.user_id = u.id WHERE email IS NOT NULL AND title > $1 AND (body IS NOT NULL OR id = 1)");
+        assert_eq!(p.head[0], None);
+        assert_eq!(p.head[1], Some(Expr::NonNull(None)));
+        // `title` in the WHERE and `p.title` in the list are one column: `p` is a FROM item here.
+        assert_eq!(p.head[2], Some(Expr::NonNull(None)));
+        // Under an OR the test may not have run.
+        assert_eq!(p.head[3], None);
+        // A qualifier that is no FROM item of this SELECT is some other column.
+        assert_eq!(pg("SELECT email FROM users WHERE outer_row.email IS NOT NULL").head[0], None);
+        // A user's own `=` may be true of NULL, and a grouping set nulls the column again.
+        let shadowed = Trust { shadowed: ["=".to_string()].into_iter().collect(), ..Default::default() };
+        assert_eq!(plan("SELECT email FROM users WHERE email = $1", Dialect::Postgres, &shadowed).head[0], None);
+        assert_eq!(pg("SELECT email FROM users WHERE email IS NOT NULL GROUP BY ROLLUP (email)").head[0], None);
+    }
+
+    #[test]
+    fn a_tables_whole_row_is_never_null_unless_a_join_can_null_it() {
+        let p = pg("SELECT u AS whole, u.name FROM users u WHERE u.id = $1");
+        assert_eq!(p.head[0], Some(Expr::Row(0, "users".to_string())));
+        assert_eq!(p.head[1], None);
+        assert_eq!(p.leaves.as_deref(), Some("SELECT u AS a0 FROM users u"));
+        // The probe says whether it was the row after all: a column named like the alias is not.
+        let row = DescribedColumn { name: "whole".into(), type_oid: 16500, type_name: "users".into(), nullable: true };
+        let column = DescribedColumn { name: "whole".into(), type_oid: oid::TEXT, type_name: "text".into(), nullable: true };
+        assert!(resolve(p.head[0].as_ref().unwrap(), Some(&[row])).non_null);
+        assert!(!resolve(p.head[0].as_ref().unwrap(), Some(&[column])).non_null);
+        assert_eq!(pg("SELECT p FROM users u LEFT JOIN posts p ON p.user_id = u.id").head[0], None);
+        assert_eq!(pg("SELECT s FROM (SELECT 1 AS a) s").head[0], None);
+    }
+
+    #[test]
+    fn a_column_read_from_a_with_query_names_that_query_as_a_statement() {
+        let (reads, queries) = with_reads("WITH pub AS (SELECT id, at FROM posts WHERE at IS NOT NULL), other AS (SELECT 1 AS one) SELECT id, pub.at, id + 1 AS next FROM pub").unwrap();
+        assert_eq!(reads, vec![Some(WithRead { query: "pub".into(), column: "id".into() }), Some(WithRead { query: "pub".into(), column: "at".into() }), None]);
+        // Only the query that is read, with the whole WITH clause still in front of it.
+        assert_eq!(queries.keys().collect::<Vec<_>>(), vec!["pub"]);
+        assert_eq!(queries["pub"].sql, "WITH pub AS (SELECT id, at FROM posts WHERE at IS NOT NULL), other AS (SELECT 1 AS one) SELECT id, at FROM posts WHERE at IS NOT NULL");
+        // A recursive one keeps its own name in scope, and its column list renames its columns.
+        let (reads, queries) = with_reads("WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM t WHERE n < 5) SELECT n FROM t").unwrap();
+        assert_eq!(reads, vec![Some(WithRead { query: "t".into(), column: "n".into() })]);
+        assert_eq!(queries["t"].columns, vec!["n"]);
+        assert!(queries["t"].sql.starts_with("WITH RECURSIVE t(n) AS ("));
+        // A bare name among several FROM items could be any item's; a table is not a WITH query; a `*` hides the positions.
+        assert_eq!(with_reads("WITH a AS (SELECT 1 AS x) SELECT x FROM a, users"), None);
+        assert_eq!(with_reads("WITH a AS (SELECT 1 AS x) SELECT id FROM users"), None);
+        assert_eq!(with_reads("WITH a AS (SELECT 1 AS x) SELECT x FROM public.a"), None);
+        assert_eq!(with_reads("WITH a AS (SELECT 1 AS x) SELECT *, x FROM a"), None);
+        assert_eq!(with_reads("SELECT id FROM users"), None);
     }
 
     #[test]

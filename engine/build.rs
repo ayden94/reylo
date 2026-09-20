@@ -10,7 +10,15 @@ use std::path::{Path, PathBuf};
 fn fingerprint(root: &Path) -> String {
     let mut files: Vec<PathBuf> = vec![root.join("Cargo.toml")];
     for dir in ["src", "csrc"] {
-        let mut entries: Vec<PathBuf> = fs::read_dir(root.join(dir)).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_file()).collect();
+        // A dotfile is never a source: macOS tar adds an AppleDouble `._name` beside a file with
+        // extended attributes, and a checkout on another platform would hash it.
+        let mut entries: Vec<PathBuf> = fs::read_dir(root.join(dir))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_file() && !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')))
+            .collect();
         entries.sort();
         files.extend(entries);
     }
@@ -67,6 +75,11 @@ fn main() {
         // `lando_sqlite_analyze` and `lando_sqlite_free` are exported, and nothing here is
         // reachable from, or shadows, the other copy.
         build.define("SQLITE_API", "static").define("SQLITE_EXTERN", "");
+    }
+    if target.contains("linux") {
+        // The amalgamation defines `_GNU_SOURCE` for itself, but `csrc/lando_sqlite.c` has
+        // included system headers before it gets there, and glibc then hides `mremap`.
+        build.define("_GNU_SOURCE", None);
     }
     if target.starts_with("wasm32") {
         build

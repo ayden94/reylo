@@ -21,6 +21,15 @@ fi
 if [ ! -f .sqlite/sqlite3-patched.c ] || [ csrc/patch-sqlite.py -nt .sqlite/sqlite3-patched.c ]; then
   python3 csrc/patch-sqlite.py .sqlite/sqlite-amalgamation-3530400/sqlite3.c .sqlite/sqlite3-patched.c
 fi
+if [ ! -f .patched/pg_query/extern_block.rs ]; then
+  # Straight from crates.io, not through `cargo fetch`: the workspace's `[patch]` points at the
+  # copy this makes, so cargo resolves nothing until it exists.
+  echo "fetching pg_query 6.2.0"
+  rm -rf .patched && mkdir -p .patched
+  curl -fsSL https://static.crates.io/crates/pg_query/pg_query-6.2.0.crate | tar -xz -C .patched
+  mv .patched/pg_query-6.2.0 .patched/pg_query
+  (cd .patched/pg_query && patch -p2 -N < ../../vendor/pg_query-6.2.0-wasm.patch)
+fi
 if [ "${1:-}" = "--prepare" ]; then
   exit 0
 fi
@@ -36,12 +45,6 @@ WASI_SDK_PATH=$(cd "$WASI_SDK_PATH" && pwd)
 SYSROOT="$WASI_SDK_PATH/share/wasi-sysroot"
 STUBS="$(pwd)/vendor/stubs"
 
-if [ ! -f .patched/pg_query/extern_block.rs ]; then
-  cargo fetch
-  REG=$(ls -d ~/.cargo/registry/src/*/pg_query-6.2.0 | head -1)
-  rm -rf .patched && mkdir -p .patched && cp -R "$REG" .patched/pg_query
-  (cd .patched/pg_query && patch -p2 -N < ../../vendor/pg_query-6.2.0-wasm.patch)
-fi
 
 export CC_wasm32_wasip1="$WASI_SDK_PATH/bin/clang"
 export AR_wasm32_wasip1="$WASI_SDK_PATH/bin/llvm-ar"

@@ -25,6 +25,9 @@ use std::collections::{HashMap, HashSet};
 /// How many statements one analysis may synthesize to settle its columns: one per set-operation
 /// arm, one per statement whose expressions read a column, one per JSON constructor context.
 const MAX_PROBES: usize = 8;
+/// How many times one analysis may settle a probe at all, the same statement under another
+/// assumption included.
+const MAX_PROBE_CALLS: usize = 64;
 
 const ATTNOTNULL_QUERY: &str = "SELECT a.attrelid::int8, a.attnum::int4 FROM pg_attribute a \
     JOIN unnest($1::oid[], $2::int2[]) AS u(rel, att) ON a.attrelid = u.rel AND a.attnum = u.att WHERE a.attnotnull";
@@ -106,6 +109,18 @@ struct Engine<'a> {
     /// The defining SELECT of each of those that is a view or a materialized view. The catalog
     /// holds no NOT NULL for a view's columns, so they are settled from this statement instead.
     views: RefCell<HashMap<u32, String>>,
+    /// The WITH queries being settled, outermost first: the statement text of each, the columns
+    /// taken as nullable for a read of the query from inside itself, and whether such a read
+    /// happened. See `with_columns`.
+    with_stack: RefCell<Vec<(String, HashSet<String>, bool)>>,
+    /// The statements probed so far. The budget is on distinct statements, which is what costs
+    /// a describe; settling one again under another assumption costs nothing.
+    probed: RefCell<HashSet<String>>,
+    /// The statements being probed right now, outermost first. A statement that comes to probe
+    /// itself (a whole-row leaf reads as a whole row in its own leaf probe) proves nothing by it.
+    probing: RefCell<Vec<String>>,
+    /// Every `probe` call so far, whatever the statement: a bound on the work one analysis does.
+    probe_calls: Cell<usize>,
     /// Per placeholder of the main statement, the cast a probe pins on it.
     casts: RefCell<Vec<Option<String>>>,
     budget: Cell<usize>,
@@ -113,7 +128,7 @@ struct Engine<'a> {
 
 impl<'a> Engine<'a> {
     fn new(host: &'a Host<'a>) -> Engine<'a> {
-        Engine { host, registry: RefCell::new(TypeRegistry::with_builtins()), relations: RefCell::new(HashMap::new()), views: RefCell::new(HashMap::new()), casts: RefCell::new(Vec::new()), budget: Cell::new(MAX_PROBES) }
+        Engine { host, registry: RefCell::new(TypeRegistry::with_builtins()), relations: RefCell::new(HashMap::new()), views: RefCell::new(HashMap::new()), with_stack: RefCell::new(Vec::new()), probed: RefCell::new(HashSet::new()), probing: RefCell::new(Vec::new()), probe_calls: Cell::new(0), casts: RefCell::new(Vec::new()), budget: Cell::new(MAX_PROBES) }
     }
 
     fn run(&self, sql: &str, lexed: &Lexed) -> Lazy<Analysis> {
@@ -149,6 +164,11 @@ impl<'a> Engine<'a> {
         for probe in &jsonshape::plan(&rewritten.sql).probes {
             self.prewarm(&probe.sql);
         }
+        if let Some((_, queries)) = infer::with_reads(&rewritten.sql) {
+            for query in queries.values() {
+                self.prewarm(&query.sql);
+            }
+        }
         if let Some(trust) = &trust {
             let plan = infer::plan(&rewritten.sql, Dialect::Postgres, trust);
             if let Some(set) = &plan.set_op {
@@ -174,7 +194,7 @@ impl<'a> Engine<'a> {
         // The catalog the row-count proof reads.
         let catalog = build_catalog(parsed.as_ref(), &operators, catalog_rows);
         // Nullability from provenance, then from the SQL.
-        let settled = self.settle(&raw, parsed.as_ref(), &trust);
+        let settled = self.settle(&rewritten.sql, &raw, parsed.as_ref(), &trust);
         let (Some(()), Some(mut described)) = (types, settled) else { return None };
         *self.casts.borrow_mut() = raw.params.iter().map(|o| self.registry.borrow().get(*o).map(|t| t.cast_name.clone()).filter(|c| !c.is_empty())).collect();
         self.refine(&rewritten.sql, &mut described, &trust)?;
@@ -286,7 +306,7 @@ impl<'a> Engine<'a> {
 
     fn trust(&self) -> Lazy<Trust> {
         let operators: Vec<Value> = infer::POSTGRES_OPERATORS.iter().map(|s| json!(s)).collect();
-        let functions: Vec<Value> = infer::FUNCTIONS.iter().chain(infer::POSTGRES_TOTAL).chain(infer::POSTGRES_NEVER_NULL).chain(infer::POSTGRES_ANY).map(|s| json!(s)).collect();
+        let functions: Vec<Value> = infer::postgres_function_names().into_iter().map(|s| json!(s)).collect();
         let rows = self.host.query(TRUST_QUERY, vec![json!(operators), json!(functions)], Scope::Session)?;
         let mut trust = Trust { shadowed: HashSet::new(), cast_targets: Some(HashSet::new()), ..Default::default() };
         if let Ok(rows) = rows {
@@ -387,7 +407,7 @@ impl<'a> Engine<'a> {
     /// A described statement's columns with their nullability from provenance: the catalog's
     /// `NOT NULL`, unless the column's table sits on the nullable side of an outer join, or the
     /// statement's shape hides which relation produced a column.
-    fn settle(&self, raw: &crate::api::RawDescribe, parsed: Option<&Parsed>, trust: &Trust) -> Lazy<DescribedStatement> {
+    fn settle(&self, sql: &str, raw: &crate::api::RawDescribe, parsed: Option<&Parsed>, trust: &Trust) -> Lazy<DescribedStatement> {
         // A column of a view: the view's own statement is settled like any other (its columns
         // trace to the base tables, its joins null a side, its expressions follow the rules),
         // and column `attnum` of the view is column `attnum - 1` of that result.
@@ -461,12 +481,20 @@ impl<'a> Engine<'a> {
         // Without a parse tree nothing degrades and nothing is nulled by a join, which is
         // wrong in the unsafe direction, so a statement libpg_query cannot read keeps every
         // column nullable.
-        let degraded = match parsed {
-            Some(p) => (p.has_repeated_table && !p.nullable_tables.is_empty()) || p.has_set_op || p.has_grouping_sets,
+        let hidden = match parsed {
+            Some(p) => (p.has_repeated_table && !p.nullable_tables.is_empty()) || p.has_grouping_sets,
             None => true,
         };
+        // A set operation anywhere: provenance names the leftmost arm's column, which says
+        // nothing about the other arms. The statement's own columns stay nullable; a column read
+        // from a WITH query is settled from that query's own probe, whose arms are combined.
+        let degraded = hidden || parsed.is_some_and(|p| p.has_set_op);
+        // A column read straight from a WITH query is as nullable as that query's own result
+        // says, whatever the catalog says of the table column behind it.
+        let with_columns = if hidden { Some(Vec::new()) } else { self.with_columns(sql, raw.columns.len(), trust) };
+        let Some(with_columns) = with_columns else { return None };
         let registry = self.registry.borrow();
-        let columns = raw
+        let columns: Vec<DescribedColumn> = raw
             .columns
             .iter()
             .map(|col| {
@@ -482,7 +510,81 @@ impl<'a> Engine<'a> {
                 DescribedColumn { name: col.name.clone(), type_oid: col.oid, type_name: registry.name(col.oid), nullable }
             })
             .collect();
+        let columns = columns
+            .into_iter()
+            .enumerate()
+            .map(|(i, col)| match with_columns.get(i) {
+                Some(Some((query, nullable))) => DescribedColumn { nullable: *nullable || nullable_tables.iter().any(|t| t == query), ..col },
+                _ => col,
+            })
+            .collect();
         Some(DescribedStatement { param_oids: raw.params.clone(), columns })
+    }
+
+    /// Per result column of `sql` that is a bare reference to a column of one of its WITH
+    /// queries: that query's name, and whether its own settled result has the column nullable.
+    ///
+    /// A recursive WITH query reads itself, so its columns' nullability is a fixed point, and
+    /// the greatest one is sound. Every column starts as non-null for the reads the query makes
+    /// of itself; the query is settled under that assumption; a column that comes out nullable
+    /// all the same joins the assumption as nullable, and the query is settled again, until
+    /// nothing changes. What survives holds by induction over the iterations: the rows of the
+    /// non-recursive arm are non-null on their own account, each later row is non-null given
+    /// the rows it was computed from, and a UNION is non-null only where both arms are.
+    fn with_columns(&self, sql: &str, count: usize, trust: &Trust) -> Lazy<Vec<Option<(String, bool)>>> {
+        let Some((reads, queries)) = infer::with_reads(sql) else { return Some(Vec::new()) };
+        if reads.len() != count {
+            return Some(Vec::new());
+        }
+        let mut settled: HashMap<String, Vec<(String, bool)>> = HashMap::new();
+        let mut pending = false;
+        for (name, query) in &queries {
+            // The query reading itself: the answer is the assumption it is being settled under.
+            if let Some(entry) = self.with_stack.borrow_mut().iter_mut().find(|(text, _, _)| *text == query.sql) {
+                entry.2 = true;
+                let assumed = &entry.1;
+                settled.insert(name.clone(), reads.iter().flatten().filter(|r| &r.query == name).map(|r| (r.column.clone(), assumed.contains(&r.column))).collect());
+                continue;
+            }
+            let mut assumed: HashSet<String> = HashSet::new();
+            loop {
+                self.with_stack.borrow_mut().push((query.sql.clone(), assumed.clone(), false));
+                let outcome = self.probe(&query.sql, trust);
+                let (_, _, read_itself) = self.with_stack.borrow_mut().pop().expect("the entry pushed above");
+                let described = match outcome {
+                    Some(Some(described)) => described,
+                    // A WITH query the server will not describe alone proves nothing.
+                    Some(None) => break,
+                    None => {
+                        pending = true;
+                        break;
+                    }
+                };
+                let columns: Vec<(String, bool)> = described.columns.iter().enumerate().map(|(i, c)| (query.columns.get(i).cloned().unwrap_or_else(|| c.name.clone()), c.nullable)).collect();
+                let refuted: Vec<String> = columns.iter().filter(|(n, nullable)| *nullable && !assumed.contains(n)).map(|(n, _)| n.clone()).collect();
+                if !read_itself || refuted.is_empty() {
+                    settled.insert(name.clone(), columns);
+                    break;
+                }
+                assumed.extend(refuted);
+            }
+        }
+        if pending {
+            return None;
+        }
+        Some(
+            reads
+                .into_iter()
+                .map(|read| {
+                    let read = read?;
+                    let mut named = settled.get(&read.query)?.iter().filter(|(n, _)| *n == read.column);
+                    match (named.next(), named.next()) {
+                        (Some((_, nullable)), None) => Some((read.query, *nullable)),
+                        _ => None,
+                    }
+                })
+                .collect(),
+        )
     }
 
     /// Settle what the describe left open about expression columns from the SQL itself. A column
@@ -530,10 +632,24 @@ impl<'a> Engine<'a> {
     /// Describe a synthesized statement the way the main one is described, refinement included.
     /// `Some(None)` is a probe the database refused, which proves nothing.
     fn probe(&self, sql: &str, trust: &Trust) -> Lazy<Option<DescribedStatement>> {
-        if self.budget.get() == 0 {
+        if self.probing.borrow().iter().any(|p| p == sql) || self.probe_calls.get() >= MAX_PROBE_CALLS {
             return Some(None);
         }
-        self.budget.set(self.budget.get() - 1);
+        self.probe_calls.set(self.probe_calls.get() + 1);
+        if !self.probed.borrow().contains(sql) {
+            if self.budget.get() == 0 {
+                return Some(None);
+            }
+            self.budget.set(self.budget.get() - 1);
+            self.probed.borrow_mut().insert(sql.to_string());
+        }
+        self.probing.borrow_mut().push(sql.to_string());
+        let outcome = self.probe_inner(sql, trust);
+        self.probing.borrow_mut().pop();
+        outcome
+    }
+
+    fn probe_inner(&self, sql: &str, trust: &Trust) -> Lazy<Option<DescribedStatement>> {
         let pinned = self.pin(sql);
         let raw = self.host.describe(&pinned)?;
         let Ok(raw) = raw else { return Some(None) };
@@ -541,7 +657,7 @@ impl<'a> Engine<'a> {
         let mut oids: Vec<u32> = raw.columns.iter().map(|c| c.oid).collect();
         oids.extend(raw.params.iter().copied());
         let types = self.types(&oids);
-        let settled = self.settle(&raw, parsed.as_ref(), trust);
+        let settled = self.settle(sql, &raw, parsed.as_ref(), trust);
         let (Some(()), Some(mut described)) = (types, settled) else { return None };
         self.refine(sql, &mut described, trust)?;
         Some(Some(described))
@@ -632,4 +748,72 @@ fn db_diagnostic(sql: &str, rewritten: &Rewritten, e: &DbError) -> Diagnostic {
         None => e.message.clone(),
     };
     diag(message, start, length, 6)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::{Answer, RawColumn, RawDescribe};
+
+    /// A server that describes every statement as one text column per target and answers every
+    /// catalog query with no rows: enough for the replay to run to its end.
+    /// How many result columns the top statement's own target list names (the leftmost arm's
+    /// for a set operation), which is what the fake describer reports.
+    fn target_count(sql: &str) -> usize {
+        fn arm(s: &pg_query::protobuf::SelectStmt) -> usize {
+            match s.larg.as_deref() {
+                Some(left) => arm(left),
+                None => s.target_list.len(),
+            }
+        }
+        let parsed = pg_query::parse(sql).expect("the probe parses");
+        match parsed.protobuf.stmts.first().and_then(|s| s.stmt.as_deref()).and_then(|n| n.node.as_ref()) {
+            Some(pg_query::NodeEnum::SelectStmt(s)) => arm(s).max(1),
+            _ => 1,
+        }
+    }
+
+    fn replay(sql: &str) -> Analysis {
+        let mut answers: HashMap<String, Answer> = HashMap::new();
+        for _ in 0..64 {
+            let host = Host::new(&answers);
+            if let Some(analysis) = analyze(sql, Dialect::Postgres, &host) {
+                return analysis;
+            }
+            let needs = host.needs();
+            assert!(!needs.is_empty(), "no answer and no need");
+            for need in needs {
+                match need {
+                    crate::api::Need::Describe { id, sql } => {
+                        let columns = (0..target_count(&sql)).map(|i| RawColumn { name: format!("c{i}"), oid: 25, table: 0, attnum: 0 }).collect();
+                        answers.insert(id, Answer::Describe { describe: RawDescribe { params: vec![], columns } });
+                    }
+                    crate::api::Need::Query { id, .. } => {
+                        answers.insert(id, Answer::Rows { rows: vec![] });
+                    }
+                }
+            }
+        }
+        panic!("the replay did not converge");
+    }
+
+    #[test]
+    fn a_probe_that_reads_as_its_own_leaf_ends() {
+        // `u` is a whole-row leaf, and in its leaf probe `SELECT u AS a0 FROM users u` it is one
+        // again: without a guard the probe would probe itself without end.
+        let analysis = replay("SELECT u AS whole FROM users u");
+        assert_eq!(analysis.columns.len(), 1);
+    }
+
+    #[test]
+    fn a_recursive_with_query_is_settled_from_its_own_arms() {
+        // The UNION ALL sits inside the WITH query, so the statement's provenance is not to be
+        // trusted, but the column read from the query takes what the query's own probe proves:
+        // `1` is never null, and `n + 1` is not once `n < 5` holds.
+        let seq = replay("WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 5) SELECT n FROM seq");
+        assert_eq!(seq.columns.iter().map(|c| c.nullable).collect::<Vec<_>>(), vec![false]);
+        // `b` starts NULL and `a` takes it over: the fixed point proves neither.
+        let pair = replay("WITH RECURSIVE pair(a, b) AS (SELECT 1, NULL::int UNION ALL SELECT b, b FROM pair WHERE a < 3) SELECT a, b FROM pair");
+        assert_eq!(pair.columns.iter().map(|c| c.nullable).collect::<Vec<_>>(), vec![true, true]);
+    }
 }
