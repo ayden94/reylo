@@ -12,7 +12,11 @@ Status: pre-alpha. Design notes and experiments live in this repository while th
 
 ## Repository
 
-Lando is the root of this repository. [`anti/`](./anti) is Anti, a web framework where the backend is a directory of SQL files, imported with its history on 2026-09-19 so the two projects share one SQL analysis engine (`engine/`, a Cargo workspace member with `anti/engine/`). [`AGENTS.md`](./AGENTS.md) describes the layout and the build gates of both; [`DESIGN.md`](./DESIGN.md) §20 records how the two implementations are being unified.
+Lando is the root of this repository. [`anti/`](./anti) is Anti, a web framework where the backend is a directory of SQL files, imported with its history on 2026-09-19 so the two projects share one SQL analysis engine (`engine/`, a Cargo workspace member with `anti/engine/` and `pg-extension/`). [`AGENTS.md`](./AGENTS.md) describes the layout and the build gates of both; [`DESIGN.md`](./DESIGN.md) §20 records how the two implementations are being unified.
+
+## The Postgres extension
+
+[`pg-extension/`](./pg-extension) is `lando`, a Postgres extension that hosts the same analysis engine inside the server: `SELECT lando.analyze('select …')` returns the whole analysis (parameter and column types, nullability, nested JSON shapes, the row count) in one query, `lando.describe` is Parse/Describe as JSON, and `lando.relation`, `lando.function` and `lando.type` describe the catalog in the same type model, a view's NOT NULL columns included. It is optional. The mapper looks for it once per session; where it finds the same engine build it asks the server for the analysis, where it finds another build it sends each round of catalog reads as one query, and where there is no extension it works as before. A native extension needs the vendor's approval on Neon and Supabase; the [extension's README](./pg-extension/README.md) has the details and the build.
 
 ## Bundlers
 

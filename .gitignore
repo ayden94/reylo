@@ -28,3 +28,13 @@ lab/sqlite/lab.db*
 
 # Example projects: mapper cache and local env
 examples/**/.lando/
+
+# The Postgres extension's build outputs: the shim, its objects, and pg_regress's own files.
+pg-extension/*.so
+pg-extension/*.dylib
+pg-extension/src/*.o
+pg-extension/src/*.bc
+pg-extension/test/results/
+pg-extension/test/regression.diffs
+pg-extension/test/regression.out
+pg-extension/test/log/
