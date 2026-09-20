@@ -16,6 +16,15 @@ const wire: Record<string, string> = {
   uuid: "string", time: "string", timetz: "string", interval: "string",
   bytea: "Uint8Array",
   void: "void",
+  // Types no supported driver parses: the value arrives as the text Postgres prints.
+  money: "string", inet: "string", cidr: "string", macaddr: "string", macaddr8: "string", xml: "string",
+  bit: "string", varbit: "string", tsvector: "string", tsquery: "string", regclass: "string", regtype: "string",
+  int4range: "string", int8range: "string", numrange: "string", tsrange: "string", tstzrange: "string", daterange: "string",
+  int4multirange: "string", int8multirange: "string", nummultirange: "string", tsmultirange: "string", tstzmultirange: "string", datemultirange: "string",
+  hstore: "string", ltree: "string", lquery: "string", ltxtquery: "string",
+  // A row value (`row(...)`, a composite-typed column, a whole-row reference): no driver parses
+  // one, so it arrives as its text form, and so does an array of them.
+  record: "string",
 };
 const json: Record<string, string> = {
   ...wire,
@@ -43,12 +52,34 @@ export function renderType(t: EngineType, inJson = false, dialect: "postgres" | 
   switch (t.kind) {
     case "scalar": return dialect === "sqlite" ? sqlite[t.name] ?? "unknown" : inJson ? json[t.name] ?? "unknown" : scalarType(t.name, repr);
     case "enum": return t.labels.length ? t.labels.map((l) => JSON.stringify(l)).join(" | ") : "string";
-    case "array": { const inner = renderType(t.of, inJson, dialect, repr); return /[|&]/.test(inner) ? `(${inner})[]` : `${inner}[]`; }
+    case "array": {
+      if (t.of.kind === "scalar" && t.of.name === "record" && !inJson) return "string";
+      const inner = renderType(t.of, inJson, dialect, repr);
+      return /[|&]/.test(inner) ? `(${inner})[]` : `${inner}[]`;
+    }
     case "object": return t.fields.length ? `{ ${t.fields.map((f) => `${ident(f.name)}: ${renderType(f.type, true, dialect, repr)}${f.nullable ? " | null" : ""}`).join("; ")} }` : "Record<never, never>";
     case "list": { const inner = renderType(t.of, true, dialect, repr) + (t.nullable_items ? " | null" : ""); return /[|&]/.test(inner) ? `(${inner})[]` : `${inner}[]`; }
     case "json": return "unknown";
     case "unknown": return "unknown";
   }
+}
+
+/**
+ * The type a parameter accepts. The `dates` and `bigint` options describe what `execute` hands
+ * back, not what a driver takes: every Postgres and MySQL driver serializes a `Date` or an ISO
+ * string for a timestamp, and a number, a BigInt or a digit string for a 64-bit integer, so a
+ * value read back under any representation can be passed in again, and `limit :n` takes a number.
+ */
+export function renderParamType(t: EngineType, dialect: "postgres" | "sqlite" | "mysql" = "postgres", repr: Repr = defaultRepr): string {
+  if (t.kind === "scalar" && dialect !== "sqlite") {
+    if (t.name === "int8") return "number | bigint | string";
+    if (t.name in temporal) return "Date | string";
+  }
+  if (t.kind === "array") {
+    const inner = renderParamType(t.of, dialect, repr);
+    return /[|&]/.test(inner) ? `(${inner})[]` : `${inner}[]`;
+  }
+  return renderType(t, false, dialect, repr);
 }
 
 /** The runtime conversion a column's wire value needs, if any: a temporal scalar or int8, or an array of one. */

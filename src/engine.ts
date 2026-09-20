@@ -62,7 +62,7 @@ export interface EngineIo {
 }
 
 type Response =
-  | { status: "ok"; version: string }
+  | { status: "ok"; version: string; fingerprint: string }
   | { status: "lexed"; lexed: Lexed }
   | { status: "need"; needs: Need[] }
   | { status: "analysis"; analysis: Analysis }

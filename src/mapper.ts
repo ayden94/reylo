@@ -8,7 +8,7 @@ import { dirname, join, relative } from "node:path";
 import { serve } from "./rpc.ts";
 import { lexPlaceholders } from "./lex.ts";
 import { engine, AnswerCache } from "./engine.ts";
-import { conversion, defaultRepr, ident, renderType, type Conversion, type Repr } from "./render.ts";
+import { conversion, defaultRepr, ident, renderParamType, renderType, type Conversion, type Repr } from "./render.ts";
 import { openMysqlDescriber, type MysqlDescriber } from "./mysql-describe.ts";
 import { openPostgresDescriber, type Describer } from "./describe.ts";
 import { openSqliteDescriber, type SqliteDescriber } from "./sqlite-describe.ts";
@@ -185,7 +185,7 @@ serve({
       // The server types a `?` from its context (LONGLONG against an int column, VAR_STRING
       // against a varchar); `-- @param name type` overrides it and covers the ones it leaves untyped.
       const paramTypes = analysis.params.map((q) => {
-        const t = annotated.get(q.name) ?? (q.type.kind === "unknown" ? undefined : renderType(q.type, false, "mysql", project.repr));
+        const t = annotated.get(q.name) ?? (q.type.kind === "unknown" ? undefined : renderParamType(q.type, "mysql", project.repr));
         if (!t) {
           const at = placeholders.find((h) => h.name === q.name)!;
           diagnostics.push(diag(`MySQL could not type parameter "${q.name}"; add "-- @param ${q.name} <type>".`, at.start, at.end - at.start, 7));
@@ -265,7 +265,7 @@ serve({
       return emit("unknown", "unknown", inferred, analysis.rewritten.order);
     }
     const columns = analysis.columns.map((c) => `${ident(c.name)}: ${renderType(c.type, false, "postgres", project.repr)}${c.nullable ? " | null" : ""}`);
-    const paramTypes = analysis.params.map((q) => `${ident(q.name)}: ${renderType(q.type, false, "postgres", project.repr)}`);
+    const paramTypes = analysis.params.map((q) => `${ident(q.name)}: ${annotated.get(q.name) ?? renderParamType(q.type, "postgres", project.repr)}`);
     const convert: Record<string, Conversion> = {};
     for (const c of analysis.columns) { const cls = conversion(c.type); if (cls) convert[c.name] = cls; }
     writeCache({ cardinality: inferred, text: analysis.rewritten.sql, order: analysis.rewritten.order }, convert);
