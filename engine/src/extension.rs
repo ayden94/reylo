@@ -10,8 +10,11 @@
 //!   travel as one query, `SELECT lando.answer($1)`, which answers every one of them in the
 //!   server. Session-scoped needs stay as they are, so the host goes on caching them.
 //!
-//! Without the extension nothing changes. Finding out costs one session-scoped catalog read that
-//! joins the first round of the first statement, and the host keeps the answer.
+//! Without the extension nothing changes. Finding out costs the first statement of a session one
+//! round for a session-scoped catalog read, and a second for `lando.version()` where the
+//! extension exists; the host keeps both answers. The statement's own needs wait for that
+//! answer: asked in the same round, a statement that settles in one round would be done before
+//! the answer came, and the extension would never be used.
 //!
 //! Only [`crate::api::call`] goes through here. [`crate::postgres::analyze`] never does, because
 //! the extension itself calls it, and an engine in the server that asked the server's engine
@@ -30,7 +33,9 @@ use std::collections::HashMap;
 pub const PROBE_QUERY: &str = "SELECT extversion::text FROM pg_extension WHERE extname = 'lando'";
 pub const VERSION_QUERY: &str = "SELECT lando.version()";
 pub const ANALYZE_QUERY: &str = "SELECT lando.analyze($1::text)";
-pub const ANSWER_QUERY: &str = "SELECT lando.answer($1::jsonb)";
+/// The needs travel as text that the server casts: a parameter described as `jsonb` makes a
+/// driver JSON-encode the string it is handed, and a JSON string is not the array.
+pub const ANSWER_QUERY: &str = "SELECT lando.answer($1::text::jsonb)";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Server {
@@ -108,7 +113,8 @@ pub fn bundle(needs: Vec<Need>) -> Vec<Need> {
         outside.extend(inside);
         return outside;
     }
-    // As JSON text, not as a JSON array: a driver would send an array as a Postgres array.
+    // As JSON text, not as a JSON array: a driver would send an array as a Postgres array, and
+    // the query casts from text so no driver JSON-encodes the text either.
     let params = vec![Value::String(serde_json::to_string(&inside).expect("needs serialize"))];
     let id = format!("query:{ANSWER_QUERY}|{}", serde_json::to_string(&params).unwrap_or_default());
     outside.push(Need::Query { id, sql: ANSWER_QUERY.to_string(), params, scope: Scope::Statement });

@@ -175,8 +175,12 @@ pub enum Response {
 fn analyze(sql: &str, dialect: Dialect, answers: &HashMap<String, Answer>) -> Response {
     use crate::extension::{self, Server};
     let host = crate::host::Host::new(answers);
+    // What the server offers is settled before the statement asks for anything: were the
+    // statement's own needs asked in the same round, a statement that settles in one round would
+    // be done before the answer came, and the extension would never be used.
     let server = if dialect == Dialect::Postgres { extension::server(&host) } else { Some(Server::Absent) };
-    if server == Some(Server::Same) {
+    let Some(server) = server else { return Response::Need { needs: host.needs() } };
+    if server == Server::Same {
         match extension::analyze(sql, &host) {
             Some(Some(analysis)) => return Response::Analysis { analysis },
             Some(None) => {}
@@ -187,7 +191,7 @@ fn analyze(sql: &str, dialect: Dialect, answers: &HashMap<String, Answer>) -> Re
         Some(analysis) => Response::Analysis { analysis },
         None => {
             let needs = host.needs();
-            let bundled = matches!(server, Some(Server::Same) | Some(Server::Other { answers: true })) && !extension::bundle_failed(&needs, answers);
+            let bundled = matches!(server, Server::Same | Server::Other { answers: true }) && !extension::bundle_failed(&needs, answers);
             Response::Need { needs: if bundled { extension::bundle(needs) } else { needs } }
         }
     }
@@ -207,4 +211,40 @@ pub fn call(request: &str) -> String {
         Err(e) => Response::Error { message: format!("bad request: {e}") },
     };
     serde_json::to_string(&response).expect("response serializes")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::extension::{ANALYZE_QUERY, PROBE_QUERY, VERSION_QUERY};
+    use serde_json::json;
+
+    fn need_ids(response: &Response) -> Vec<String> {
+        match response {
+            Response::Need { needs } => needs.iter().map(|n| match n {
+                Need::Describe { id, .. } | Need::Query { id, .. } => id.clone(),
+            }).collect(),
+            _ => panic!("a round of needs"),
+        }
+    }
+
+    #[test]
+    fn the_server_is_settled_before_the_statement_asks_for_anything() {
+        let sql = "select 1";
+        let mut answers: HashMap<String, Answer> = HashMap::new();
+        // The first round of a session is the probe alone.
+        assert_eq!(need_ids(&analyze(sql, Dialect::Postgres, &answers)), vec![format!("query:{PROBE_QUERY}|[]")]);
+        // Without the extension, the statement's own needs follow, unbundled.
+        answers.insert(format!("query:{PROBE_QUERY}|[]"), Answer::Rows { rows: vec![] });
+        let ids = need_ids(&analyze(sql, Dialect::Postgres, &answers));
+        assert!(ids.iter().any(|id| id == &format!("describe:{sql}")), "{ids:?}");
+        assert!(ids.iter().all(|id| !id.contains("lando.")), "{ids:?}");
+        // With the same build inside the server, the statement is one query.
+        answers.insert(format!("query:{PROBE_QUERY}|[]"), Answer::Rows { rows: vec![vec![json!("0.1.0")]] });
+        assert_eq!(need_ids(&analyze(sql, Dialect::Postgres, &answers)), vec![format!("query:{VERSION_QUERY}|[]")]);
+        answers.insert(format!("query:{VERSION_QUERY}|[]"), Answer::Rows { rows: vec![vec![json!({ "fingerprint": crate::FINGERPRINT })]] });
+        let ids = need_ids(&analyze(sql, Dialect::Postgres, &answers));
+        assert_eq!(ids.len(), 1);
+        assert!(ids[0].starts_with(&format!("query:{ANALYZE_QUERY}|")), "{ids:?}");
+    }
 }
