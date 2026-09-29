@@ -1,16 +1,20 @@
 //! Placeholders and directives, read off the raw statement text.
 //!
 //! Lando lets a statement name its parameters in any dialect: `:name`, `$name` and `@name` are
-//! named placeholders, `$1` and `?` positional ones, and one statement uses one style. The engine
-//! rewrites them to whatever the database binds by position (`$n` on Postgres, `?` on MySQL) and
-//! keeps a map back to the author's text, so a server error at a rewritten position lands on the
-//! right characters of the `.sql` file.
+//! named placeholders, `$1`, `?` and `?1` positional ones, and one statement uses one style. A
+//! name may be dotted (`:auth.user_id`): each `.segment` starts like a name, so `arr[1:2]` and
+//! `:t.*` end where they should. The engine rewrites placeholders to whatever the database binds
+//! by position (`$n` on Postgres, `?` on MySQL, `?n` for the SQLite prepare, where SQLite's own
+//! `:name` would end at the first dot) and keeps a map back to the author's text, so a server
+//! error at a rewritten position lands on the right characters of the `.sql` file.
 //!
 //! The pass knows what the parser knows about text: single-quoted literals (with `''`), `E''`
 //! escape strings (with backslashes), dollar quoting, double-quoted identifiers, line comments,
 //! nested block comments, and `::` casts. Two readings are per dialect: `?` is a placeholder
 //! everywhere but Postgres, where it is the `jsonb ? text` operator; `$n` is positional
-//! everywhere, and a Postgres `$tag$…$tag$` string is read before a `$name` parameter is.
+//! everywhere, and a Postgres `$tag$…$tag$` string is read before a `$name` parameter is. The
+//! spans it skipped as text are returned as [`Lexed::opaque`], so a caller that looks for its own
+//! construct in the statement does not need a scanner of its own.
 //!
 //! Directives are `-- @name value` line comments; the engine collects them and the caller
 //! decides what each means.
@@ -21,8 +25,9 @@ use serde::Serialize;
 /// One placeholder occurrence, by byte offsets in the original text.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Placeholder {
-    /// The parameter name: the author's for a named placeholder, `$n` for a numbered one, and
-    /// `?k` for the k-th `?`.
+    /// The parameter name: the author's for a named placeholder (dots included), `$n` for a
+    /// numbered one (`$3` and SQLite's `?3` alike, so both name one position), and `?k` for the
+    /// k-th bare `?`.
     pub name: String,
     pub start: usize,
     pub end: usize,
@@ -53,6 +58,10 @@ pub struct Lexed {
     pub placeholders: Vec<Placeholder>,
     pub directives: Vec<Directive>,
     pub style: Style,
+    /// Every span the walk read as text rather than code, `(start, end)` in byte offsets, in
+    /// source order and never overlapping: string literals (an `E''` string from its `E`), dollar
+    /// quotes, quoted identifiers, line comments (up to their newline) and block comments.
+    pub opaque: Vec<(usize, usize)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -61,6 +70,14 @@ pub struct LexError {
     pub offset: usize,
 }
 
+impl std::fmt::Display for LexError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} (at byte {})", self.message, self.offset)
+    }
+}
+
+impl std::error::Error for LexError {}
+
 /// The placeholder syntax a rewrite emits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Target {
@@ -68,13 +85,17 @@ pub enum Target {
     Dollar,
     /// `?`, one per occurrence, in text order; the binding order repeats a name where it repeats.
     Question,
+    /// `?n`, numbered by binding order (the parameter's 1-based index in [`Lexed::params`]), so a
+    /// repeated name is one position. Unlike [`Target::Dollar`], an author's `$3` is renumbered
+    /// too: the binding order is `params` either way, and SQLite reads `?n` as position `n`.
+    Numbered,
 }
 
 /// A rewritten statement plus the map back to the author's text.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Rewritten {
     pub sql: String,
-    /// The binding order: for `?` one entry per occurrence, for `$n` one per distinct name.
+    /// The binding order: for `?` one entry per occurrence, for `$n` and `?n` one per distinct name.
     pub order: Vec<String>,
     /// Per placeholder in text order: `(original start, original end, rewritten start, rewritten end)`.
     pub spans: Vec<(usize, usize, usize, usize)>,
@@ -117,6 +138,24 @@ fn name_end(b: &[u8], start: usize) -> usize {
     j
 }
 
+/// A placeholder name from `start`: a name, then any `.segment` that starts like one
+/// (`:auth.user_id`). `:t.*` stops before the dot.
+fn dotted_name_end(b: &[u8], start: usize) -> usize {
+    let mut j = name_end(b, start);
+    while b.get(j) == Some(&b'.') && b.get(j + 1).is_some_and(|c| is_name_start(*c)) {
+        j = name_end(b, j + 1);
+    }
+    j
+}
+
+fn digits_end(b: &[u8], start: usize) -> usize {
+    let mut j = start;
+    while j < b.len() && b[j].is_ascii_digit() {
+        j += 1;
+    }
+    j
+}
+
 /// `$tag$` at `i`: the offset one past its closing `$`, when `i` starts a dollar-quote opener.
 fn dollar_tag_end(b: &[u8], i: usize) -> Option<usize> {
     if b.get(i) != Some(&b'$') {
@@ -142,6 +181,7 @@ pub fn lex(sql: &str, dialect: Dialect) -> Result<Lexed, LexError> {
     let mut params: Vec<String> = Vec::new();
     let mut placeholders: Vec<Placeholder> = Vec::new();
     let mut directives: Vec<Directive> = Vec::new();
+    let mut opaque: Vec<(usize, usize)> = Vec::new();
     let mut questions = 0usize;
     let mut push = |name: String, start: usize, end: usize, params: &mut Vec<String>| {
         if !params.contains(&name) {
@@ -153,6 +193,7 @@ pub fn lex(sql: &str, dialect: Dialect) -> Result<Lexed, LexError> {
         let c = b[i];
         match c {
             b'\'' => {
+                let start = i;
                 i += 1;
                 loop {
                     match b.get(i) {
@@ -165,8 +206,10 @@ pub fn lex(sql: &str, dialect: Dialect) -> Result<Lexed, LexError> {
                         Some(_) => i += 1,
                     }
                 }
+                opaque.push((start, i));
             }
             b'E' | b'e' if b.get(i + 1) == Some(&b'\'') && !prev_is_name_char(b, i) => {
+                let start = i;
                 i += 2;
                 loop {
                     match b.get(i) {
@@ -180,9 +223,11 @@ pub fn lex(sql: &str, dialect: Dialect) -> Result<Lexed, LexError> {
                         Some(_) => i += 1,
                     }
                 }
+                opaque.push((start, i));
             }
             b'"' | b'`' => {
                 let quote = c;
+                let start = i;
                 i += 1;
                 loop {
                     match b.get(i) {
@@ -195,12 +240,14 @@ pub fn lex(sql: &str, dialect: Dialect) -> Result<Lexed, LexError> {
                         Some(_) => i += 1,
                     }
                 }
+                opaque.push((start, i));
             }
             b'-' if b.get(i + 1) == Some(&b'-') => {
                 let start = i;
                 while i < b.len() && b[i] != b'\n' {
                     i += 1;
                 }
+                opaque.push((start, i));
                 let text = sql[start + 2..i].trim();
                 if let Some(rest) = text.strip_prefix('@') {
                     let name_len = rest.bytes().take_while(|c| is_name_char(*c)).count();
@@ -215,6 +262,7 @@ pub fn lex(sql: &str, dialect: Dialect) -> Result<Lexed, LexError> {
                 }
             }
             b'/' if b.get(i + 1) == Some(&b'*') => {
+                let start = i;
                 let mut depth = 1usize;
                 i += 2;
                 while depth > 0 {
@@ -231,6 +279,7 @@ pub fn lex(sql: &str, dialect: Dialect) -> Result<Lexed, LexError> {
                         (None, _) => return Err(LexError { message: "unterminated block comment".into(), offset: i }),
                     }
                 }
+                opaque.push((start, i));
             }
             b':' => {
                 if b.get(i + 1) == Some(&b':') {
@@ -243,7 +292,7 @@ pub fn lex(sql: &str, dialect: Dialect) -> Result<Lexed, LexError> {
                 }
                 match b.get(i + 1) {
                     Some(&n) if is_name_start(n) && !prev_is_name_char(b, i) => {
-                        let end = name_end(b, i + 1);
+                        let end = dotted_name_end(b, i + 1);
                         push(sql[i + 1..end].to_string(), i, end, &mut params);
                         i = end;
                     }
@@ -256,6 +305,7 @@ pub fn lex(sql: &str, dialect: Dialect) -> Result<Lexed, LexError> {
                         let tag = &b[i..tag_end];
                         match find_bytes(b, tag, tag_end) {
                             Some(close) => {
+                                opaque.push((i, close + tag.len()));
                                 i = close + tag.len();
                                 continue;
                             }
@@ -270,15 +320,12 @@ pub fn lex(sql: &str, dialect: Dialect) -> Result<Lexed, LexError> {
                 }
                 match b.get(i + 1) {
                     Some(&n) if is_name_start(n) => {
-                        let end = name_end(b, i + 1);
+                        let end = dotted_name_end(b, i + 1);
                         push(sql[i + 1..end].to_string(), i, end, &mut params);
                         i = end;
                     }
                     Some(&n) if n.is_ascii_digit() => {
-                        let mut end = i + 1;
-                        while end < b.len() && b[end].is_ascii_digit() {
-                            end += 1;
-                        }
+                        let end = digits_end(b, i + 1);
                         push(sql[i..end].to_string(), i, end, &mut params);
                         i = end;
                     }
@@ -287,16 +334,23 @@ pub fn lex(sql: &str, dialect: Dialect) -> Result<Lexed, LexError> {
             }
             b'@' => match b.get(i + 1) {
                 Some(&n) if is_name_start(n) && !prev_is_name_char(b, i) => {
-                    let end = name_end(b, i + 1);
+                    let end = dotted_name_end(b, i + 1);
                     push(sql[i + 1..end].to_string(), i, end, &mut params);
                     i = end;
                 }
                 _ => i += 1,
             },
             b'?' if dialect != Dialect::Postgres => {
-                questions += 1;
-                push(format!("?{questions}"), i, i + 1, &mut params);
-                i += 1;
+                if b.get(i + 1).is_some_and(u8::is_ascii_digit) {
+                    // SQLite's `?NNN` names position NNN, as `$NNN` does, so it takes that name.
+                    let end = digits_end(b, i + 1);
+                    push(format!("${}", &sql[i + 1..end]), i, end, &mut params);
+                    i = end;
+                } else {
+                    questions += 1;
+                    push(format!("?{questions}"), i, i + 1, &mut params);
+                    i += 1;
+                }
             }
             _ => i += 1,
         }
@@ -308,7 +362,7 @@ pub fn lex(sql: &str, dialect: Dialect) -> Result<Lexed, LexError> {
         (p, n) if p == n => Style::Positional,
         _ => Style::Mixed,
     };
-    Ok(Lexed { params, placeholders, directives, style })
+    Ok(Lexed { params, placeholders, directives, style, opaque })
 }
 
 /// Whether a parameter name is one the lexer minted for a positional placeholder.
@@ -338,6 +392,7 @@ pub fn rewrite_with(sql: &str, lexed: &Lexed, target: Target, decorate: &dyn Fn(
                 }
             }
             Target::Question => "?".to_string(),
+            Target::Numbered => format!("?{}", lexed.params.iter().position(|q| q == &p.name).map_or(0, |i| i + 1)),
         };
         let rendered = decorate(&p.name, &rendered);
         out.push_str(&sql[last..p.start]);
@@ -350,7 +405,7 @@ pub fn rewrite_with(sql: &str, lexed: &Lexed, target: Target, decorate: &dyn Fn(
         }
     }
     out.push_str(&sql[last..]);
-    if target == Target::Dollar {
+    if target != Target::Question {
         order = lexed.params.clone();
     }
     Rewritten { sql: out, order, spans }
@@ -410,5 +465,75 @@ mod tests {
         assert!(lex("select 'abc", Dialect::Postgres).is_err());
         assert!(lex("select $x$abc", Dialect::Postgres).is_err());
         assert!(lex("select /* a", Dialect::Postgres).is_err());
+        assert_eq!(lex("select 'abc", Dialect::Postgres).unwrap_err().to_string(), "unterminated string literal (at byte 11)");
+    }
+
+    #[test]
+    fn dotted_names() {
+        let sql = "select :a.b";
+        let l = lex(sql, Dialect::Postgres).unwrap();
+        assert_eq!(l.params, ["a.b"]);
+        assert_eq!(l.placeholders, [Placeholder { name: "a.b".into(), start: 7, end: 11 }]);
+        assert_eq!(l.style, Style::Named);
+        assert_eq!(rewrite(sql, &l, Target::Dollar).sql, "select $1");
+        assert_eq!(rewrite(sql, &l, Target::Numbered).sql, "select ?1");
+        assert_eq!(rewrite(sql, &l, Target::Question).sql, "select ?");
+        // Every segment starts like a name; the named forms agree; a cast after one is a cast.
+        assert_eq!(names("select :auth.user_id, :org.name::text, :t.*, :x.1", Dialect::Postgres), ["auth.user_id", "org.name", "t", "x"]);
+        assert_eq!(names("select $a.b, @c.d from t", Dialect::Sqlite), ["a.b", "c.d"]);
+        // A dotted name survives the SQLite prepare only through the rewrite, and maps back.
+        let sql = "select :a.b, :c";
+        let l = lex(sql, Dialect::Sqlite).unwrap();
+        let r = rewrite(sql, &l, Target::Numbered);
+        assert_eq!(r.sql, "select ?1, ?2");
+        assert_eq!(r.to_original(r.sql.find("?2").unwrap()), sql.find(":c").unwrap());
+        assert_eq!(r.to_original(r.sql.len()), sql.len());
+    }
+
+    #[test]
+    fn numbered_question_is_a_position() {
+        let l = lex("select ?3, $3", Dialect::Sqlite).unwrap();
+        assert_eq!(l.params, ["$3"]);
+        assert_eq!(l.placeholders.iter().map(|p| (p.start, p.end)).collect::<Vec<_>>(), [(7, 9), (11, 13)]);
+        assert_eq!(l.style, Style::Positional);
+        assert_eq!(lex("select ?3, :x", Dialect::Sqlite).unwrap().style, Style::Mixed);
+        // On Postgres `?` is still the operator, digits or not.
+        assert!(lex("select j ? 'k', 1 ?2", Dialect::Postgres).unwrap().params.is_empty());
+    }
+
+    #[test]
+    fn array_slices_are_not_placeholders() {
+        for d in [Dialect::Postgres, Dialect::Sqlite, Dialect::Mysql] {
+            assert!(lex("select arr[1:2], arr[2:], arr[1:2].x from t", d).unwrap().params.is_empty());
+        }
+    }
+
+    #[test]
+    fn opaque_spans() {
+        let sql = "select 'a''b', \"q\"\"r\", $t$ :x $t$, e'\\'' -- c :y\n/* d /* :z */ */ :w";
+        let l = lex(sql, Dialect::Postgres).unwrap();
+        assert_eq!(l.params, ["w"]);
+        assert_eq!(l.opaque, [(7, 13), (15, 21), (23, 33), (35, 40), (41, 48), (49, 65)]);
+        let text: Vec<&str> = l.opaque.iter().map(|&(s, e)| &sql[s..e]).collect();
+        assert_eq!(text, ["'a''b'", "\"q\"\"r\"", "$t$ :x $t$", "e'\\''", "-- c :y", "/* d /* :z */ */"]);
+        // A directive is a line comment like any other; code between the spans is not listed.
+        let l = lex("-- @returns one\nselect `a`, 1", Dialect::Mysql).unwrap();
+        assert_eq!(l.opaque, [(0, 15), (23, 26)]);
+    }
+
+    #[test]
+    fn numbered_target() {
+        let sql = "select :a, :b, :a";
+        let l = lex(sql, Dialect::Sqlite).unwrap();
+        let r = rewrite(sql, &l, Target::Numbered);
+        assert_eq!(r.sql, "select ?1, ?2, ?1");
+        assert_eq!(r.order, ["a", "b"]);
+        assert_eq!(r.spans, [(7, 9, 7, 9), (11, 13, 11, 13), (15, 17, 15, 17)]);
+        // An author's numbering is renumbered by binding order: `?n` binds `params[n - 1]`.
+        let sql = "select $2, ?1, $2";
+        let l = lex(sql, Dialect::Sqlite).unwrap();
+        let r = rewrite(sql, &l, Target::Numbered);
+        assert_eq!(r.sql, "select ?1, ?2, ?1");
+        assert_eq!(r.order, ["$2", "$1"]);
     }
 }

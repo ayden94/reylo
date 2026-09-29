@@ -23,13 +23,17 @@ pub fn analyze(sql: &str, lexed: &Lexed, host: &Host) -> Lazy<Analysis> {
         Ok(rows) => rows.iter().filter_map(|r| r.first().and_then(as_str)).map(String::from).collect(),
         Err(e) => return Some(crate::postgres::bare(sql, lexed, Dialect::Sqlite, vec![diag(format!("Cannot read the schema: {}", e.message), 0, 1, 5)])),
     };
-    let t = match tree::analyze(&ddl, sql) {
+    // SQLite prepares the `?n` rewrite, not the author's text: its own `:name` ends at the first
+    // dot, so `:auth.user_id` survives only as a number. `?n` is the lexer's n-th parameter, which
+    // is how `params` matches them back, and an error offset maps back through the rewrite.
+    let numbered = lex::rewrite(sql, lexed, Target::Numbered);
+    let t = match tree::analyze(&ddl, &numbered.sql) {
         Ok(t) => t,
         Err(message) => return Some(crate::postgres::bare(sql, lexed, Dialect::Sqlite, vec![diag(message, 0, sql.trim_end().len(), 6)])),
     };
     let mut diagnostics = Vec::new();
     if let Some(err) = &t.error {
-        let start = usize::try_from(err.offset).unwrap_or(0).min(sql.len());
+        let start = usize::try_from(err.offset).map_or(0, |o| numbered.to_original(o)).min(sql.len());
         diagnostics.push(diag(err.message.clone(), start, if err.offset >= 0 { token_len(&sql[start..]) } else { sql.trim_end().len() }, 6));
         // A statement that fails against the replayed schema often fails because a replay step did.
         for e in &t.schema_errors {
@@ -375,14 +379,17 @@ impl Analyzer<'_> {
                 self.walk(&c.expr, Ctx::None, &Vec::new(), &mut found);
             }
         }
-        // The engine's names for the parameters, in the lexer's order: `:id` is `id`, `?` is `?1`.
+        // The tree was prepared over the `?n` rewrite (see `analyze`): SQLite's `?k` is the lexer's
+        // k-th parameter, whatever the author wrote.
         lexed
             .params
             .iter()
-            .map(|name| {
+            .enumerate()
+            .map(|(k, name)| {
+                let numbered = format!("?{}", k + 1);
                 let fact = found
                     .iter()
-                    .filter(|(n, _)| same_param(n, name))
+                    .filter(|(n, _)| *n == numbered)
                     .map(|(_, f)| f)
                     .find(|f| !matches!(f.ty, Type::Unknown))
                     .cloned()
@@ -750,12 +757,6 @@ pub fn affinity(declared: &str) -> &'static str {
     }
 }
 
-/// `:id`, `$id`, `@id` are the lexer's `id`; `?` and `?3` are its `?1`, `?3`.
-fn same_param(tree_name: &str, lexed_name: &str) -> bool {
-    let stripped = tree_name.trim_start_matches([':', '$', '@']);
-    stripped == lexed_name || tree_name == lexed_name
-}
-
 /// A parameter's context while walking.
 enum Ctx {
     Typed(Option<Fact>),
@@ -789,7 +790,7 @@ mod tests {
             crate::api::Answer::Rows { rows: tree("select 1").tables.keys().map(|_| Vec::new()).collect() },
         )]);
         let _ = answers;
-        let t = tree(sql);
+        let t = tree(&lex::rewrite(sql, &lexed, Target::Numbered).sql);
         let a = Analyzer { tree: &t };
         let (columns, kind) = a.columns();
         let params = a.params(&lexed);
@@ -865,6 +866,36 @@ mod tests {
         assert_eq!(analysis("insert into users (email, name) values (:e, :n)").cardinality, "none");
         assert_eq!(analysis("delete from users where id = :id returning id").cardinality, "maybeOne");
         assert_eq!(analysis("select id from users union all select user_id from posts").cardinality, "many");
+    }
+
+    /// The whole path, schema query included, as the host drives it.
+    fn analyzed(sql: &str) -> Analysis {
+        let ddl = [
+            "create table users (id integer primary key, name text not null, email text unique, score real, avatar blob, created_at text not null default current_timestamp)",
+        ];
+        let rows = ddl.iter().map(|d| vec![serde_json::Value::String(d.to_string())]).collect();
+        let answers = std::collections::HashMap::from([(format!("query:{DDL_QUERY}|[]"), crate::api::Answer::Rows { rows })]);
+        let host = Host::new(&answers);
+        analyze(sql, &lex::lex(sql, Dialect::Sqlite).unwrap(), &host).expect("the schema was answered")
+    }
+
+    #[test]
+    fn prepares_the_numbered_rewrite() {
+        // SQLite's own `:auth` would end at the dot; the rewrite keeps the whole name one parameter.
+        let a = analyzed("select name from users where email = :auth.email and id = :auth.id and score > :auth.email");
+        assert!(a.diagnostics.is_empty(), "{:?}", a.diagnostics);
+        assert_eq!(param(&a, "auth.email"), "text");
+        assert_eq!(param(&a, "auth.id"), "integer");
+        assert_eq!(a.rewritten.sql, "select name from users where email = ? and id = ? and score > ?");
+        assert_eq!(a.rewritten.order, ["auth.email", "auth.id", "auth.email"]);
+        // Positional forms: SQLite's `?3` is the lexer's `$3`, and a bare `?` its `?1`.
+        assert_eq!(param(&analyzed("select name from users where id = ?3"), "$3"), "integer");
+        assert_eq!(param(&analyzed("select name from users where email = ?"), "?1"), "text");
+        // An error SQLite reports in the rewrite lands on the author's text.
+        let sql = "select :auth.user_id, nope from users";
+        let a = analyzed(sql);
+        assert_eq!(a.diagnostics.len(), 1, "{:?}", a.diagnostics);
+        assert_eq!((a.diagnostics[0].start, a.diagnostics[0].length), (sql.find("nope").unwrap(), 4));
     }
 
     #[test]
