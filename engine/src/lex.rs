@@ -504,8 +504,20 @@ mod tests {
     #[test]
     fn array_slices_are_not_placeholders() {
         for d in [Dialect::Postgres, Dialect::Sqlite, Dialect::Mysql] {
-            assert!(lex("select arr[1:2], arr[2:], arr[1:2].x from t", d).unwrap().params.is_empty());
+            assert!(lex("select arr[1:2], arr[2:], arr[:3], arr[1:2].x, arr[lo:hi], arr[1:n] from t", d).unwrap().params.is_empty());
         }
+        // A colon after no name character still opens a name: `arr[:lo]` reads a parameter.
+        assert_eq!(names("select arr[:lo] from t", Dialect::Postgres), ["lo"]);
+    }
+
+    #[test]
+    fn colons_that_open_nothing() {
+        // `:{` and MySQL's `:=` open nothing; a quote doubled inside a string is one quote.
+        assert!(names("select '{}'::jsonb, :{a}", Dialect::Postgres).is_empty());
+        assert_eq!(names("select @x := 1", Dialect::Mysql), ["x"]);
+        assert_eq!(names("select 'it''s :not', :yes", Dialect::Postgres), ["yes"]);
+        // An upper-case `E''` string and a tagged dollar quote hide what is inside them.
+        assert_eq!(names("select E'\\':nope', $tag$ :nope $tag$, :real", Dialect::Postgres), ["real"]);
     }
 
     #[test]
