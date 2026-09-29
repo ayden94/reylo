@@ -17,7 +17,8 @@
 //! `||`, a function's return — and nothing is claimed for it.
 //!
 //! This module is pure: `plan` reads the parse tree and synthesizes statement text, `resolve`
-//! turns the describes of that text into JSON Schema. The build owns the round trips.
+//! turns the describes of that text into the column's `Type`. The build owns the round trips.
+//! The framework reads it too, and renders the `Type` to JSON Schema itself.
 
 use crate::pgtypes::{oid, TypeRegistry};
 use crate::types::{DescribedColumn, Field, Type};
@@ -322,7 +323,7 @@ impl Builder {
 }
 
 /// The target list, `FROM` context, and `WITH` clause the top statement's result columns live in.
-pub(crate) fn top_context(top: &NodeEnum) -> Option<(Vec<Node>, Vec<Node>, Option<protobuf::WithClause>)> {
+pub fn top_context(top: &NodeEnum) -> Option<(Vec<Node>, Vec<Node>, Option<protobuf::WithClause>)> {
     match top {
         NodeEnum::SelectStmt(s) => {
             // A set operation hides which arm produced a column; the build degrades there anyway.
@@ -537,7 +538,7 @@ fn display_path(path: &str) -> String {
 // Parse-tree helpers
 // ---------------------------------------------------------------------------------------------
 
-pub(crate) fn as_select(node: &Node) -> Option<&SelectStmt> {
+pub fn as_select(node: &Node) -> Option<&SelectStmt> {
     match node.node.as_ref()? {
         NodeEnum::SelectStmt(s) => Some(s),
         _ => None,
@@ -653,3 +654,302 @@ fn contains_param<T: serde::Serialize>(node: &T) -> bool {
     serde_json::to_value(node).is_ok_and(|v| hunt(&v))
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn shapes(sql: &str) -> Plan {
+        plan(sql)
+    }
+
+    #[test]
+    fn a_nested_aggregate_becomes_one_probe_over_the_subquery() {
+        let p = shapes(
+            "SELECT p.id, p.title,
+               (SELECT coalesce(jsonb_agg(jsonb_build_object('id', c.id, 'body', c.body) ORDER BY c.created_at), '[]'::jsonb)
+                FROM comments c WHERE c.post_id = p.id) AS comments
+             FROM posts p",
+        );
+        assert_eq!(p.probes.len(), 1);
+        assert_eq!(p.probes[0].sql, "SELECT c.id AS a0, c.body AS a1 FROM comments c");
+        assert_eq!(p.probes[0].wider.as_deref(), Some("SELECT c.id AS a0, c.body AS a1 FROM comments c, posts p"));
+        assert_eq!(p.columns.len(), 1);
+        let (name, shape) = &p.columns[0];
+        assert_eq!(name, "comments");
+        let Shape::Array { items, non_null } = shape else { panic!("{shape:?}") };
+        assert!(non_null, "coalesce(…, '[]') makes the array non-null");
+        assert_eq!(
+            **items,
+            Shape::Object {
+                fields: vec![
+                    ("id".into(), Shape::Column { probe: 0, index: 0 }),
+                    ("body".into(), Shape::Column { probe: 0, index: 1 }),
+                ],
+                non_null: true,
+            }
+        );
+    }
+
+    #[test]
+    fn a_bare_aggregate_stays_nullable() {
+        let p = shapes("SELECT (SELECT jsonb_agg(jsonb_build_object('id', c.id)) FROM comments c) AS cs FROM posts p");
+        let Shape::Array { non_null, .. } = &p.columns[0].1 else { panic!() };
+        assert!(!non_null);
+    }
+
+    #[test]
+    fn a_subquery_that_does_not_aggregate_is_nullable() {
+        // One row is not guaranteed, so the object can come back NULL even though the
+        // constructor itself never does.
+        let p = shapes("SELECT (SELECT jsonb_build_object('n', u.name) FROM users u WHERE u.id = p.author_id) AS author FROM posts p");
+        let Shape::Object { non_null, .. } = &p.columns[0].1 else { panic!("{:?}", p.columns) };
+        assert!(!non_null);
+        // A GROUP BY takes the single-row guarantee away from an aggregate too.
+        let g = shapes("SELECT (SELECT jsonb_agg(c.id) FROM comments c GROUP BY c.post_id) AS cs FROM posts p");
+        assert!(matches!(&g.columns[0].1, Shape::Array { non_null: false, .. }));
+        // So do a LIMIT or an OFFSET, which can skip the one row, and a window, which is no
+        // aggregate at all.
+        for sql in [
+            "SELECT (SELECT coalesce(jsonb_agg(c.id), '[]'::jsonb) FROM comments c LIMIT 0) AS cs FROM posts p",
+            "SELECT (SELECT coalesce(jsonb_agg(c.id), '[]'::jsonb) FROM comments c OFFSET 1) AS cs FROM posts p",
+            "SELECT (SELECT coalesce(jsonb_agg(c.id) OVER (), '[]'::jsonb) FROM comments c) AS cs FROM posts p",
+        ] {
+            assert!(matches!(&shapes(sql).columns[0].1, Shape::Array { non_null: false, .. }), "{sql}");
+        }
+    }
+
+    #[test]
+    fn a_top_level_object_is_non_null_and_probes_the_outer_from() {
+        let p = shapes("SELECT jsonb_build_object('id', p.id, 'name', u.name) AS post FROM posts p JOIN users u ON u.id = p.author_id");
+        assert_eq!(p.probes.len(), 1);
+        assert_eq!(p.probes[0].sql, "SELECT p.id AS a0, u.name AS a1 FROM posts p JOIN users u ON u.id = p.author_id");
+        assert_eq!(p.probes[0].wider, None);
+        assert!(matches!(&p.columns[0].1, Shape::Object { non_null: true, .. }));
+    }
+
+    #[test]
+    fn objects_nest_inside_objects_on_one_probe() {
+        let p = shapes("SELECT jsonb_build_object('id', p.id, 'author', jsonb_build_object('name', u.name)) AS post FROM posts p, users u");
+        assert_eq!(p.probes.len(), 1);
+        assert_eq!(p.probes[0].sql, "SELECT p.id AS a0, u.name AS a1 FROM posts p, users u");
+        let Shape::Object { fields, .. } = &p.columns[0].1 else { panic!() };
+        assert_eq!(fields[1].0, "author");
+        assert!(matches!(&fields[1].1, Shape::Object { non_null: true, .. }));
+    }
+
+    #[test]
+    fn an_aggregate_inside_an_object_gets_its_own_probe() {
+        let p = shapes(
+            "SELECT jsonb_build_object(
+               'id', p.id,
+               'comments', (SELECT coalesce(jsonb_agg(jsonb_build_object('body', c.body)), '[]'::jsonb) FROM comments c WHERE c.post_id = p.id)
+             ) AS post FROM posts p",
+        );
+        assert_eq!(p.probes.len(), 2);
+        assert_eq!(p.probes[0].sql, "SELECT p.id AS a0 FROM posts p");
+        assert_eq!(p.probes[1].sql, "SELECT c.body AS a0 FROM comments c");
+        let Shape::Object { fields, .. } = &p.columns[0].1 else { panic!() };
+        assert!(matches!(&fields[1].1, Shape::Array { non_null: true, .. }));
+    }
+
+    #[test]
+    fn a_whole_row_probes_the_star() {
+        let p = shapes("SELECT to_jsonb(u) AS author FROM users u");
+        assert_eq!(p.probes[0].sql, "SELECT u.* FROM users u");
+        assert_eq!(p.columns[0].1, Shape::Row { probe: 0 });
+        let r = shapes("SELECT row_to_json(u) AS author FROM users u");
+        assert_eq!(r.columns[0].1, Shape::Row { probe: 0 });
+    }
+
+    #[test]
+    fn returning_probes_the_written_relation() {
+        let p = shapes("INSERT INTO comments (body) VALUES ('x') RETURNING jsonb_build_object('id', id) AS created");
+        assert_eq!(p.probes[0].sql, "SELECT id AS a0 FROM comments");
+    }
+
+    #[test]
+    fn jsonb_the_build_cannot_explain_is_left_alone() {
+        // A stored column, a concatenation, and an unrecognised function are not shapes.
+        assert!(shapes("SELECT a.raw FROM addresses a").columns.is_empty());
+        assert!(shapes("SELECT a.raw || '{}'::jsonb AS merged FROM addresses a").columns.is_empty());
+        assert!(shapes("SELECT jsonb_path_query_array(a.raw, '$') AS x FROM addresses a").columns.is_empty());
+        // A non-literal key is not a shape either.
+        assert!(shapes("SELECT jsonb_build_object(t.title, t.id) AS x FROM todos t").columns.is_empty());
+        assert!(shapes("SELECT jsonb_build_object('a') AS x FROM todos t").columns.is_empty());
+    }
+
+    #[test]
+    fn a_placeholder_leaf_takes_the_statements_own_parameter_type() {
+        let p = shapes("SELECT jsonb_build_object('q', $1::text, 'id', t.id) AS x FROM todos t");
+        let Shape::Object { fields, .. } = &p.columns[0].1 else { panic!() };
+        assert_eq!(fields[0].1, Shape::Param(1));
+        assert_eq!(fields[1].1, Shape::Column { probe: 0, index: 0 });
+        assert_eq!(p.probes[0].sql, "SELECT t.id AS a0 FROM todos t");
+        // An expression merely containing one cannot go in a probe, which binds nothing.
+        let q = shapes("SELECT jsonb_build_object('q', 'x' || $1::text) AS x FROM todos t");
+        let Shape::Object { fields, .. } = &q.columns[0].1 else { panic!() };
+        assert_eq!(fields[0].1, Shape::Unknown);
+        assert!(q.probes.is_empty());
+    }
+
+    #[test]
+    fn a_cte_travels_with_the_probe_unless_it_binds() {
+        let p = shapes("WITH recent AS (SELECT id, body FROM comments) SELECT jsonb_build_object('b', r.body) AS x FROM recent r");
+        assert_eq!(p.probes[0].sql, "WITH recent AS (SELECT id, body FROM comments) SELECT r.body AS a0 FROM recent r");
+        let q = shapes("WITH input AS (SELECT $1::uuid AS id) SELECT jsonb_build_object('b', c.body) AS x FROM comments c, input i WHERE c.id = i.id");
+        assert_eq!(q.probes[0].sql, "SELECT c.body AS a0 FROM comments c, input i");
+    }
+
+    #[test]
+    fn a_set_operation_is_left_to_the_existing_degradation() {
+        assert!(shapes("SELECT jsonb_build_object('a', t.id) AS x FROM todos t UNION ALL SELECT jsonb_build_object('a', t.id) FROM todos t")
+            .columns
+            .is_empty());
+    }
+
+    #[test]
+    fn an_unaliased_constructor_takes_the_name_postgres_gives_it() {
+        assert_eq!(shapes("SELECT jsonb_build_object('a', t.id) FROM todos t").columns[0].0, "jsonb_build_object");
+        assert_eq!(
+            shapes("SELECT coalesce(jsonb_agg(t.id), '[]'::jsonb) FROM todos t").columns.first().map(|c| c.0.as_str()),
+            Some("coalesce")
+        );
+    }
+
+    #[test]
+    fn sibling_subqueries_get_a_probe_each() {
+        // Both sit one level down, but they select from different relations: pooling their
+        // value expressions onto one probe would type each against the other's `FROM`.
+        let p = shapes(
+            "SELECT jsonb_build_object(
+               'comments', (SELECT jsonb_agg(c.body) FROM comments c WHERE c.post_id = p.id),
+               'author', (SELECT jsonb_agg(u.name) FROM users u WHERE u.id = p.author_id)
+             ) AS x FROM posts p",
+        );
+        assert_eq!(p.probes.len(), 2);
+        assert_eq!(p.probes[0].sql, "SELECT c.body AS a0 FROM comments c");
+        assert_eq!(p.probes[1].sql, "SELECT u.name AS a0 FROM users u");
+        let Shape::Object { fields, .. } = &p.columns[0].1 else { panic!() };
+        assert_eq!(fields[0].1, Shape::Array { items: Box::new(Shape::Column { probe: 0, index: 0 }), non_null: false });
+        assert_eq!(fields[1].1, Shape::Array { items: Box::new(Shape::Column { probe: 1, index: 0 }), non_null: false });
+    }
+
+    #[test]
+    fn the_probe_budget_is_bounded() {
+        // A whole-row constructor costs a probe each, so this is the cheapest way to overrun.
+        let keys: Vec<String> = (0..MAX_PROBES + 2).map(|i| format!("'k{i}', to_jsonb(u{i})")).collect();
+        let rels: Vec<String> = (0..MAX_PROBES + 2).map(|i| format!("users u{i}")).collect();
+        let sql = format!("SELECT jsonb_build_object({}) AS x FROM {}", keys.join(", "), rels.join(", "));
+        let p = shapes(&sql);
+        assert!(p.probes.is_empty(), "{}", p.probes.len());
+        assert!(p.columns.is_empty(), "a statement that overflows the budget claims nothing");
+    }
+
+    // Resolution. The shape's types come back as lando's `Type`; the JSON Schema spelling of each
+    // (a nullable field, an `int8` inside a JSON document) is the renderer's, not the resolver's.
+
+    const NUMERIC: u32 = 1700;
+    const BYTEA: u32 = 17;
+
+    fn column(name: &str, type_oid: u32, type_name: &str, nullable: bool) -> DescribedColumn {
+        DescribedColumn { name: name.into(), type_oid, type_name: type_name.into(), nullable }
+    }
+
+    fn scalar(name: &str) -> Type {
+        Type::Scalar { name: name.into() }
+    }
+
+    fn field(name: &str, ty: Type, nullable: bool) -> Field {
+        Field { name: name.into(), ty, nullable }
+    }
+
+    #[test]
+    fn resolution_maps_described_columns_back_onto_the_shape() {
+        let registry = TypeRegistry::with_builtins();
+        let p = shapes(
+            "SELECT (SELECT coalesce(jsonb_agg(jsonb_build_object('id', c.id, 'body', c.body, 'score', c.score)), '[]'::jsonb)
+                     FROM comments c) AS comments FROM posts p",
+        );
+        let outcome = Outcome {
+            columns: vec![
+                column("a0", oid::UUID, "uuid", false),
+                column("a1", oid::TEXT, "text", false),
+                column("a2", oid::INT4, "int4", true),
+            ],
+            outer_join: false,
+        };
+        let r = resolve(&p.columns[0].1, &[Some(outcome)], &registry, &[]);
+        assert!(r.non_null);
+        assert!(r.unresolved.is_empty());
+        assert_eq!(
+            r.ty,
+            Type::List {
+                of: Box::new(Type::Object {
+                    fields: vec![field("id", scalar("uuid"), false), field("body", scalar("text"), false), field("score", scalar("int4"), true)],
+                }),
+                nullable_items: false,
+            }
+        );
+    }
+
+    #[test]
+    fn a_probe_that_could_not_be_described_names_the_paths_it_lost() {
+        let registry = TypeRegistry::with_builtins();
+        let p = shapes("SELECT jsonb_build_object('id', p.id, 'title', p.title) AS post FROM posts p");
+        let r = resolve(&p.columns[0].1, &[None], &registry, &[]);
+        assert_eq!(r.unresolved, vec!["id", "title"]);
+        assert_eq!(r.ty, Type::Object { fields: vec![field("id", Type::Unknown, true), field("title", Type::Unknown, true)] });
+        // The keys are still the SQL's own, and the object is still never null.
+        assert!(r.non_null);
+    }
+
+    #[test]
+    fn a_column_sqlite_cannot_type_is_reported_not_guessed() {
+        let registry = TypeRegistry::with_builtins();
+        let p = shapes("SELECT json_object('id', c.id, 'n', length(c.body)) AS x FROM comments c");
+        let outcome = Outcome {
+            columns: vec![column("a0", oid::UUID, "uuid", false), column("a1", oid::UNKNOWN, "unknown", true)],
+            outer_join: false,
+        };
+        let r = resolve(&p.columns[0].1, &[Some(outcome)], &registry, &[]);
+        assert_eq!(r.unresolved, vec!["n"]);
+        let Type::Object { fields } = &r.ty else { panic!("{:?}", r.ty) };
+        assert_eq!(fields[1], field("n", Type::Unknown, true));
+        assert_eq!(fields[0], field("id", scalar("uuid"), false));
+    }
+
+    /// A value the database wrote into the JSON document is still the column's own type here; how
+    /// it is spelled inside JSON (an `int8` or a `numeric` as a JSON number, a `bytea` as `\x…`
+    /// hex) is the renderer's rule, and the framework's `pgtypes::schema_of` pins it.
+    #[test]
+    fn a_leaf_inside_a_constructor_takes_the_databases_json_spelling() {
+        let registry = TypeRegistry::with_builtins();
+        let p = shapes("SELECT jsonb_build_object('n', c.n, 'amount', c.amount, 'blob', c.blob) AS x FROM c");
+        let outcome = Outcome {
+            columns: vec![column("a0", oid::INT8, "int8", false), column("a1", NUMERIC, "numeric", false), column("a2", BYTEA, "bytea", false)],
+            outer_join: false,
+        };
+        let r = resolve(&p.columns[0].1, &[Some(outcome)], &registry, &[]);
+        assert!(r.unresolved.is_empty());
+        assert_eq!(
+            r.ty,
+            Type::Object {
+                fields: vec![field("n", scalar("int8"), false), field("amount", scalar("numeric"), false), field("blob", scalar("bytea"), false)],
+            }
+        );
+    }
+
+    #[test]
+    fn a_row_shape_becomes_the_relations_own_columns() {
+        let registry = TypeRegistry::with_builtins();
+        let p = shapes("SELECT to_jsonb(u) AS author FROM users u");
+        let columns = vec![column("id", oid::UUID, "uuid", false), column("name", oid::TEXT, "text", true)];
+        let r = resolve(&p.columns[0].1, &[Some(Outcome { columns: columns.clone(), outer_join: false })], &registry, &[]);
+        assert!(r.non_null);
+        assert_eq!(r.ty, Type::Object { fields: vec![field("id", scalar("uuid"), false), field("name", scalar("text"), true)] });
+        // An outer join in the probe's own analysis is what can null the whole row.
+        let r = resolve(&p.columns[0].1, &[Some(Outcome { columns, outer_join: true })], &registry, &[]);
+        assert!(!r.non_null);
+    }
+}
