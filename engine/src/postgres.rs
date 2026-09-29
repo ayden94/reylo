@@ -49,7 +49,7 @@ const TRUST_QUERY: &str = "SELECT false, o.oprname::text FROM pg_operator o WHER
 pub fn analyze(sql: &str, dialect: Dialect, host: &Host) -> Lazy<Analysis> {
     let lexed = match lex::lex(sql, dialect) {
         Ok(l) => l,
-        Err(e) => return Some(bare(sql, &Lexed { params: vec![], placeholders: vec![], directives: vec![], style: Style::None }, dialect, vec![diag(e.message, e.offset, 1, 1)])),
+        Err(e) => return Some(bare(sql, &Lexed { params: vec![], placeholders: vec![], directives: vec![], style: Style::None, opaque: vec![] }, dialect, vec![diag(e.message, e.offset, 1, 1)])),
     };
     if lexed.style == Style::Mixed {
         let first = lexed.placeholders.iter().find(|p| lex::is_positional(&p.name)).expect("a mixed statement has a positional placeholder");
