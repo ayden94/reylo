@@ -1,5 +1,6 @@
-// Placeholder lexing for the runtime loader: finds `:name`, `$name`, `$1` and `?`
-// outside strings and comments and returns the binding order. This is the
+// Placeholder lexing for the runtime loader: finds `:name`, `$name`, `$1`, `?` and `?NNN`
+// outside strings and comments and returns the binding order. A name may be dotted
+// (`:auth.user_id`); each segment starts like a name, so `arr[1:2]` is a slice. This is the
 // provisional JavaScript version of the engine's lexer; the Rust engine owns the
 // authoritative one (dollar quoting, E'' strings, nested comments, array slices).
 export type Placeholder = { name: string; start: number; end: number };
@@ -22,10 +23,15 @@ export function lexPlaceholders(sql: string): { params: string[]; placeholders: 
     if (ch === "/" && next === "*") { const end = sql.indexOf("*/", i + 2); i = end === -1 ? sql.length : end + 2; continue; }
     if (ch === ":" && next === ":") { i += 2; continue; }
     if ((ch === ":" || ch === "$" || ch === "@") && next !== undefined && /[A-Za-z_]/.test(next)) {
-      const m = /^[A-Za-z_][A-Za-z0-9_]*/.exec(sql.slice(i + 1))!;
+      const m = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*/.exec(sql.slice(i + 1))!;
       push(m[0], i, i + 1 + m[0].length); i += 1 + m[0].length; continue;
     }
     if (ch === "$" && next !== undefined && /[0-9]/.test(next)) {
+      const m = /^[0-9]+/.exec(sql.slice(i + 1))!;
+      push(`$${m[0]}`, i, i + 1 + m[0].length); i += 1 + m[0].length; continue;
+    }
+    if (ch === "?" && next !== undefined && /[0-9]/.test(next)) {
+      // SQLite's `?NNN` names the same position a `$NNN` does.
       const m = /^[0-9]+/.exec(sql.slice(i + 1))!;
       push(`$${m[0]}`, i, i + 1 + m[0].length); i += 1 + m[0].length; continue;
     }

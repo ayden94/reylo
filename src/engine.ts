@@ -37,6 +37,8 @@ export type Lexed = {
   placeholders: { name: string; start: number; end: number }[];
   directives: Directive[];
   style: "none" | "named" | "positional" | "mixed";
+  /** The spans the lexer read as text (strings, quoted identifiers, comments): `[start, end]` byte offsets, in order. */
+  opaque: [number, number][];
 };
 
 export type Need =
