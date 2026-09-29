@@ -14,7 +14,7 @@ coverage/
 .claude/
 .frizz/
 
-# Cargo workspace build output (engine/ and anti/engine/)
+# Cargo workspace build output (engine/, lando-framework/engine/ and pg-extension/)
 target/
 
 # Lab emit output
