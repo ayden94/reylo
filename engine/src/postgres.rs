@@ -756,7 +756,7 @@ impl<'a> Engine<'a> {
         }
         let casts = self.casts.borrow();
         lex::rewrite_with(sql, &lexed, Target::Dollar, &|name, rendered| {
-            let cast = name.strip_prefix('$').and_then(|n| n.parse::<usize>().ok()).and_then(|n| casts.get(n.wrapping_sub(1)).cloned().flatten());
+            let cast = name.parse::<usize>().ok().and_then(|n| casts.get(n.wrapping_sub(1)).cloned().flatten());
             match cast {
                 Some(c) => format!("({rendered}::{c})"),
                 None => rendered.to_string(),

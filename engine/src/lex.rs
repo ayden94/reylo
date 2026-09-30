@@ -2,6 +2,8 @@
 //!
 //! Porg lets a statement name its parameters in any dialect: `:name`, `$name` and `@name` are
 //! named placeholders, `$1`, `?` and `?1` positional ones, and one statement uses one style. A
+//! parameter's name drops the prefix: `:id` is `id`, and `$2` and `?2` are both `2`. A bare `?`
+//! takes the number after the largest one so far, as SQLite numbers it, so `?, ?` is `1`, `2`. A
 //! name may be dotted (`:auth.user_id`): each `.segment` starts like a name, so `arr[1:2]` and
 //! `:t.*` end where they should. The engine rewrites placeholders to whatever the database binds
 //! by position (`$n` on Postgres, `?` on MySQL, `?n` for the SQLite prepare, where SQLite's own
@@ -25,9 +27,9 @@ use serde::Serialize;
 /// One placeholder occurrence, by byte offsets in the original text.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Placeholder {
-    /// The parameter name: the author's for a named placeholder (dots included), `$n` for a
-    /// numbered one (`$3` and SQLite's `?3` alike, so both name one position), and `?k` for the
-    /// k-th bare `?`.
+    /// The parameter name: the author's for a named placeholder (dots included, prefix dropped),
+    /// and the position's number for a positional one (`$3` and SQLite's `?3` are both `3`; a
+    /// bare `?` is one past the largest number before it).
     pub name: String,
     pub start: usize,
     pub end: usize,
@@ -53,7 +55,8 @@ pub enum Style {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Lexed {
-    /// Distinct parameter names in first-appearance order: the binding order.
+    /// Distinct parameter names in binding order: first appearance for named parameters, and
+    /// by number for positional ones, so `params[k]` is the statement's `$(k + 1)`.
     pub params: Vec<String>,
     pub placeholders: Vec<Placeholder>,
     pub directives: Vec<Directive>,
@@ -86,8 +89,9 @@ pub enum Target {
     /// `?`, one per occurrence, in text order; the binding order repeats a name where it repeats.
     Question,
     /// `?n`, numbered by binding order (the parameter's 1-based index in [`Lexed::params`]), so a
-    /// repeated name is one position. Unlike [`Target::Dollar`], an author's `$3` is renumbered
-    /// too: the binding order is `params` either way, and SQLite reads `?n` as position `n`.
+    /// repeated name is one position. An author's `$1 ... $n` keeps its numbers; unlike
+    /// [`Target::Dollar`], a gap closes (`$3` alone is `?1`): the binding order is `params` either
+    /// way, and SQLite reads `?n` as position `n`.
     Numbered,
 }
 
@@ -182,12 +186,19 @@ pub fn lex(sql: &str, dialect: Dialect) -> Result<Lexed, LexError> {
     let mut placeholders: Vec<Placeholder> = Vec::new();
     let mut directives: Vec<Directive> = Vec::new();
     let mut opaque: Vec<(usize, usize)> = Vec::new();
-    let mut questions = 0usize;
+    // The largest position a positional placeholder has named so far; a bare `?` takes the next.
+    let mut largest = 0u64;
     let mut push = |name: String, start: usize, end: usize, params: &mut Vec<String>| {
         if !params.contains(&name) {
             params.push(name.clone());
         }
         placeholders.push(Placeholder { name, start, end });
+    };
+    let position = |digits: &str, largest: &mut u64| {
+        let n = digits.trim_start_matches('0');
+        let n = if n.is_empty() { "0" } else { n };
+        *largest = (*largest).max(n.parse().unwrap_or(u64::MAX));
+        n.to_string()
     };
     while i < b.len() {
         let c = b[i];
@@ -326,7 +337,7 @@ pub fn lex(sql: &str, dialect: Dialect) -> Result<Lexed, LexError> {
                     }
                     Some(&n) if n.is_ascii_digit() => {
                         let end = digits_end(b, i + 1);
-                        push(sql[i..end].to_string(), i, end, &mut params);
+                        push(position(&sql[i + 1..end], &mut largest), i, end, &mut params);
                         i = end;
                     }
                     _ => i += 1,
@@ -344,11 +355,11 @@ pub fn lex(sql: &str, dialect: Dialect) -> Result<Lexed, LexError> {
                 if b.get(i + 1).is_some_and(u8::is_ascii_digit) {
                     // SQLite's `?NNN` names position NNN, as `$NNN` does, so it takes that name.
                     let end = digits_end(b, i + 1);
-                    push(format!("${}", &sql[i + 1..end]), i, end, &mut params);
+                    push(position(&sql[i + 1..end], &mut largest), i, end, &mut params);
                     i = end;
                 } else {
-                    questions += 1;
-                    push(format!("?{questions}"), i, i + 1, &mut params);
+                    largest = largest.saturating_add(1);
+                    push(largest.to_string(), i, i + 1, &mut params);
                     i += 1;
                 }
             }
@@ -362,13 +373,17 @@ pub fn lex(sql: &str, dialect: Dialect) -> Result<Lexed, LexError> {
         (p, n) if p == n => Style::Positional,
         _ => Style::Mixed,
     };
+    if style == Style::Positional {
+        // `$2 ... $1` binds `$1` first: the describe reports the parameters by number.
+        params.sort_by_key(|p| p.parse::<u64>().unwrap_or(u64::MAX));
+    }
     Ok(Lexed { params, placeholders, directives, style, opaque })
 }
 
-/// Whether a parameter name is one the lexer minted for a positional placeholder.
+/// Whether a parameter name is one the lexer minted for a positional placeholder: a number,
+/// where a named one starts with a letter or `_`.
 pub fn is_positional(name: &str) -> bool {
-    let mut chars = name.chars();
-    matches!(chars.next(), Some('$') | Some('?')) && chars.as_str().bytes().all(|c| c.is_ascii_digit()) && name.len() > 1
+    !name.is_empty() && name.bytes().all(|c| c.is_ascii_digit())
 }
 
 /// Rewrite every placeholder to the target's syntax.
@@ -385,8 +400,8 @@ pub fn rewrite_with(sql: &str, lexed: &Lexed, target: Target, decorate: &dyn Fn(
     for p in &lexed.placeholders {
         let rendered = match target {
             Target::Dollar => {
-                if let Some(n) = p.name.strip_prefix('$') {
-                    format!("${n}")
+                if is_positional(&p.name) {
+                    format!("${}", p.name)
                 } else {
                     format!("${}", lexed.params.iter().position(|q| q == &p.name).map_or(0, |i| i + 1))
                 }
@@ -422,8 +437,9 @@ mod tests {
     #[test]
     fn styles() {
         assert_eq!(names("select :a, @b, $c, :a", Dialect::Postgres), ["a", "b", "c"]);
-        assert_eq!(names("select $1, $2, $1", Dialect::Postgres), ["$1", "$2"]);
-        assert_eq!(names("select ?, ?", Dialect::Sqlite), ["?1", "?2"]);
+        assert_eq!(names("select $1, $2, $1", Dialect::Postgres), ["1", "2"]);
+        assert_eq!(names("select ?, ?", Dialect::Sqlite), ["1", "2"]);
+        assert_eq!(names("select ?, ?", Dialect::Mysql), ["1", "2"]);
         assert_eq!(lex("select :a, $1", Dialect::Postgres).unwrap().style, Style::Mixed);
         assert_eq!(lex("select 1", Dialect::Postgres).unwrap().style, Style::None);
     }
@@ -432,7 +448,7 @@ mod tests {
     fn skips_text_and_casts() {
         let sql = "select ':x' as a, \":y\" as b, e'\\':z' as c, $$:w$$ as d, x::int, arr[1:2], tags ? 'k' -- :c\n /* :d /* :e */ */ from t where id = :id";
         assert_eq!(names(sql, Dialect::Postgres), ["id"]);
-        assert_eq!(names("select json_extract(j, '$.a') = ? and x = :n", Dialect::Sqlite), ["?1", "n"]);
+        assert_eq!(names("select json_extract(j, '$.a') = ? and x = :n", Dialect::Sqlite), ["1", "n"]);
         assert_eq!(names("select `a:b`, 'x' from t where a = @a", Dialect::Mysql), ["a"]);
     }
 
@@ -493,7 +509,7 @@ mod tests {
     #[test]
     fn numbered_question_is_a_position() {
         let l = lex("select ?3, $3", Dialect::Sqlite).unwrap();
-        assert_eq!(l.params, ["$3"]);
+        assert_eq!(l.params, ["3"]);
         assert_eq!(l.placeholders.iter().map(|p| (p.start, p.end)).collect::<Vec<_>>(), [(7, 9), (11, 13)]);
         assert_eq!(l.style, Style::Positional);
         assert_eq!(lex("select ?3, :x", Dialect::Sqlite).unwrap().style, Style::Mixed);
@@ -541,11 +557,32 @@ mod tests {
         assert_eq!(r.sql, "select ?1, ?2, ?1");
         assert_eq!(r.order, ["a", "b"]);
         assert_eq!(r.spans, [(7, 9, 7, 9), (11, 13, 11, 13), (15, 17, 15, 17)]);
-        // An author's numbering is renumbered by binding order: `?n` binds `params[n - 1]`.
+        // Positional parameters bind by number, whatever order they appear in: `?n` binds
+        // `params[n - 1]`, so an author's numbering survives.
         let sql = "select $2, ?1, $2";
         let l = lex(sql, Dialect::Sqlite).unwrap();
         let r = rewrite(sql, &l, Target::Numbered);
-        assert_eq!(r.sql, "select ?1, ?2, ?1");
-        assert_eq!(r.order, ["$2", "$1"]);
+        assert_eq!(r.sql, "select ?2, ?1, ?2");
+        assert_eq!(r.order, ["1", "2"]);
+    }
+
+    #[test]
+    fn positional_names_are_numbers() {
+        // A bare `?` takes the number after the largest one so far, as SQLite numbers it.
+        assert_eq!(names("select ?1, ?2, ?", Dialect::Sqlite), ["1", "2", "3"]);
+        assert_eq!(names("select ?5, ?, ?2", Dialect::Sqlite), ["2", "5", "6"]);
+        assert_eq!(names("select $01, $1", Dialect::Postgres), ["1"]);
+        assert!(is_positional("12") && !is_positional("a1") && !is_positional(""));
+        // `$2 ... $1` binds `$1` first, and the rewrite keeps the author's numbers.
+        let sql = "select $2::int, $1::text";
+        let l = lex(sql, Dialect::Postgres).unwrap();
+        assert_eq!(l.params, ["1", "2"]);
+        let r = rewrite(sql, &l, Target::Dollar);
+        assert_eq!(r.sql, sql);
+        assert_eq!(r.order, ["1", "2"]);
+        // MySQL binds one value per `?`, in text order.
+        let sql = "select ?, $1";
+        let l = lex(sql, Dialect::Mysql).unwrap();
+        assert_eq!(rewrite(sql, &l, Target::Question).order, ["1", "1"]);
     }
 }

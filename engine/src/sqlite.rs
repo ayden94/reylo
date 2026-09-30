@@ -988,9 +988,9 @@ mod tests {
         assert_eq!(param(&a, "auth.id"), "integer");
         assert_eq!(a.rewritten.sql, "select name from users where email = ? and id = ? and score > ?");
         assert_eq!(a.rewritten.order, ["auth.email", "auth.id", "auth.email"]);
-        // Positional forms: SQLite's `?3` is the lexer's `$3`, and a bare `?` its `?1`.
-        assert_eq!(param(&analyzed("select name from users where id = ?3"), "$3"), "integer");
-        assert_eq!(param(&analyzed("select name from users where email = ?"), "?1"), "text");
+        // Positional forms: SQLite's `?3` is the parameter `3`, and a bare `?` the next number.
+        assert_eq!(param(&analyzed("select name from users where id = ?3"), "3"), "integer");
+        assert_eq!(param(&analyzed("select name from users where email = ?"), "1"), "text");
         // An error SQLite reports in the rewrite lands on the author's text.
         let sql = "select :auth.user_id, nope from users";
         let a = analyzed(sql);
