@@ -81,6 +81,13 @@ pub struct SqliteAnalysis {
     /// the row-count proof reads, for a host that runs that proof over text of its own. Empty when
     /// the statement did not prepare.
     pub unique_keys: HashMap<String, Vec<Vec<String>>>,
+    /// Per result column, whether it is a truth value: a comparison, `IN`, `BETWEEN`, `EXISTS`,
+    /// `IS`, `IS NULL`, `NOT`, `AND`, `OR`, `TRUE` or `FALSE`, a `like`, `glob`, `regexp` or `match`
+    /// call, or a `CASE`, `coalesce`, `ifnull`, `iif`, scalar subquery or subquery column whose
+    /// every value is one. SQLite stores one as the integer 0 or 1, and its type stays `integer`;
+    /// a host that types by meaning, as the framework does, reads it as a boolean. Empty when the
+    /// statement did not prepare.
+    pub booleans: Vec<bool>,
 }
 
 /// The replayed entry: the host answers [`DDL_QUERY`] (session-scoped), the rest is [`run`].
@@ -100,12 +107,12 @@ pub fn analyze(sql: &str, lexed: &Lexed, host: &Host) -> Lazy<Analysis> {
 pub fn analyze_ddl(sql: &str, ddl: &[String], extras: &Extras) -> SqliteAnalysis {
     match crate::postgres::lexed(sql, Dialect::Sqlite) {
         Ok(lexed) => run(sql, &lexed, ddl, extras),
-        Err(analysis) => SqliteAnalysis { analysis, declared: Vec::new(), readonly: false, unique_keys: HashMap::new() },
+        Err(analysis) => SqliteAnalysis { analysis, declared: Vec::new(), readonly: false, unique_keys: HashMap::new(), booleans: Vec::new() },
     }
 }
 
 fn run(sql: &str, lexed: &Lexed, ddl: &[String], extras: &Extras) -> SqliteAnalysis {
-    let failed = |analysis: Analysis| SqliteAnalysis { analysis, declared: Vec::new(), readonly: false, unique_keys: HashMap::new() };
+    let failed = |analysis: Analysis| SqliteAnalysis { analysis, declared: Vec::new(), readonly: false, unique_keys: HashMap::new(), booleans: Vec::new() };
     // SQLite prepares the `?n` rewrite, not the author's text: its own `:name` ends at the first
     // dot, so `:auth.user_id` survives only as a number. `?n` is the lexer's n-th parameter, which
     // is how `params` matches them back, and an error offset maps back through the rewrite.
@@ -131,6 +138,7 @@ fn run(sql: &str, lexed: &Lexed, ddl: &[String], extras: &Extras) -> SqliteAnaly
     }
     let a = Analyzer { tree: &t, extras };
     let (columns, kind) = a.columns();
+    let booleans = a.booleans();
     let params = a.params(lexed);
     let (cardinality, reason) = match crate::postgres::cardinality_directive(lexed, &mut diagnostics) {
         Some(c) => c,
@@ -149,7 +157,7 @@ fn run(sql: &str, lexed: &Lexed, ddl: &[String], extras: &Extras) -> SqliteAnaly
         unresolved: Vec::new(),
     };
     let unique_keys = t.tables.iter().map(|(name, info)| (name.clone(), info.unique_keys.clone())).collect();
-    SqliteAnalysis { analysis, declared: t.columns.iter().map(|c| c.declared.clone()).collect(), readonly: t.readonly, unique_keys }
+    SqliteAnalysis { analysis, declared: t.columns.iter().map(|c| c.declared.clone()).collect(), readonly: t.readonly, unique_keys, booleans }
 }
 
 fn diag(message: impl Into<String>, start: usize, length: usize, code: u32) -> Diagnostic {
@@ -256,6 +264,79 @@ impl Analyzer<'_> {
             })
             .collect();
         (columns, kind)
+    }
+
+    /// Per result column, whether it is a truth value ([`SqliteAnalysis::booleans`]).
+    fn booleans(&self) -> Vec<bool> {
+        let t = self.tree;
+        let truths: Vec<bool> = if let Some(returning) = &t.returning {
+            returning.iter().map(|c| self.truth(&c.expr, &Vec::new())).collect()
+        } else if let (Some(sel), None) = (&t.statement, &t.dml) {
+            (0..sel.columns.len()).map(|i| self.select_truth(sel, i, &Vec::new())).collect()
+        } else {
+            Vec::new()
+        };
+        (0..t.columns.len()).map(|i| truths.get(i).copied().unwrap_or(false)).collect()
+    }
+
+    /// Whether column `i` of a select is a truth value in every arm of a compound.
+    fn select_truth(&self, sel: &Sel, i: usize, scope: &ScopeStack) -> bool {
+        let mut s = Some(sel);
+        while let Some(arm) = s {
+            let mut inner = scope.clone();
+            inner.push(&arm.from);
+            if !arm.columns.get(i).is_some_and(|c| self.truth(&c.expr, &inner)) {
+                return false;
+            }
+            s = arm.prior.as_deref();
+        }
+        true
+    }
+
+    /// Whether an expression is a truth value: what a comparison, a test or a logical operator
+    /// answers, and what passes one through unchanged. A NULL arm is no counterexample (`CASE`
+    /// without `ELSE`), and nullability is [`Analyzer::type_of`]'s business.
+    fn truth(&self, n: &Node, scope: &ScopeStack) -> bool {
+        let every = |nodes: &mut dyn Iterator<Item = &Node>| {
+            let mut any = false;
+            for x in nodes {
+                if x.op == "null" {
+                    continue;
+                }
+                if !self.truth(x, scope) {
+                    return false;
+                }
+                any = true;
+            }
+            any
+        };
+        match n.op.as_str() {
+            "=" | "!=" | "<" | "<=" | ">" | ">=" | "is" | "is not" | "isnull" | "notnull" | "in" | "between" | "exists" | "and" | "or" | "not" | "truefalse" => true,
+            "collate" => n.left.as_deref().is_some_and(|l| self.truth(l, scope)),
+            "function" if !n.agg && !n.window => match n.name.as_deref().unwrap_or("") {
+                "like" | "glob" | "regexp" | "match" => self.extras.function(n.name.as_deref().unwrap_or(""), n.args.len()).is_none(),
+                "likely" | "unlikely" | "likelihood" => n.args.first().is_some_and(|a| self.truth(a, scope)),
+                "coalesce" | "ifnull" => every(&mut n.args.iter()),
+                "iif" | "if" => every(&mut n.args.iter().skip(1)),
+                _ => false,
+            },
+            // `list` alternates WHEN and THEN; an odd tail is the ELSE.
+            "case" => {
+                let results = n.list.chunks(2).filter_map(|pair| if pair.len() == 2 { Some(&pair[1]) } else { None });
+                let otherwise = if n.list.len() % 2 == 1 { n.list.last() } else { None };
+                every(&mut results.chain(otherwise))
+            }
+            "select" => n.select.as_deref().is_some_and(|sub| self.select_truth(sub, 0, scope)),
+            "column" => {
+                for froms in scope.iter().rev() {
+                    if let Some(f) = froms.iter().find(|f| f.cursor == n.cursor) {
+                        return f.subquery.as_deref().is_some_and(|sub| self.select_truth(sub, n.index.max(0) as usize, scope));
+                    }
+                }
+                false
+            }
+            _ => false,
+        }
     }
 
     /// Column `i` of a select: for a compound, the leftmost arm's type and any arm's nullability.
@@ -1109,6 +1190,31 @@ mod tests {
         assert_eq!(col(&a, "one"), ("text".into(), true));
         assert_eq!(col(&a, "g"), ("integer".into(), true));
         assert_eq!(col(&a, "k"), ("integer".into(), false));
+    }
+
+    #[test]
+    fn truth_values_are_marked_and_stay_integers() {
+        let r = analyze_ddl(
+            "select id = 1 as a, exists (select 1 from posts) as b, name like 'x%' as c, not (score > 1) as d, case when id > 1 then true end as e, coalesce(email is null, false) as f, email in ('a', 'b') as g, id as h, id + 1 as i, (select p.id > 1 from posts p limit 1) as j, iif(id > 1, 0, 1) as k from users",
+            &ddl(),
+            &Extras::default(),
+        );
+        assert!(r.analysis.diagnostics.is_empty(), "{:?}", r.analysis.diagnostics);
+        assert_eq!(r.booleans, [true, true, true, true, true, true, true, false, false, true, false]);
+        // The storage class is what the value is: an integer, 0 or 1.
+        assert_eq!(col(&r.analysis, "a"), ("integer".into(), false));
+        assert_eq!(col(&r.analysis, "b"), ("integer".into(), false));
+        // Through a subquery's column, and across every arm of a compound.
+        let r = analyze_ddl("select t.x, t.y from (select id > 1 as x, id as y from users) t", &ddl(), &Extras::default());
+        assert_eq!(r.booleans, [true, false]);
+        let r = analyze_ddl("select id > 1 as x from users union all select exists (select 1 from posts) union all select 0", &ddl(), &Extras::default());
+        assert_eq!(r.booleans, [false]);
+        let r = analyze_ddl("select id > 1 as x from users union all select email is null from users", &ddl(), &Extras::default());
+        assert_eq!(r.booleans, [true]);
+        // RETURNING, and a statement that does not prepare.
+        let r = analyze_ddl("insert into users (name) values ('a') returning id, id > 0 as positive", &ddl(), &Extras::default());
+        assert_eq!(r.booleans, [false, true]);
+        assert!(analyze_ddl("select nope from users", &ddl(), &Extras::default()).booleans.is_empty());
     }
 
     #[test]
