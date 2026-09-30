@@ -1,4 +1,4 @@
-// Does every real driver satisfy the structural interfaces without lando importing them?
+// Does every real driver satisfy the structural interfaces without porg importing them?
 import { Pool, Client } from "pg";
 import postgres from "postgres";
 import { PGlite } from "@electric-sql/pglite";

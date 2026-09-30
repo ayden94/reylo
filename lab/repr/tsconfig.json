@@ -10,7 +10,7 @@
     "allowImportingTsExtensions": true
   },
   "contentMappers": [
-    { "package": "lando", "extensions": [".sql"], "options": { "dialect": "postgres", "dates": "temporal", "bigint": "bigint" } }
+    { "package": "porg", "extensions": [".sql"], "options": { "dialect": "postgres", "dates": "temporal", "bigint": "bigint" } }
   ],
   "include": ["."],
   "exclude": ["run.ts", "node_modules"]

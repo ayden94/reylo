@@ -1,14 +1,14 @@
 {
-  "name": "lando-example-postgres",
+  "name": "porg-example-postgres",
   "private": true,
   "type": "module",
   "scripts": {
     "setup": "psql \"$DATABASE_URL\" -f setup.sql",
     "typecheck": "tsc --noEmit --runExternalCode",
-    "start": "node --import lando/register src/main.ts"
+    "start": "node --import porg/register src/main.ts"
   },
   "dependencies": {
-    "lando": "link:../..",
+    "porg": "link:../..",
     "postgres": "^3.4.9"
   },
   "devDependencies": {

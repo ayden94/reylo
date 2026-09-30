@@ -1,5 +1,5 @@
 // Vendored from @standard-schema/spec (MIT). The spec is designed to be copied so
-// that implementers carry no dependency; only the members lando implements are kept.
+// that implementers carry no dependency; only the members porg implements are kept.
 export interface StandardTypedV1<Input = unknown, Output = Input> {
   readonly "~standard": StandardTypedV1.Props<Input, Output>;
 }

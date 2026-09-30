@@ -8,7 +8,7 @@ importers:
 
   .:
     dependencies:
-      lando:
+      porg:
         specifier: link:../..
         version: link:../..
       postgres:

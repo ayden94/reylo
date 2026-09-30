@@ -1,6 +1,6 @@
 import { defineConfig } from "vite";
-import lando from "lando/vite";
+import porg from "porg/vite";
 export default defineConfig({
-  plugins: [lando()],
-  build: { ssr: "main.ts", outDir: "dist/vite", rollupOptions: { external: ["lando", "postgres"], output: { format: "es", entryFileNames: "main.js" } } },
+  plugins: [porg()],
+  build: { ssr: "main.ts", outDir: "dist/vite", rollupOptions: { external: ["porg", "postgres"], output: { format: "es", entryFileNames: "main.js" } } },
 });

@@ -8,9 +8,9 @@ type Build = {
   onLoad(options: { filter: RegExp }, callback: (args: { path: string }) => { contents: string; loader: "js" }): void;
 };
 
-export default function lando() {
+export default function porg() {
   return {
-    name: "lando",
+    name: "porg",
     setup(build: Build) {
       build.onLoad({ filter: /\.sql$/ }, (args) => ({ contents: sqlModuleSource(readFileSync(args.path, "utf8"), args.path), loader: "js" }));
     },

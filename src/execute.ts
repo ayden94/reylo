@@ -1,5 +1,5 @@
 // Runtime execution over a caller-supplied client, typed structurally so that
-// lando has no dependency (not even a type-only one) on any driver package.
+// porg has no dependency (not even a type-only one) on any driver package.
 // Each interface is the smallest slice of the real driver that execution needs,
 // and the query's dialect selects which clients are accepted at compile time.
 

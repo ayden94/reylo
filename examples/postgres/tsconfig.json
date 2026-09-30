@@ -11,7 +11,7 @@
   },
   "contentMappers": [
     {
-      "package": "lando",
+      "package": "porg",
       "extensions": [".sql"],
       "options": { "dialect": "postgres" }
     }

@@ -9,6 +9,6 @@
     "skipLibCheck": true,
     "allowImportingTsExtensions": true
   },
-  "contentMappers": [{ "package": "lando", "extensions": [".sql"], "options": { "dialect": "postgres" } }],
+  "contentMappers": [{ "package": "porg", "extensions": [".sql"], "options": { "dialect": "postgres" } }],
   "include": ["."]
 }

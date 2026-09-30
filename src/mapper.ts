@@ -44,7 +44,7 @@ function readDotenv(dir: string): Record<string, string> {
 
 /** The cache as it is on disk; a missing or half-written file is an empty cache. */
 function readCache(projectDir: string): Record<string, CacheEntry> {
-  const path = join(projectDir, ".lando", "queries.json");
+  const path = join(projectDir, ".porg", "queries.json");
   if (!existsSync(path)) return {};
   try {
     return JSON.parse(readFileSync(path, "utf8"));
@@ -83,7 +83,7 @@ serve({
     // Builds from 2026-09-18 on send `protocolVersion: 1` and refuse a mapper that does not
     // answer with the version it speaks; the npm nightly of the same day does not send it yet.
     const { protocolVersion } = (params ?? {}) as { protocolVersion?: number };
-    return { protocolVersion: protocolVersion ?? 1, positionEncoding: "utf-8", diagnosticSource: "lando" };
+    return { protocolVersion: protocolVersion ?? 1, positionEncoding: "utf-8", diagnosticSource: "porg" };
   },
   openProject(params) {
     const p = params as { projectHandle: string; options?: Options; configFileName: string };
@@ -114,15 +114,15 @@ serve({
       // A transform for a project this process never opened: answer, never throw, so the file
       // keeps its default export instead of becoming an empty module.
       diagnostics.push(diag(`The content mapper has no project for this file; restart the TypeScript server.`, 0, 1, 9));
-      return { extension: ".ts" as const, diagnostics, text: `import type { Query } from "lando";\nexport type Params = unknown;\nexport type Row = unknown;\ndeclare const query: Query<unknown, unknown, "many", "postgres">;\nexport default query;\n` };
+      return { extension: ".ts" as const, diagnostics, text: `import type { Query } from "porg";\nexport type Params = unknown;\nexport type Row = unknown;\ndeclare const query: Query<unknown, unknown, "many", "postgres">;\nexport default query;\n` };
     }
     const emit = (paramsType: string, rowType: string, cardinality: string, names: string[]) => ({
       extension: ".ts" as const,
       diagnostics,
       text: [
-        `import type { Query } from "lando";`,
-        // The Temporal types are not in TypeScript's libs yet; `lando/temporal` declares them.
-        ...(project.repr.dates === "temporal" ? [`import "lando/temporal";`] : []),
+        `import type { Query } from "porg";`,
+        // The Temporal types are not in TypeScript's libs yet; `porg/temporal` declares them.
+        ...(project.repr.dates === "temporal" ? [`import "porg/temporal";`] : []),
         `export type Params = ${paramsType};`,
         `export type Row = ${rowType};`,
         `export declare const sql: ${JSON.stringify(sql)};`,
@@ -158,7 +158,7 @@ serve({
       project.cache[key] = { hash: createHash("sha1").update(sql).digest("hex"), params: names, cardinality, dialect: project.dialect, ...extra, ...conversions };
       // Two editors on one project run two mappers; each writes the whole file, so the write
       // is a rename and a reader never sees a half-written cache.
-      const dir = join(project.projectDir, ".lando");
+      const dir = join(project.projectDir, ".porg");
       mkdirSync(dir, { recursive: true });
       const tmp = join(dir, `queries.json.${process.pid}.tmp`);
       writeFileSync(tmp, JSON.stringify(project.cache, null, 2) + "\n");

@@ -21,13 +21,13 @@ target/
 lab/**/dist/
 
 # Mapper cache written into lab projects
-lab/**/.lando/
+lab/**/.porg/
 
 # SQLite lab database file
 lab/sqlite/lab.db*
 
 # Example projects: mapper cache and local env
-examples/**/.lando/
+examples/**/.porg/
 
 # The Postgres extension's build outputs: the shim, its objects, and pg_regress's own files.
 pg-extension/*.so

@@ -22,7 +22,7 @@ const d: Params = null! as ExpectedParams;
 const e: Row | null = await query.execute(pool, { id: 1, name: "ada" });
 const f: readonly ["id", "name"] = q.params;
 const g: ExpectedRow | null = query["~standard"].types!.output;
-const h: { created_at: string; big: string | null } | null = query["~lando"].json;
+const h: { created_at: string; big: string | null } | null = query["~porg"].json;
 // @ts-expect-error wrong parameter type
 await query.execute(pool, { id: "1", name: "ada" });
 // @ts-expect-error a sqlite client cannot run a postgres query

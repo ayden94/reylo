@@ -8,7 +8,7 @@ type CacheEntry = { hash: string; params: string[]; cardinality: string; dialect
 
 function cachedEntry(path: string, sql: string): CacheEntry | undefined {
   for (let dir = dirname(path); ; dir = dirname(dir)) {
-    const cache = join(dir, ".lando", "queries.json");
+    const cache = join(dir, ".porg", "queries.json");
     if (existsSync(cache)) {
       let entries: Record<string, CacheEntry>;
       try {
@@ -36,7 +36,7 @@ export function sqlModuleSource(sql: string, path: string): string {
   const rewritten = cached?.text && cached.order ? `, text: ${JSON.stringify(cached.text)}, order: ${JSON.stringify(cached.order)}` : "";
   const converted = cached?.convert ? `, convert: ${JSON.stringify(cached.convert)}, dates: ${JSON.stringify(cached.dates ?? "string")}, bigint: ${JSON.stringify(cached.bigint ?? "string")}` : "";
   return [
-    `import { defineQuery } from "lando";`,
+    `import { defineQuery } from "porg";`,
     `export const sql = ${JSON.stringify(sql)};`,
     `export const params = ${JSON.stringify(params)};`,
     `export default defineQuery({ dialect: ${JSON.stringify(dialect)}, sql, params, cardinality: ${JSON.stringify(cardinality)}${rewritten}${converted} });`,

@@ -20,7 +20,7 @@ export type Json<T> = T extends Date | bigint | Uint8Array | { toJSON(): string 
       ? { [K in keyof T]: Json<T[K]> }
       : T;
 
-export type LandoTypes<Params, Row, C extends Cardinality> = {
+export type PorgTypes<Params, Row, C extends Cardinality> = {
   readonly element: Row;
   readonly cardinality: C;
   readonly json: Materialize<Json<Row>, C>;
@@ -30,13 +30,13 @@ export type LandoTypes<Params, Row, C extends Cardinality> = {
 export interface Query<Params, Row, C extends Cardinality, D extends Dialect>
   extends StandardTypedV1<Params, Materialize<Row, C>>, StandardJSONSchemaV1<Params, Materialize<Row, C>> {
   readonly dialect: D;
-  /** The statement as written, with lando's placeholders left in place. */
+  /** The statement as written, with porg's placeholders left in place. */
   readonly sql: string;
   /** Parameter names in binding order. */
   readonly params: readonly string[];
   readonly cardinality: C;
   readonly "~standard": StandardJSONSchemaV1.Props<Params, Materialize<Row, C>>;
-  readonly "~lando": LandoTypes<Params, Row, C>;
+  readonly "~porg": PorgTypes<Params, Row, C>;
   execute(client: ClientFor<D>, params: Params): Promise<Materialize<Row, C>>;
 }
 
@@ -71,13 +71,13 @@ export function defineQuery<Params, Row, C extends Cardinality, D extends Dialec
     cardinality,
     "~standard": {
       version: 1,
-      vendor: "lando",
+      vendor: "porg",
       jsonSchema: {
         input: () => def.jsonSchema?.input ?? missingSchema(),
         output: () => def.jsonSchema?.output ?? missingSchema(),
       },
     },
-    "~lando": undefined as unknown as LandoTypes<Params, Row, C>,
+    "~porg": undefined as unknown as PorgTypes<Params, Row, C>,
     async execute(client, params) {
       const rows = (await run(client, query, params as Record<string, unknown>)) as Row[];
       if (def.convert) convertRows(rows, def.convert, { dates: def.dates ?? "string", bigint: def.bigint ?? "string" });

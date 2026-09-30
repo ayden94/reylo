@@ -4,6 +4,6 @@ export default {
   entry: "./main.mjs",
   experiments: { outputModule: true },
   output: { path: fileURLToPath(new URL("./dist/rspack", import.meta.url)), filename: "main.js", module: true, chunkFormat: "module" },
-  externalsType: "module", externals: { lando: "lando", postgres: "postgres" },
-  module: { rules: [{ test: /\.sql$/, use: "lando/webpack-loader" }] },
+  externalsType: "module", externals: { porg: "porg", postgres: "postgres" },
+  module: { rules: [{ test: /\.sql$/, use: "porg/webpack-loader" }] },
 };

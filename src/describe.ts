@@ -1,6 +1,6 @@
 // The JavaScript half of analysis: run Parse/Describe against the project's own
 // Postgres client. Drivers are resolved from the PROJECT directory, never from
-// lando's own dependencies, so every driver stays an optional peer.
+// porg's own dependencies, so every driver stays an optional peer.
 import { createRequire } from "node:module";
 import { Unreachable } from "./engine.ts";
 

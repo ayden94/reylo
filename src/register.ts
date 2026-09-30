@@ -1,5 +1,5 @@
-// One preload for every runtime: `node --import lando/register`,
-// `nub --import lando/register`, `bun --preload lando/register` (or bunfig.toml).
+// One preload for every runtime: `node --import porg/register`,
+// `nub --import porg/register`, `bun --preload porg/register` (or bunfig.toml).
 // Bun exposes Bun.plugin; Node and nub expose module.registerHooks.
 import { readFileSync } from "node:fs";
 import { sqlModuleSource } from "./loader.ts";
@@ -8,7 +8,7 @@ declare const Bun: undefined | { plugin(p: { name: string; setup(build: { onLoad
 
 if (typeof Bun !== "undefined") {
   Bun.plugin({
-    name: "lando-sql",
+    name: "porg-sql",
     setup(build) {
       build.onLoad({ filter: /\.sql$/ }, (args) => ({ loader: "js", contents: sqlModuleSource(readFileSync(args.path, "utf8"), args.path) }));
     },

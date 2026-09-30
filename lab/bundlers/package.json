@@ -1,5 +1,5 @@
 {
-  "name": "lando-lab-bundlers",
+  "name": "porg-lab-bundlers",
   "private": true,
   "type": "module",
   "devDependencies": {

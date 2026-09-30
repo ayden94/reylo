@@ -1,5 +1,5 @@
 {
-  "name": "lando",
+  "name": "porg",
   "version": "0.0.0",
   "description": "Import SQL files as fully typed queries. A TypeScript content mapper plus a runtime loader.",
   "license": "MIT",
