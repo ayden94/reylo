@@ -17,7 +17,7 @@ use crate::lex::{self, Lexed, Target};
 use crate::pgtypes::oid;
 use crate::sqlite_tree::{self as tree, From, Node, Sel, Tree};
 use crate::types::Type;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// The schema, as SQLite stores it: its `sql` column is the DDL the engine replays into its
 /// in-memory copy. The replayed entry asks the host for it; a host with a connection of its own
@@ -75,6 +75,12 @@ pub struct SqliteAnalysis {
     pub declared: Vec<Option<String>>,
     /// `sqlite3_stmt_readonly`; false when the statement did not prepare.
     pub readonly: bool,
+    /// The unique keys of every table the statement reads or writes (through views and
+    /// subqueries), by the table's name as its DDL spells it: every unique, non-partial index over
+    /// plain columns, the `INTEGER PRIMARY KEY`, and `rowid` for a rowid table without one. What
+    /// the row-count proof reads, for a host that runs that proof over text of its own. Empty when
+    /// the statement did not prepare.
+    pub unique_keys: HashMap<String, Vec<Vec<String>>>,
 }
 
 /// The replayed entry: the host answers [`DDL_QUERY`] (session-scoped), the rest is [`run`].
@@ -94,12 +100,12 @@ pub fn analyze(sql: &str, lexed: &Lexed, host: &Host) -> Lazy<Analysis> {
 pub fn analyze_ddl(sql: &str, ddl: &[String], extras: &Extras) -> SqliteAnalysis {
     match crate::postgres::lexed(sql, Dialect::Sqlite) {
         Ok(lexed) => run(sql, &lexed, ddl, extras),
-        Err(analysis) => SqliteAnalysis { analysis, declared: Vec::new(), readonly: false },
+        Err(analysis) => SqliteAnalysis { analysis, declared: Vec::new(), readonly: false, unique_keys: HashMap::new() },
     }
 }
 
 fn run(sql: &str, lexed: &Lexed, ddl: &[String], extras: &Extras) -> SqliteAnalysis {
-    let failed = |analysis: Analysis| SqliteAnalysis { analysis, declared: Vec::new(), readonly: false };
+    let failed = |analysis: Analysis| SqliteAnalysis { analysis, declared: Vec::new(), readonly: false, unique_keys: HashMap::new() };
     // SQLite prepares the `?n` rewrite, not the author's text: its own `:name` ends at the first
     // dot, so `:auth.user_id` survives only as a number. `?n` is the lexer's n-th parameter, which
     // is how `params` matches them back, and an error offset maps back through the rewrite.
@@ -142,7 +148,8 @@ fn run(sql: &str, lexed: &Lexed, ddl: &[String], extras: &Extras) -> SqliteAnaly
         diagnostics,
         unresolved: Vec::new(),
     };
-    SqliteAnalysis { analysis, declared: t.columns.iter().map(|c| c.declared.clone()).collect(), readonly: t.readonly }
+    let unique_keys = t.tables.iter().map(|(name, info)| (name.clone(), info.unique_keys.clone())).collect();
+    SqliteAnalysis { analysis, declared: t.columns.iter().map(|c| c.declared.clone()).collect(), readonly: t.readonly, unique_keys }
 }
 
 fn diag(message: impl Into<String>, start: usize, length: usize, code: u32) -> Diagnostic {
@@ -1008,10 +1015,38 @@ mod tests {
         assert!(!r.readonly);
         assert_eq!((r.analysis.kind.as_str(), r.analysis.cardinality.as_str()), ("insert", "one"));
         assert_eq!(col(&r.analysis, "done"), ("numeric".into(), false));
+        // The unique keys of the table it read: the primary key's index and the UNIQUE constraint's.
+        assert_eq!(r.unique_keys.len(), 1, "{:?}", r.unique_keys);
+        let mut keys = r.unique_keys["todos"].clone();
+        keys.sort();
+        assert_eq!(keys, [vec!["id".to_string()], vec!["owner_id".into(), "title".into()], vec!["rowid".into()]]);
         // A lex error comes back as the replayed path reports it.
         let r = analyze_ddl("SELECT id FROM todos WHERE id = :a AND title = ?", &ddl, &Extras::default());
         assert_eq!(r.analysis.diagnostics.len(), 1, "{:?}", r.analysis.diagnostics);
         assert!(r.declared.is_empty() && !r.readonly);
+    }
+
+    #[test]
+    fn the_unique_keys_of_every_table_read() {
+        let mut schema = ddl();
+        schema.push("create unique index users_lower_name on users (lower(name))".into());
+        schema.push("create unique index posts_title on posts (title) where body is not null".into());
+        schema.push("create table tags (label text not null, post_id integer not null, primary key (post_id, label)) without rowid".into());
+        schema.push("create view titled as select p.id, p.title from posts p".into());
+        let r = analyze_ddl("select t.title, (select count(*) from tags g where g.post_id = t.id) as n from titled t where exists (select 1 from users u where u.id = :id)", &schema, &Extras::default());
+        assert!(r.analysis.diagnostics.is_empty(), "{:?}", r.analysis.diagnostics);
+        let mut tables: Vec<&String> = r.unique_keys.keys().collect();
+        tables.sort();
+        // The view reads through to `posts`; a view has no keys of its own.
+        assert_eq!(tables, ["posts", "tags", "users"]);
+        // The INTEGER PRIMARY KEY and the UNIQUE column; an expression index is no key.
+        assert_eq!(r.unique_keys["users"], [vec!["id".to_string()], vec!["email".into()]]);
+        // A partial index is no key either.
+        assert_eq!(r.unique_keys["posts"], [vec!["id".to_string()]]);
+        // WITHOUT ROWID: no rowid, only the primary key.
+        assert_eq!(r.unique_keys["tags"], [vec!["post_id".to_string(), "label".into()]]);
+        // A statement that does not prepare has none.
+        assert!(analyze_ddl("select nope from users", &schema, &Extras::default()).unique_keys.is_empty());
     }
 
     fn html() -> Extras {
