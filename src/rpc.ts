@@ -5,6 +5,9 @@ type Handler = (params: unknown) => unknown | Promise<unknown>;
 
 export function serve(handlers: Record<string, Handler>): void {
   let buffer = Buffer.alloc(0);
+  // tsc closes the pipe when it is done with the mapper. A driver's pending reconnect timer must
+  // not keep the process, and tsc waiting on it, alive.
+  process.stdin.on("end", () => process.exit(0));
 
   process.stdin.on("data", (chunk: Buffer) => {
     buffer = Buffer.concat([buffer, chunk]);

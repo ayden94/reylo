@@ -4,20 +4,22 @@
 // cardinality directives, and SQLSTATE errors mapped into the .sql file.
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { serve } from "./rpc.ts";
 import { lexPlaceholders } from "./lex.ts";
-import { engine, AnswerCache } from "./engine.ts";
+import { engine, reason, AnswerCache, Unreachable } from "./engine.ts";
 import { conversion, defaultRepr, ident, renderParamType, renderType, type Conversion, type Repr } from "./render.ts";
 import { openMysqlDescriber, type MysqlDescriber } from "./mysql-describe.ts";
 import { openPostgresDescriber, type Describer } from "./describe.ts";
-import { openSqliteDescriber, type SqliteDescriber } from "./sqlite-describe.ts";
+import { openSqliteDescriber, sqlitePath, type SqliteDescriber } from "./sqlite-describe.ts";
 
 type Options = { dialect?: "postgres" | "sqlite" | "mysql"; source?: "database"; url?: string; urlEnv?: string; dates?: Repr["dates"]; bigint?: Repr["bigint"] };
 type Project = {
   projectDir: string;
   options: Options;
   url: string | undefined;
+  /** Where the URL came from, for a diagnostic: the option, the environment or `.env`. */
+  urlSource: string;
   dialect: "postgres" | "sqlite" | "mysql";
   repr: Repr;
   describer: Promise<Describer> | undefined;
@@ -59,6 +61,17 @@ function diag(messageText: string, start: number, length: number, code = 1) {
   return { messageText, start, length, code };
 }
 
+/** The diagnostic for a database that cannot be reached: where it was looked for, where that came from, and the driver's reason; never the credentials. */
+function cannotConnect(project: Project, e: unknown) {
+  if (project.dialect === "sqlite") return diag(`Cannot open the database ${sqlitePath(project.url ?? "", project.projectDir)} (${project.urlSource}): ${reason(e)}`, 0, 1, 5);
+  let where = "the database";
+  try {
+    const u = new URL(project.url ?? "");
+    where = `${u.hostname || u.searchParams.get("host") || "localhost"}${u.port ? `:${u.port}` : ""}${u.pathname}`;
+  } catch {}
+  return diag(`Cannot connect to the database at ${where} (${project.urlSource}): ${reason(e)}`, 0, 1, 5);
+}
+
 serve({
   initialize(params) {
     // Builds from 2026-09-18 on send `protocolVersion: 1` and refuse a mapper that does not
@@ -79,9 +92,10 @@ serve({
     const dotenv = readDotenv(projectDir);
     const urlEnv = options.urlEnv ?? "DATABASE_URL";
     const url = options.url ?? process.env[urlEnv] ?? dotenv[urlEnv];
+    const urlSource = options.url !== undefined ? `"url" in ${basename(p.configFileName)}` : process.env[urlEnv] !== undefined ? `${urlEnv} in the environment` : `${urlEnv} in .env`;
     const cache = readCache(projectDir);
     const dialect = options.dialect ?? (url && /^(file:|sqlite:)/.test(url) ? "sqlite" : url && /^(mysql|mariadb):/.test(url) ? "mysql" : "postgres");
-    projects.set(p.projectHandle, { projectDir, options, url, dialect, repr, describer: undefined, sqlite: undefined, mysql: undefined, answers: new AnswerCache(), cache });
+    projects.set(p.projectHandle, { projectDir, options, url, urlSource, dialect, repr, describer: undefined, sqlite: undefined, mysql: undefined, answers: new AnswerCache(), cache });
     const configIdentity = createHash("sha1").update(JSON.stringify([options, url ?? null])).digest("hex");
     return { configIdentity, watchedFiles: [join(projectDir, ".env")], optionDiagnostics };
   },
@@ -153,7 +167,7 @@ serve({
         mysql = await project.mysql;
       } catch (e) {
         project.mysql = undefined;
-        diagnostics.push(diag(`Cannot connect to the database: ${(e as Error).message}`, 0, 1, 5));
+        diagnostics.push(e instanceof Unreachable ? cannotConnect(project, e) : diag((e as Error).message, 0, 1, 5));
         return emit("unknown", "unknown", cardinality, names);
       }
       // The server's prepare is the type source (each column's type and NOT NULL, a type per
@@ -162,20 +176,13 @@ serve({
       let analysis;
       try {
         analysis = await (await engine()).analyze(sql, "mysql", {
-          describe: async (text) => {
-            try {
-              return await mysql.describe(text);
-            } catch (e) {
-              // A server error carries a SQLSTATE; anything else is the connection, reopened next time.
-              if (!(e as { sqlState?: string }).sqlState) project.mysql = undefined;
-              throw e;
-            }
-          },
+          describe: (text) => mysql.describe(text),
           query: (text, params) => mysql.values(text, params),
         }, project.answers);
       } catch (e) {
-        project.mysql = undefined;
-        diagnostics.push(diag((e as Error).message, 0, 1, 5));
+        // A dead connection is reopened on the next transform.
+        if (e instanceof Unreachable) project.mysql = undefined;
+        diagnostics.push(e instanceof Unreachable ? cannotConnect(project, e) : diag((e as Error).message, 0, 1, 5));
         return emit("unknown", "unknown", cardinality, names);
       }
       diagnostics.push(...analysis.diagnostics.map((d) => diag(d.message, d.start, d.length, d.code)));
@@ -204,7 +211,7 @@ serve({
         sqlite = await project.sqlite;
       } catch (e) {
         project.sqlite = undefined;
-        diagnostics.push(diag(`Cannot open the database: ${(e as Error).message}`, 0, 1, 5));
+        diagnostics.push(cannotConnect(project, e));
         return emit("unknown", "unknown", cardinality, names);
       }
       let analysis;
@@ -240,7 +247,7 @@ serve({
       describer = await project.describer;
     } catch (e) {
       project.describer = undefined;
-      diagnostics.push(diag(`Cannot connect to the database: ${(e as Error).message}`, 0, 1, 5));
+      diagnostics.push(e instanceof Unreachable ? cannotConnect(project, e) : diag((e as Error).message, 0, 1, 5));
       return emit("unknown", "unknown", cardinality, names);
     }
     // The engine owns the analysis: it names what it needs (a describe, a catalog query),
@@ -253,10 +260,9 @@ serve({
         query: (text, params) => describer.values(text, params),
       }, project.answers);
     } catch (e) {
-      const err = e as Error & { code?: string };
       // A dead connection is reopened on the next transform; a server error is reported.
-      if (!err.code) project.describer = undefined;
-      diagnostics.push(diag(err.message, 0, 1, 5));
+      if (e instanceof Unreachable) project.describer = undefined;
+      diagnostics.push(e instanceof Unreachable ? cannotConnect(project, e) : diag((e as Error).message, 0, 1, 5));
       return emit("unknown", "unknown", cardinality, names);
     }
     diagnostics.push(...analysis.diagnostics.map((d) => diag(d.message, d.start, d.length, d.code)));

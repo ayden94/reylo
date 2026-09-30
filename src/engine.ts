@@ -132,6 +132,24 @@ export class Engine {
   }
 }
 
+/**
+ * The database cannot be reached, as opposed to the server answering a statement with an error.
+ * It ends the analysis at once instead of becoming an answer: asking again cannot succeed, and a
+ * driver that backs off between attempts (postgres.js waits up to 20 s) would hold the transform
+ * for minutes.
+ */
+export class Unreachable extends Error {
+  constructor(cause: unknown) {
+    super(reason(cause), { cause });
+  }
+}
+
+/** A driver error as one line: a refused connection is an AggregateError with no message of its own. */
+export function reason(e: unknown): string {
+  const err = e as { message?: string; code?: string; errors?: { message?: string }[] } | undefined;
+  return err?.message || err?.errors?.map((x) => x.message).filter(Boolean).join("; ") || err?.code || String(e);
+}
+
 async function fulfil(need: Need, io: EngineIo): Promise<Answer> {
   try {
     if (need.kind === "describe") {
@@ -141,6 +159,7 @@ async function fulfil(need: Need, io: EngineIo): Promise<Answer> {
     }
     return { rows: await io.query(need.sql, need.params) };
   } catch (e) {
+    if (e instanceof Unreachable) throw e;
     const err = e as Error & { code?: string; position?: string | number };
     const error: DbError = { message: err.message };
     if (err.code) error.code = err.code;

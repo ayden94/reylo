@@ -4,7 +4,7 @@
 // those as they are (docs/mysql-sources.md); this side only carries them, and
 // runs the engine's catalog queries.
 import { createRequire } from "node:module";
-import type { MysqlDescribed } from "./engine.ts";
+import { Unreachable, type MysqlDescribed } from "./engine.ts";
 
 export type { MysqlDescribed } from "./engine.ts";
 
@@ -24,10 +24,19 @@ export async function openMysqlDescriber(projectDir: string, url: string): Promi
     throw new Error(`No MySQL client found in ${projectDir}; install "mysql2".`);
   }
   const mysql = (await import(path)).default as { createConnection(url: string): Promise<any> };
-  const conn = await mysql.createConnection(url);
+  // The server's answer to a statement carries a SQLSTATE; mysql2 marks `fatal` the errors that
+  // end the connection (a refused socket, a handshake the server rejects, a lost connection).
+  const rethrow = (e: unknown): never => {
+    const err = e as { sqlState?: string; fatal?: boolean };
+    throw err?.sqlState && !err.fatal ? e : new Unreachable(e);
+  };
+  // mysql2's default connectTimeout is already 10 s, the Postgres describer's limit.
+  const conn = await mysql.createConnection(url).catch(rethrow);
+  // A connection that drops while idle is reported as an event; unheard, it ends the process.
+  conn.on("error", () => {});
   return {
     async describe(sql) {
-      const prepared = await conn.prepare(sql);
+      const prepared = await conn.prepare(sql).catch(rethrow);
       const info = prepared.statement ?? prepared;
       try {
         return {
@@ -40,7 +49,7 @@ export async function openMysqlDescriber(projectDir: string, url: string): Promi
       }
     },
     async values(sql, params) {
-      const [rows] = await conn.query({ sql, values: params, rowsAsArray: true });
+      const [rows] = await conn.query({ sql, values: params, rowsAsArray: true }).catch(rethrow);
       return rows as unknown[][];
     },
     close: () => conn.end(),
