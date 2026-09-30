@@ -5,14 +5,21 @@
 // authoritative one (dollar quoting, E'' strings, nested comments, array slices).
 export type Placeholder = { name: string; start: number; end: number };
 
+// A name drops its prefix (`:id` is `id`); a positional placeholder is named by its number
+// (`$2` and `?2` are `2`), and a bare `?` takes the number after the largest so far.
 export function lexPlaceholders(sql: string): { params: string[]; placeholders: Placeholder[] } {
   const placeholders: Placeholder[] = [];
   const params: string[] = [];
-  let positional = 0;
+  let largest = 0;
   let i = 0;
   const push = (name: string, start: number, end: number) => {
     placeholders.push({ name, start, end });
     if (!params.includes(name)) params.push(name);
+  };
+  const position = (digits: string) => {
+    const n = digits.replace(/^0+(?=\d)/, "");
+    largest = Math.max(largest, Number(n));
+    return n;
   };
   while (i < sql.length) {
     const ch = sql[i]!;
@@ -28,17 +35,24 @@ export function lexPlaceholders(sql: string): { params: string[]; placeholders: 
     }
     if (ch === "$" && next !== undefined && /[0-9]/.test(next)) {
       const m = /^[0-9]+/.exec(sql.slice(i + 1))!;
-      push(`$${m[0]}`, i, i + 1 + m[0].length); i += 1 + m[0].length; continue;
+      push(position(m[0]), i, i + 1 + m[0].length); i += 1 + m[0].length; continue;
     }
     if (ch === "?" && next !== undefined && /[0-9]/.test(next)) {
       // SQLite's `?NNN` names the same position a `$NNN` does.
       const m = /^[0-9]+/.exec(sql.slice(i + 1))!;
-      push(`$${m[0]}`, i, i + 1 + m[0].length); i += 1 + m[0].length; continue;
+      push(position(m[0]), i, i + 1 + m[0].length); i += 1 + m[0].length; continue;
     }
-    if (ch === "?") { positional += 1; push(`?${positional}`, i, i + 1); i += 1; continue; }
+    if (ch === "?") { largest += 1; push(String(largest), i, i + 1); i += 1; continue; }
     i += 1;
   }
+  // Positional parameters bind by number, whatever order they appear in.
+  if (params.length && params.every(isPositional)) params.sort((a, b) => Number(a) - Number(b));
   return { params, placeholders };
+}
+
+/** Whether a parameter name is a position: a number, where a name starts with a letter or `_`. */
+export function isPositional(name: string): boolean {
+  return /^\d+$/.test(name);
 }
 
 function skipQuoted(sql: string, start: number, quote: string): number {

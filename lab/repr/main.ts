@@ -18,6 +18,6 @@ const b: Row = null! as ExpectedRow;
 const c: { id: number } = null! as Params;
 const d: Params = null! as { id: number };
 declare const pool: { query(text: string, values?: unknown[]): Promise<{ rows: unknown[] }> };
-const e: ExpectedRow | null = await query.execute(pool, { id: 1 });
+const e: ExpectedRow | null = await query.run(pool, { id: 1 });
 // JSON.stringify turns every Temporal value and bigint into text.
 const j: { id: number; created_at: string; big: string | null; day: string; local: string; stamps: string[]; n: string } | null = query["~porg"].json;

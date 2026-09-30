@@ -16,38 +16,44 @@ const a: ExpectedRow = null! as Row;
 const b: Row = null! as ExpectedRow;
 const c: { id: number; pattern: string } = null! as Params;
 const d: Params = null! as { id: number; pattern: string };
-const e: Row | null = await query.execute(db, { id: 1, pattern: "a%" });
+const e: Row | null = await query.run(db, { id: 1, pattern: "a%" });
 const f: readonly ["id", "pattern"] = q.params;
 // @ts-expect-error a postgres pool cannot run a sqlite query
-await query.execute({ query: async () => ({ rows: [] }) }, { id: 1, pattern: "a%" });
+await query.run({ query: async () => ({ rows: [] }) }, { id: 1, pattern: "a%" });
 
 // Inference without directives: parameter types from context, cardinality from the keys,
 // nullability from the schema and the joins.
 import insert from "./insert.sql";
 import byEmail from "./by_email.sql";
 import search from "./search.sql";
-const i1: { id: number; name: string; created_at: string } = null! as Awaited<ReturnType<typeof insert.execute>>;
-const i2: Awaited<ReturnType<typeof insert.execute>> = null! as { id: number; name: string; created_at: string };
+const i1: { id: number; name: string; created_at: string } = null! as Awaited<ReturnType<typeof insert.run>>;
+const i2: Awaited<ReturnType<typeof insert.run>> = null! as { id: number; name: string; created_at: string };
 // :email is written whole to a nullable column, so the caller may pass null; :name fills a NOT NULL one.
-const i3: { name: string; email: string | null } = null! as Parameters<typeof insert.execute>[1];
-const i4: Parameters<typeof insert.execute>[1] = null! as { name: string; email: string | null };
-const b1: { id: number; name: string } | null = null! as Awaited<ReturnType<typeof byEmail.execute>>;
-const b2: Awaited<ReturnType<typeof byEmail.execute>> = null! as { id: number; name: string } | null;
-const s1: { id: number; name: string; title: string | null; min_score: number | null }[] = null! as Awaited<ReturnType<typeof search.execute>>;
-const s2: Awaited<ReturnType<typeof search.execute>> = null! as { id: number; name: string; title: string | null; min_score: number | null }[];
-const s3: { min: number; q: string; n: number; o: number } = null! as Parameters<typeof search.execute>[1];
-const s4: Parameters<typeof search.execute>[1] = null! as { min: number; q: string; n: number; o: number };
+const i3: { name: string; email: string | null } = null! as Parameters<typeof insert.run>[1];
+const i4: Parameters<typeof insert.run>[1] = null! as { name: string; email: string | null };
+const b1: { id: number; name: string } | null = null! as Awaited<ReturnType<typeof byEmail.run>>;
+const b2: Awaited<ReturnType<typeof byEmail.run>> = null! as { id: number; name: string } | null;
+const s1: { id: number; name: string; title: string | null; min_score: number | null }[] = null! as Awaited<ReturnType<typeof search.run>>;
+const s2: Awaited<ReturnType<typeof search.run>> = null! as { id: number; name: string; title: string | null; min_score: number | null }[];
+const s3: { min: number; q: string; n: number; o: number } = null! as Parameters<typeof search.run>[1];
+const s4: Parameters<typeof search.run>[1] = null! as { min: number; q: string; n: number; o: number };
 const cards: ["one", "maybeOne", "many"] = [insert.cardinality, byEmail.cardinality, search.cardinality];
 // SQLite-only syntax parses, because the engine prepares the statement with SQLite itself:
 // `limit o, n` (offset first, as SQLite reads it), `glob`, `insert or ignore`, `on conflict do nothing`.
-// A statement without RETURNING is cardinality `none` and `execute` resolves to void.
+// A statement without RETURNING is cardinality `none` and `run` resolves to void.
 import page from "./page.sql";
 import upsert from "./upsert.sql";
 import ignore from "./ignore.sql";
-const p1: { id: number; name: string }[] = null! as Awaited<ReturnType<typeof page.execute>>;
-const p2: { g: string; n: number; o: number } = null! as Parameters<typeof page.execute>[1];
-const p3: Parameters<typeof page.execute>[1] = null! as { g: string; n: number; o: number };
-const u1: { id: number } | null = null! as Awaited<ReturnType<typeof upsert.execute>>;
-const u2: Awaited<ReturnType<typeof upsert.execute>> = null! as { id: number } | null;
+const p1: { id: number; name: string }[] = null! as Awaited<ReturnType<typeof page.run>>;
+const p2: { g: string; n: number; o: number } = null! as Parameters<typeof page.run>[1];
+const p3: Parameters<typeof page.run>[1] = null! as { g: string; n: number; o: number };
+const u1: { id: number } | null = null! as Awaited<ReturnType<typeof upsert.run>>;
+const u2: Awaited<ReturnType<typeof upsert.run>> = null! as { id: number } | null;
 const more: ["many", "maybeOne", "none"] = [page.cardinality, upsert.cardinality, ignore.cardinality];
-const v: void = await ignore.execute(db, { email: "x", name: "y" });
+const v: void = await ignore.run(db, { email: "x", name: "y" });
+// A positional parameter's key is its number; a bare `?` is one past the largest number before it.
+import positional from "./positional.sql";
+const pos1: { name: string } | null = null! as Awaited<ReturnType<typeof positional.run>>;
+const pos2: Awaited<ReturnType<typeof positional.run>> = null! as { name: string } | null;
+const pos3: { 1: number; 2: string } = null! as Parameters<typeof positional.run>[1];
+const pos4: Parameters<typeof positional.run>[1] = null! as { 1: number; 2: string };

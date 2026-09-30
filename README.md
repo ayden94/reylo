@@ -24,7 +24,7 @@ Porg is the root of this repository. [`porgapi/`](./porgapi) is PorgAPI, a web f
 
 ## Examples
 
-Parameters are written `:name` in every dialect (`$name` and `@name` work too). The engine lexes them out and rewrites to the database's own placeholder (`$1` for Postgres, `?` for MySQL, `:name` stays for SQLite) when the mapper describes the statement; the rewritten text and its binding order land in `.porg/queries.json`, and `execute` binds through them, so the parameter object is `{ name: ... }` everywhere. Positional `$1` / `?` are accepted too; mixing the two styles in one statement is an error. The engine infers the row count from the statement and the schema on every dialect (a primary-key equality is `maybeOne`, an ungrouped aggregate `one`, a one-row `INSERT … RETURNING` `one`, a data-modifying statement without RETURNING `none`); `-- @returns one | maybeOne | many | none` overrides it. A parameter nothing in the statement types is `unknown`; `cast(:x as integer)` types it, and the database enforces the cast. A parameter is typed without null unless the statement lets the caller pass one: it tests the parameter for null or coalesces it (Postgres), or writes it whole to a nullable column (Postgres and SQLite).
+Parameters are written `:name` in every dialect (`$name` and `@name` work too). The engine lexes them out and rewrites to the database's own placeholder (`$1` for Postgres, `?` for MySQL, `:name` stays for SQLite) when the mapper describes the statement; the rewritten text and its binding order land in `.porg/queries.json`, and `run` binds through them, so the parameter object is `{ name: ... }` everywhere. Positional `$1` / `?` are accepted too, and the key is the position's number: `where id = $1` takes `{ 1: ... }`, and a bare `?` is one past the largest number before it, as SQLite numbers it; mixing the two styles in one statement is an error. The engine infers the row count from the statement and the schema on every dialect (a primary-key equality is `maybeOne`, an ungrouped aggregate `one`, a one-row `INSERT … RETURNING` `one`, a data-modifying statement without RETURNING `none`); `-- @returns one | maybeOne | many | none` overrides it. A parameter nothing in the statement types is `unknown`; `cast(:x as integer)` types it, and the database enforces the cast. A parameter is typed without null unless the statement lets the caller pass one: it tests the parameter for null or coalesces it (Postgres), or writes it whole to a nullable column (Postgres and SQLite).
 
 ### Postgres
 
@@ -36,9 +36,11 @@ where id = :id and name = :name
 
 ```ts
 import getUser from "./get_user.sql";
-const user = await getUser.execute(sql, { id: 1, name: "ada" });
+const user = await getUser.run(sql, { id: 1, name: "ada" });
 //    ^? { id: number; name: string; email: string | null; role: "admin" | "member"; tags: string[]; created_at: string; next_id: number } | null
 ```
+
+`run(client)` without the parameters returns a function of them, so a transaction passes its own client: `const get = getUser.run(tx); await get({ id: 1, name: "ada" })`. A statement that takes no parameters runs at once. The client is always the caller's.
 
 Parameter types come from the server (`id: number`, `name: string`); `role` is an enum, `tags` a `text[]`, `email` nullable from the catalog, `next_id` non-null because `id` is and the built-in `+` never returns NULL for non-null operands; `| null` on the row because `id` is the primary key, so the `WHERE` matches at most one row. `created_at` is an ISO 8601 `string` and an `int8` a `string` because those are the default representations (see [Dates and 64-bit integers](#dates-and-64-bit-integers)).
 
@@ -70,11 +72,11 @@ order by u.id limit :n offset :o
 
 ```ts
 import search from "./search.sql";
-const rows = await search.execute(db, { q: "a%", min: 1, n: 5, o: 0 });
+const rows = await search.run(db, { q: "a%", min: 1, n: 5, o: 0 });
 //    ^? { id: number; name: string; title: string | null; min_score: number | null }[]
 ```
 
-SQLite has no describe for a parameter or an expression, so the engine carries SQLite itself: the amalgamation, patched with five one-line hooks after name resolution, compiled into the engine's wasm. The mapper reads the schema DDL from `sqlite_schema` through `node:sqlite`, the engine replays it into an in-memory database and prepares the statement there, and SQLite's own resolved tree comes back: every column reference with its table, column, `NOT NULL` and outer-join mark, every expression with SQLite's affinity, every parameter in the context SQLite placed it in. So `:q` is text because SQLite compares it with `u.name`, `:min` is the type of `u.score` (and the cast agrees), `:n` and `:o` are integers because they are the `LIMIT` and `OFFSET`; an `INSERT … VALUES` or `UPDATE … SET` types a placeholder from the column it feeds. What SQLite has no facts for stays a table in the engine: the result types of the built-in functions (`count` is a non-null integer, `coalesce` takes its arguments' type, `length` an integer), the arithmetic rule (`id + 1` is an integer, `score * 2` a real), and the row count from the unique keys: `where id = :id` on an `INTEGER PRIMARY KEY` or a unique index is `| null`, a one-row `INSERT … RETURNING` is one row, `on conflict do nothing` and `insert or ignore` make it `| null`, and a statement without `RETURNING` is `none` (`execute` resolves to `void`). Every SQLite form parses, `limit o, n`, `glob`, `insert or replace` included. A parameter no context names (one whose only context is a function call, or a bare `select :x`) is `unknown`, and a `cast(:x as text)` types it.
+SQLite has no describe for a parameter or an expression, so the engine carries SQLite itself: the amalgamation, patched with five one-line hooks after name resolution, compiled into the engine's wasm. The mapper reads the schema DDL from `sqlite_schema` through `node:sqlite`, the engine replays it into an in-memory database and prepares the statement there, and SQLite's own resolved tree comes back: every column reference with its table, column, `NOT NULL` and outer-join mark, every expression with SQLite's affinity, every parameter in the context SQLite placed it in. So `:q` is text because SQLite compares it with `u.name`, `:min` is the type of `u.score` (and the cast agrees), `:n` and `:o` are integers because they are the `LIMIT` and `OFFSET`; an `INSERT … VALUES` or `UPDATE … SET` types a placeholder from the column it feeds. What SQLite has no facts for stays a table in the engine: the result types of the built-in functions (`count` is a non-null integer, `coalesce` takes its arguments' type, `length` an integer), the arithmetic rule (`id + 1` is an integer, `score * 2` a real), and the row count from the unique keys: `where id = :id` on an `INTEGER PRIMARY KEY` or a unique index is `| null`, a one-row `INSERT … RETURNING` is one row, `on conflict do nothing` and `insert or ignore` make it `| null`, and a statement without `RETURNING` is `none` (`run` resolves to `void`). Every SQLite form parses, `limit o, n`, `glob`, `insert or replace` included. A parameter no context names (one whose only context is a function call, or a bare `select :x`) is `unknown`, and a `cast(:x as text)` types it.
 
 ### MySQL
 
@@ -85,7 +87,7 @@ where id = :id and name <> :skip
 ```
 
 ```ts
-const user = await getUser.execute(conn, { id: 1, skip: "" });
+const user = await getUser.run(conn, { id: 1, skip: "" });
 //    ^? { id: number; name: string; email: string | null; big: string; n: string; at: string; j: unknown; flag: number; next_id: string } | null
 ```
 
@@ -102,7 +104,7 @@ where u.id = :id
 
 ## Dates and 64-bit integers
 
-Every Postgres and MySQL driver decodes a timestamp as a `Date`, and they disagree on 64-bit integers: `pg`, `postgres` and Bun.sql return a string, mysql2 and the SQLite drivers a number that is lossy above 2^53, mariadb a BigInt (the measurements are in [docs/dates.md](./docs/dates.md)). Two mapper options name one representation; the rendered type follows it, and `execute` produces it whatever the driver returned:
+Every Postgres and MySQL driver decodes a timestamp as a `Date`, and they disagree on 64-bit integers: `pg`, `postgres` and Bun.sql return a string, mysql2 and the SQLite drivers a number that is lossy above 2^53, mariadb a BigInt (the measurements are in [docs/dates.md](./docs/dates.md)). Two mapper options name one representation; the rendered type follows it, and `run` produces it whatever the driver returned:
 
 ```jsonc
 "contentMappers": [{ "package": "porg", "extensions": [".sql"], "options": { "dates": "string", "bigint": "string" } }]
@@ -117,7 +119,7 @@ Every Postgres and MySQL driver decodes a timestamp as a `Date`, and they disagr
 
 - The default is text on both because it is never lossy, `JSON.stringify(row)` round-trips, and the wire type then equals the JSON twin that `Json<T>` describes.
 - A zone-less `timestamp` or `date` reaches Porg as a `Date` the driver built from wall-clock fields (local time in `pg`, `postgres`, PGlite, Bun.sql, mysql2 and mariadb; a `date` is UTC midnight in `postgres`, PGlite and Bun.sql), and Porg reads the fields back in that frame, so the text is the stored wall clock. A driver configured to return the text form (`pg` `types.setTypeParser`, `postgres` `types`, PGlite `parsers`, mysql2 and mariadb `dateStrings`) passes through under `"string"` and is parsed under `"temporal"`.
-- `"temporal"` makes the generated module import `porg/temporal`, which declares the global `Temporal` namespace from `temporal-spec`. At runtime Node 26 has a global `Temporal`; Bun does not, so assign a polyfill to `globalThis.Temporal` or `execute` throws with that instruction.
+- `"temporal"` makes the generated module import `porg/temporal`, which declares the global `Temporal` namespace from `temporal-spec`. At runtime Node 26 has a global `Temporal`; Bun does not, so assign a polyfill to `globalThis.Temporal` or `run` throws with that instruction.
 - `"bigint"` gives a `bigint`; `JSON.stringify` has no rule for one, so add a `BigInt.prototype.toJSON` or a replacer. A value above 2^53 that the driver already decoded as a number is lost before Porg sees it: mysql2 takes `supportBigNumbers: true, bigNumberStrings: true`, better-sqlite3 and bun:sqlite `safeIntegers`, node:sqlite `readBigInts`.
 - Inside a nested JSON shape the database serialized the value already, so the options do not apply there; SQLite has no date type and its integers follow the driver, so neither option changes a SQLite type.
 - The runtime reads the column classes from the mapper's cache (`.porg/queries.json`); before the first `tsc --runExternalCode` run it returns the driver's values unchanged.

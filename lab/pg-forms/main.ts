@@ -3,7 +3,7 @@
 // `// WRONG: expected <X>` would mark a place where that is still weaker than the database's
 // truth; there is none left.
 // Both directions of each assignment are pinned, so the check is exact, and
-// `Awaited<ReturnType<typeof q.execute>>` pins the cardinality with the row type.
+// `Awaited<ReturnType<typeof q.run>>` pins the cardinality with the row type.
 
 // ---------------------------------------------------------------------------
 // 1. json_agg / jsonb_agg of a jsonb_build_object in a correlated subquery
@@ -16,8 +16,8 @@ type JsonAggRow = {
   posts_jsonb: { id: number; views: number }[] | null;
   posts_coalesced: { id: number; at: string | null }[];
 };
-const jsonAgg1: JsonAggRow | null = null! as Awaited<ReturnType<typeof jsonAgg.execute>>;
-const jsonAgg2: Awaited<ReturnType<typeof jsonAgg.execute>> = null! as JsonAggRow | null;
+const jsonAgg1: JsonAggRow | null = null! as Awaited<ReturnType<typeof jsonAgg.run>>;
+const jsonAgg2: Awaited<ReturnType<typeof jsonAgg.run>> = null! as JsonAggRow | null;
 const jsonAgg3: { id: number } = null! as JsonAggParams;
 const jsonAgg4: JsonAggParams = null! as { id: number };
 // Right in every part: the shape comes out of the constructors, the field nullability out of
@@ -39,8 +39,8 @@ type ArraysRow = {
   // `{"(1,hello)","(2,second)"}`.
   agg_rows: string | null;
 };
-const arrays1: ArraysRow | null = null! as Awaited<ReturnType<typeof arrays.execute>>;
-const arrays2: Awaited<ReturnType<typeof arrays.execute>> = null! as ArraysRow | null;
+const arrays1: ArraysRow | null = null! as Awaited<ReturnType<typeof arrays.run>>;
+const arrays2: Awaited<ReturnType<typeof arrays.run>> = null! as ArraysRow | null;
 
 // ---------------------------------------------------------------------------
 // 3. row(...) constructors, a composite-typed column, to_jsonb of a whole row
@@ -71,8 +71,8 @@ type RowsRow = {
   // join, so its row is never NULL.
   whole_row: string;
 };
-const rows1: RowsRow | null = null! as Awaited<ReturnType<typeof rows.execute>>;
-const rows2: Awaited<ReturnType<typeof rows.execute>> = null! as RowsRow | null;
+const rows1: RowsRow | null = null! as Awaited<ReturnType<typeof rows.run>>;
+const rows2: Awaited<ReturnType<typeof rows.run>> = null! as RowsRow | null;
 
 // ---------------------------------------------------------------------------
 // 4. Aggregates, ungrouped and grouped, with FILTER and a window function
@@ -87,8 +87,11 @@ type AggPlainRow = {
   all_viewed: boolean | null;
   published: string;
 };
-const aggPlain1: AggPlainRow = null! as Awaited<ReturnType<typeof aggPlain.execute>>;
-const aggPlain2: Awaited<ReturnType<typeof aggPlain.execute>> = null! as AggPlainRow;
+const aggPlain1: AggPlainRow = null! as Awaited<ReturnType<typeof aggPlain.run>>;
+const aggPlain2: Awaited<ReturnType<typeof aggPlain.run>> = null! as AggPlainRow;
+// A statement without parameters runs at once: `run(client)` is the result, not a function.
+declare const client: { query(text: string, values?: unknown[]): Promise<{ rows: unknown[] }> };
+const aggPlain3: Promise<AggPlainRow> = aggPlain.run(client);
 // Right throughout: an ungrouped aggregate is exactly one row (`one`), count and
 // `count(*) filter (...)` are never NULL, every other aggregate is NULL over an empty set,
 // sum(int4) is int8 and avg(int4) is numeric, so both are text under `bigint`/`numeric`.
@@ -102,8 +105,8 @@ type AggGroupedRow = {
   viewed: string;
   groups: string;
 };
-const aggGrouped1: AggGroupedRow[] = null! as Awaited<ReturnType<typeof aggGrouped.execute>>;
-const aggGrouped2: Awaited<ReturnType<typeof aggGrouped.execute>> = null! as AggGroupedRow[];
+const aggGrouped1: AggGroupedRow[] = null! as Awaited<ReturnType<typeof aggGrouped.run>>;
+const aggGrouped2: Awaited<ReturnType<typeof aggGrouped.run>> = null! as AggGroupedRow[];
 // Right otherwise: `many` for a GROUP BY that no unique key pins, and `count(*) over ()` is a
 // non-null int8.
 
@@ -118,30 +121,30 @@ type CtePlainRow = {
   // The CTE's own `where published_at is not null` proves it.
   published_at: string;
 };
-const ctePlain1: CtePlainRow[] = null! as Awaited<ReturnType<typeof ctePlain.execute>>;
-const ctePlain2: Awaited<ReturnType<typeof ctePlain.execute>> = null! as CtePlainRow[];
+const ctePlain1: CtePlainRow[] = null! as Awaited<ReturnType<typeof ctePlain.run>>;
+const ctePlain2: Awaited<ReturnType<typeof ctePlain.run>> = null! as CtePlainRow[];
 // Right otherwise: the column types and the catalog NOT NULL survive the CTE.
 
 import cteJoin from "./cte_join.sql";
 type CteJoinRow = { id: number; name: string; title: string };
-const cteJoin1: CteJoinRow[] = null! as Awaited<ReturnType<typeof cteJoin.execute>>;
-const cteJoin2: Awaited<ReturnType<typeof cteJoin.execute>> = null! as CteJoinRow[];
+const cteJoin1: CteJoinRow[] = null! as Awaited<ReturnType<typeof cteJoin.run>>;
+const cteJoin2: Awaited<ReturnType<typeof cteJoin.run>> = null! as CteJoinRow[];
 // Right: `many`, because the unique key pins the user but not the joined CTE rows.
 
 import cteRecursive from "./cte_recursive.sql";
 // `select 1 union all select n + 1 from counter where n < 5` is never NULL: the recursive
 // query's columns are settled as a fixed point of its own arms.
 type CteRecursiveRow = { n: number };
-const cteRecursive1: CteRecursiveRow[] = null! as Awaited<ReturnType<typeof cteRecursive.execute>>;
-const cteRecursive2: Awaited<ReturnType<typeof cteRecursive.execute>> = null! as CteRecursiveRow[];
+const cteRecursive1: CteRecursiveRow[] = null! as Awaited<ReturnType<typeof cteRecursive.run>>;
+const cteRecursive2: Awaited<ReturnType<typeof cteRecursive.run>> = null! as CteRecursiveRow[];
 
 import cteDml from "./cte_dml.sql";
 import type { Params as CteDmlParams } from "./cte_dml.sql";
 type CteDmlRow = { id: number; title: string; views: number };
 // `one`: the WITH query inserts exactly one VALUES row and the outer select reads it with no
 // WHERE, so the statement returns that row, like the bare `insert ... returning` of param_insert.
-const cteDml1: CteDmlRow = null! as Awaited<ReturnType<typeof cteDml.execute>>;
-const cteDml2: Awaited<ReturnType<typeof cteDml.execute>> = null! as CteDmlRow;
+const cteDml1: CteDmlRow = null! as Awaited<ReturnType<typeof cteDml.run>>;
+const cteDml2: Awaited<ReturnType<typeof cteDml.run>> = null! as CteDmlRow;
 const cteDml3: { uid: number; title: string } = null! as CteDmlParams;
 const cteDml4: CteDmlParams = null! as { uid: number; title: string };
 
@@ -168,8 +171,8 @@ type FnScalarRow = {
   fresh: string;
   lowered: string | null;
 };
-const fnScalar1: FnScalarRow | null = null! as Awaited<ReturnType<typeof fnScalar.execute>>;
-const fnScalar2: Awaited<ReturnType<typeof fnScalar.execute>> = null! as FnScalarRow | null;
+const fnScalar1: FnScalarRow | null = null! as Awaited<ReturnType<typeof fnScalar.run>>;
+const fnScalar2: Awaited<ReturnType<typeof fnScalar.run>> = null! as FnScalarRow | null;
 // Right: a user-defined function's result is nullable (nothing in the catalog says otherwise,
 // and a STRICT function with a nullable argument really can return NULL), coalesce with a
 // non-null constant is non-null, nullif and lower(nullable) are nullable.
@@ -186,20 +189,20 @@ type FnSetofRow = {
   published_at: string | null;
   views: number | null;
 };
-const fnSetof1: FnSetofRow[] = null! as Awaited<ReturnType<typeof fnSetof.execute>>;
-const fnSetof2: Awaited<ReturnType<typeof fnSetof.execute>> = null! as FnSetofRow[];
+const fnSetof1: FnSetofRow[] = null! as Awaited<ReturnType<typeof fnSetof.run>>;
+const fnSetof2: Awaited<ReturnType<typeof fnSetof.run>> = null! as FnSetofRow[];
 
 import fnTable from "./fn_table.sql";
 type FnTableRow = { user_id: number | null; n: string | null };
-const fnTable1: FnTableRow[] = null! as Awaited<ReturnType<typeof fnTable.execute>>;
-const fnTable2: Awaited<ReturnType<typeof fnTable.execute>> = null! as FnTableRow[];
+const fnTable1: FnTableRow[] = null! as Awaited<ReturnType<typeof fnTable.run>>;
+const fnTable2: Awaited<ReturnType<typeof fnTable.run>> = null! as FnTableRow[];
 // Right: `returns table(user_id int, n bigint)` declares no NOT NULL, so nullable is the
 // truth, and int/bigint map to number/string.
 
 import fnSrf from "./fn_srf.sql";
 type FnSrfRow = { id: number; k: unknown };
-const fnSrf1: FnSrfRow[] = null! as Awaited<ReturnType<typeof fnSrf.execute>>;
-const fnSrf2: Awaited<ReturnType<typeof fnSrf.execute>> = null! as FnSrfRow[];
+const fnSrf1: FnSrfRow[] = null! as Awaited<ReturnType<typeof fnSrf.run>>;
+const fnSrf2: Awaited<ReturnType<typeof fnSrf.run>> = null! as FnSrfRow[];
 // Right, and the best reason string in the lab: a set-returning function in the select list
 // makes the row count `many` even though the WHERE pins the primary key
 // ("the set-returning function jsonb_path_query returns a row per value, and none for an
@@ -223,8 +226,8 @@ type ColumnsRow = {
   blob: Uint8Array | null;
   created_at: string;
 };
-const columns1: ColumnsRow[] = null! as Awaited<ReturnType<typeof columns.execute>>;
-const columns2: Awaited<ReturnType<typeof columns.execute>> = null! as ColumnsRow[];
+const columns1: ColumnsRow[] = null! as Awaited<ReturnType<typeof columns.run>>;
+const columns2: Awaited<ReturnType<typeof columns.run>> = null! as ColumnsRow[];
 // Right throughout: the enum becomes its label union, the domain over text becomes the base
 // type with the column's NOT NULL, uuid/timestamptz/numeric/int8 follow the representation
 // options, bytea is Uint8Array, text[] is string[], jsonb is unknown.
@@ -234,18 +237,18 @@ const columns2: Awaited<ReturnType<typeof columns.execute>> = null! as ColumnsRo
 // ---------------------------------------------------------------------------
 import joinLeft from "./join_left.sql";
 type JoinLeftRow = { id: number; name: string; post_id: number | null; title: string | null; views: number | null };
-const joinLeft1: JoinLeftRow[] = null! as Awaited<ReturnType<typeof joinLeft.execute>>;
-const joinLeft2: Awaited<ReturnType<typeof joinLeft.execute>> = null! as JoinLeftRow[];
+const joinLeft1: JoinLeftRow[] = null! as Awaited<ReturnType<typeof joinLeft.run>>;
+const joinLeft2: Awaited<ReturnType<typeof joinLeft.run>> = null! as JoinLeftRow[];
 
 import joinRight from "./join_right.sql";
 type JoinRightRow = { id: number | null; name: string | null; post_id: number; title: string; views: number };
-const joinRight1: JoinRightRow[] = null! as Awaited<ReturnType<typeof joinRight.execute>>;
-const joinRight2: Awaited<ReturnType<typeof joinRight.execute>> = null! as JoinRightRow[];
+const joinRight1: JoinRightRow[] = null! as Awaited<ReturnType<typeof joinRight.run>>;
+const joinRight2: Awaited<ReturnType<typeof joinRight.run>> = null! as JoinRightRow[];
 
 import joinFull from "./join_full.sql";
 type JoinFullRow = { id: number | null; name: string | null; post_id: number | null; title: string | null; views: number | null };
-const joinFull1: JoinFullRow[] = null! as Awaited<ReturnType<typeof joinFull.execute>>;
-const joinFull2: Awaited<ReturnType<typeof joinFull.execute>> = null! as JoinFullRow[];
+const joinFull1: JoinFullRow[] = null! as Awaited<ReturnType<typeof joinFull.run>>;
+const joinFull2: Awaited<ReturnType<typeof joinFull.run>> = null! as JoinFullRow[];
 // Right: LEFT makes the right side nullable, RIGHT flips it, FULL makes both sides nullable.
 
 import joinNotNull from "./join_notnull.sql";
@@ -258,31 +261,31 @@ type JoinNotNullRow = {
   title: string;
   views: number;
 };
-const joinNotNull1: JoinNotNullRow[] = null! as Awaited<ReturnType<typeof joinNotNull.execute>>;
-const joinNotNull2: Awaited<ReturnType<typeof joinNotNull.execute>> = null! as JoinNotNullRow[];
+const joinNotNull1: JoinNotNullRow[] = null! as Awaited<ReturnType<typeof joinNotNull.run>>;
+const joinNotNull2: Awaited<ReturnType<typeof joinNotNull.run>> = null! as JoinNotNullRow[];
 
 // ---------------------------------------------------------------------------
 // 10. Parameters in every position
 // ---------------------------------------------------------------------------
 import paramWhere from "./param_where.sql";
 import type { Params as ParamWhereParams } from "./param_where.sql";
-const paramWhere1: { id: number; name: string } | null = null! as Awaited<ReturnType<typeof paramWhere.execute>>;
-const paramWhere2: Awaited<ReturnType<typeof paramWhere.execute>> = null! as { id: number; name: string } | null;
+const paramWhere1: { id: number; name: string } | null = null! as Awaited<ReturnType<typeof paramWhere.run>>;
+const paramWhere2: Awaited<ReturnType<typeof paramWhere.run>> = null! as { id: number; name: string } | null;
 const paramWhere3: { id: number } = null! as ParamWhereParams;
 const paramWhere4: ParamWhereParams = null! as { id: number };
 
 import paramAny from "./param_any.sql";
 import type { Params as ParamAnyParams } from "./param_any.sql";
-const paramAny1: { id: number; name: string }[] = null! as Awaited<ReturnType<typeof paramAny.execute>>;
-const paramAny2: Awaited<ReturnType<typeof paramAny.execute>> = null! as { id: number; name: string }[];
+const paramAny1: { id: number; name: string }[] = null! as Awaited<ReturnType<typeof paramAny.run>>;
+const paramAny2: Awaited<ReturnType<typeof paramAny.run>> = null! as { id: number; name: string }[];
 const paramAny3: { names: string[] } = null! as ParamAnyParams;
 const paramAny4: ParamAnyParams = null! as { names: string[] };
 // Right: `= any(:names)` types the parameter as the array of the column's type.
 
 import paramLimit from "./param_limit.sql";
 import type { Params as ParamLimitParams } from "./param_limit.sql";
-const paramLimit1: { id: number; name: string }[] = null! as Awaited<ReturnType<typeof paramLimit.execute>>;
-const paramLimit2: Awaited<ReturnType<typeof paramLimit.execute>> = null! as { id: number; name: string }[];
+const paramLimit1: { id: number; name: string }[] = null! as Awaited<ReturnType<typeof paramLimit.run>>;
+const paramLimit2: Awaited<ReturnType<typeof paramLimit.run>> = null! as { id: number; name: string }[];
 // Postgres types a LIMIT placeholder as int8. The `bigint` representation is about how a driver
 // DECODES a column; on the way in every driver takes a number, a bigint or a string.
 const paramLimit3: { n: number | bigint | string } = null! as ParamLimitParams;
@@ -290,8 +293,8 @@ const paramLimit4: ParamLimitParams = null! as { n: number | bigint | string };
 
 import paramInsert from "./param_insert.sql";
 import type { Params as ParamInsertParams } from "./param_insert.sql";
-const paramInsert1: { id: number; name: string; slug: string } = null! as Awaited<ReturnType<typeof paramInsert.execute>>;
-const paramInsert2: Awaited<ReturnType<typeof paramInsert.execute>> = null! as { id: number; name: string; slug: string };
+const paramInsert1: { id: number; name: string; slug: string } = null! as Awaited<ReturnType<typeof paramInsert.run>>;
+const paramInsert2: Awaited<ReturnType<typeof paramInsert.run>> = null! as { id: number; name: string; slug: string };
 const paramInsert3: { a: string; b: string } = null! as ParamInsertParams;
 const paramInsert4: ParamInsertParams = null! as { a: string; b: string };
 // Right: a one-row INSERT ... RETURNING is `one`, the RETURNING columns keep the table's NOT
@@ -304,8 +307,8 @@ type ParamExprRow = {
   x: number;
   y: string;
 };
-const paramExpr1: ParamExprRow = null! as Awaited<ReturnType<typeof paramExpr.execute>>;
-const paramExpr2: Awaited<ReturnType<typeof paramExpr.execute>> = null! as ParamExprRow;
+const paramExpr1: ParamExprRow = null! as Awaited<ReturnType<typeof paramExpr.run>>;
+const paramExpr2: Awaited<ReturnType<typeof paramExpr.run>> = null! as ParamExprRow;
 const paramExpr3: { x: number; y: string | null } = null! as ParamExprParams;
 const paramExpr4: ParamExprParams = null! as { x: number; y: string | null };
 // Right otherwise: `:x::int` is a number, `coalesce(:y, 'd')` types :y as text the caller may
@@ -314,12 +317,21 @@ const paramExpr4: ParamExprParams = null! as { x: number; y: string | null };
 import paramNull from "./param_null.sql";
 import type { Params as ParamNullParams } from "./param_null.sql";
 type ParamNullParamsType = { email: string | null; name: string; role: "admin" | "member" | null };
-const paramNull1: { id: number; email: string | null }[] = null! as Awaited<ReturnType<typeof paramNull.execute>>;
-const paramNull2: Awaited<ReturnType<typeof paramNull.execute>> = null! as { id: number; email: string | null }[];
+const paramNull1: { id: number; email: string | null }[] = null! as Awaited<ReturnType<typeof paramNull.run>>;
+const paramNull2: Awaited<ReturnType<typeof paramNull.run>> = null! as { id: number; email: string | null }[];
 const paramNull3: ParamNullParamsType = null! as ParamNullParams;
 const paramNull4: ParamNullParams = null! as ParamNullParamsType;
 // Right: a parameter may be null where the statement lets it be, and nowhere else. :email is
 // written whole to a nullable column; :role is tested for null; :name fills a NOT NULL column.
+
+import paramPositional from "./param_positional.sql";
+import type { Params as ParamPositionalParams } from "./param_positional.sql";
+const paramPositional1: { b: string; a: number } = null! as Awaited<ReturnType<typeof paramPositional.run>>;
+const paramPositional2: Awaited<ReturnType<typeof paramPositional.run>> = null! as { b: string; a: number };
+const paramPositional3: { 1: number; 2: string } = null! as ParamPositionalParams;
+const paramPositional4: ParamPositionalParams = null! as { 1: number; 2: string };
+// Right: a positional parameter's key is its number, and each binds by number whatever order the
+// statement names them in: $2 is the text, $1 the integer.
 
 // ---------------------------------------------------------------------------
 // 11. Views
@@ -335,8 +347,8 @@ type ViewsRow = {
   posts: string;
   last_at: string | null;
 };
-const views1: ViewsRow[] = null! as Awaited<ReturnType<typeof views.execute>>;
-const views2: Awaited<ReturnType<typeof views.execute>> = null! as ViewsRow[];
+const views1: ViewsRow[] = null! as Awaited<ReturnType<typeof views.run>>;
+const views2: Awaited<ReturnType<typeof views.run>> = null! as ViewsRow[];
 
 // ---------------------------------------------------------------------------
 // 12. Casts
@@ -355,8 +367,8 @@ type CastsRow = {
   k: number | null;
   nothing: number | null;
 };
-const casts1: CastsRow | null = null! as Awaited<ReturnType<typeof casts.execute>>;
-const casts2: Awaited<ReturnType<typeof casts.execute>> = null! as CastsRow | null;
+const casts1: CastsRow | null = null! as Awaited<ReturnType<typeof casts.run>>;
+const casts2: Awaited<ReturnType<typeof casts.run>> = null! as CastsRow | null;
 // A cast types its parameter: `:since::timestamptz` takes a Date or its text.
 const casts3: { since: Date | string; id: number } = null! as CastsParams;
 const casts4: CastsParams = null! as { since: Date | string; id: number };
@@ -379,5 +391,5 @@ type TypesRow = {
   pair: string | null;
   roles: ("admin" | "member")[];
 };
-const types1: TypesRow | null = null! as Awaited<ReturnType<typeof types.execute>>;
-const types2: Awaited<ReturnType<typeof types.execute>> = null! as TypesRow | null;
+const types1: TypesRow | null = null! as Awaited<ReturnType<typeof types.run>>;
+const types2: Awaited<ReturnType<typeof types.run>> = null! as TypesRow | null;

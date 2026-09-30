@@ -1,6 +1,6 @@
 // The runtime query object behind `import query from "./file.sql"`.
 // Types come from the content mapper; values come from the runtime loader.
-import { execute as run, type ClientFor, type Dialect } from "./execute.ts";
+import { execute, type ClientFor, type Dialect } from "./execute.ts";
 import { convertRows, type Conversion, type Repr } from "./convert.ts";
 import type { StandardJSONSchemaV1, StandardTypedV1 } from "./standard.ts";
 
@@ -37,7 +37,13 @@ export interface Query<Params, Row, C extends Cardinality, D extends Dialect>
   readonly cardinality: C;
   readonly "~standard": StandardJSONSchemaV1.Props<Params, Materialize<Row, C>>;
   readonly "~porg": PorgTypes<Params, Row, C>;
-  execute(client: ClientFor<D>, params: Params): Promise<Materialize<Row, C>>;
+  /**
+   * Runs the statement on the client. Without the parameters, a statement that takes some
+   * returns a function of them (`const get = q.run(tx); await get({ id: 1 })`), and one that
+   * takes none runs at once.
+   */
+  run(client: ClientFor<D>): {} extends Params ? Promise<Materialize<Row, C>> : (params: Params) => Promise<Materialize<Row, C>>;
+  run(client: ClientFor<D>, params: Params): Promise<Materialize<Row, C>>;
 }
 
 export type QueryDefinition = {
@@ -47,7 +53,7 @@ export type QueryDefinition = {
   /** The mapper's rewritten statement and its binding order, when the mapper's cache had them. */
   text?: string;
   order?: readonly string[];
-  /** The columns whose wire value `execute` converts, and the representation the mapper chose. */
+  /** The columns whose wire value `run` converts, and the representation the mapper chose. */
   convert?: Record<string, Conversion>;
   dates?: Repr["dates"];
   bigint?: Repr["bigint"];
@@ -78,22 +84,24 @@ export function defineQuery<Params, Row, C extends Cardinality, D extends Dialec
       },
     },
     "~porg": undefined as unknown as PorgTypes<Params, Row, C>,
-    async execute(client, params) {
-      const rows = (await run(client, query, params as Record<string, unknown>)) as Row[];
-      if (def.convert) convertRows(rows, def.convert, { dates: def.dates ?? "string", bigint: def.bigint ?? "string" });
-      switch (cardinality) {
-        case "none":
-          return undefined as Materialize<Row, C>;
-        case "many":
-          return rows as Materialize<Row, C>;
-        case "one":
-          if (rows.length !== 1) throw new Error(`Expected exactly one row, got ${rows.length}`);
-          return rows[0] as Materialize<Row, C>;
-        default:
-          if (rows.length > 1) throw new Error(`Expected at most one row, got ${rows.length}`);
-          return (rows[0] ?? null) as Materialize<Row, C>;
-      }
-    },
+    run: ((client: ClientFor<D>, ...rest: [Params?]) =>
+      rest.length === 0 && def.params.length > 0 ? (params: Params) => run(client, params) : run(client, rest[0] ?? ({} as Params))) as Query<Params, Row, C, D>["run"],
   };
+  async function run(client: ClientFor<D>, params: Params): Promise<Materialize<Row, C>> {
+    const rows = (await execute(client, query, params as Record<string, unknown>)) as Row[];
+    if (def.convert) convertRows(rows, def.convert, { dates: def.dates ?? "string", bigint: def.bigint ?? "string" });
+    switch (cardinality) {
+      case "none":
+        return undefined as Materialize<Row, C>;
+      case "many":
+        return rows as Materialize<Row, C>;
+      case "one":
+        if (rows.length !== 1) throw new Error(`Expected exactly one row, got ${rows.length}`);
+        return rows[0] as Materialize<Row, C>;
+      default:
+        if (rows.length > 1) throw new Error(`Expected at most one row, got ${rows.length}`);
+        return (rows[0] ?? null) as Materialize<Row, C>;
+    }
+  }
   return query;
 }

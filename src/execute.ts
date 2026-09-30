@@ -88,7 +88,10 @@ function rewrite(query: QueryModule, params: Record<string, unknown>, placeholde
   let text = "";
   let last = 0;
   for (const p of placeholders) {
-    text += query.sql.slice(last, p.start) + placeholder(query.params.indexOf(p.name));
+    const index = query.params.indexOf(p.name);
+    // A hand-built query whose `params` misses a placeholder would bind `$0`.
+    if (index === -1) throw new Error(`The statement's placeholder ${query.sql.slice(p.start, p.end)} is parameter "${p.name}", which the query's params (${JSON.stringify(query.params)}) do not list.`);
+    text += query.sql.slice(last, p.start) + placeholder(index);
     last = p.end;
   }
   return { text: text + query.sql.slice(last), values: query.params.map((name) => params[name]) };

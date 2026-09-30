@@ -7,15 +7,15 @@ import { execute } from "../../src/execute.ts";
 const URL = "postgres://localhost:5432/postgres";
 const admin = postgres(URL);
 await admin.unsafe(`drop table if exists porg_drv; create table porg_drv (id serial primary key, name text not null, big bigint not null default 9007199254740993, n numeric(10,2) not null default 1.50, at timestamptz not null default now(), j jsonb not null default '{"a":1}'); insert into porg_drv (name) values ('ada')`);
-const q = { dialect: "postgres", sql: "select id, name, big, n, at, j from porg_drv where id = $1", params: ["id"] };
+const q = { dialect: "postgres", sql: "select id, name, big, n, at, j from porg_drv where id = $1", params: ["1"] };
 const pool = new pg.Pool({ connectionString: URL });
-const viaPg = await execute(pool, q, { id: 1 });
+const viaPg = await execute(pool, q, { 1: 1 });
 console.log("pg      :", viaPg[0], typeof viaPg[0].big, viaPg[0].at?.constructor?.name);
-const viaPostgres = await execute(admin, q, { id: 1 });
+const viaPostgres = await execute(admin, q, { 1: 1 });
 console.log("postgres:", viaPostgres[0], typeof viaPostgres[0].big, viaPostgres[0].at?.constructor?.name);
 const lite = new PGlite();
 await lite.exec(`create table porg_drv (id serial primary key, name text not null, big bigint not null default 9007199254740993, n numeric(10,2) not null default 1.50, at timestamptz not null default now(), j jsonb not null default '{"a":1}'); insert into porg_drv (name) values ('ada')`);
-const viaLite = await execute(lite, q, { id: 1 });
+const viaLite = await execute(lite, q, { 1: 1 });
 console.log("pglite  :", viaLite[0], typeof viaLite[0].big, viaLite[0].at?.constructor?.name);
 // metadata without execution
 const d = await admin.unsafe(q.sql).describe();
@@ -26,10 +26,10 @@ console.log("pg fields (post-exec):", pgRes.fields.map(f => [f.name, f.dataTypeI
 await admin.unsafe("drop table porg_drv"); await admin.end(); await pool.end(); await lite.close();
 // sqlite
 const ddl = `create table t (id integer primary key, name text not null, big integer not null default 9007199254740993, n real, at text default current_timestamp, j text default '{"a":1}'); insert into t (name) values ('ada')`;
-const sq = { dialect: "sqlite", sql: "select id, name, big, n, at, j, id + 1 as expr from t where id = ?", params: ["id"] };
+const sq = { dialect: "sqlite", sql: "select id, name, big, n, at, j, id + 1 as expr from t where id = ?", params: ["1"] };
 const bs3 = new Database(":memory:"); bs3.exec(ddl);
-console.log("better-sqlite3:", await execute(bs3, sq, { id: 1 }));
+console.log("better-sqlite3:", await execute(bs3, sq, { 1: 1 }));
 console.log("better-sqlite3 columns():", bs3.prepare(sq.sql).columns().map(c => [c.name, c.type, c.table, c.column]));
 const nd = new DatabaseSync(":memory:"); nd.exec(ddl);
-console.log("node:sqlite  :", await execute(nd, sq, { id: 1 }));
+console.log("node:sqlite  :", await execute(nd, sq, { 1: 1 }));
 console.log("node:sqlite columns():", nd.prepare(sq.sql).columns().map(c => [c.name, c.type, c.table, c.column]));

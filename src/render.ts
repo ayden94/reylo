@@ -1,6 +1,6 @@
 // The engine's type model as TypeScript text. On the wire a driver decodes a Postgres value
 // its own way (int8 as a string, timestamps as Date); the mapper's `dates` and `bigint`
-// options pick the representation `execute` hands back, and the rendered type follows them.
+// options pick the representation `run` hands back, and the rendered type follows them.
 // Inside a JSON value the database has already serialized it, so the same type reads
 // differently there and the options do not apply.
 import type { EngineType } from "./engine.ts";
@@ -73,7 +73,7 @@ function renderFields(fields: { name: string; type: EngineType; nullable: boolea
 }
 
 /**
- * The type a parameter accepts. The `dates` and `bigint` options describe what `execute` hands
+ * The type a parameter accepts. The `dates` and `bigint` options describe what `run` hands
  * back, not what a driver takes: every Postgres and MySQL driver serializes a `Date` or an ISO
  * string for a timestamp, and a number, a BigInt or a digit string for a 64-bit integer, so a
  * value read back under any representation can be passed in again, and `limit :n` takes a number.

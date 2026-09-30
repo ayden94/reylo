@@ -4,7 +4,7 @@
 // SQLite drivers, lossy above 2^53) or a BigInt (mariadb, PGlite above 2^53). The mapper's
 // `dates` and `bigint` options name one representation, and this pass produces it.
 
-/** How `execute` represents temporal and 64-bit integer values, from the mapper options. */
+/** How `run` represents temporal and 64-bit integer values, from the mapper options. */
 export type Repr = { dates: "string" | "Date" | "temporal"; bigint: "string" | "number" | "bigint" };
 export const defaultRepr: Repr = { dates: "string", bigint: "string" };
 

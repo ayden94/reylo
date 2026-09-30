@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { createHash } from "node:crypto";
 import { basename, dirname, join, relative } from "node:path";
 import { serve } from "./rpc.ts";
-import { lexPlaceholders } from "./lex.ts";
+import { isPositional, lexPlaceholders } from "./lex.ts";
 import { engine, reason, AnswerCache, Unreachable, type Analysis } from "./engine.ts";
 import { conversion, defaultRepr, ident, renderParamType, renderType, type Conversion, type Repr } from "./render.ts";
 import { openMysqlDescriber, type MysqlDescriber } from "./mysql-describe.ts";
@@ -136,9 +136,9 @@ serve({
     });
 
     const { params: names, placeholders } = lexPlaceholders(sql);
-    const named = names.filter((n) => !/^[$?]\d+$/.test(n));
+    const named = names.filter((n) => !isPositional(n));
     if (named.length && named.length !== names.length) {
-      const first = placeholders.find((h) => /^[$?]\d+$/.test(h.name))!;
+      const first = placeholders.find((h) => isPositional(h.name))!;
       diagnostics.push(diag("Named and positional parameters cannot be mixed in one statement.", first.start, first.end - first.start, 2));
       return emit("never", "never", "many", names);
     }
