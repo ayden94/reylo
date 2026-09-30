@@ -20,7 +20,7 @@ lto = true
 codegen-units = 1
 panic = "abort"
 
-# `pg-extension/` hosts the engine inside a Postgres backend (`cargo build -p lando-pg --profile pg`).
+# `pg-extension/` hosts the engine inside a Postgres backend (`cargo build -p porg-pg --profile pg`).
 # There a panic has to unwind to the FFI boundary and come back as an SQL error; an abort would
 # take the server down with it. Speed over size: the library is loaded once per backend.
 [profile.pg]
