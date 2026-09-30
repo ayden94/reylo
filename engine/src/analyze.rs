@@ -26,6 +26,13 @@ pub struct ParamUse {
     pub null_guarded: bool,
 }
 
+/// The column a parameter is written to: by name, or by position when an INSERT names no columns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Filled {
+    Name(String),
+    Position(usize),
+}
+
 #[derive(Debug, Clone)]
 pub struct Analysis {
     pub kind: StatementKind,
@@ -40,6 +47,9 @@ pub struct Analysis {
     pub functions: Vec<String>,
     /// Binding-site info per parameter number (1-based).
     pub params: HashMap<i32, ParamUse>,
+    /// Each parameter that is the whole value written to a column, bare or under a cast: an
+    /// INSERT's VALUES item, an UPDATE's or an ON CONFLICT's SET. (parameter number, relation, column)
+    pub filled: Vec<(i32, String, Filled)>,
     /// Whether RETURNING produces rows (for defaulting `returns`).
     pub has_returning: bool,
     /// Nullability degradation triggers: an outer join anywhere, a repeated table, a set op.
@@ -125,6 +135,7 @@ pub fn analyze(sql: &str) -> Result<Analysis, AnalyzeError> {
     let mut relnames: Vec<String> = Vec::new();
     let mut functions: Vec<String> = Vec::new();
     let mut params: HashMap<i32, ParamUse> = HashMap::new();
+    let mut filled: Vec<(i32, String, Filled)> = Vec::new();
 
     let is_null = protobuf::NullTestType::IsNull as i32;
     let outer_joins = [
@@ -153,6 +164,40 @@ pub fn analyze(sql: &str) -> Result<Analysis, AnalyzeError> {
             kind = StatementKind::Mutation;
             if node.get("returning_list").and_then(|l| l.as_array()).is_some_and(|l| !l.is_empty()) {
                 has_returning = true;
+            }
+            let Some(relation) = node.get("relation").and_then(|r| r.get("relname")).and_then(|r| r.as_str()) else { return };
+            let mut set = |targets: Option<&Value>| {
+                for target in targets.and_then(|t| t.as_array()).into_iter().flatten() {
+                    let Some(rt) = target.get("node").and_then(|n| n.get("ResTarget")) else { continue };
+                    if let (Some(name), Some(n)) = (rt.get("name").and_then(|n| n.as_str()), rt.get("val").and_then(direct_param_number)) {
+                        filled.push((n, relation.to_string(), Filled::Name(name.to_string())));
+                    }
+                }
+            };
+            match key {
+                "UpdateStmt" => set(node.get("target_list")),
+                "InsertStmt" => {
+                    set(node.get("on_conflict_clause").and_then(|o| o.get("target_list")));
+                    let columns: Vec<&str> = node
+                        .get("cols")
+                        .and_then(|c| c.as_array())
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|c| c.get("node")?.get("ResTarget")?.get("name")?.as_str())
+                        .collect();
+                    let rows = node.get("select_stmt").and_then(|s| s.get("node")).and_then(|n| n.get("SelectStmt")).and_then(|s| s.get("values_lists")).and_then(|v| v.as_array());
+                    for row in rows.into_iter().flatten() {
+                        let items = row.get("node").and_then(|n| n.get("List")).and_then(|l| l.get("items")).and_then(|i| i.as_array());
+                        for (i, item) in items.into_iter().flatten().enumerate() {
+                            let Some(n) = direct_param_number(item) else { continue };
+                            let column = if columns.is_empty() { Some(Filled::Position(i)) } else { columns.get(i).map(|c| Filled::Name(c.to_string())) };
+                            if let Some(column) = column {
+                                filled.push((n, relation.to_string(), column));
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
         }
         "JoinExpr" => {
@@ -251,6 +296,7 @@ pub fn analyze(sql: &str) -> Result<Analysis, AnalyzeError> {
         write_set,
         functions,
         params,
+        filled,
         has_returning,
         has_outer_join,
         nullable_tables,
@@ -507,6 +553,19 @@ mod tests {
         let p = a.params.get(&1).unwrap();
         assert!(p.coalesce);
         assert_eq!(p.coalesce_default, None);
+    }
+
+    #[test]
+    fn a_parameter_written_whole_to_a_column_names_it() {
+        use Filled::{Name, Position};
+        let a = analyze("INSERT INTO notes (title, body) VALUES ($1, $2::text), ($3, lower($4)) ON CONFLICT (title) DO UPDATE SET body = $5").unwrap();
+        let notes = |n: i32, column: &str| (n, "notes".to_string(), Name(column.to_string()));
+        assert_eq!(a.filled, vec![notes(5, "body"), notes(1, "title"), notes(2, "body"), notes(3, "title")]);
+        let a = analyze("INSERT INTO notes VALUES ($1, $2)").unwrap();
+        assert_eq!(a.filled, vec![(1, "notes".into(), Position(0)), (2, "notes".into(), Position(1))]);
+        let a = analyze("UPDATE notes SET body = $1, title = upper($2) WHERE id = $3").unwrap();
+        assert_eq!(a.filled, vec![(1, "notes".into(), Name("body".into()))]);
+        assert!(analyze("SELECT $1::text AS x").unwrap().filled.is_empty());
     }
 
     #[test]

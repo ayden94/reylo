@@ -112,7 +112,8 @@ pub fn analyze(sql: &str, lexed: &Lexed, host: &Host) -> Lazy<Analysis> {
                 Some(p) => param_type(p.r#type, p.charset),
                 None => (Type::Unknown, ""),
             };
-            Param { name: name.clone(), ty, type_name: type_name.to_string() }
+            // MySQL reports no nullability for a parameter; every one is typed without null.
+            Param { name: name.clone(), ty, type_name: type_name.to_string(), nullable: false }
         })
         .collect();
     let kind = match &parsed {

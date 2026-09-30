@@ -454,16 +454,26 @@ impl Analyzer<'_> {
             };
             self.walk_select(sel, &Vec::new(), &targets, &mut found);
         }
+        // A parameter that is the whole value written to a column may be null when that column
+        // may, and no NOT NULL column it also fills forbids it.
+        let mut fills: HashMap<String, bool> = HashMap::new();
+        let mut fill = |v: &Node, target: &Option<Fact>| {
+            if let (true, Some(name), Some(target)) = (v.op == "variable", v.name.as_ref(), target) {
+                *fills.entry(name.clone()).or_insert(true) &= !target.non_null;
+            }
+        };
         if let Some(dml) = &t.dml {
             let scope: ScopeStack = Vec::new();
             if let Some(values) = &dml.values {
                 for (i, v) in values.iter().enumerate() {
                     let target = dml.columns.get(i).and_then(|c| c.as_deref()).and_then(|c| self.table_column(&dml.table, c));
+                    fill(v, &target);
                     self.walk(v, Ctx::Typed(target), &scope, &mut found);
                 }
             }
             for item in dml.set.iter().chain(dml.upsert.iter().flat_map(|u| u.set.iter())) {
                 let target = item.column.as_deref().and_then(|c| self.table_column(&dml.table, c));
+                fill(&item.expr, &target);
                 self.walk(&item.expr, Ctx::Typed(target), &scope, &mut found);
             }
             if let Some(w) = &dml.where_ {
@@ -494,7 +504,7 @@ impl Analyzer<'_> {
                     .cloned()
                     .unwrap_or_else(Fact::unknown);
                 let type_name = scalar_name(&fact.ty).unwrap_or("").to_string();
-                Param { name: name.clone(), ty: fact.ty, type_name }
+                Param { name: name.clone(), ty: fact.ty, type_name, nullable: fills.get(&numbered).copied().unwrap_or(false) }
             })
             .collect()
     }

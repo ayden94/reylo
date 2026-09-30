@@ -128,6 +128,10 @@ pub struct Param {
     pub ty: Type,
     /// The catalog's name for the type, for messages.
     pub type_name: String,
+    /// Whether the caller may pass null: the statement tests the parameter for null or
+    /// coalesces it, or it is the whole value written to a nullable column.
+    #[serde(default)]
+    pub nullable: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

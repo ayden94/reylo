@@ -20,7 +20,7 @@ use crate::pgtypes::{TypeRegistry, RELATION_TYPES_QUERY, TYPE_QUERY};
 use crate::types::{DescribedColumn, DescribedStatement, Type};
 use serde_json::{json, Value};
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// How many statements one analysis may synthesize to settle its columns: one per set-operation
 /// arm, one per statement whose expressions read a column, one per JSON constructor context.
@@ -41,7 +41,7 @@ pub const RELNAMES_QUERY: &str = "SELECT c.oid::int8, c.relname::text FROM pg_cl
 /// settled without a second round for the tables the statement itself reads. `$1` is `text[]` of
 /// relation names.
 pub const RELATION_COLUMNS_QUERY: &str = "SELECT c.oid::int8, c.relname::text, a.attnum::int4, a.attnotnull, \
-    CASE WHEN c.relkind IN ('v', 'm') AND a.attnum = 1 THEN pg_catalog.pg_get_viewdef(c.oid) END \
+    CASE WHEN c.relkind IN ('v', 'm') AND a.attnum = 1 THEN pg_catalog.pg_get_viewdef(c.oid) END, a.attname::text \
     FROM pg_class c JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped \
     WHERE c.relname = ANY($1::text[]) AND pg_catalog.pg_table_is_visible(c.oid)";
 /// Which of the names the expression rules read a user or an extension has defined, and which
@@ -153,7 +153,7 @@ pub(crate) fn bare(sql: &str, lexed: &Lexed, dialect: Dialect, mut diagnostics: 
     let (cardinality, _) = cardinality_directive(lexed, &mut diagnostics).unwrap_or(("many".to_string(), None));
     Analysis {
         kind: String::new(),
-        params: lexed.params.iter().map(|n| Param { name: n.clone(), ty: Type::Unknown, type_name: String::new() }).collect(),
+        params: lexed.params.iter().map(|n| Param { name: n.clone(), ty: Type::Unknown, type_name: String::new(), nullable: false }).collect(),
         columns: Vec::new(),
         cardinality,
         cardinality_reason: None,
@@ -181,6 +181,9 @@ struct Engine<'a> {
     registry: RefCell<TypeRegistry>,
     /// The parse-named relations' columns: relation oid → (name, attnum → NOT NULL).
     relations: RefCell<HashMap<u32, (String, HashMap<i32, bool>)>>,
+    /// The same columns by relation name, in attnum order: column name → NOT NULL. An INSERT
+    /// or an UPDATE names the columns it writes, or their positions.
+    columns_by_name: RefCell<HashMap<String, BTreeMap<i32, (String, bool)>>>,
     /// The defining SELECT of each of those that is a view or a materialized view. The catalog
     /// holds no NOT NULL for a view's columns, so they are settled from this statement instead.
     views: RefCell<HashMap<u32, String>>,
@@ -203,7 +206,7 @@ struct Engine<'a> {
 
 impl<'a> Engine<'a> {
     fn new(host: &'a Host<'a>) -> Engine<'a> {
-        Engine { host, registry: RefCell::new(TypeRegistry::with_builtins()), relations: RefCell::new(HashMap::new()), views: RefCell::new(HashMap::new()), with_stack: RefCell::new(Vec::new()), probed: RefCell::new(HashSet::new()), probing: RefCell::new(Vec::new()), probe_calls: Cell::new(0), casts: RefCell::new(Vec::new()), budget: Cell::new(MAX_PROBES) }
+        Engine { host, registry: RefCell::new(TypeRegistry::with_builtins()), relations: RefCell::new(HashMap::new()), columns_by_name: RefCell::new(HashMap::new()), views: RefCell::new(HashMap::new()), with_stack: RefCell::new(Vec::new()), probed: RefCell::new(HashSet::new()), probing: RefCell::new(Vec::new()), probe_calls: Cell::new(0), casts: RefCell::new(Vec::new()), budget: Cell::new(MAX_PROBES) }
     }
 
     fn run(&self, sql: &str, lexed: &Lexed) -> Lazy<Analysis> {
@@ -224,15 +227,16 @@ impl<'a> Engine<'a> {
         // the functions, and every probe that carries no placeholder. Only what depends on the
         // describe (a type it reports that no named relation holds, a probe that pins a
         // parameter's type) waits for a second round.
-        let trust = trust(self.host).map(|mut trust| {
-            // A parameter's TypeScript type carries no null, so a parameter is a non-null value,
-            // unless its `-- @param` annotation says the caller may pass null.
+        let relations = relations_of(parsed.as_ref());
+        // A parameter's TypeScript type carries null only where the statement lets the caller
+        // pass one (see `nullable_params`); every other parameter is a non-null value.
+        let nullable = self.nullable_params(parsed.as_ref(), &relations);
+        let trust = trust(self.host).zip(nullable.clone()).map(|(mut trust, nullable)| {
             trust.non_null_params = true;
-            trust.nullable_params = nullable_params(lexed);
+            trust.nullable_params = nullable;
             trust
         });
         let operators = set_returning_operators(self.host);
-        let relations = relations_of(parsed.as_ref());
         let described = self.described(&rewritten.sql, parsed.as_ref(), &relations, trust.as_ref());
         let functions: &[String] = parsed.as_ref().map(|p| p.functions.as_slice()).unwrap_or(&[]);
         let catalog_rows = catalog_rows(self.host, functions, &relations);
@@ -303,7 +307,8 @@ impl<'a> Engine<'a> {
             .enumerate()
             .map(|(i, name)| {
                 let o = raw.params.get(i).copied().unwrap_or(0);
-                Param { name: name.clone(), ty: registry.render(o), type_name: registry.name(o) }
+                let nullable = nullable.as_ref().is_some_and(|n| n.contains(&(i as i32 + 1)));
+                Param { name: name.clone(), ty: registry.render(o), type_name: registry.name(o), nullable }
             })
             .collect();
 
@@ -394,12 +399,43 @@ impl<'a> Engine<'a> {
         for row in columns.unwrap_or_default() {
             let (Some(oid), Some(name), Some(attnum), Some(not_null)) = (row.first().and_then(as_u32), row.get(1).and_then(as_str), row.get(2).and_then(as_u32), row.get(3).and_then(as_bool)) else { continue };
             known.entry(oid).or_insert_with(|| (name.to_string(), HashMap::new())).1.insert(attnum as i32, not_null);
+            if let Some(column) = row.get(5).and_then(as_str) {
+                self.columns_by_name.borrow_mut().entry(name.to_string()).or_default().insert(attnum as i32, (column.to_string(), not_null));
+            }
             if let Some(definition) = row.get(4).and_then(as_str) {
                 self.views.borrow_mut().insert(oid, definition.trim_end().trim_end_matches(';').to_string());
             }
         }
         self.registry.borrow_mut().insert_rows(&types.unwrap_or_default());
         Some(())
+    }
+
+    /// The parameters the caller may pass null for, by number: one the statement tests for null
+    /// or coalesces (`:p IS NULL OR …`, `coalesce(:p, 50)`), and one that is the whole value
+    /// written to a column the catalog lets hold null, wherever it is written (a parameter that
+    /// also fills a NOT NULL column cannot be null). The rules take every other parameter as a
+    /// non-null value, which is what its TypeScript type promises.
+    fn nullable_params(&self, parsed: Option<&Parsed>, relations: &[String]) -> Lazy<HashSet<i32>> {
+        let Some(parsed) = parsed else { return Some(HashSet::new()) };
+        let mut out: HashSet<i32> = parsed.params.iter().filter(|(_, u)| u.null_guarded || u.coalesce).map(|(n, _)| *n).collect();
+        if parsed.filled.is_empty() {
+            return Some(out);
+        }
+        self.prefetch(relations)?;
+        let columns = self.columns_by_name.borrow();
+        let mut fills: HashMap<i32, bool> = HashMap::new();
+        for (n, relation, column) in &parsed.filled {
+            let Some(known) = columns.get(relation) else { continue };
+            let not_null = match column {
+                analyze::Filled::Name(name) => known.values().find(|(c, _)| c == name).map(|(_, nn)| *nn),
+                analyze::Filled::Position(i) => known.values().nth(*i).map(|(_, nn)| *nn),
+            };
+            if let Some(not_null) = not_null {
+                *fills.entry(*n).or_insert(true) &= !not_null;
+            }
+        }
+        out.extend(fills.into_iter().filter(|(_, nullable)| *nullable).map(|(n, _)| n));
+        Some(out)
     }
 
     /// Ask for a probe's describe ahead of the round that reads it, when nothing has to be
@@ -728,23 +764,6 @@ impl<'a> Engine<'a> {
         })
         .sql
     }
-}
-
-/// The numbers of the parameters a `-- @param name type` annotation types with `null` or
-/// `undefined`: `$1` is the first name in `lexed.params`.
-fn nullable_params(lexed: &Lexed) -> HashSet<i32> {
-    let mut out = HashSet::new();
-    for d in lexed.directives.iter().filter(|d| d.name == "param") {
-        let Some((name, ty)) = d.value.trim().split_once(char::is_whitespace) else { continue };
-        let admits_null = ty.split(|c: char| !c.is_ascii_alphanumeric()).any(|word| word == "null" || word == "undefined");
-        if !admits_null {
-            continue;
-        }
-        if let Some(i) = lexed.params.iter().position(|p| p == name) {
-            out.insert(i as i32 + 1);
-        }
-    }
-    out
 }
 
 /// The relations a statement reads or writes, as the parse names them, sorted. libpg_query
