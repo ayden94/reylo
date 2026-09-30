@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import { basename, dirname, join, relative } from "node:path";
 import { serve } from "./rpc.ts";
 import { lexPlaceholders } from "./lex.ts";
-import { engine, reason, AnswerCache, Unreachable } from "./engine.ts";
+import { engine, reason, AnswerCache, Unreachable, type Analysis } from "./engine.ts";
 import { conversion, defaultRepr, ident, renderParamType, renderType, type Conversion, type Repr } from "./render.ts";
 import { openMysqlDescriber, type MysqlDescriber } from "./mysql-describe.ts";
 import { openPostgresDescriber, type Describer } from "./describe.ts";
@@ -59,6 +59,12 @@ function directive(sql: string, name: string): string | undefined {
 
 function diag(messageText: string, start: number, length: number, code = 1) {
   return { messageText, start, length, code };
+}
+
+/** A parameter's TypeScript type: `unknown` when nothing in the statement types it (a CAST does), with `| null` where the statement lets the caller pass null. */
+function paramType(q: Analysis["params"][number], rendered: string): string {
+  if (q.type.kind === "unknown") return "unknown";
+  return q.nullable ? `${rendered} | null` : rendered;
 }
 
 /** The diagnostic for a database that cannot be reached: where it was looked for, where that came from, and the driver's reason; never the credentials. */
@@ -145,8 +151,6 @@ serve({
       diagnostics.push(diag(`No database URL: set ${project.options.urlEnv ?? "DATABASE_URL"} in the environment or .env, or "url" in the content mapper options.`, 0, 1, 4));
       return emit("unknown", "unknown", cardinality, names);
     }
-    const annotated = new Map<string, string>();
-    for (const m of sql.matchAll(/^\s*--\s*@param\s+(\S+)\s+(.+?)\s*$/gm)) annotated.set(m[1]!, m[2]!);
     const writeCache = (extra: Partial<CacheEntry> = {}, convert: Record<string, Conversion> = {}) => {
       const key = relative(project.projectDir, p.fileName);
       // The runtime converts only the columns named here, to the representation named here.
@@ -190,15 +194,8 @@ serve({
       if (analysis.diagnostics.some((d) => d.code === 6)) return emit("unknown", "unknown", inferred, names);
       const columns = analysis.columns.map((c) => `${ident(c.name)}: ${renderType(c.type, false, "mysql", project.repr)}${c.nullable ? " | null" : ""}`);
       // The server types a `?` from its context (LONGLONG against an int column, VAR_STRING
-      // against a varchar); `-- @param name type` overrides it and covers the ones it leaves untyped.
-      const paramTypes = analysis.params.map((q) => {
-        const t = annotated.get(q.name) ?? (q.type.kind === "unknown" ? undefined : renderParamType(q.type, "mysql", project.repr));
-        if (!t) {
-          const at = placeholders.find((h) => h.name === q.name)!;
-          diagnostics.push(diag(`MySQL could not type parameter "${q.name}"; add "-- @param ${q.name} <type>".`, at.start, at.end - at.start, 7));
-        }
-        return `${ident(q.name)}: ${t ?? "unknown"}`;
-      });
+      // against a varchar, the target of a CAST); one it leaves untyped is `unknown`.
+      const paramTypes = analysis.params.map((q) => `${ident(q.name)}: ${paramType(q, renderParamType(q.type, "mysql", project.repr))}`);
       const convert: Record<string, Conversion> = {};
       for (const c of analysis.columns) { const cls = conversion(c.type); if (cls) convert[c.name] = cls; }
       writeCache({ cardinality: inferred, text: analysis.rewritten.sql, order: analysis.rewritten.order }, convert);
@@ -228,16 +225,9 @@ serve({
       const inferred = directive(sql, "returns") ? cardinality : analysis.cardinality;
       if (analysis.diagnostics.some((d) => d.code === 6)) return emit("unknown", "unknown", inferred, analysis.rewritten.order);
       const columns = analysis.columns.map((c) => `${ident(c.name)}: ${renderType(c.type, false, "sqlite")}${c.nullable ? " | null" : ""}`);
-      // The engine types a parameter from its context; `-- @param name type` overrides it and
-      // covers the ones no context names.
-      const paramTypes = analysis.params.map((q) => {
-        const t = annotated.get(q.name) ?? (q.type.kind === "unknown" ? undefined : renderType(q.type, false, "sqlite"));
-        if (!t) {
-          const at = placeholders.find((h) => h.name === q.name)!;
-          diagnostics.push(diag(`Nothing in the statement types parameter "${q.name}"; add "-- @param ${q.name} <type>" (number, string, Uint8Array, ...).`, at.start, at.end - at.start, 7));
-        }
-        return `${ident(q.name)}: ${t ?? "unknown"}`;
-      });
+      // The engine types a parameter from its context (a column it is compared with or written
+      // to, a CAST); one no context types is `unknown`.
+      const paramTypes = analysis.params.map((q) => `${ident(q.name)}: ${paramType(q, renderType(q.type, false, "sqlite"))}`);
       writeCache({ cardinality: inferred, text: analysis.rewritten.sql, order: analysis.rewritten.order });
       return emit(names.length ? `{ ${paramTypes.join("; ")} }` : "Record<never, never>", columns.length ? `{ ${columns.join("; ")} }` : "never", inferred, names);
     }
@@ -271,7 +261,7 @@ serve({
       return emit("unknown", "unknown", inferred, analysis.rewritten.order);
     }
     const columns = analysis.columns.map((c) => `${ident(c.name)}: ${renderType(c.type, false, "postgres", project.repr)}${c.nullable ? " | null" : ""}`);
-    const paramTypes = analysis.params.map((q) => `${ident(q.name)}: ${annotated.get(q.name) ?? renderParamType(q.type, "postgres", project.repr)}`);
+    const paramTypes = analysis.params.map((q) => `${ident(q.name)}: ${paramType(q, renderParamType(q.type, "postgres", project.repr))}`);
     const convert: Record<string, Conversion> = {};
     for (const c of analysis.columns) { const cls = conversion(c.type); if (cls) convert[c.name] = cls; }
     writeCache({ cardinality: inferred, text: analysis.rewritten.sql, order: analysis.rewritten.order }, convert);

@@ -28,7 +28,9 @@ import byEmail from "./by_email.sql";
 import search from "./search.sql";
 const i1: { id: number; name: string; created_at: string } = null! as Awaited<ReturnType<typeof insert.execute>>;
 const i2: Awaited<ReturnType<typeof insert.execute>> = null! as { id: number; name: string; created_at: string };
-const i3: { name: string; email: string } = null! as Parameters<typeof insert.execute>[1];
+// :email is written whole to a nullable column, so the caller may pass null; :name fills a NOT NULL one.
+const i3: { name: string; email: string | null } = null! as Parameters<typeof insert.execute>[1];
+const i4: Parameters<typeof insert.execute>[1] = null! as { name: string; email: string | null };
 const b1: { id: number; name: string } | null = null! as Awaited<ReturnType<typeof byEmail.execute>>;
 const b2: Awaited<ReturnType<typeof byEmail.execute>> = null! as { id: number; name: string } | null;
 const s1: { id: number; name: string; title: string | null; min_score: number | null }[] = null! as Awaited<ReturnType<typeof search.execute>>;

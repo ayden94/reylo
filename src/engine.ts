@@ -22,7 +22,8 @@ export type Directive = { name: string; value: string; start: number; end: numbe
 
 export type Analysis = {
   kind: string;
-  params: { name: string; type: EngineType; type_name: string }[];
+  /** `nullable`: the statement lets the caller pass null (it tests the parameter for null, coalesces it, or writes it whole to a nullable column). */
+  params: { name: string; type: EngineType; type_name: string; nullable: boolean }[];
   columns: { name: string; type: EngineType; nullable: boolean; type_name: string }[];
   cardinality: "one" | "maybeOne" | "many" | "none";
   cardinalityReason?: string;

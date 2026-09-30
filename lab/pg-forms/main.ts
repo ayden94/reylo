@@ -306,10 +306,20 @@ type ParamExprRow = {
 };
 const paramExpr1: ParamExprRow = null! as Awaited<ReturnType<typeof paramExpr.execute>>;
 const paramExpr2: Awaited<ReturnType<typeof paramExpr.execute>> = null! as ParamExprRow;
-const paramExpr3: { x: number; y: string } = null! as ParamExprParams;
-const paramExpr4: ParamExprParams = null! as { x: number; y: string };
-// Right otherwise: `:x::int` is a number, `coalesce(:y, 'd')` types :y as text and the column
-// as non-null, and a FROM-less select is exactly one row.
+const paramExpr3: { x: number; y: string | null } = null! as ParamExprParams;
+const paramExpr4: ParamExprParams = null! as { x: number; y: string | null };
+// Right otherwise: `:x::int` is a number, `coalesce(:y, 'd')` types :y as text the caller may
+// pass as null and the column as non-null, and a FROM-less select is exactly one row.
+
+import paramNull from "./param_null.sql";
+import type { Params as ParamNullParams } from "./param_null.sql";
+type ParamNullParamsType = { email: string | null; name: string; role: "admin" | "member" | null };
+const paramNull1: { id: number; email: string | null }[] = null! as Awaited<ReturnType<typeof paramNull.execute>>;
+const paramNull2: Awaited<ReturnType<typeof paramNull.execute>> = null! as { id: number; email: string | null }[];
+const paramNull3: ParamNullParamsType = null! as ParamNullParams;
+const paramNull4: ParamNullParams = null! as ParamNullParamsType;
+// Right: a parameter may be null where the statement lets it be, and nowhere else. :email is
+// written whole to a nullable column; :role is tested for null; :name fills a NOT NULL column.
 
 // ---------------------------------------------------------------------------
 // 11. Views
