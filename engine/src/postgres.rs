@@ -9,7 +9,7 @@
 //! returns `None`, the host answers, and the next call replays with more.
 
 use crate::analyze::{self, Analysis as Parsed};
-use crate::api::{Analysis, Column, DbError, Diagnostic, Param, Scope};
+use crate::api::{Analysis, Column, DbError, Diagnostic, Param, RawDescribe, Scope};
 use crate::cardinality::{self, Catalog};
 use crate::dialect::Dialect;
 use crate::host::{as_bool, as_str, as_strings, as_u32, Host, Lazy};
@@ -29,18 +29,25 @@ const MAX_PROBES: usize = 8;
 /// assumption included.
 const MAX_PROBE_CALLS: usize = 64;
 
-const ATTNOTNULL_QUERY: &str = "SELECT a.attrelid::int8, a.attnum::int4 FROM pg_attribute a \
+// The catalog queries below are public so that a host with a driver of its own can bind their
+// parameters by type: each casts every parameter in its text, and the doc comment names them.
+
+/// `$1` is `oid[]` of relations, `$2` the `int2[]` of attribute numbers beside them.
+pub const ATTNOTNULL_QUERY: &str = "SELECT a.attrelid::int8, a.attnum::int4 FROM pg_attribute a \
     JOIN unnest($1::oid[], $2::int2[]) AS u(rel, att) ON a.attrelid = u.rel AND a.attnum = u.att WHERE a.attnotnull";
-const RELNAMES_QUERY: &str = "SELECT c.oid::int8, c.relname::text FROM pg_class c WHERE c.oid = ANY($1::oid[])";
+/// `$1` is `oid[]` of relations.
+pub const RELNAMES_QUERY: &str = "SELECT c.oid::int8, c.relname::text FROM pg_class c WHERE c.oid = ANY($1::oid[])";
 /// Every column of the relations the parse names, by name, so provenance and `NOT NULL` are
-/// settled without a second round for the tables the statement itself reads.
-const RELATION_COLUMNS_QUERY: &str = "SELECT c.oid::int8, c.relname::text, a.attnum::int4, a.attnotnull, \
+/// settled without a second round for the tables the statement itself reads. `$1` is `text[]` of
+/// relation names.
+pub const RELATION_COLUMNS_QUERY: &str = "SELECT c.oid::int8, c.relname::text, a.attnum::int4, a.attnotnull, \
     CASE WHEN c.relkind IN ('v', 'm') AND a.attnum = 1 THEN pg_catalog.pg_get_viewdef(c.oid) END \
     FROM pg_class c JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped \
     WHERE c.relname = ANY($1::text[]) AND pg_catalog.pg_table_is_visible(c.oid)";
 /// Which of the names the expression rules read a user or an extension has defined, and which
-/// built-in types a cast may target (see [`crate::infer::Trust`]).
-const TRUST_QUERY: &str = "SELECT false, o.oprname::text FROM pg_operator o WHERE o.oid >= 16384 AND o.oprname::text = ANY($1::text[]) \
+/// built-in types a cast may target (see [`crate::infer::Trust`]). `$1` is `text[]` of operator
+/// names, `$2` the `text[]` of function names.
+pub const TRUST_QUERY: &str = "SELECT false, o.oprname::text FROM pg_operator o WHERE o.oid >= 16384 AND o.oprname::text = ANY($1::text[]) \
     UNION ALL SELECT false, p.proname::text FROM pg_proc p WHERE p.oid >= 16384 AND p.proname::text = ANY($2::text[]) \
     UNION ALL SELECT true, t.typname::text FROM pg_type t WHERE t.oid < 16384 AND t.typnamespace = 'pg_catalog'::regnamespace \
       AND NOT EXISTS (SELECT 1 FROM pg_type u WHERE u.oid >= 16384 AND u.typname = t.typname) \
@@ -59,6 +66,64 @@ pub fn analyze(sql: &str, dialect: Dialect, host: &Host) -> Lazy<Analysis> {
     }
     let engine = Engine::new(host);
     engine.run(sql, &lexed)
+}
+
+/// The described statement alone, for a host that renders its own types and reads its own JSON
+/// shapes and row counts (the framework's `describe.rs`): the parameter types in `$n` order and
+/// each result column's type and nullability, settled the way [`analyze`] settles them. `sql` is
+/// already in the server's `$n` form and is described as it is, and a parameter may be null,
+/// because such a host binds whatever its caller sends. `Some(Err)` is the server's refusal of
+/// the statement itself.
+pub fn describe(sql: &str, host: &Host) -> Lazy<Result<DescribedStatement, DbError>> {
+    let engine = Engine::new(host);
+    let parsed = analyze::analyze(sql).ok();
+    let trust = trust(host);
+    let relations = relations_of(parsed.as_ref());
+    engine.described(sql, parsed.as_ref(), &relations, trust.as_ref()).map(|r| r.map(|(_, described)| described))
+}
+
+/// Which of the names the expression rules read are the built-ins, as the catalog says: one
+/// session-scoped query.
+pub fn trust(host: &Host) -> Lazy<Trust> {
+    let operators: Vec<Value> = infer::POSTGRES_OPERATORS.iter().map(|s| json!(s)).collect();
+    let functions: Vec<Value> = infer::postgres_function_names().into_iter().map(|s| json!(s)).collect();
+    let rows = host.query(TRUST_QUERY, vec![json!(operators), json!(functions)], Scope::Session)?;
+    let mut trust = Trust { shadowed: HashSet::new(), cast_targets: Some(HashSet::new()), ..Default::default() };
+    if let Ok(rows) = rows {
+        for row in rows {
+            let (Some(cast), Some(name)) = (row.first().and_then(as_bool), row.get(1).and_then(as_str)) else { continue };
+            if cast {
+                trust.cast_targets.get_or_insert_with(HashSet::new).insert(name.to_string());
+            } else {
+                trust.shadowed.insert(name.to_string());
+            }
+        }
+    }
+    Some(trust)
+}
+
+/// The catalog the row-count proof reads for a statement that calls `functions` and reads
+/// `relations`: which of those functions return a set, the unique keys of those relations, and
+/// every operator a set-returning function implements.
+pub fn catalog(host: &Host, functions: &[String], relations: &[String]) -> Lazy<Catalog> {
+    let operators = set_returning_operators(host);
+    let rows = catalog_rows(host, functions, &sorted(relations.to_vec()));
+    let (Some(operators), Some(rows)) = (operators, rows) else { return None };
+    Some(build_catalog(&operators, rows))
+}
+
+fn set_returning_operators(host: &Host) -> Lazy<HashSet<String>> {
+    let rows = host.query(cardinality::SET_RETURNING_OPERATORS_QUERY, vec![], Scope::Session)?;
+    Some(rows.unwrap_or_default().iter().filter_map(|r| r.first().and_then(as_str).map(String::from)).collect())
+}
+
+/// The rows the row-count proof's catalog is built from: the unique keys of `relations`, and
+/// which of `functions` return a set.
+fn catalog_rows(host: &Host, functions: &[String], relations: &[String]) -> Lazy<(Vec<Vec<Value>>, Vec<Vec<Value>>)> {
+    let keys = if relations.is_empty() { Some(Ok(Vec::new())) } else { host.query(cardinality::UNIQUE_KEYS_QUERY, vec![json!(relations)], Scope::Statement) };
+    let functions = if functions.is_empty() { Some(Ok(Vec::new())) } else { host.query(cardinality::FUNCTIONS_QUERY, vec![json!(functions)], Scope::Statement) };
+    let (Some(keys), Some(functions)) = (keys, functions) else { return None };
+    Some((keys.unwrap_or_default(), functions.unwrap_or_default()))
 }
 
 /// The statement's placeholders, or the bare analysis that reports why they cannot be read: a
@@ -159,55 +224,31 @@ impl<'a> Engine<'a> {
         // the functions, and every probe that carries no placeholder. Only what depends on the
         // describe (a type it reports that no named relation holds, a probe that pins a
         // parameter's type) waits for a second round.
-        let trust = self.trust().map(|mut trust| {
+        let trust = trust(self.host).map(|mut trust| {
             // A parameter's TypeScript type carries no null, so a parameter is a non-null value,
             // unless its `-- @param` annotation says the caller may pass null.
             trust.non_null_params = true;
             trust.nullable_params = nullable_params(lexed);
             trust
         });
-        let operators = self.set_returning_operators();
-        let raw = self.host.describe(&rewritten.sql);
+        let operators = set_returning_operators(self.host);
         let relations = relations_of(parsed.as_ref());
-        let prefetched = self.prefetch(&relations);
-        let catalog_rows = self.catalog_rows(parsed.as_ref(), &relations);
+        let described = self.described(&rewritten.sql, parsed.as_ref(), &relations, trust.as_ref());
+        let functions: &[String] = parsed.as_ref().map(|p| p.functions.as_slice()).unwrap_or(&[]);
+        let catalog_rows = catalog_rows(self.host, functions, &relations);
         for probe in &jsonshape::plan(&rewritten.sql).probes {
             self.prewarm(&probe.sql);
         }
-        if let Some((_, queries)) = infer::with_reads(&rewritten.sql) {
-            for query in queries.values() {
-                self.prewarm(&query.sql);
-            }
-        }
-        if let Some(trust) = &trust {
-            let plan = infer::plan(&rewritten.sql, Dialect::Postgres, trust);
-            if let Some(set) = &plan.set_op {
-                self.prewarm(&set.left);
-                self.prewarm(&set.right);
-            }
-            if let (Some(leaves), true) = (&plan.leaves, plan.reads_leaves()) {
-                self.prewarm(leaves);
-            }
-        }
-        let (Some(raw), Some(trust), Some(operators), Some(()), Some(catalog_rows)) = (raw, trust, operators, prefetched, catalog_rows) else { return None };
-        let raw = match raw {
-            Ok(r) => r,
+        let (Some(described), Some(trust), Some(operators), Some(catalog_rows)) = (described, trust, operators, catalog_rows) else { return None };
+        let (raw, described) = match described {
+            Ok(d) => d,
             Err(e) => {
                 diagnostics.push(db_diagnostic(sql, &rewritten, &e));
                 return Some(bare(sql, lexed, Dialect::Postgres, diagnostics));
             }
         };
-        // Types for the parameters and the columns, and the casts probes pin on the parameters.
-        let mut oids: Vec<u32> = raw.params.clone();
-        oids.extend(raw.columns.iter().map(|c| c.oid));
-        let types = self.types(&oids);
         // The catalog the row-count proof reads.
-        let catalog = build_catalog(parsed.as_ref(), &operators, catalog_rows);
-        // Nullability from provenance, then from the SQL.
-        let settled = self.settle(&rewritten.sql, &raw, parsed.as_ref(), &trust);
-        let (Some(()), Some(mut described)) = (types, settled) else { return None };
-        *self.casts.borrow_mut() = raw.params.iter().map(|o| self.registry.borrow().get(*o).map(|t| t.cast_name.clone()).filter(|c| !c.is_empty())).collect();
-        self.refine(&rewritten.sql, &mut described, &trust)?;
+        let catalog = build_catalog(&operators, catalog_rows);
 
         // JSON shapes.
         let plan = jsonshape::plan(&rewritten.sql);
@@ -311,33 +352,6 @@ impl<'a> Engine<'a> {
     }
 
     // -----------------------------------------------------------------------------------------
-    // Session facts
-    // -----------------------------------------------------------------------------------------
-
-    fn trust(&self) -> Lazy<Trust> {
-        let operators: Vec<Value> = infer::POSTGRES_OPERATORS.iter().map(|s| json!(s)).collect();
-        let functions: Vec<Value> = infer::postgres_function_names().into_iter().map(|s| json!(s)).collect();
-        let rows = self.host.query(TRUST_QUERY, vec![json!(operators), json!(functions)], Scope::Session)?;
-        let mut trust = Trust { shadowed: HashSet::new(), cast_targets: Some(HashSet::new()), ..Default::default() };
-        if let Ok(rows) = rows {
-            for row in rows {
-                let (Some(cast), Some(name)) = (row.first().and_then(as_bool), row.get(1).and_then(as_str)) else { continue };
-                if cast {
-                    trust.cast_targets.get_or_insert_with(HashSet::new).insert(name.to_string());
-                } else {
-                    trust.shadowed.insert(name.to_string());
-                }
-            }
-        }
-        Some(trust)
-    }
-
-    fn set_returning_operators(&self) -> Lazy<HashSet<String>> {
-        let rows = self.host.query(cardinality::SET_RETURNING_OPERATORS_QUERY, vec![], Scope::Session)?;
-        Some(rows.unwrap_or_default().iter().filter_map(|r| r.first().and_then(as_str).map(String::from)).collect())
-    }
-
-    // -----------------------------------------------------------------------------------------
     // Catalog
     // -----------------------------------------------------------------------------------------
 
@@ -365,20 +379,6 @@ impl<'a> Engine<'a> {
                 registry.insert_unknown(*o);
             }
         }
-    }
-
-    /// The rows the row-count proof's catalog is built from: the unique keys of the relations
-    /// the parse names, and which of the functions it calls return a set.
-    fn catalog_rows(&self, parsed: Option<&Parsed>, relations: &[String]) -> Lazy<(Vec<Vec<Value>>, Vec<Vec<Value>>)> {
-        let Some(parsed) = parsed else { return Some((Vec::new(), Vec::new())) };
-        let keys = if relations.is_empty() { Some(Ok(Vec::new())) } else { self.host.query(cardinality::UNIQUE_KEYS_QUERY, vec![json!(relations)], Scope::Statement) };
-        let functions = if parsed.functions.is_empty() {
-            Some(Ok(Vec::new()))
-        } else {
-            self.host.query(cardinality::FUNCTIONS_QUERY, vec![json!(parsed.functions)], Scope::Statement)
-        };
-        let (Some(keys), Some(functions)) = (keys, functions) else { return None };
-        Some((keys.unwrap_or_default(), functions.unwrap_or_default()))
     }
 
     /// Every column and every column type of the named relations, in one round, so `settle`
@@ -414,10 +414,48 @@ impl<'a> Engine<'a> {
     // Describe, settle, refine
     // -----------------------------------------------------------------------------------------
 
+    /// The describe of `sql` (the `$n` form) with its columns' nullability settled and refined.
+    /// What it needs is asked in the same round as the parse-named relations' columns and types
+    /// and every probe that carries no placeholder. `Some(Err)` is the server's refusal.
+    fn described(&self, sql: &str, parsed: Option<&Parsed>, relations: &[String], trust: Option<&Trust>) -> Lazy<Result<(RawDescribe, DescribedStatement), DbError>> {
+        let raw = self.host.describe(sql);
+        let prefetched = self.prefetch(relations);
+        if let Some((_, queries)) = infer::with_reads(sql) {
+            for query in queries.values() {
+                self.prewarm(&query.sql);
+            }
+        }
+        if let Some(trust) = trust {
+            let plan = infer::plan(sql, Dialect::Postgres, trust);
+            if let Some(set) = &plan.set_op {
+                self.prewarm(&set.left);
+                self.prewarm(&set.right);
+            }
+            if let (Some(leaves), true) = (&plan.leaves, plan.reads_leaves()) {
+                self.prewarm(leaves);
+            }
+        }
+        let (Some(raw), Some(trust), Some(())) = (raw, trust, prefetched) else { return None };
+        let raw = match raw {
+            Ok(r) => r,
+            Err(e) => return Some(Err(e)),
+        };
+        // Types for the parameters and the columns, and the casts probes pin on the parameters.
+        let mut oids: Vec<u32> = raw.params.clone();
+        oids.extend(raw.columns.iter().map(|c| c.oid));
+        let types = self.types(&oids);
+        // Nullability from provenance, then from the SQL.
+        let settled = self.settle(sql, &raw, parsed, trust);
+        let (Some(()), Some(mut described)) = (types, settled) else { return None };
+        *self.casts.borrow_mut() = raw.params.iter().map(|o| self.registry.borrow().get(*o).map(|t| t.cast_name.clone()).filter(|c| !c.is_empty())).collect();
+        self.refine(sql, &mut described, trust)?;
+        Some(Ok((raw, described)))
+    }
+
     /// A described statement's columns with their nullability from provenance: the catalog's
     /// `NOT NULL`, unless the column's table sits on the nullable side of an outer join, or the
     /// statement's shape hides which relation produced a column.
-    fn settle(&self, sql: &str, raw: &crate::api::RawDescribe, parsed: Option<&Parsed>, trust: &Trust) -> Lazy<DescribedStatement> {
+    fn settle(&self, sql: &str, raw: &RawDescribe, parsed: Option<&Parsed>, trust: &Trust) -> Lazy<DescribedStatement> {
         // A column of a view: the view's own statement is settled like any other (its columns
         // trace to the base tables, its joins null a side, its expressions follow the rules),
         // and column `attnum` of the view is column `attnum - 1` of that result.
@@ -709,23 +747,23 @@ fn nullable_params(lexed: &Lexed) -> HashSet<i32> {
     out
 }
 
-/// The relations a statement reads or writes, as the parse names them.
+/// The relations a statement reads or writes, as the parse names them, sorted. libpg_query
+/// collects them through a hash set, so each parse lists them in another order; a query that
+/// carried that order would be a new need every round, and the replay would settle only when two
+/// rounds happened to agree.
 fn relations_of(parsed: Option<&Parsed>) -> Vec<String> {
     let Some(parsed) = parsed else { return Vec::new() };
-    let mut relations: Vec<String> = parsed.read_set.clone();
-    for w in &parsed.write_set {
-        if !relations.contains(w) {
-            relations.push(w.clone());
-        }
-    }
-    relations
+    sorted(parsed.read_set.iter().chain(&parsed.write_set).cloned().collect())
 }
 
-fn build_catalog(parsed: Option<&Parsed>, operators: &HashSet<String>, rows: (Vec<Vec<Value>>, Vec<Vec<Value>>)) -> Catalog {
+fn sorted(mut names: Vec<String>) -> Vec<String> {
+    names.sort_unstable();
+    names.dedup();
+    names
+}
+
+fn build_catalog(operators: &HashSet<String>, rows: (Vec<Vec<Value>>, Vec<Vec<Value>>)) -> Catalog {
     let mut catalog = Catalog { set_returning_operators: operators.clone(), ..Catalog::default() };
-    if parsed.is_none() {
-        return catalog;
-    }
     for row in rows.0 {
         if let (Some(rel), Some(cols)) = (row.first().and_then(as_str), row.get(1).and_then(as_strings)) {
             catalog.unique_keys.entry(rel.to_string()).or_default().push(cols);
@@ -813,6 +851,23 @@ mod tests {
         // again: without a guard the probe would probe itself without end.
         let analysis = replay("SELECT u AS whole FROM users u");
         assert_eq!(analysis.columns.len(), 1);
+    }
+
+    #[test]
+    fn a_round_names_the_same_needs_however_the_parse_orders_its_tables() {
+        // libpg_query lists a statement's tables in hash order, which differs between parses; a
+        // need that carried that order would be new every round and the replay would not settle.
+        let sql = "SELECT a.x FROM alpha a JOIN beta b ON b.id = a.id JOIN gamma g ON g.id = b.id JOIN delta d ON d.id = g.id";
+        let answers: HashMap<String, Answer> = HashMap::new();
+        let round = || {
+            let host = Host::new(&answers);
+            assert!(analyze(sql, Dialect::Postgres, &host).is_none());
+            host.needs()
+        };
+        let first = round();
+        for _ in 0..16 {
+            assert_eq!(round(), first);
+        }
     }
 
     #[test]
