@@ -921,7 +921,7 @@ mod tests {
 
     /// A value the database wrote into the JSON document is still the column's own type here; how
     /// it is spelled inside JSON (an `int8` or a `numeric` as a JSON number, a `bytea` as `\x…`
-    /// hex) is the renderer's rule, and the framework's `pgtypes::schema_of` pins it.
+    /// hex) is the renderer's rule, which `Type::json_schema` in `schema.rs` states and its tests pin.
     #[test]
     fn a_leaf_inside_a_constructor_takes_the_databases_json_spelling() {
         let registry = TypeRegistry::with_builtins();
