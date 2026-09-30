@@ -3,7 +3,7 @@ import query from "./query.sql";
 import count from "./count.sql";
 import insert from "./insert.sql";
 import nested from "./nested.sql";
-const conn = await mysql.createConnection(process.env.DATABASE_URL ?? "mysql://root:lando@127.0.0.1:33306/lando");
+const conn = await mysql.createConnection(process.env.DATABASE_URL ?? "mysql://root:porg@127.0.0.1:33306/porg");
 await conn.beginTransaction();
 const inserted = await insert.execute(conn, { name: "eve", email: "eve@example.com" });
 const after = await count.execute(conn, { pattern: "%" });

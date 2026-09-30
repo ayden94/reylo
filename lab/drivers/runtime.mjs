@@ -6,15 +6,15 @@ import { DatabaseSync } from "node:sqlite";
 import { execute } from "../../src/execute.ts";
 const URL = "postgres://localhost:5432/postgres";
 const admin = postgres(URL);
-await admin.unsafe(`drop table if exists lando_drv; create table lando_drv (id serial primary key, name text not null, big bigint not null default 9007199254740993, n numeric(10,2) not null default 1.50, at timestamptz not null default now(), j jsonb not null default '{"a":1}'); insert into lando_drv (name) values ('ada')`);
-const q = { dialect: "postgres", sql: "select id, name, big, n, at, j from lando_drv where id = $1", params: ["id"] };
+await admin.unsafe(`drop table if exists porg_drv; create table porg_drv (id serial primary key, name text not null, big bigint not null default 9007199254740993, n numeric(10,2) not null default 1.50, at timestamptz not null default now(), j jsonb not null default '{"a":1}'); insert into porg_drv (name) values ('ada')`);
+const q = { dialect: "postgres", sql: "select id, name, big, n, at, j from porg_drv where id = $1", params: ["id"] };
 const pool = new pg.Pool({ connectionString: URL });
 const viaPg = await execute(pool, q, { id: 1 });
 console.log("pg      :", viaPg[0], typeof viaPg[0].big, viaPg[0].at?.constructor?.name);
 const viaPostgres = await execute(admin, q, { id: 1 });
 console.log("postgres:", viaPostgres[0], typeof viaPostgres[0].big, viaPostgres[0].at?.constructor?.name);
 const lite = new PGlite();
-await lite.exec(`create table lando_drv (id serial primary key, name text not null, big bigint not null default 9007199254740993, n numeric(10,2) not null default 1.50, at timestamptz not null default now(), j jsonb not null default '{"a":1}'); insert into lando_drv (name) values ('ada')`);
+await lite.exec(`create table porg_drv (id serial primary key, name text not null, big bigint not null default 9007199254740993, n numeric(10,2) not null default 1.50, at timestamptz not null default now(), j jsonb not null default '{"a":1}'); insert into porg_drv (name) values ('ada')`);
 const viaLite = await execute(lite, q, { id: 1 });
 console.log("pglite  :", viaLite[0], typeof viaLite[0].big, viaLite[0].at?.constructor?.name);
 // metadata without execution
@@ -23,7 +23,7 @@ console.log("postgres.describe:", d.types, d.columns.map(c => [c.name, c.type, c
 console.log("pglite.describeQuery:", JSON.stringify(await lite.describeQuery(q.sql)));
 const pgRes = await pool.query(q.sql, [1]);
 console.log("pg fields (post-exec):", pgRes.fields.map(f => [f.name, f.dataTypeID, f.tableID, f.columnID]));
-await admin.unsafe("drop table lando_drv"); await admin.end(); await pool.end(); await lite.close();
+await admin.unsafe("drop table porg_drv"); await admin.end(); await pool.end(); await lite.close();
 // sqlite
 const ddl = `create table t (id integer primary key, name text not null, big integer not null default 9007199254740993, n real, at text default current_timestamp, j text default '{"a":1}'); insert into t (name) values ('ada')`;
 const sq = { dialect: "sqlite", sql: "select id, name, big, n, at, j, id + 1 as expr from t where id = ?", params: ["id"] };

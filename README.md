@@ -30,7 +30,7 @@ Parameters are written `:name` in every dialect (`$name` and `@name` work too). 
 
 ```sql
 select id, name, email, role, tags, created_at, id + 1 as next_id
-from lando_users
+from porg_users
 where id = :id and name = :name
 ```
 
@@ -46,10 +46,10 @@ Nested JSON keeps its shape. The engine reads the constructors out of the parse 
 
 ```sql
 select u.id, u.name,
-  coalesce((select jsonb_agg(jsonb_build_object('id', p.id, 'title', p.title, 'body', p.body, 'at', p.published_at)) from lando_posts p where p.user_id = u.id), '[]') as posts,
+  coalesce((select jsonb_agg(jsonb_build_object('id', p.id, 'title', p.title, 'body', p.body, 'at', p.published_at)) from porg_posts p where p.user_id = u.id), '[]') as posts,
   to_jsonb(u) as row,
-  (select count(*) from lando_posts p where p.user_id = u.id) as post_count
-from lando_users u
+  (select count(*) from porg_posts p where p.user_id = u.id) as post_count
+from porg_users u
 where u.id = :id
 ```
 
