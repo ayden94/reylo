@@ -7,10 +7,6 @@ settings:
 importers:
 
   .:
-    dependencies:
-      temporal-spec:
-        specifier: ^1.0.1
-        version: 1.0.1
     devDependencies:
       '@types/node':
         specifier: ^26.6.1
@@ -230,9 +226,6 @@ packages:
     engines: {node: '>=18'}
     hasBin: true
 
-  temporal-spec@1.0.1:
-    resolution: {integrity: sha512-wxVoanmDeavXie1vu2JaQ3WIc3JZnWAOYFBsJyATaVsXsycKYUflGsyBmrRSnoCpZJpwPyr38VpgSUlQ8CbFxg==}
-
   typescript@7.1.0-dev.20260918.1:
     resolution: {integrity: sha512-/HzGzVht3sKVAGPQeCoTC5dm6pjH7ebpmqe0FXSFJ5UFL58Zjy7UHbDAn1lv6Y8JNzgDoW2GtKUVHBLbbV17ZQ==}
     engines: {node: '>=16.20.0'}
@@ -374,8 +367,6 @@ snapshots:
       '@esbuild/win32-arm64': 0.28.2
       '@esbuild/win32-ia32': 0.28.2
       '@esbuild/win32-x64': 0.28.2
-
-  temporal-spec@1.0.1: {}
 
   typescript@7.1.0-dev.20260918.1:
     optionalDependencies:

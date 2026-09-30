@@ -3,7 +3,8 @@ import type { Row, Params } from "./query.sql";
 
 // The mapper options `dates: "temporal"` and `bigint: "bigint"`: temporal columns are the
 // Temporal type that matches the Postgres type, int8 columns are bigint, and an array of
-// either follows. The types come from `porg/temporal` (temporal-spec), imported by the module.
+// either follows. The types are TypeScript's own `esnext.temporal` lib, which the module references,
+// so this lab's `lib` is `es2024` to prove the reference brings them in.
 type ExpectedRow = {
   id: number;
   created_at: Temporal.Instant;

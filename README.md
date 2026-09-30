@@ -58,6 +58,22 @@ const user = await getUser.run(sql, { id: 1, name: "ada" });
 
 `with(client)` binds the query to a client, such as a transaction, and returns a function of the parameters: `const get = getUser.with(tx); await get({ id: 1, name: "ada" })`. A statement that takes no parameters takes no second argument: `await listUsers.run(sql)`. The client is always the caller's.
 
+`run` takes the client object of the driver the project already uses, or a transaction, savepoint or connection taken from it, and Porg imports no driver: pg (Pool, Client, PoolClient), postgres.js and Bun.sql (with `begin`, `savepoint` and `reserve`), PGlite (with `transaction`), Neon (Pool, Client and `neon()`), pg-promise (with `task` and `tx`) and @vercel/postgres; mysql2 and mariadb (promise or callback API) and PlanetScale's serverless driver 1.x (with `transaction`; 2.0 binds no parameters, so it runs only statements without any); better-sqlite3, node:sqlite, bun:sqlite, @libsql/client (with `transaction()`), Cloudflare D1, sqlite3 and sqlite. The query's dialect narrows which of them it accepts. A parameter left out binds NULL on every driver. On better-sqlite3, node:sqlite and bun:sqlite, which answer synchronously, `run` returns the result itself rather than a promise and throws on an error, so it works inside their `db.transaction(fn)`, whose function cannot await:
+
+```ts
+// postgres.js and Bun.sql: the transaction and the savepoint are clients.
+await sql.begin(async (tx) => {
+  const user = await getUser.run(tx, { id: 1, name: "ada" });
+  await tx.savepoint((sp) => rename.run(sp, { id: user!.id, name: "bo" }));
+});
+// better-sqlite3 and bun:sqlite: the row comes back at once, and an error (a constraint, or a
+// statement that returns the wrong number of rows) rolls the whole transaction back.
+db.transaction(() => {
+  const { id } = insertUser.run(db, { name: "ada" });
+  insertPost.run(db, { user_id: id, title: "hello" });
+})();
+```
+
 Parameter types come from the server (`id: number`, `name: string`); `role` is an enum, `tags` a `text[]`, `email` nullable from the catalog, `next_id` non-null because `id` is and the built-in `+` never returns NULL for non-null operands; `| null` on the row because `id` is the primary key, so the `WHERE` matches at most one row. `created_at` is an ISO 8601 `string` and an `int8` a `string` because those are the default representations (see [Dates and 64-bit integers](#dates-and-64-bit-integers)).
 
 Nested JSON keeps its shape. The engine reads the constructors out of the parse tree, has the database type their arguments as ordinary columns, and folds the catalog's `NOT NULL` and the outer joins back in:
@@ -154,7 +170,7 @@ bigint = "string"
 
 - The default is text on both because it is never lossy, `JSON.stringify(row)` round-trips, and the wire type then equals the JSON twin that `Json<T>` describes.
 - A zone-less `timestamp` or `date` reaches Porg as a `Date` the driver built from wall-clock fields (local time in `pg`, `postgres`, PGlite, Bun.sql, mysql2 and mariadb; a `date` is UTC midnight in `postgres`, PGlite and Bun.sql), and Porg reads the fields back in that frame, so the text is the stored wall clock. A driver configured to return the text form (`pg` `types.setTypeParser`, `postgres` `types`, PGlite `parsers`, mysql2 and mariadb `dateStrings`) passes through under `"string"` and is parsed under `"temporal"`.
-- `"temporal"` makes the generated module import `porg/temporal`, which declares the global `Temporal` namespace from `temporal-spec`. At runtime Node 26 has a global `Temporal`; Bun does not, so assign a polyfill to `globalThis.Temporal` or `run` throws with that instruction.
+- `"temporal"` makes the generated module reference TypeScript's own `esnext.temporal` lib, which declares the global `Temporal` namespace, so the types resolve whatever `lib` the project sets. At runtime Node 26 has a global `Temporal`; Bun does not, so assign a polyfill to `globalThis.Temporal` or `run` throws with that instruction.
 - `"bigint"` gives a `bigint`; `JSON.stringify` has no rule for one, so add a `BigInt.prototype.toJSON` or a replacer. A value above 2^53 that the driver already decoded as a number is lost before Porg sees it: mysql2 takes `supportBigNumbers: true, bigNumberStrings: true`, better-sqlite3 and bun:sqlite `safeIntegers`, node:sqlite `readBigInts`.
 - Inside a nested JSON shape the database serialized the value already, so the settings do not apply there; SQLite has no date type and its integers follow the driver, so neither setting changes a SQLite type.
 - The runtime reads the column classes from the mapper's cache (`.porg/queries.json`); before the first `tsc --runExternalCode` run it returns the driver's values unchanged.

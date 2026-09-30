@@ -13,9 +13,7 @@
     "./register": "./src/register.ts",
     "./vite": "./src/vite.ts",
     "./esbuild": "./src/esbuild.ts",
-    "./webpack-loader": "./src/webpack-loader.ts",
-    "./temporal": "./src/temporal.ts",
-    "./mapper": "./src/mapper.ts"
+    "./webpack-loader": "./src/webpack-loader.ts"
   },
   "typescript": {
     "contentMapper": {
@@ -30,9 +28,6 @@
   "scripts": {
     "typecheck": "tsc --noEmit --runExternalCode",
     "test": "node --test 'tests/**/*.test.ts'"
-  },
-  "dependencies": {
-    "temporal-spec": "^1.0.1"
   },
   "devDependencies": {
     "@types/node": "^26.6.1",

@@ -99,9 +99,10 @@ serve({
       extension: ".ts" as const,
       diagnostics,
       text: [
+        // TypeScript's own lib declares the Temporal types; the reference brings them in when
+        // the project's `lib` stops short of `esnext`.
+        ...(project.repr.dates === "temporal" ? [`/// <reference lib="esnext.temporal" />`] : []),
         `import type { Query } from "porg";`,
-        // The Temporal types are not in TypeScript's libs yet; `porg/temporal` declares them.
-        ...(project.repr.dates === "temporal" ? [`import "porg/temporal";`] : []),
         `export type Params = ${paramsType};`,
         `export type Row = ${rowType};`,
         `export declare const sql: ${JSON.stringify(sql)};`,
