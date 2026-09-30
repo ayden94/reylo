@@ -38,6 +38,8 @@ pub struct TreeError {
 #[serde(rename_all = "camelCase", default)]
 pub struct SchemaError {
     pub index: usize,
+    /// Set when the failed step registered a host function rather than replaying DDL.
+    pub function: Option<String>,
     pub message: String,
 }
 
@@ -198,18 +200,23 @@ pub struct Node {
 }
 
 extern "C" {
-    fn lando_sqlite_analyze(ddl: *const *const c_char, n: c_int, sql: *const c_char) -> *mut c_char;
+    fn lando_sqlite_analyze(ddl: *const *const c_char, n: c_int, sql: *const c_char, functions: *const *const c_char, arities: *const c_int, n_functions: c_int) -> *mut c_char;
     fn lando_sqlite_free(p: *mut c_char);
 }
 
 /// Prepares `sql` against the schema `ddl` inside the embedded SQLite and returns what it resolved.
-pub fn analyze(ddl: &[String], sql: &str) -> Result<Tree, String> {
+/// `functions` are the host's own scalar functions, by name and argument count (-1 for any): the
+/// replay registers a stub for each, so a statement that calls one prepares.
+pub fn analyze(ddl: &[String], sql: &str, functions: &[(&str, i32)]) -> Result<Tree, String> {
     let owned: Vec<CString> = ddl.iter().map(|d| CString::new(d.replace('\0', " ")).unwrap()).collect();
     let pointers: Vec<*const c_char> = owned.iter().map(|c| c.as_ptr()).collect();
+    let names: Vec<CString> = functions.iter().map(|(n, _)| CString::new(n.replace('\0', " ")).unwrap()).collect();
+    let name_pointers: Vec<*const c_char> = names.iter().map(|c| c.as_ptr()).collect();
+    let arities: Vec<c_int> = functions.iter().map(|(_, a)| *a as c_int).collect();
     let sql = CString::new(sql.replace('\0', " ")).map_err(|e| e.to_string())?;
     let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let json = unsafe {
-        let p = lando_sqlite_analyze(pointers.as_ptr(), pointers.len() as c_int, sql.as_ptr());
+        let p = lando_sqlite_analyze(pointers.as_ptr(), pointers.len() as c_int, sql.as_ptr(), name_pointers.as_ptr(), arities.as_ptr(), name_pointers.len() as c_int);
         if p.is_null() {
             return Err("the embedded SQLite returned nothing".into());
         }

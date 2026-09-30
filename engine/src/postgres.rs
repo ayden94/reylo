@@ -47,15 +47,10 @@ const TRUST_QUERY: &str = "SELECT false, o.oprname::text FROM pg_operator o WHER
       AND NOT EXISTS (SELECT 1 FROM pg_cast c WHERE c.oid >= 16384 AND c.casttarget = t.oid AND c.castmethod = 'f')";
 
 pub fn analyze(sql: &str, dialect: Dialect, host: &Host) -> Lazy<Analysis> {
-    let lexed = match lex::lex(sql, dialect) {
+    let lexed = match lexed(sql, dialect) {
         Ok(l) => l,
-        Err(e) => return Some(bare(sql, &Lexed { params: vec![], placeholders: vec![], directives: vec![], style: Style::None, opaque: vec![] }, dialect, vec![diag(e.message, e.offset, 1, 1)])),
+        Err(bare) => return Some(bare),
     };
-    if lexed.style == Style::Mixed {
-        let first = lexed.placeholders.iter().find(|p| lex::is_positional(&p.name)).expect("a mixed statement has a positional placeholder");
-        let d = diag("Named and positional parameters cannot be mixed in one statement.", first.start, first.end - first.start, 2);
-        return Some(bare(sql, &lexed, dialect, vec![d]));
-    }
     if dialect == Dialect::Sqlite {
         return crate::sqlite::analyze(sql, &lexed, host);
     }
@@ -64,6 +59,21 @@ pub fn analyze(sql: &str, dialect: Dialect, host: &Host) -> Lazy<Analysis> {
     }
     let engine = Engine::new(host);
     engine.run(sql, &lexed)
+}
+
+/// The statement's placeholders, or the bare analysis that reports why they cannot be read: a
+/// lex error, or named and positional parameters mixed.
+pub(crate) fn lexed(sql: &str, dialect: Dialect) -> Result<Lexed, Analysis> {
+    let lexed = match lex::lex(sql, dialect) {
+        Ok(l) => l,
+        Err(e) => return Err(bare(sql, &Lexed { params: vec![], placeholders: vec![], directives: vec![], style: Style::None, opaque: vec![] }, dialect, vec![diag(e.message, e.offset, 1, 1)])),
+    };
+    if lexed.style == Style::Mixed {
+        let first = lexed.placeholders.iter().find(|p| lex::is_positional(&p.name)).expect("a mixed statement has a positional placeholder");
+        let d = diag("Named and positional parameters cannot be mixed in one statement.", first.start, first.end - first.start, 2);
+        return Err(bare(sql, &lexed, dialect, vec![d]));
+    }
+    Ok(lexed)
 }
 
 fn diag(message: impl Into<String>, start: usize, length: usize, code: u32) -> Diagnostic {

@@ -9,7 +9,9 @@
 ** column reference with its Table, Column, NOT NULL and outer-join mark (EP_CanBeNull), the FROM
 ** items with their join type and cursor, the DML target columns per value position, and each
 ** table's columns and unique keys. The rules (function result types, arithmetic, the row-count
-** proof) live in Rust; nothing here decides a type.
+** proof) live in Rust; nothing here decides a type. A host that registers scalar functions of its
+** own on its connection names them with their argument counts, and the replay registers a stub
+** for each, so a statement calling one prepares here as it does there.
 */
 #include <stdio.h>
 #include <string.h>
@@ -475,11 +477,19 @@ static void installHooks(int on){
   lando_returning_hook = on ? returningHook : 0;
 }
 
-/* Replays the DDL into a fresh in-memory database; errors are reported, not fatal. */
-static int openSchema(const char *const *azDdl, int nDdl, sqlite3_str *errors){
+/* A host function's stand-in: the replay only prepares, so it is never called. */
+static void hostFunctionStub(sqlite3_context *ctx, int argc, sqlite3_value **argv){
+  (void)argc; (void)argv;
+  sqlite3_result_null(ctx);
+}
+
+/* Replays the DDL into a fresh in-memory database; errors are reported, not fatal. The host's
+** functions are registered first, so a view, an index or a CHECK that calls one replays too. */
+static int openSchema(const char *const *azDdl, int nDdl, const char *const *azFn, const int *aFnArg, int nFn, sqlite3_str *errors){
   sqlite3_str *k = sqlite3_str_new(0);
   char *zKey;
   int i, rc;
+  for(i=0; i<nFn; i++){ sqlite3_str_appendf(k, "%s/%d", azFn[i], aFnArg[i]); sqlite3_str_appendchar(k, 1, '\2'); }
   for(i=0; i<nDdl; i++){ sqlite3_str_appendall(k, azDdl[i]); sqlite3_str_appendchar(k, 1, '\1'); }
   zKey = sqlite3_str_finish(k);
   if( zKey==0 ) zKey = sqlite3_mprintf("");
@@ -489,6 +499,16 @@ static int openSchema(const char *const *azDdl, int nDdl, sqlite3_str *errors){
   rc = sqlite3_open(":memory:", &gDb);
   if( rc!=SQLITE_OK ) return rc;
   installHooks(0);
+  for(i=0; i<nFn; i++){
+    /* Deterministic and innocuous: whatever the host's own flags, the replay accepts every place
+    ** the host's schema could already call it from. */
+    if( sqlite3_create_function_v2(gDb, azFn[i], aFnArg[i], SQLITE_UTF8|SQLITE_DETERMINISTIC|SQLITE_INNOCUOUS, 0, hostFunctionStub, 0, 0, 0)!=SQLITE_OK ){
+      sqlite3_str_appendchar(errors, 1, '{');
+      kv_str(errors, "function", azFn[i]);
+      kv_str(errors, "message", sqlite3_errmsg(gDb));
+      closeObj(errors); sqlite3_str_appendchar(errors, 1, ',');
+    }
+  }
   for(i=0; i<nDdl; i++){
     char *zErr = 0;
     if( sqlite3_exec(gDb, azDdl[i], 0, 0, &zErr)!=SQLITE_OK ){
@@ -503,17 +523,19 @@ static int openSchema(const char *const *azDdl, int nDdl, sqlite3_str *errors){
 }
 
 /*
-** Analyzes one statement against the schema DDL. Returns a JSON document (free with
-** lando_sqlite_free): { statement, dml, returning, tables, columns, params, readonly, error, schemaErrors }.
+** Analyzes one statement against the schema DDL, with the host's scalar functions (azFn[i] taking
+** aFnArg[i] arguments, -1 for any number) registered on the replay. Returns a JSON document (free
+** with lando_sqlite_free): { statement, dml, returning, tables, columns, params, readonly, error,
+** schemaErrors }.
 */
-char *lando_sqlite_analyze(const char *const *azDdl, int nDdl, const char *zSql){
+char *lando_sqlite_analyze(const char *const *azDdl, int nDdl, const char *zSql, const char *const *azFn, const int *aFnArg, int nFn){
   sqlite3_str *out = sqlite3_str_new(0);
   sqlite3_str *schemaErrors = sqlite3_str_new(0);
   sqlite3_stmt *pStmt = 0;
   const char *zTail = 0;
   int rc, i, n;
   sqlite3_str_appendchar(schemaErrors, 1, '[');
-  rc = openSchema(azDdl, nDdl, schemaErrors);
+  rc = openSchema(azDdl, nDdl, azFn, aFnArg, nFn, schemaErrors);
   closeArr(schemaErrors);
   sqlite3_str_appendchar(out, 1, '{');
   if( rc!=SQLITE_OK ){
@@ -590,7 +612,7 @@ int main(int argc, char **argv){
   while( fgets(line, sizeof line, f) ){
     char *nl = strchr(line, '\n'); if( nl ) *nl = 0;
     if( line[0]==0 || line[0]=='#' ) continue;
-    char *json = lando_sqlite_analyze(azDdl, nDdl, line);
+    char *json = lando_sqlite_analyze(azDdl, nDdl, line, 0, 0, 0);
     printf("%s\n", json);
     lando_sqlite_free(json);
   }
