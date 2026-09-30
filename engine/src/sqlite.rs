@@ -132,10 +132,7 @@ fn run(sql: &str, lexed: &Lexed, ddl: &[String], extras: &Extras) -> SqliteAnaly
     let a = Analyzer { tree: &t, extras };
     let (columns, kind) = a.columns();
     let params = a.params(lexed);
-    let (cardinality, reason) = match crate::postgres::cardinality_directive(lexed, &mut diagnostics) {
-        Some(c) => c,
-        None => a.cardinality(),
-    };
+    let (cardinality, reason) = a.cardinality();
     let analysis = Analysis {
         kind,
         params,
@@ -144,7 +141,6 @@ fn run(sql: &str, lexed: &Lexed, ddl: &[String], extras: &Extras) -> SqliteAnaly
         cardinality_reason: reason,
         rewritten: lex::rewrite(sql, lexed, Target::Question),
         style: lexed.style,
-        directives: lexed.directives.clone(),
         diagnostics,
         unresolved: Vec::new(),
     };

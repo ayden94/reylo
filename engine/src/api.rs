@@ -17,7 +17,7 @@ use std::collections::HashMap;
 pub enum Request {
     /// Round-trip check: answers with the engine version.
     Ping,
-    /// Placeholders and directives only; no database.
+    /// Placeholders only; no database.
     Lex { sql: String, dialect: Dialect },
     /// The project file's text, `.porg.toml`.
     Config { text: String },
@@ -159,7 +159,6 @@ pub struct Analysis {
     pub cardinality_reason: Option<String>,
     pub rewritten: lex::Rewritten,
     pub style: lex::Style,
-    pub directives: Vec<lex::Directive>,
     pub diagnostics: Vec<Diagnostic>,
     /// Paths inside JSON columns the engine could not type, for a message.
     pub unresolved: Vec<String>,

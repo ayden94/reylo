@@ -1,25 +1,25 @@
-//! Placeholders and directives, read off the raw statement text.
+//! Placeholders, read off the raw statement text.
 //!
-//! Porg lets a statement name its parameters in any dialect: `:name`, `$name` and `@name` are
-//! named placeholders, `$1`, `?` and `?1` positional ones, and one statement uses one style. A
-//! parameter's name drops the prefix: `:id` is `id`, and `$2` and `?2` are both `2`. A bare `?`
-//! takes the number after the largest one so far, as SQLite numbers it, so `?, ?` is `1`, `2`. A
-//! name may be dotted (`:auth.user_id`): each `.segment` starts like a name, so `arr[1:2]` and
-//! `:t.*` end where they should. The engine rewrites placeholders to whatever the database binds
-//! by position (`$n` on Postgres, `?` on MySQL, `?n` for the SQLite prepare, where SQLite's own
-//! `:name` would end at the first dot) and keeps a map back to the author's text, so a server
-//! error at a rewritten position lands on the right characters of the `.sql` file.
+//! One named form works in every dialect, `:name`, which is also the form mysql2's
+//! `namedPlaceholders` and SQLite accept. Beside it a statement may use its database's own
+//! positional form instead, never both: `$1` on Postgres, `?` on MySQL, `?` and `?NNN` on SQLite.
+//! A form the database does not have is refused where the database would misread it: SQLite takes
+//! `$name` and `@name` for parameters of its own, and a Postgres `$name` outside a dollar quote is
+//! a syntax error, so each is an error that says to write `:name`; MySQL's `@name` is a user
+//! variable and `$` a character of its identifiers, so both stay text there, as `@` (an operator)
+//! does on Postgres. A parameter's name drops the prefix: `:id` is `id`, and `$2` and `?2` are both
+//! `2`. A bare `?` takes the number after the largest one so far, as SQLite numbers it, so `?, ?`
+//! is `1`, `2`. A name may be dotted (`:auth.user_id`): each `.segment` starts like a name, so
+//! `arr[1:2]` and `:t.*` end where they should. The engine rewrites placeholders to whatever the
+//! database binds by position (`$n` on Postgres, `?` on MySQL, `?n` for the SQLite prepare, where
+//! SQLite's own `:name` would end at the first dot) and keeps a map back to the author's text, so
+//! a server error at a rewritten position lands on the right characters of the `.sql` file.
 //!
 //! The pass knows what the parser knows about text: single-quoted literals (with `''`), `E''`
 //! escape strings (with backslashes), dollar quoting, double-quoted identifiers, line comments,
-//! nested block comments, and `::` casts. Two readings are per dialect: `?` is a placeholder
-//! everywhere but Postgres, where it is the `jsonb ? text` operator; `$n` is positional
-//! everywhere, and a Postgres `$tag$…$tag$` string is read before a `$name` parameter is. The
-//! spans it skipped as text are returned as [`Lexed::opaque`], so a caller that looks for its own
-//! construct in the statement does not need a scanner of its own.
-//!
-//! Directives are `-- @name value` line comments; the engine collects them and the caller
-//! decides what each means.
+//! nested block comments, and `::` casts. The spans it skipped as text are returned as
+//! [`Lexed::opaque`], so a caller that looks for its own construct in the statement does not need
+//! a scanner of its own.
 
 use crate::dialect::Dialect;
 use serde::Serialize;
@@ -31,15 +31,6 @@ pub struct Placeholder {
     /// and the position's number for a positional one (`$3` and SQLite's `?3` are both `3`; a
     /// bare `?` is one past the largest number before it).
     pub name: String,
-    pub start: usize,
-    pub end: usize,
-}
-
-/// `-- @name value`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct Directive {
-    pub name: String,
-    pub value: String,
     pub start: usize,
     pub end: usize,
 }
@@ -59,7 +50,6 @@ pub struct Lexed {
     /// by number for positional ones, so `params[k]` is the statement's `$(k + 1)`.
     pub params: Vec<String>,
     pub placeholders: Vec<Placeholder>,
-    pub directives: Vec<Directive>,
     pub style: Style,
     /// Every span the walk read as text rather than code, `(start, end)` in byte offsets, in
     /// source order and never overlapping: string literals (an `E''` string from its `E`), dollar
@@ -184,7 +174,6 @@ pub fn lex(sql: &str, dialect: Dialect) -> Result<Lexed, LexError> {
     let mut i = 0usize;
     let mut params: Vec<String> = Vec::new();
     let mut placeholders: Vec<Placeholder> = Vec::new();
-    let mut directives: Vec<Directive> = Vec::new();
     let mut opaque: Vec<(usize, usize)> = Vec::new();
     // The largest position a positional placeholder has named so far; a bare `?` takes the next.
     let mut largest = 0u64;
@@ -259,18 +248,6 @@ pub fn lex(sql: &str, dialect: Dialect) -> Result<Lexed, LexError> {
                     i += 1;
                 }
                 opaque.push((start, i));
-                let text = sql[start + 2..i].trim();
-                if let Some(rest) = text.strip_prefix('@') {
-                    let name_len = rest.bytes().take_while(|c| is_name_char(*c)).count();
-                    if name_len > 0 {
-                        directives.push(Directive {
-                            name: rest[..name_len].to_string(),
-                            value: rest[name_len..].trim().to_string(),
-                            start,
-                            end: i,
-                        });
-                    }
-                }
             }
             b'/' if b.get(i + 1) == Some(&b'*') => {
                 let start = i;
@@ -330,28 +307,30 @@ pub fn lex(sql: &str, dialect: Dialect) -> Result<Lexed, LexError> {
                     }
                 }
                 match b.get(i + 1) {
-                    Some(&n) if is_name_start(n) => {
-                        let end = dotted_name_end(b, i + 1);
-                        push(sql[i + 1..end].to_string(), i, end, &mut params);
-                        i = end;
-                    }
-                    Some(&n) if n.is_ascii_digit() => {
+                    // `a$1` and `a$b` are identifiers.
+                    _ if prev_is_name_char(b, i) => i += 1,
+                    Some(&n) if n.is_ascii_digit() && dialect == Dialect::Postgres => {
                         let end = digits_end(b, i + 1);
                         push(position(&sql[i + 1..end], &mut largest), i, end, &mut params);
                         i = end;
+                    }
+                    Some(&n) if (is_name_start(n) || n.is_ascii_digit()) && dialect != Dialect::Mysql => {
+                        return Err(foreign(sql, i, dialect));
                     }
                     _ => i += 1,
                 }
             }
             b'@' => match b.get(i + 1) {
-                Some(&n) if is_name_start(n) && !prev_is_name_char(b, i) => {
-                    let end = dotted_name_end(b, i + 1);
-                    push(sql[i + 1..end].to_string(), i, end, &mut params);
-                    i = end;
+                Some(&n) if is_name_start(n) && !prev_is_name_char(b, i) && dialect == Dialect::Sqlite => {
+                    return Err(foreign(sql, i, dialect));
                 }
                 _ => i += 1,
             },
             b'?' if dialect != Dialect::Postgres => {
+                if b.get(i + 1).is_some_and(u8::is_ascii_digit) && dialect == Dialect::Mysql {
+                    let end = digits_end(b, i + 1);
+                    return Err(LexError { message: format!("MySQL has no numbered placeholder {}; write ? for each value, or :name", &sql[i..end]), offset: i });
+                }
                 if b.get(i + 1).is_some_and(u8::is_ascii_digit) {
                     // SQLite's `?NNN` names position NNN, as `$NNN` does, so it takes that name.
                     let end = digits_end(b, i + 1);
@@ -377,7 +356,22 @@ pub fn lex(sql: &str, dialect: Dialect) -> Result<Lexed, LexError> {
         // `$2 ... $1` binds `$1` first: the describe reports the parameters by number.
         params.sort_by_key(|p| p.parse::<u64>().unwrap_or(u64::MAX));
     }
-    Ok(Lexed { params, placeholders, directives, style, opaque })
+    Ok(Lexed { params, placeholders, style, opaque })
+}
+
+/// The error for a `$name`, `$1` or `@name` the dialect would misread: Porg's named placeholder is
+/// `:name`, and SQLite's numbered one `?1`.
+fn foreign(sql: &str, i: usize, dialect: Dialect) -> LexError {
+    let b = sql.as_bytes();
+    let digits = b.get(i + 1).is_some_and(u8::is_ascii_digit);
+    let end = if digits { digits_end(b, i + 1) } else { dotted_name_end(b, i + 1) };
+    let written = &sql[i..end];
+    let fix = if digits { format!("?{}", &sql[i + 1..end]) } else { format!(":{}", &sql[i + 1..end]) };
+    let message = match dialect {
+        Dialect::Sqlite => format!("SQLite reads {written} as a parameter that Porg does not bind; write {fix}"),
+        _ => format!("{written} is not a placeholder here; Porg's named placeholder is {fix}"),
+    };
+    LexError { message, offset: i }
 }
 
 /// Whether a parameter name is one the lexer minted for a positional placeholder: a number,
@@ -436,7 +430,7 @@ mod tests {
 
     #[test]
     fn styles() {
-        assert_eq!(names("select :a, @b, $c, :a", Dialect::Postgres), ["a", "b", "c"]);
+        assert_eq!(names("select :a, :b, :a", Dialect::Postgres), ["a", "b"]);
         assert_eq!(names("select $1, $2, $1", Dialect::Postgres), ["1", "2"]);
         assert_eq!(names("select ?, ?", Dialect::Sqlite), ["1", "2"]);
         assert_eq!(names("select ?, ?", Dialect::Mysql), ["1", "2"]);
@@ -449,15 +443,24 @@ mod tests {
         let sql = "select ':x' as a, \":y\" as b, e'\\':z' as c, $$:w$$ as d, x::int, arr[1:2], tags ? 'k' -- :c\n /* :d /* :e */ */ from t where id = :id";
         assert_eq!(names(sql, Dialect::Postgres), ["id"]);
         assert_eq!(names("select json_extract(j, '$.a') = ? and x = :n", Dialect::Sqlite), ["1", "n"]);
-        assert_eq!(names("select `a:b`, 'x' from t where a = @a", Dialect::Mysql), ["a"]);
+        assert_eq!(names("select `a:b`, 'x' from t where a = :a", Dialect::Mysql), ["a"]);
     }
 
     #[test]
-    fn directives() {
-        let l = lex("-- @returns maybeOne\n-- @param id number\nselect :id", Dialect::Postgres).unwrap();
-        assert_eq!(l.directives.len(), 2);
-        assert_eq!((l.directives[0].name.as_str(), l.directives[0].value.as_str()), ("returns", "maybeOne"));
-        assert_eq!((l.directives[1].name.as_str(), l.directives[1].value.as_str()), ("param", "id number"));
+    fn one_named_form_and_the_native_positional_one() {
+        // A form the dialect would misread is an error that says what to write.
+        let err = |sql: &str, d: Dialect| lex(sql, d).unwrap_err();
+        assert_eq!(err("select $name", Dialect::Postgres).message, "$name is not a placeholder here; Porg's named placeholder is :name");
+        assert_eq!(err("select @a.b from t", Dialect::Sqlite).message, "SQLite reads @a.b as a parameter that Porg does not bind; write :a.b");
+        assert_eq!(err("select 1 where x = $2", Dialect::Sqlite).message, "SQLite reads $2 as a parameter that Porg does not bind; write ?2");
+        assert_eq!(err("select ?2", Dialect::Mysql).message, "MySQL has no numbered placeholder ?2; write ? for each value, or :name");
+        assert_eq!(err("select $name", Dialect::Postgres).offset, 7);
+        // Where the dialect reads the form as something else, it is that: MySQL's user variable and
+        // `$` identifier, Postgres's `@` operator and `a$1` identifier.
+        assert!(names("select @x := 1, $col, $1 from t", Dialect::Mysql).is_empty());
+        assert!(names("select @ -5, a$1, b$c from t", Dialect::Postgres).is_empty());
+        // A `-- @returns one` line is a comment like any other.
+        assert!(names("-- @returns one\nselect 1", Dialect::Postgres).is_empty());
     }
 
     #[test]
@@ -496,7 +499,6 @@ mod tests {
         assert_eq!(rewrite(sql, &l, Target::Question).sql, "select ?");
         // Every segment starts like a name; the named forms agree; a cast after one is a cast.
         assert_eq!(names("select :auth.user_id, :org.name::text, :t.*, :x.1", Dialect::Postgres), ["auth.user_id", "org.name", "t", "x"]);
-        assert_eq!(names("select $a.b, @c.d from t", Dialect::Sqlite), ["a.b", "c.d"]);
         // A dotted name survives the SQLite prepare only through the rewrite, and maps back.
         let sql = "select :a.b, :c";
         let l = lex(sql, Dialect::Sqlite).unwrap();
@@ -508,7 +510,7 @@ mod tests {
 
     #[test]
     fn numbered_question_is_a_position() {
-        let l = lex("select ?3, $3", Dialect::Sqlite).unwrap();
+        let l = lex("select ?3, ?3", Dialect::Sqlite).unwrap();
         assert_eq!(l.params, ["3"]);
         assert_eq!(l.placeholders.iter().map(|p| (p.start, p.end)).collect::<Vec<_>>(), [(7, 9), (11, 13)]);
         assert_eq!(l.style, Style::Positional);
@@ -530,7 +532,7 @@ mod tests {
     fn colons_that_open_nothing() {
         // `:{` and MySQL's `:=` open nothing; a quote doubled inside a string is one quote.
         assert!(names("select '{}'::jsonb, :{a}", Dialect::Postgres).is_empty());
-        assert_eq!(names("select @x := 1", Dialect::Mysql), ["x"]);
+        assert!(names("select @x := 1", Dialect::Mysql).is_empty());
         assert_eq!(names("select 'it''s :not', :yes", Dialect::Postgres), ["yes"]);
         // An upper-case `E''` string and a tagged dollar quote hide what is inside them.
         assert_eq!(names("select E'\\':nope', $tag$ :nope $tag$, :real", Dialect::Postgres), ["real"]);
@@ -544,7 +546,7 @@ mod tests {
         assert_eq!(l.opaque, [(7, 13), (15, 21), (23, 33), (35, 40), (41, 48), (49, 65)]);
         let text: Vec<&str> = l.opaque.iter().map(|&(s, e)| &sql[s..e]).collect();
         assert_eq!(text, ["'a''b'", "\"q\"\"r\"", "$t$ :x $t$", "e'\\''", "-- c :y", "/* d /* :z */ */"]);
-        // A directive is a line comment like any other; code between the spans is not listed.
+        // A `-- @` line is a comment like any other; code between the spans is not listed.
         let l = lex("-- @returns one\nselect `a`, 1", Dialect::Mysql).unwrap();
         assert_eq!(l.opaque, [(0, 15), (23, 26)]);
     }
@@ -559,7 +561,7 @@ mod tests {
         assert_eq!(r.spans, [(7, 9, 7, 9), (11, 13, 11, 13), (15, 17, 15, 17)]);
         // Positional parameters bind by number, whatever order they appear in: `?n` binds
         // `params[n - 1]`, so an author's numbering survives.
-        let sql = "select $2, ?1, $2";
+        let sql = "select ?2, ?1, ?2";
         let l = lex(sql, Dialect::Sqlite).unwrap();
         let r = rewrite(sql, &l, Target::Numbered);
         assert_eq!(r.sql, "select ?2, ?1, ?2");
@@ -581,8 +583,8 @@ mod tests {
         assert_eq!(r.sql, sql);
         assert_eq!(r.order, ["1", "2"]);
         // MySQL binds one value per `?`, in text order.
-        let sql = "select ?, $1";
+        let sql = "select ?, ?";
         let l = lex(sql, Dialect::Mysql).unwrap();
-        assert_eq!(rewrite(sql, &l, Target::Question).order, ["1", "1"]);
+        assert_eq!(rewrite(sql, &l, Target::Question).order, ["1", "2"]);
     }
 }

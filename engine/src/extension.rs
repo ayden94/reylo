@@ -65,7 +65,7 @@ pub fn server(host: &Host) -> Lazy<Server> {
 }
 
 /// What the server's analysis carries that the client cannot work out alone. The lexing (the
-/// rewritten text, the style, the directives) is the same on both sides and stays local.
+/// rewritten text, the style) is the same on both sides and stays local.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Remote {
@@ -96,7 +96,6 @@ pub fn analyze(sql: &str, host: &Host) -> Lazy<Option<Analysis>> {
         cardinality_reason: remote.cardinality_reason,
         rewritten: lex::rewrite(sql, &lexed, Target::Dollar),
         style: lexed.style,
-        directives: lexed.directives.clone(),
         diagnostics: remote.diagnostics,
         unresolved: remote.unresolved,
     }))

@@ -34,7 +34,7 @@ pub fn analyze(sql: &str, lexed: &Lexed, host: &Host) -> Lazy<Analysis> {
             return Some(crate::postgres::bare(sql, lexed, Dialect::Mysql, vec![Diagnostic { message, start: 0, length: sql.trim_end().len().max(1), code: 6 }]));
         }
     };
-    let mut diagnostics = Vec::new();
+    let diagnostics = Vec::new();
     let parsed = Parser::parse_sql(&MySqlDialect {}, &rewritten.sql).ok().and_then(|mut v| if v.len() == 1 { v.pop() } else { None });
     // JSON shapes: the constructors' value expressions, prepared as columns of their own statements.
     let mut shaped: Vec<(String, Type, bool)> = Vec::new();
@@ -123,18 +123,15 @@ pub fn analyze(sql: &str, lexed: &Lexed, host: &Host) -> Lazy<Analysis> {
         Some(Statement::Delete(_)) => "delete",
         _ => "",
     };
-    let (cardinality, reason) = match crate::postgres::cardinality_directive(lexed, &mut diagnostics) {
-        Some(c) => c,
-        None => match &parsed {
-            Some(Statement::Query(q)) => {
-                let tables = tables_of(q);
-                let keys = if tables.is_empty() { HashMap::new() } else { unique_keys(host, &tables)? };
-                cardinality(q, &keys)
-            }
-            Some(Statement::Insert(_)) | Some(Statement::Update(_)) | Some(Statement::Delete(_)) => ("none".to_string(), None),
-            Some(_) => ("many".to_string(), Some("only a SELECT is proven".into())),
-            None => ("many".to_string(), Some("the engine could not parse the statement, so nothing bounds its rows".into())),
-        },
+    let (cardinality, reason) = match &parsed {
+        Some(Statement::Query(q)) => {
+            let tables = tables_of(q);
+            let keys = if tables.is_empty() { HashMap::new() } else { unique_keys(host, &tables)? };
+            cardinality(q, &keys)
+        }
+        Some(Statement::Insert(_)) | Some(Statement::Update(_)) | Some(Statement::Delete(_)) => ("none".to_string(), None),
+        Some(_) => ("many".to_string(), Some("only a SELECT is proven".into())),
+        None => ("many".to_string(), Some("the engine could not parse the statement, so nothing bounds its rows".into())),
     };
     Some(Analysis {
         kind: kind.to_string(),
@@ -144,7 +141,6 @@ pub fn analyze(sql: &str, lexed: &Lexed, host: &Host) -> Lazy<Analysis> {
         cardinality_reason: reason,
         rewritten,
         style: lexed.style,
-        directives: lexed.directives.clone(),
         diagnostics,
         unresolved: Vec::new(),
     })
