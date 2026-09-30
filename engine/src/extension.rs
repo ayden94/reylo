@@ -1,17 +1,17 @@
-//! The `lando` Postgres extension, seen from a client.
+//! The `pg_porg` Postgres extension, seen from a client.
 //!
 //! The extension (`pg-extension/`) hosts this same engine inside the server, where a need is a
 //! function call and not a round trip. A client that finds it has two ways to use it:
 //!
 //! - The server's engine was built from the same sources as this one ([`crate::FINGERPRINT`]):
 //!   the two give the same answer, so the client asks for the whole analysis,
-//!   `SELECT lando.analyze($1)`, in one query.
+//!   `SELECT porg.analyze($1)`, in one query.
 //! - It is another build: the rules stay the client's, and each round's statement-scoped needs
-//!   travel as one query, `SELECT lando.answer($1)`, which answers every one of them in the
+//!   travel as one query, `SELECT porg.answer($1)`, which answers every one of them in the
 //!   server. Session-scoped needs stay as they are, so the host goes on caching them.
 //!
 //! Without the extension nothing changes. Finding out costs the first statement of a session one
-//! round for a session-scoped catalog read, and a second for `lando.version()` where the
+//! round for a session-scoped catalog read, and a second for `porg.version()` where the
 //! extension exists; the host keeps both answers. The statement's own needs wait for that
 //! answer: asked in the same round, a statement that settles in one round would be done before
 //! the answer came, and the extension would never be used.
@@ -30,12 +30,12 @@ use std::collections::HashMap;
 
 /// Reads nothing but the catalog, so it cannot fail where the extension is absent; an error
 /// here would be asked again for every statement, since a host does not keep a failure.
-pub const PROBE_QUERY: &str = "SELECT extversion::text FROM pg_extension WHERE extname = 'lando'";
-pub const VERSION_QUERY: &str = "SELECT lando.version()";
-pub const ANALYZE_QUERY: &str = "SELECT lando.analyze($1::text)";
+pub const PROBE_QUERY: &str = "SELECT extversion::text FROM pg_extension WHERE extname = 'pg_porg'";
+pub const VERSION_QUERY: &str = "SELECT porg.version()";
+pub const ANALYZE_QUERY: &str = "SELECT porg.analyze($1::text)";
 /// The needs travel as text that the server casts: a parameter described as `jsonb` makes a
 /// driver JSON-encode the string it is handed, and a JSON string is not the array.
-pub const ANSWER_QUERY: &str = "SELECT lando.answer($1::text::jsonb)";
+pub const ANSWER_QUERY: &str = "SELECT porg.answer($1::text::jsonb)";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Server {

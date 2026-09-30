@@ -1,9 +1,9 @@
-# One Cargo workspace over both Rust crates: `engine/` (lando-engine, the pure SQL analysis engine
-# built to WebAssembly for the mapper and usable as an rlib), `lando-framework/engine/` (the Lando
-# Framework binary, which consumes lando-engine for its analysis) and `pg-extension/`. One lockfile,
+# One Cargo workspace over both Rust crates: `engine/` (porg-engine, the pure SQL analysis engine
+# built to WebAssembly for the mapper and usable as an rlib), `lando-framework/engine/` (the PorgAPI
+# binary, which consumes porg-engine for its analysis) and `pg-extension/`. One lockfile,
 # one `target/`.
 #
-# The `[patch]` is lando-engine's: the crates.io `pg_query` 6.2.0 source with the WebAssembly patch
+# The `[patch]` is porg-engine's: the crates.io `pg_query` 6.2.0 source with the WebAssembly patch
 # from `engine/vendor/` applied by `engine/build.sh --prepare`, which also fetches the SQLite
 # amalgamation `engine/build.rs` compiles. Run it once before any cargo command here; cargo refuses to
 # resolve the workspace while the patched copy is missing.

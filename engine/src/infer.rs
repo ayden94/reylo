@@ -203,7 +203,7 @@ pub struct Trust {
     /// Functions the host registers on its own connection, by name, with the type oid each
     /// returns: NULL only when an argument is NULL. Anti's `anti_html` on SQLite is one.
     pub total: HashMap<String, u32>,
-    /// Whether a parameter is a non-null value. A host whose callers cannot pass null (Lando
+    /// Whether a parameter is a non-null value. A host whose callers cannot pass null (Porg
     /// types a parameter without it) sets this; by default a placeholder proves nothing.
     pub non_null_params: bool,
     /// The parameter numbers that may be null all the same.

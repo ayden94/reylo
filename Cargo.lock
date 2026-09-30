@@ -148,7 +148,6 @@ dependencies = [
  "indexmap",
  "jsonschema",
  "jsonwebtoken",
- "lando-engine",
  "libc",
  "notify",
  "opentelemetry",
@@ -156,6 +155,7 @@ dependencies = [
  "opentelemetry_sdk",
  "percent-encoding",
  "pg_query",
+ "porg-engine",
  "rand 0.9.5",
  "reqwest",
  "rusqlite",
@@ -1984,22 +1984,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "lando-engine"
-version = "0.0.0"
-dependencies = [
- "cc",
- "indexmap",
- "pg_query",
- "serde",
- "serde_json",
- "sqlparser",
-]
-
-[[package]]
 name = "lando-pg"
 version = "0.1.0"
 dependencies = [
- "lando-engine",
+ "porg-engine",
  "serde_json",
 ]
 
@@ -2676,6 +2664,18 @@ name = "pkg-config"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
+
+[[package]]
+name = "porg-engine"
+version = "0.0.0"
+dependencies = [
+ "cc",
+ "indexmap",
+ "pg_query",
+ "serde",
+ "serde_json",
+ "sqlparser",
+]
 
 [[package]]
 name = "postcard"

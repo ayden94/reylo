@@ -1,5 +1,5 @@
 //! The SQLite analysis, over SQLite's own resolved tree ([`crate::sqlite_tree`], produced by
-//! `csrc/lando_sqlite.c` from a patched amalgamation). SQLite resolves the names, the join sides,
+//! `csrc/porg_sqlite.c` from a patched amalgamation). SQLite resolves the names, the join sides,
 //! every parameter's context and the DML target columns itself, and reports each expression's
 //! affinity. What SQLite has no facts for stays here, as explicit tables: the result type and
 //! nullability of the built-in functions, the type a function gives its arguments, the arithmetic

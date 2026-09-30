@@ -1,4 +1,4 @@
-//! SQLite's resolved parse tree, as `csrc/lando_sqlite.c` serializes it: what SQLite itself
+//! SQLite's resolved parse tree, as `csrc/porg_sqlite.c` serializes it: what SQLite itself
 //! resolved while preparing the statement against an in-memory replay of the schema DDL.
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -200,8 +200,8 @@ pub struct Node {
 }
 
 extern "C" {
-    fn lando_sqlite_analyze(ddl: *const *const c_char, n: c_int, sql: *const c_char, functions: *const *const c_char, arities: *const c_int, n_functions: c_int) -> *mut c_char;
-    fn lando_sqlite_free(p: *mut c_char);
+    fn porg_sqlite_analyze(ddl: *const *const c_char, n: c_int, sql: *const c_char, functions: *const *const c_char, arities: *const c_int, n_functions: c_int) -> *mut c_char;
+    fn porg_sqlite_free(p: *mut c_char);
 }
 
 /// Prepares `sql` against the schema `ddl` inside the embedded SQLite and returns what it resolved.
@@ -216,12 +216,12 @@ pub fn analyze(ddl: &[String], sql: &str, functions: &[(&str, i32)]) -> Result<T
     let sql = CString::new(sql.replace('\0', " ")).map_err(|e| e.to_string())?;
     let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let json = unsafe {
-        let p = lando_sqlite_analyze(pointers.as_ptr(), pointers.len() as c_int, sql.as_ptr(), name_pointers.as_ptr(), arities.as_ptr(), name_pointers.len() as c_int);
+        let p = porg_sqlite_analyze(pointers.as_ptr(), pointers.len() as c_int, sql.as_ptr(), name_pointers.as_ptr(), arities.as_ptr(), name_pointers.len() as c_int);
         if p.is_null() {
             return Err("the embedded SQLite returned nothing".into());
         }
         let text = CStr::from_ptr(p).to_string_lossy().into_owned();
-        lando_sqlite_free(p);
+        porg_sqlite_free(p);
         text
     };
     serde_json::from_str(&json).map_err(|e| format!("the embedded SQLite's answer did not parse: {e}"))

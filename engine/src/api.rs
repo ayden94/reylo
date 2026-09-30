@@ -173,7 +173,7 @@ pub enum Response {
     Error { message: String },
 }
 
-/// One round of the replay, through the server's `lando` extension where there is one
+/// One round of the replay, through the server's `pg_porg` extension where there is one
 /// ([`crate::extension`]): the whole analysis from a server with this engine inside, a round's
 /// needs in one query from a server with another build, and the needs as they are otherwise.
 fn analyze(sql: &str, dialect: Dialect, answers: &HashMap<String, Answer>) -> Response {
@@ -242,7 +242,7 @@ mod tests {
         answers.insert(format!("query:{PROBE_QUERY}|[]"), Answer::Rows { rows: vec![] });
         let ids = need_ids(&analyze(sql, Dialect::Postgres, &answers));
         assert!(ids.iter().any(|id| id == &format!("describe:{sql}")), "{ids:?}");
-        assert!(ids.iter().all(|id| !id.contains("lando.")), "{ids:?}");
+        assert!(ids.iter().all(|id| !id.contains("porg.")), "{ids:?}");
         // With the same build inside the server, the statement is one query.
         answers.insert(format!("query:{PROBE_QUERY}|[]"), Answer::Rows { rows: vec![vec![json!("0.1.0")]] });
         assert_eq!(need_ids(&analyze(sql, Dialect::Postgres, &answers)), vec![format!("query:{VERSION_QUERY}|[]")]);

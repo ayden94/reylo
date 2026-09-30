@@ -1,6 +1,6 @@
 //! Placeholders and directives, read off the raw statement text.
 //!
-//! Lando lets a statement name its parameters in any dialect: `:name`, `$name` and `@name` are
+//! Porg lets a statement name its parameters in any dialect: `:name`, `$name` and `@name` are
 //! named placeholders, `$1`, `?` and `?1` positional ones, and one statement uses one style. A
 //! name may be dotted (`:auth.user_id`): each `.segment` starts like a name, so `arr[1:2]` and
 //! `:t.*` end where they should. The engine rewrites placeholders to whatever the database binds

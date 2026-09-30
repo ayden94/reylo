@@ -1,5 +1,5 @@
 // Compiles SQLite's amalgamation, patched with the engine's five resolution hooks, together with
-// the tree serializer in `csrc/lando_sqlite.c`, for the native and the wasm32-wasip1 target alike.
+// the tree serializer in `csrc/porg_sqlite.c`, for the native and the wasm32-wasip1 target alike.
 // `build.sh` fetches the amalgamation and applies `csrc/patch-sqlite.py`; this script only compiles.
 use std::env;
 use std::fs;
@@ -43,7 +43,7 @@ fn fingerprint(root: &Path) -> String {
 
 fn main() {
     let root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-    println!("cargo:rustc-env=LANDO_ENGINE_FINGERPRINT={}", fingerprint(&root));
+    println!("cargo:rustc-env=PORG_ENGINE_FINGERPRINT={}", fingerprint(&root));
     println!("cargo:rerun-if-changed=src");
     println!("cargo:rerun-if-changed=csrc");
     println!("cargo:rerun-if-changed=Cargo.toml");
@@ -54,7 +54,7 @@ fn main() {
     let target = env::var("TARGET").unwrap();
     let mut build = cc::Build::new();
     build
-        .file(root.join("csrc/lando_sqlite.c"))
+        .file(root.join("csrc/porg_sqlite.c"))
         .include(root.join(".sqlite"))
         .include(root.join(".sqlite/sqlite-amalgamation-3530400"))
         .flag("-w")
@@ -72,12 +72,12 @@ fn main() {
     if !target.starts_with("wasm32") {
         // A native consumer of this rlib may link its own SQLite (Anti links rusqlite's bundled
         // one), so the amalgamation's public API stays private to this translation unit: only
-        // `lando_sqlite_analyze` and `lando_sqlite_free` are exported, and nothing here is
+        // `porg_sqlite_analyze` and `porg_sqlite_free` are exported, and nothing here is
         // reachable from, or shadows, the other copy.
         build.define("SQLITE_API", "static").define("SQLITE_EXTERN", "");
     }
     if target.contains("linux") {
-        // The amalgamation defines `_GNU_SOURCE` for itself, but `csrc/lando_sqlite.c` has
+        // The amalgamation defines `_GNU_SOURCE` for itself, but `csrc/porg_sqlite.c` has
         // included system headers before it gets there, and glibc then hides `mremap`.
         build.define("_GNU_SOURCE", None);
     }
@@ -90,8 +90,8 @@ fn main() {
             .define("SQLITE_MAX_MMAP_SIZE", "0")
             .define("SQLITE_ENABLE_LOCKING_STYLE", "0");
     }
-    build.compile("lando_sqlite");
-    println!("cargo:rerun-if-changed=csrc/lando_sqlite.c");
+    build.compile("porg_sqlite");
+    println!("cargo:rerun-if-changed=csrc/porg_sqlite.c");
     println!("cargo:rerun-if-changed=csrc/patch-sqlite.py");
     println!("cargo:rerun-if-changed=.sqlite/sqlite3-patched.c");
 }
