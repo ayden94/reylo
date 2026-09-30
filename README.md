@@ -12,7 +12,7 @@ Status: pre-alpha. Design notes and experiments live in this repository while th
 
 ## Repository
 
-Porg (named Lando until 2026-09-30; [ROADMAP.md](./ROADMAP.md#names-decided-2026-09-30) says why the name was dropped) is the root of this repository. [`lando-framework/`](./lando-framework) is PorgAPI, a web framework where the backend is a directory of SQL files, imported with its history on 2026-09-19 (as Anti; renamed Lando Framework on 2026-09-29 and PorgAPI on 2026-09-30; its directory and its own identifiers, such as the `anti` binary, keep their old names until their rename is decided) so the two projects share one SQL analysis engine (`engine/`, a Cargo workspace member with `lando-framework/engine/` and `pg-extension/`). [`AGENTS.md`](./AGENTS.md) describes the layout and the build gates of both; [`DESIGN.md`](./DESIGN.md) §20 records how the two implementations are being unified. [`ROADMAP.md`](./ROADMAP.md) lists the pieces, the order they ship in and the planned work, and [`docs/dialects.md`](./docs/dialects.md) what each SQL dialect can and cannot type.
+Porg is the root of this repository. [`porgapi/`](./porgapi) is PorgAPI, a web framework where the backend is a directory of SQL files, imported with its history on 2026-09-19 so the two projects share one SQL analysis engine (`engine/`, a Cargo workspace member with `porgapi/engine/` and `pg-extension/`). [`AGENTS.md`](./AGENTS.md) describes the layout and the build gates of both; [`DESIGN.md`](./DESIGN.md) §20 records how the two implementations are being unified. [`ROADMAP.md`](./ROADMAP.md) lists the pieces, the order they ship in and the planned work, and [`docs/dialects.md`](./docs/dialects.md) what each SQL dialect can and cannot type.
 
 ## The Postgres extension
 
