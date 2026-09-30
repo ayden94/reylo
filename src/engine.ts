@@ -1,4 +1,4 @@
-// The analysis engine: `engine/lando_engine.wasm`, a WASI reactor, loaded once per process.
+// The analysis engine: `engine/porg_engine.wasm`, a WASI reactor, loaded once per process.
 // The engine is pure. `analyze` replays it: every round it either answers or names what it
 // still needs — statements to describe, catalog queries to run — and this module fulfils
 // those through the project's own driver and calls again.
@@ -72,9 +72,9 @@ type Response =
   | { status: "analysis"; analysis: Analysis }
   | { status: "error"; message: string };
 
-const WASM_PATH = new URL("../engine/lando_engine.wasm", import.meta.url);
+const WASM_PATH = new URL("../engine/porg_engine.wasm", import.meta.url);
 
-// The WebAssembly namespace is a global in every runtime Lando supports; it is typed here
+// The WebAssembly namespace is a global in every runtime Porg supports; it is typed here
 // rather than through the DOM lib.
 type Memory = { buffer: ArrayBuffer };
 type Instance = { exports: Record<string, unknown> };
@@ -89,14 +89,14 @@ export class Engine {
   private constructor(instance: Instance) {
     const e = instance.exports as Record<string, any>;
     this.#memory = e.memory;
-    this.#alloc = e.lando_alloc;
-    this.#free = e.lando_free;
-    this.#call = e.lando_call;
+    this.#alloc = e.porg_alloc;
+    this.#free = e.porg_free;
+    this.#call = e.porg_call;
   }
 
   static async load(path: URL | string = WASM_PATH): Promise<Engine> {
     const module = await WA.compile(readFileSync(path));
-    const wasi = new WASI({ version: "preview1", args: ["lando-engine"], env: {} });
+    const wasi = new WASI({ version: "preview1", args: ["porg-engine"], env: {} });
     const instance = await WA.instantiate(module, wasi.getImportObject());
     wasi.initialize(instance as never);
     return new Engine(instance);
