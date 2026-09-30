@@ -1,9 +1,10 @@
-// The project file, `.porg.toml`, and the connection it names. The file is found by walking up
-// from the tsconfig's directory (`PORG_CONFIG` names one instead), parsed by the engine so that
-// every Porg tool reads the same TOML, and resolved here against the environment: the process
-// environment first, then the `.env` files the project file names (by default `.env.local`, then
-// `.env`), and a `${VAR}` in `url` is replaced from that. A project without the file behaves as if
-// it held `url = "${DATABASE_URL}"`.
+// The project file, `.porg.toml`, and the connection it names. The file sits beside the project's
+// `package.json` (the nearest one at or above the tsconfig's directory; `PORG_CONFIG` names
+// another file), is parsed by the engine so that every Porg tool reads the same TOML, and is
+// resolved here against the environment: the process environment first, then the `.env` files the
+// project file names under `env` (by default `.env.local`, then `.env`, beside it), and a `${VAR}`
+// in a URL is replaced from that. The URL's scheme names the dialect. A project without the file
+// behaves as if it held `url = "${DATABASE_URL}"`.
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { Engine } from "./engine.ts";
@@ -13,19 +14,22 @@ export type Dialect = "postgres" | "sqlite" | "mysql";
 
 /** What the engine reads out of `.porg.toml`: the keys the library uses. */
 export type ProjectFile = {
-  dialect?: Dialect;
   url?: string;
-  env_files?: string[];
+  direct_url?: string;
+  env?: string[];
+  param_typing?: "loose" | "strict";
   types: { dates?: Repr["dates"]; bigint?: Repr["bigint"] };
 };
 
 export type ResolvedProject = {
   /** The project file, when there is one. */
   file: string | undefined;
-  /** The directory a relative path in the project resolves against: the file's, or the tsconfig's. */
+  /** The directory a relative path in the project resolves against: the package's. */
   root: string;
   dialect: Dialect;
   repr: Repr;
+  paramTyping: "loose" | "strict";
+  /** The connection the type check uses: `direct_url` when the file names one, else `url`. */
   url: string | undefined;
   /** Where the URL came from, for a diagnostic: never the URL itself. */
   urlSource: string;
@@ -38,14 +42,28 @@ export type ResolvedProject = {
 export const PROJECT_FILE = ".porg.toml";
 const DEFAULT_ENV_FILES = [".env.local", ".env"];
 
-/** The project file for a project directory: `PORG_CONFIG`, or the first `.porg.toml` walking up. */
+/** The package directory: the nearest one at or above `from` that holds a `package.json`, else `from`. */
+export function packageDir(from: string): string {
+  for (let dir = resolve(from); ; dir = dirname(dir)) {
+    if (existsSync(join(dir, "package.json"))) return dir;
+    if (dirname(dir) === dir) return resolve(from);
+  }
+}
+
+/** The project file for a project directory: `PORG_CONFIG`, or `.porg.toml` beside the package's `package.json`. */
 export function findProjectFile(from: string, env: Record<string, string | undefined> = process.env): string | undefined {
   if (env.PORG_CONFIG) return resolve(env.PORG_CONFIG);
-  for (let dir = resolve(from); ; dir = dirname(dir)) {
-    const candidate = join(dir, PROJECT_FILE);
-    if (existsSync(candidate)) return candidate;
-    if (dirname(dir) === dir) return undefined;
-  }
+  const candidate = join(packageDir(from), PROJECT_FILE);
+  return existsSync(candidate) ? candidate : undefined;
+}
+
+/** The dialect a URL's scheme names, or undefined for a scheme Porg does not read. */
+export function dialectOf(url: string): Dialect | undefined {
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(url)?.[1]?.toLowerCase();
+  if (scheme === "postgres" || scheme === "postgresql") return "postgres";
+  if (scheme === "mysql" || scheme === "mariadb") return "mysql";
+  if (scheme === "file" || scheme === "sqlite") return "sqlite";
+  return undefined;
 }
 
 export function readEnvFile(path: string): Record<string, string> {
@@ -67,7 +85,7 @@ function place(text: string, offset: number): string {
 
 export function resolveProject(engine: Engine, projectDir: string, env: Record<string, string | undefined> = process.env): ResolvedProject {
   const file = findProjectFile(projectDir, env);
-  const root = file ? dirname(file) : projectDir;
+  const root = file ? dirname(file) : packageDir(projectDir);
   const shown = (path: string) => (isAbsolute(path) ? relative(projectDir, path) || path : path);
   let config: ProjectFile = { types: {} };
   let error: string | undefined;
@@ -85,7 +103,7 @@ export function resolveProject(engine: Engine, projectDir: string, env: Record<s
       else error = `${shown(file)}: ${r.status === "error" ? r.message : `unexpected ${r.status}`}`;
     }
   }
-  const envFiles = (config.env_files ?? DEFAULT_ENV_FILES).map((f) => resolve(root, f));
+  const envFiles = (config.env ?? DEFAULT_ENV_FILES).map((f) => resolve(root, f));
   // The process environment wins; among the files, the first that sets a variable does.
   const lookup = (name: string): { value: string; source: string } | undefined => {
     if (env[name] !== undefined) return { value: env[name]!, source: `${name} in the environment` };
@@ -97,18 +115,20 @@ export function resolveProject(engine: Engine, projectDir: string, env: Record<s
   };
   let url: string | undefined;
   let urlSource = "DATABASE_URL";
-  if (config.url !== undefined) {
+  const key = config.direct_url !== undefined ? "direct_url" : "url";
+  const written = config.direct_url ?? config.url;
+  if (written !== undefined) {
     const missing: string[] = [];
     const sources: string[] = [];
-    url = config.url.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, name: string) => {
+    url = written.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, name: string) => {
       const hit = lookup(name);
       if (!hit) missing.push(name);
       else sources.push(hit.source);
       return hit?.value ?? "";
     });
-    urlSource = `"url" in ${shown(file!)}${sources.length ? `, ${sources.join(", ")}` : ""}`;
+    urlSource = `"${key}" in ${shown(file!)}${sources.length ? `, ${sources.join(", ")}` : ""}`;
     if (missing.length) {
-      error ??= `${shown(file!)}: "url" names ${missing.map((m) => `\${${m}}`).join(", ")}, which neither the environment nor ${envFiles.map(shown).join(" nor ")} sets.`;
+      error ??= `${shown(file!)}: "${key}" names ${missing.map((m) => `\${${m}}`).join(", ")}, which neither the environment nor ${envFiles.map(shown).join(" nor ")} sets.`;
       url = undefined;
     }
   } else {
@@ -116,7 +136,8 @@ export function resolveProject(engine: Engine, projectDir: string, env: Record<s
     url = hit?.value;
     if (hit) urlSource = hit.source;
   }
-  const dialect = config.dialect ?? (url && /^(file:|sqlite:)/.test(url) ? "sqlite" : url && /^(mysql|mariadb):/.test(url) ? "mysql" : "postgres");
+  const dialect = url ? dialectOf(url) : "postgres";
+  if (url && !dialect) error ??= `Cannot tell the database from the URL (${urlSource}): Porg reads postgres://, postgresql://, mysql://, mariadb://, file: and sqlite: URLs.`;
   const repr: Repr = { dates: config.types.dates ?? defaultRepr.dates, bigint: config.types.bigint ?? defaultRepr.bigint };
-  return { file, root, dialect, repr, url, urlSource, watched: [...(file ? [file] : [join(projectDir, PROJECT_FILE)]), ...envFiles], error };
+  return { file, root, dialect: dialect ?? "postgres", repr, paramTyping: config.param_typing ?? "loose", url, urlSource, watched: [...(file ? [file] : [join(root, PROJECT_FILE)]), ...envFiles], error };
 }

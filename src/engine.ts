@@ -18,7 +18,6 @@ export type EngineType =
   | { kind: "unknown" };
 
 export type Diagnostic = { message: string; start: number; length: number; code: number };
-export type Directive = { name: string; value: string; start: number; end: number };
 
 export type Analysis = {
   kind: string;
@@ -29,7 +28,6 @@ export type Analysis = {
   cardinalityReason?: string;
   rewritten: { sql: string; order: string[]; spans: [number, number, number, number][] };
   style: "none" | "named" | "positional" | "mixed";
-  directives: Directive[];
   diagnostics: Diagnostic[];
   unresolved: string[];
 };
@@ -37,7 +35,6 @@ export type Analysis = {
 export type Lexed = {
   params: string[];
   placeholders: { name: string; start: number; end: number }[];
-  directives: Directive[];
   style: "none" | "named" | "positional" | "mixed";
   /** The spans the lexer read as text (strings, quoted identifiers, comments): `[start, end]` byte offsets, in order. */
   opaque: [number, number][];

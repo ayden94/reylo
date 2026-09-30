@@ -37,14 +37,14 @@ export interface Query<Params, Row, C extends Cardinality, D extends Dialect>
   readonly cardinality: C;
   readonly "~standard": StandardJSONSchemaV1.Props<Params, Materialize<Row, C>>;
   readonly "~porg": PorgTypes<Params, Row, C>;
-  /**
-   * Runs the statement on the client. Without the parameters, a statement that takes some
-   * returns a function of them (`const get = q.run(tx); await get({ id: 1 })`), and one that
-   * takes none runs at once.
-   */
-  run(client: ClientFor<D>): {} extends Params ? Promise<Materialize<Row, C>> : (params: Params) => Promise<Materialize<Row, C>>;
-  run(client: ClientFor<D>, params: Params): Promise<Materialize<Row, C>>;
+  /** Runs the statement on the client; the parameters may be left out when the statement takes none. */
+  run(client: ClientFor<D>, ...params: ParamsArg<Params>): Promise<Materialize<Row, C>>;
+  /** The statement bound to a client, such as a transaction: `const get = q.with(tx); await get({ id: 1 })`. */
+  with(client: ClientFor<D>): (...params: ParamsArg<Params>) => Promise<Materialize<Row, C>>;
 }
+
+/** The parameters argument: required when the statement takes any, optional when it takes none. */
+export type ParamsArg<Params> = {} extends Params ? [params?: Params] : [params: Params];
 
 export type QueryDefinition = {
   dialect: Dialect;
@@ -84,8 +84,8 @@ export function defineQuery<Params, Row, C extends Cardinality, D extends Dialec
       },
     },
     "~porg": undefined as unknown as PorgTypes<Params, Row, C>,
-    run: ((client: ClientFor<D>, ...rest: [Params?]) =>
-      rest.length === 0 && def.params.length > 0 ? (params: Params) => run(client, params) : run(client, rest[0] ?? ({} as Params))) as Query<Params, Row, C, D>["run"],
+    run: ((client: ClientFor<D>, params?: Params) => run(client, params ?? ({} as Params))) as Query<Params, Row, C, D>["run"],
+    with: ((client: ClientFor<D>) => (params?: Params) => run(client, params ?? ({} as Params))) as Query<Params, Row, C, D>["with"],
   };
   async function run(client: ClientFor<D>, params: Params): Promise<Materialize<Row, C>> {
     const rows = (await execute(client, query, params as Record<string, unknown>)) as Row[];

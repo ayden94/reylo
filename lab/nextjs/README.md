@@ -1,0 +1,19 @@
+# Next.js lab
+
+A Next.js 16.3 App Router app that imports `get_user.sql` in a route handler (`app/api/user/route.ts`), a server component (`app/page.tsx`) and an edge route handler (`app/api/edge-user/route.ts`, with a stub client, because postgres.js needs TCP sockets the edge runtime does not have). `types.ts` pins the inferred row and parameter types exactly.
+
+```sh
+nub install
+ln -sfn ../../.. node_modules/porg
+echo 'DATABASE_URL=postgres://localhost:5432/postgres' > .env   # the lab/basic tables
+nub run typecheck        # next typegen, then tsc --noEmit --runExternalCode
+nub run dev              # Turbopack; nub run dev:webpack for webpack
+nub run build && nub run start   # build:webpack for webpack
+curl 'http://localhost:3000/api/user?id=1'
+```
+
+- `next.config.ts` registers `porg/webpack-loader` for `*.sql` in `turbopack.rules` and in the `webpack` hook, on the server only: a client component that imports a `.sql` file fails the build instead of shipping the statement to the browser.
+- `next build` type-checks by running the project's `tsc` without `--runExternalCode`, so the content mapper cannot run there and every `.sql` import is TS2307 (plus TS100024 on the tsconfig). `typescript.ignoreBuildErrors` turns that step off, and the `build` script runs `next typegen` and `tsc --noEmit --runExternalCode` first, which also checks the route types Next generates in `.next/types`.
+- `turbopack.root` is the repository root because `node_modules/porg` is a symlink to it and Turbopack resolves nothing outside its root; an app that installs porg keeps the default.
+- `allowImportingTsExtensions` is needed because porg ships its TypeScript sources, whose imports end in `.ts`; the same sources are why an installed copy of porg does not load yet (ROADMAP, release 0.1).
+- `/api/user` also returns `rewritten`, the mapper's rewritten statement, which is present only when the loader found a matching `.porg/queries.json` entry.

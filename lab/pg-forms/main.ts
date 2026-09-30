@@ -89,7 +89,7 @@ type AggPlainRow = {
 };
 const aggPlain1: AggPlainRow = null! as Awaited<ReturnType<typeof aggPlain.run>>;
 const aggPlain2: Awaited<ReturnType<typeof aggPlain.run>> = null! as AggPlainRow;
-// A statement without parameters runs at once: `run(client)` is the result, not a function.
+// A statement without parameters takes no second argument.
 declare const client: { query(text: string, values?: unknown[]): Promise<{ rows: unknown[] }> };
 const aggPlain3: Promise<AggPlainRow> = aggPlain.run(client);
 // Right throughout: an ungrouped aggregate is exactly one row (`one`), count and

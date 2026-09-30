@@ -1,5 +1,6 @@
-// Placeholder lexing for the runtime loader: finds `:name`, `$name`, `$1`, `?` and `?NNN`
-// outside strings and comments and returns the binding order. A name may be dotted
+// Placeholder lexing for the runtime loader: finds `:name`, and the dialect's own positional form
+// (`$1` on Postgres, `?` on MySQL, `?` and `?NNN` on SQLite), outside strings and comments, and
+// returns the binding order. A name may be dotted
 // (`:auth.user_id`); each segment starts like a name, so `arr[1:2]` is a slice. This is the
 // provisional JavaScript version of the engine's lexer; the Rust engine owns the
 // authoritative one (dollar quoting, E'' strings, nested comments, array slices).
@@ -7,7 +8,7 @@ export type Placeholder = { name: string; start: number; end: number };
 
 // A name drops its prefix (`:id` is `id`); a positional placeholder is named by its number
 // (`$2` and `?2` are `2`), and a bare `?` takes the number after the largest so far.
-export function lexPlaceholders(sql: string): { params: string[]; placeholders: Placeholder[] } {
+export function lexPlaceholders(sql: string, dialect: "postgres" | "mysql" | "sqlite"): { params: string[]; placeholders: Placeholder[] } {
   const placeholders: Placeholder[] = [];
   const params: string[] = [];
   let largest = 0;
@@ -29,20 +30,21 @@ export function lexPlaceholders(sql: string): { params: string[]; placeholders: 
     if (ch === "-" && next === "-") { i = sql.indexOf("\n", i); if (i === -1) break; continue; }
     if (ch === "/" && next === "*") { const end = sql.indexOf("*/", i + 2); i = end === -1 ? sql.length : end + 2; continue; }
     if (ch === ":" && next === ":") { i += 2; continue; }
-    if ((ch === ":" || ch === "$" || ch === "@") && next !== undefined && /[A-Za-z_]/.test(next)) {
+    // `arr[lo:hi]` is a slice: a name character before the colon means it opens nothing.
+    if (ch === ":" && next !== undefined && /[A-Za-z_]/.test(next) && !(i > 0 && /[A-Za-z0-9_]/.test(sql[i - 1]!))) {
       const m = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*/.exec(sql.slice(i + 1))!;
       push(m[0], i, i + 1 + m[0].length); i += 1 + m[0].length; continue;
     }
-    if (ch === "$" && next !== undefined && /[0-9]/.test(next)) {
+    if (ch === "$" && dialect === "postgres" && next !== undefined && /[0-9]/.test(next)) {
       const m = /^[0-9]+/.exec(sql.slice(i + 1))!;
       push(position(m[0]), i, i + 1 + m[0].length); i += 1 + m[0].length; continue;
     }
-    if (ch === "?" && next !== undefined && /[0-9]/.test(next)) {
+    if (ch === "?" && dialect === "sqlite" && next !== undefined && /[0-9]/.test(next)) {
       // SQLite's `?NNN` names the same position a `$NNN` does.
       const m = /^[0-9]+/.exec(sql.slice(i + 1))!;
       push(position(m[0]), i, i + 1 + m[0].length); i += 1 + m[0].length; continue;
     }
-    if (ch === "?") { largest += 1; push(String(largest), i, i + 1); i += 1; continue; }
+    if (ch === "?" && dialect !== "postgres") { largest += 1; push(String(largest), i, i + 1); i += 1; continue; }
     i += 1;
   }
   // Positional parameters bind by number, whatever order they appear in.

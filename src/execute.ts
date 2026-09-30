@@ -84,7 +84,7 @@ function bind(text: string, order: readonly string[], params: Record<string, unk
 // engine's lexer is the authoritative one, and the two agree on every statement the
 // runtime fallback is meant for.
 function rewrite(query: QueryModule, params: Record<string, unknown>, placeholder: (index: number) => string) {
-  const { placeholders } = lexPlaceholders(query.sql);
+  const { placeholders } = lexPlaceholders(query.sql, query.dialect);
   let text = "";
   let last = 0;
   for (const p of placeholders) {
@@ -98,7 +98,7 @@ function rewrite(query: QueryModule, params: Record<string, unknown>, placeholde
 }
 
 function rewriteRepeating(query: QueryModule, params: Record<string, unknown>) {
-  const { placeholders } = lexPlaceholders(query.sql);
+  const { placeholders } = lexPlaceholders(query.sql, query.dialect);
   let text = "";
   let last = 0;
   const values: unknown[] = [];

@@ -6,7 +6,7 @@ import grouped from "./grouped.sql";
 const sql = postgres("postgres://localhost:5432/postgres");
 const ada = await query.run(sql, { id: 1, name: "ada" });
 const nobody = await query.run(sql, { id: 999, name: "x" });
-const curried = await query.run(sql)({ id: 1, name: "ada" });
+const curried = await query.with(sql)({ id: 1, name: "ada" });
 const adaNested = await nested.run(sql, { id: 1 });
 const counted = await count.run(sql, { role: "member" });
 const group = await grouped.run(sql, { id: 1 });

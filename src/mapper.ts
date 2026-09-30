@@ -1,12 +1,11 @@
 // The content mapper process. First happy path: Postgres, live database, scalar
 // column and parameter types from Parse/Describe through the project's own
 // driver, NOT NULL from the catalog for plain columns, named placeholders,
-// cardinality directives, and SQLSTATE errors mapped into the .sql file.
+// the proved row count, and SQLSTATE errors mapped into the .sql file.
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join, relative } from "node:path";
 import { serve } from "./rpc.ts";
-import { isPositional, lexPlaceholders } from "./lex.ts";
 import { engine, reason, AnswerCache, Unreachable, type Analysis } from "./engine.ts";
 import { conversion, ident, renderParamType, renderType, type Conversion, type Repr } from "./render.ts";
 import { resolveProject, type Dialect } from "./project.ts";
@@ -25,6 +24,7 @@ type Project = {
   repr: Repr;
   /** Why the project file cannot be used; every transform reports it. */
   error: string | undefined;
+  paramTyping: "loose" | "strict";
   describer: Promise<Describer> | undefined;
   sqlite: Promise<SqliteDescriber> | undefined;
   mysql: Promise<MysqlDescriber> | undefined;
@@ -43,10 +43,6 @@ function readCache(projectDir: string): Record<string, CacheEntry> {
   } catch {
     return {};
   }
-}
-
-function directive(sql: string, name: string): string | undefined {
-  return new RegExp(`^\\s*--\\s*@${name}\\s+(\\S+)`, "m").exec(sql)?.[1];
 }
 
 function diag(messageText: string, start: number, length: number, code = 1) {
@@ -84,8 +80,8 @@ serve({
     const optionDiagnostics = Object.keys(p.options ?? {}).map((key) => ({ path: [key], messageText: `Porg reads its settings from .porg.toml, not from the content mapper's options; move "${key}" there.`, code: 104 }));
     const resolved = resolveProject(await engine(), projectDir);
     const cache = readCache(projectDir);
-    projects.set(p.projectHandle, { projectDir, root: resolved.root, url: resolved.url, urlSource: resolved.urlSource, dialect: resolved.dialect, repr: resolved.repr, error: resolved.error, describer: undefined, sqlite: undefined, mysql: undefined, answers: new AnswerCache(), cache });
-    const configIdentity = createHash("sha1").update(JSON.stringify([resolved.file ?? null, resolved.dialect, resolved.repr, resolved.url ?? null, resolved.error ?? null, p.options ?? null])).digest("hex");
+    projects.set(p.projectHandle, { projectDir, root: resolved.root, url: resolved.url, urlSource: resolved.urlSource, dialect: resolved.dialect, repr: resolved.repr, error: resolved.error, paramTyping: resolved.paramTyping, describer: undefined, sqlite: undefined, mysql: undefined, answers: new AnswerCache(), cache });
+    const configIdentity = createHash("sha1").update(JSON.stringify([resolved.file ?? null, resolved.dialect, resolved.repr, resolved.paramTyping, resolved.url ?? null, resolved.error ?? null, p.options ?? null])).digest("hex");
     return { configIdentity, watchedFiles: resolved.watched, optionDiagnostics };
   },
   async transform(params) {
@@ -118,18 +114,26 @@ serve({
       ].join("\n"),
     });
 
-    const { params: names, placeholders } = lexPlaceholders(sql);
-    const named = names.filter((n) => !isPositional(n));
-    if (named.length && named.length !== names.length) {
-      const first = placeholders.find((h) => isPositional(h.name))!;
-      diagnostics.push(diag("Named and positional parameters cannot be mixed in one statement.", first.start, first.end - first.start, 2));
-      return emit("never", "never", "many", names);
-    }
-    const cardinality = directive(sql, "returns") ?? "many";
-    if (!["many", "one", "maybeOne", "none"].includes(cardinality)) {
-      const at = sql.indexOf(cardinality);
-      diagnostics.push(diag(`Unknown @returns value "${cardinality}"; expected many, one, maybeOne or none.`, at, cardinality.length, 3));
-    }
+    // The engine's lexer names the parameters. A statement it cannot read (a placeholder form the
+    // dialect would misread, named and positional mixed) comes back from the analysis as an error
+    // at its place; until then nothing is proved, so the row count is `many`.
+    let names: string[] = [];
+    let placeholders: { name: string; start: number; end: number }[] = [];
+    try {
+      ({ params: names, placeholders } = (await engine()).lex(sql, project.dialect));
+    } catch {}
+    const cardinality = "many";
+    // `param_typing = "strict"`: a parameter nothing in the statement types is an error at its first use.
+    const strict = (analysis: Analysis) => {
+      if (project.paramTyping !== "strict") return;
+      for (const q of analysis.params) {
+        if (q.type.kind !== "unknown") continue;
+        const at = placeholders.find((h) => h.name === q.name);
+        // The engine's offsets are UTF-8 bytes, as the diagnostics' are.
+        const written = at ? Buffer.from(sql, "utf8").subarray(at.start, at.end).toString("utf8") : `:${q.name}`;
+        diagnostics.push(diag(`Nothing in the statement gives the parameter ${written} a type; cast it, as in cast(${written} as integer), or set param_typing = "loose" in .porg.toml.`, at?.start ?? 0, at ? at.end - at.start : 1, 12));
+      }
+    };
     if (project.error) {
       diagnostics.push(diag(project.error, 0, 1, 11));
       return emit("unknown", "unknown", cardinality, names);
@@ -177,7 +181,8 @@ serve({
         return emit("unknown", "unknown", cardinality, names);
       }
       diagnostics.push(...analysis.diagnostics.map((d) => diag(d.message, d.start, d.length, d.code)));
-      const inferred = directive(sql, "returns") ? cardinality : analysis.cardinality;
+      strict(analysis);
+      const inferred = analysis.cardinality;
       if (analysis.diagnostics.some((d) => d.code === 6)) return emit("unknown", "unknown", inferred, names);
       const columns = analysis.columns.map((c) => `${ident(c.name)}: ${renderType(c.type, false, "mysql", project.repr)}${c.nullable ? " | null" : ""}`);
       // The server types a `?` from its context (LONGLONG against an int column, VAR_STRING
@@ -209,7 +214,8 @@ serve({
         return emit("unknown", "unknown", cardinality, names);
       }
       diagnostics.push(...analysis.diagnostics.map((d) => diag(d.message, d.start, d.length, d.code)));
-      const inferred = directive(sql, "returns") ? cardinality : analysis.cardinality;
+      strict(analysis);
+      const inferred = analysis.cardinality;
       if (analysis.diagnostics.some((d) => d.code === 6)) return emit("unknown", "unknown", inferred, analysis.rewritten.order);
       const columns = analysis.columns.map((c) => `${ident(c.name)}: ${renderType(c.type, false, "sqlite")}${c.nullable ? " | null" : ""}`);
       // The engine types a parameter from its context (a column it is compared with or written
@@ -243,7 +249,8 @@ serve({
       return emit("unknown", "unknown", cardinality, names);
     }
     diagnostics.push(...analysis.diagnostics.map((d) => diag(d.message, d.start, d.length, d.code)));
-    const inferred = directive(sql, "returns") ? cardinality : analysis.cardinality;
+    strict(analysis);
+    const inferred = analysis.cardinality;
     if (analysis.diagnostics.some((d) => d.code === 6) || analysis.kind === "") {
       return emit("unknown", "unknown", inferred, analysis.rewritten.order);
     }

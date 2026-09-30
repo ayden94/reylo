@@ -22,9 +22,25 @@ Porg is the root of this repository. [`porgapi/`](./porgapi) is PorgAPI, a web f
 
 `porg/vite` is a Vite, Rollup and Rolldown plugin; `porg/esbuild` is an esbuild plugin that `Bun.build` and `Bun.plugin` take as is; `porg/webpack-loader` is a loader for webpack, Rspack and Turbopack. Each turns a `.sql` import into the same module the runtime preload builds, so a bundled app needs no preload.
 
+Each adapter also watches the mapper's cache, so a dev server rebuilds a `.sql` module when the mapper rewrites its statement.
+
+Next.js takes `porg/webpack-loader` for both of its bundlers, on the server only, so that a client component that imports a `.sql` file fails the build instead of shipping the statement to the browser. `next build` runs `tsc` without `--runExternalCode`, so the mapper cannot run inside it: turn that step off and run the type check before the build ([lab/nextjs](./lab/nextjs) is the whole setup, with Turbopack and webpack, in `next dev` and `next build`):
+
+```ts
+// next.config.ts
+const nextConfig: NextConfig = {
+  typescript: { ignoreBuildErrors: true }, // the build script runs `next typegen && tsc --noEmit --runExternalCode` first
+  turbopack: { rules: { "*.sql": { condition: { not: "browser" }, loaders: ["porg/webpack-loader"], as: "*.js" } } },
+  webpack(config, { isServer }) {
+    if (isServer) config.module.rules.push({ test: /\.sql$/, use: "porg/webpack-loader" });
+    return config;
+  },
+};
+```
+
 ## Examples
 
-Parameters are written `:name` in every dialect (`$name` and `@name` work too). The engine lexes them out and rewrites to the database's own placeholder (`$1` for Postgres, `?` for MySQL, `:name` stays for SQLite) when the mapper describes the statement; the rewritten text and its binding order land in `.porg/queries.json`, and `run` binds through them, so the parameter object is `{ name: ... }` everywhere. Positional `$1` / `?` are accepted too, and the key is the position's number: `where id = $1` takes `{ 1: ... }`, and a bare `?` is one past the largest number before it, as SQLite numbers it; mixing the two styles in one statement is an error. The engine infers the row count from the statement and the schema on every dialect (a primary-key equality is `maybeOne`, an ungrouped aggregate `one`, a one-row `INSERT … RETURNING` `one`, a data-modifying statement without RETURNING `none`); `-- @returns one | maybeOne | many | none` overrides it. A parameter nothing in the statement types is `unknown`; `cast(:x as integer)` types it, and the database enforces the cast. A parameter is typed without null unless the statement lets the caller pass one: it tests the parameter for null or coalesces it (Postgres), or writes it whole to a nullable column (Postgres and SQLite).
+Parameters are written `:name` in every dialect, the form mysql2's `namedPlaceholders` and SQLite use. The engine lexes them out and rewrites them to the database's own placeholder (`$1` for Postgres, `?` for MySQL and SQLite) when the mapper describes the statement; the rewritten text and its binding order land in `.porg/queries.json`, and `run` binds through them, so the parameter object is `{ name: ... }` everywhere. A statement may use its database's own positional form instead (`$1` on Postgres, `?` on MySQL, `?` and `?NNN` on SQLite), and the key is the position's number: `where id = $1` takes `{ 1: ... }`, and a bare `?` is one past the largest number before it, as SQLite numbers it. Mixing the two styles in one statement is an error, and so is a form the database would misread (`$name` or `@name` on SQLite, `$name` on Postgres, `?2` on MySQL); MySQL's `@name` is a user variable and stays one. The engine infers the row count from the statement and the schema on every dialect (a primary-key equality is `maybeOne`, `LIMIT 1` is `maybeOne`, an ungrouped aggregate `one`, a one-row `INSERT … RETURNING` `one`, a data-modifying statement without RETURNING `none`); there is no directive to override it. A parameter nothing in the statement types is `unknown`; `cast(:x as integer)` types it, and the database enforces the cast. A parameter is typed without null unless the statement lets the caller pass one: it tests the parameter for null or coalesces it (Postgres), or writes it whole to a nullable column (Postgres and SQLite).
 
 ### Postgres
 
@@ -40,7 +56,7 @@ const user = await getUser.run(sql, { id: 1, name: "ada" });
 //    ^? { id: number; name: string; email: string | null; role: "admin" | "member"; tags: string[]; created_at: string; next_id: number } | null
 ```
 
-`run(client)` without the parameters returns a function of them, so a transaction passes its own client: `const get = getUser.run(tx); await get({ id: 1, name: "ada" })`. A statement that takes no parameters runs at once. The client is always the caller's.
+`with(client)` binds the query to a client, such as a transaction, and returns a function of the parameters: `const get = getUser.with(tx); await get({ id: 1, name: "ada" })`. A statement that takes no parameters takes no second argument: `await listUsers.run(sql)`. The client is always the caller's.
 
 Parameter types come from the server (`id: number`, `name: string`); `role` is an enum, `tags` a `text[]`, `email` nullable from the catalog, `next_id` non-null because `id` is and the built-in `+` never returns NULL for non-null operands; `| null` on the row because `id` is the primary key, so the `WHERE` matches at most one row. `created_at` is an ISO 8601 `string` and an `int8` a `string` because those are the default representations (see [Dates and 64-bit integers](#dates-and-64-bit-integers)).
 
@@ -104,19 +120,20 @@ where u.id = :id
 
 ## The project file
 
-Settings live in `.porg.toml`, which the mapper finds by walking up from the tsconfig's directory (`PORG_CONFIG` names another file). A project whose connection is `DATABASE_URL` needs no file; the content mapper itself takes no options in `tsconfig.json`.
+Settings live in `.porg.toml` beside the project's `package.json` (the nearest one at or above the tsconfig; `PORG_CONFIG` names another file), one file per package. A project whose connection is `DATABASE_URL` needs no file; the content mapper itself takes no options in `tsconfig.json`.
 
 ```toml
-dialect = "postgres"                 # optional: the URL's scheme decides otherwise
-url = "${DATABASE_URL}"              # the default; the secret stays in the environment
-env_files = [".env.local", ".env"]   # the default; the process environment wins, then the first file that sets a variable
+url = "${DATABASE_URL}"              # the default; the secret stays in the environment; the scheme names the dialect
+direct_url = "${DIRECT_URL}"         # optional: a connection past a pooler, which the type check prefers
+env = [".env.local", ".env"]         # the default; the process environment wins, then the first file that sets a variable
+param_typing = "loose"               # the default; "strict" makes a parameter the statement does not type an error
 
 [types]
 dates = "string"                     # "string" (the default), "Date" or "temporal"
 bigint = "string"                    # "string" (the default), "number" or "bigint"
 ```
 
-A key Porg does not know, or a `${VAR}` nothing sets, is an error on every `.sql` import that names the line and column in `.porg.toml`. The tables PorgREST and PorgAPI will read (`[rest]`, `[api]`, `[check]`, `[auth]`, `[live]`) are accepted as they are. A relative SQLite path in the URL resolves against the file's directory.
+The URL's scheme names the dialect: `postgres://` and `postgresql://`, `mysql://` and `mariadb://`, `file:` and `sqlite:`. A key Porg does not know, or a `${VAR}` nothing sets, is an error on every `.sql` import that names the line and column in `.porg.toml`; the tables PorgREST and PorgAPI will read (`[rest]`, `[api]`) are accepted as they are. A relative SQLite path in the URL resolves against the package directory.
 
 ## Dates and 64-bit integers
 

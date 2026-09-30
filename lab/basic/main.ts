@@ -20,8 +20,8 @@ const b: Row = null! as ExpectedRow;
 const c: ExpectedParams = null! as Params;
 const d: Params = null! as ExpectedParams;
 const e: Row | null = await query.run(pool, { id: 1, name: "ada" });
-// Without the parameters, `run` returns a function of them.
-const get = query.run(pool);
+// `with` binds a client, such as a transaction, and returns a function of the parameters.
+const get = query.with(pool);
 const e2: Row | null = await get({ id: 1, name: "ada" });
 // @ts-expect-error the function still checks the parameters
 await get({ id: 1 });
