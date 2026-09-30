@@ -15,6 +15,7 @@ pub mod mysql;
 pub mod mysql_shape;
 pub mod pgtypes;
 pub mod postgres;
+pub mod schema;
 pub mod sqlite;
 pub mod sqlite_tree;
 pub mod types;

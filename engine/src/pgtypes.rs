@@ -1,7 +1,8 @@
 //! Postgres type knowledge: the well-known OIDs the rules read, and the registry of the types a
 //! statement mentions, read from `pg_type` through the host.
 
-use crate::host::{as_strings, as_u32};
+use crate::host::{as_bool, as_strings, as_u32};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -38,8 +39,19 @@ pub struct PgType {
     pub elem: Option<u32>,
     pub base: Option<u32>,
     pub labels: Vec<String>,
+    /// A composite type's own columns, in attribute order: the shape a whole-row value carries.
+    /// A `record` has none, because an anonymous row type has no catalog entry to read them from.
+    pub fields: Vec<Attribute>,
     /// The name a cast may spell, schema-qualified when the search path would not find it.
     pub cast_name: String,
+}
+
+/// One column of a composite type, read from `pg_attribute` beside its relation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Attribute {
+    pub name: String,
+    pub type_oid: u32,
+    pub not_null: bool,
 }
 
 /// The types a statement mentions, by oid. Loaded lazily: the engine asks the host for the oids
@@ -49,24 +61,37 @@ pub struct TypeRegistry {
     pub types: HashMap<u32, PgType>,
 }
 
-/// `$1` is `oid[]`.
-pub const TYPE_QUERY: &str = "SELECT t.oid::int8, t.typname::text, t.typtype::text, t.typelem::int8, t.typbasetype::int8, \
+/// The columns of one `pg_type` row `t` as [`TypeRegistry::insert_rows`] reads them: the oid, the
+/// name, `typtype`, the element and base types, an enum's labels, the name a cast spells, and a
+/// composite's columns from `pg_attribute` as three arrays in attribute order (names, type oids,
+/// `NOT NULL`), so a whole-row value has its fields in the same round as its type.
+macro_rules! type_columns {
+    () => {
+        "t.oid::int8, t.typname::text, t.typtype::text, t.typelem::int8, t.typbasetype::int8, \
     CASE WHEN t.typtype = 'e' THEN (SELECT array_agg(e.enumlabel::text ORDER BY e.enumsortorder) FROM pg_enum e WHERE e.enumtypid = t.oid) END, \
-    pg_catalog.format_type(t.oid, NULL) \
-    FROM pg_type t WHERE t.oid = ANY($1::oid[])";
+    pg_catalog.format_type(t.oid, NULL), \
+    CASE WHEN t.typtype = 'c' THEN (SELECT array_agg(a.attname::text ORDER BY a.attnum) FROM pg_attribute a WHERE a.attrelid = t.typrelid AND a.attnum > 0 AND NOT a.attisdropped) END, \
+    CASE WHEN t.typtype = 'c' THEN (SELECT array_agg(a.atttypid::int8 ORDER BY a.attnum) FROM pg_attribute a WHERE a.attrelid = t.typrelid AND a.attnum > 0 AND NOT a.attisdropped) END, \
+    CASE WHEN t.typtype = 'c' THEN (SELECT array_agg(a.attnotnull ORDER BY a.attnum) FROM pg_attribute a WHERE a.attrelid = t.typrelid AND a.attnum > 0 AND NOT a.attisdropped) END"
+    };
+}
+
+/// `$1` is `oid[]`.
+pub const TYPE_QUERY: &str = concat!("SELECT ", type_columns!(), " FROM pg_type t WHERE t.oid = ANY($1::oid[])");
 
 /// The same rows for every column type of the named relations, with the element and base types
 /// those name, so a statement over plain columns has its types before it is described. `$1` is
 /// `text[]` of relation names.
-pub const RELATION_TYPES_QUERY: &str = "WITH cols AS (SELECT a.atttypid AS oid FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid \
+pub const RELATION_TYPES_QUERY: &str = concat!(
+    "WITH cols AS (SELECT a.atttypid AS oid FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid \
       WHERE c.relname = ANY($1::text[]) AND pg_catalog.pg_table_is_visible(c.oid) AND a.attnum > 0 AND NOT a.attisdropped), \
     wanted AS (SELECT oid FROM cols \
       UNION SELECT t.typelem FROM pg_type t JOIN cols ON cols.oid = t.oid WHERE t.typelem <> 0 \
       UNION SELECT t.typbasetype FROM pg_type t JOIN cols ON cols.oid = t.oid WHERE t.typbasetype <> 0) \
-    SELECT t.oid::int8, t.typname::text, t.typtype::text, t.typelem::int8, t.typbasetype::int8, \
-    CASE WHEN t.typtype = 'e' THEN (SELECT array_agg(e.enumlabel::text ORDER BY e.enumsortorder) FROM pg_enum e WHERE e.enumtypid = t.oid) END, \
-    pg_catalog.format_type(t.oid, NULL) \
-    FROM pg_type t WHERE t.oid IN (SELECT oid FROM wanted)";
+    SELECT ",
+    type_columns!(),
+    " FROM pg_type t WHERE t.oid IN (SELECT oid FROM wanted)"
+);
 
 /// The `pg_catalog` types with fixed oids the registry starts with, as `pg_type` reports them on
 /// 14 (`oid, typname, typtype, typelem, typbasetype, format_type`), so a statement over plain
@@ -154,6 +179,11 @@ const BUILTINS: &[(u32, &str, &str, u32, u32, &str)] = &[
     (3927, "_int8range", "b", 3926, 0, "int8range[]"),
 ];
 
+/// How deep [`TypeRegistry::render`] and [`TypeRegistry::missing`] follow arrays and composite
+/// columns; the catalog forbids a composite that contains itself, so this only guards a registry
+/// a host filled by hand.
+const MAX_DEPTH: usize = 16;
+
 impl TypeRegistry {
     /// A registry holding [`BUILTINS`].
     pub fn with_builtins() -> TypeRegistry {
@@ -177,6 +207,15 @@ impl TypeRegistry {
             let base = row.get(4).and_then(as_u32).unwrap_or(0);
             let labels = row.get(5).and_then(as_strings);
             let cast_name = row.get(6).and_then(Value::as_str).unwrap_or("").to_string();
+            let fields = match (row.get(7).and_then(as_strings), row.get(8).and_then(Value::as_array), row.get(9).and_then(Value::as_array)) {
+                (Some(names), Some(oids), Some(not_null)) if names.len() == oids.len() && names.len() == not_null.len() => names
+                    .into_iter()
+                    .zip(oids)
+                    .zip(not_null)
+                    .filter_map(|((name, o), n)| Some(Attribute { name, type_oid: as_u32(o)?, not_null: as_bool(n)? }))
+                    .collect(),
+                _ => Vec::new(),
+            };
             let name = name.to_string();
             let kind = match typtype {
                 "b" | "p" if elem != 0 && name.starts_with('_') => TypeKind::Array,
@@ -188,7 +227,7 @@ impl TypeRegistry {
             };
             self.types.insert(
                 oid,
-                PgType { oid, name, kind, elem: (elem != 0).then_some(elem), base: (base != 0).then_some(base), labels: labels.unwrap_or_default(), cast_name },
+                PgType { oid, name, kind, elem: (elem != 0).then_some(elem), base: (base != 0).then_some(base), labels: labels.unwrap_or_default(), fields, cast_name },
             );
         }
     }
@@ -202,6 +241,7 @@ impl TypeRegistry {
             elem: None,
             base: None,
             labels: Vec::new(),
+            fields: Vec::new(),
             cast_name: String::new(),
         });
     }
@@ -230,41 +270,147 @@ impl TypeRegistry {
         cur
     }
 
-    /// The oids this one needs to be rendered, itself included, that the registry does not hold.
+    /// The oids this one needs to be rendered, itself included, that the registry does not hold:
+    /// through arrays, domains and a composite's columns.
     pub fn missing(&self, oid: u32, out: &mut Vec<u32>) {
-        let mut cur = oid;
-        for _ in 0..8 {
-            let Some(t) = self.get(cur) else {
-                if !out.contains(&cur) {
-                    out.push(cur);
-                }
-                return;
-            };
-            match (t.kind, t.elem, t.base) {
-                (TypeKind::Array, Some(e), _) => cur = e,
-                (TypeKind::Domain, _, Some(b)) => cur = b,
-                _ => return,
+        self.missing_at(oid, out, 0);
+    }
+
+    fn missing_at(&self, oid: u32, out: &mut Vec<u32>, depth: usize) {
+        if depth > MAX_DEPTH {
+            return;
+        }
+        let Some(t) = self.get(oid) else {
+            if !out.contains(&oid) {
+                out.push(oid);
             }
+            return;
+        };
+        match (t.kind, t.elem, t.base) {
+            (TypeKind::Array, Some(e), _) => self.missing_at(e, out, depth + 1),
+            (TypeKind::Domain, _, Some(b)) => self.missing_at(b, out, depth + 1),
+            (TypeKind::Composite, _, _) => {
+                for f in &t.fields {
+                    self.missing_at(f.type_oid, out, depth + 1);
+                }
+            }
+            _ => {}
         }
     }
 
     /// The type model for one oid.
     pub fn render(&self, oid: u32) -> crate::types::Type {
-        use crate::types::Type;
+        self.render_at(oid, 0)
+    }
+
+    fn render_at(&self, oid: u32, depth: usize) -> crate::types::Type {
+        use crate::types::{Field, Type};
+        if depth > MAX_DEPTH {
+            return Type::Unknown;
+        }
         let mut cur = oid;
         for _ in 0..8 {
             let Some(t) = self.get(cur) else { return Type::Unknown };
             match (t.kind, t.elem, t.base) {
-                (TypeKind::Array, Some(e), _) => return Type::Array { of: Box::new(self.render(e)) },
+                (TypeKind::Array, Some(e), _) => return Type::Array { of: Box::new(self.render_at(e, depth + 1)) },
                 (TypeKind::Domain, _, Some(b)) => cur = b,
                 (TypeKind::Enum, _, _) => return Type::Enum { name: t.name.clone(), labels: t.labels.clone() },
-                // A row value: no driver parses one, so it reaches the caller as its text form,
-                // and so does an array of them.
+                (TypeKind::Composite, _, _) if !t.fields.is_empty() => {
+                    let fields = t.fields.iter().map(|f| Field { name: f.name.clone(), ty: self.render_at(f.type_oid, depth + 1), nullable: !f.not_null }).collect();
+                    return Type::Composite { name: t.name.clone(), fields };
+                }
+                // A row value whose columns were not read: no driver parses one, so it reaches
+                // the caller as its text form, and so does an array of them.
                 (TypeKind::Composite, _, _) => return Type::Scalar { name: "record".into() },
                 (TypeKind::Base, _, _) if matches!(t.oid, oid::JSON | oid::JSONB) => return Type::Json,
                 _ => return Type::Scalar { name: t.name.clone() },
             }
         }
         Type::Unknown
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{Field, Type};
+    use serde_json::json;
+
+    /// A `TYPE_QUERY` row for a composite, its columns as a driver hands them back: one decodes
+    /// `int8[]` as numbers, another as digit strings.
+    fn users_row(oids: Value) -> Vec<Value> {
+        vec![json!(90001), json!("users"), json!("c"), json!(0), json!(0), Value::Null, json!("users"), json!(["id", "name", "tags"]), oids, json!([true, false, false])]
+    }
+
+    #[test]
+    fn a_composite_renders_its_columns_once_they_are_read() {
+        for oids in [json!([20, 25, 1009]), json!(["20", "25", "1009"])] {
+            let mut registry = TypeRegistry::with_builtins();
+            registry.insert_rows(&[users_row(oids)]);
+            assert_eq!(
+                registry.get(90001).unwrap().fields,
+                vec![
+                    Attribute { name: "id".into(), type_oid: 20, not_null: true },
+                    Attribute { name: "name".into(), type_oid: 25, not_null: false },
+                    Attribute { name: "tags".into(), type_oid: 1009, not_null: false },
+                ]
+            );
+            let users = Type::Composite {
+                name: "users".into(),
+                fields: vec![
+                    Field { name: "id".into(), ty: Type::Scalar { name: "int8".into() }, nullable: false },
+                    Field { name: "name".into(), ty: Type::Scalar { name: "text".into() }, nullable: true },
+                    Field { name: "tags".into(), ty: Type::Array { of: Box::new(Type::Scalar { name: "text".into() }) }, nullable: true },
+                ],
+            };
+            assert_eq!(registry.render(90001), users);
+        }
+    }
+
+    #[test]
+    fn a_composite_without_its_columns_stays_a_record() {
+        let mut registry = TypeRegistry::with_builtins();
+        // The seven columns a host that predates the composite columns answers with.
+        registry.insert_rows(&[vec![json!(90001), json!("users"), json!("c"), json!(0), json!(0), Value::Null, json!("users")]]);
+        assert!(registry.get(90001).unwrap().fields.is_empty());
+        assert_eq!(registry.render(90001), Type::Scalar { name: "record".into() });
+        // `record` itself is a pseudo-type with no columns.
+        assert_eq!(registry.render(2249), Type::Scalar { name: "record".into() });
+    }
+
+    #[test]
+    fn missing_follows_a_composites_columns() {
+        let mut registry = TypeRegistry::with_builtins();
+        // `id` is a domain the registry has not seen, `tags` an array of an enum it has not seen.
+        let row = vec![json!(90001), json!("users"), json!("c"), json!(0), json!(0), Value::Null, json!("users"), json!(["id", "tags"]), json!([90002, 90003]), json!([true, false])];
+        registry.insert_rows(&[row]);
+        let mut out = Vec::new();
+        registry.missing(90001, &mut out);
+        assert_eq!(out, vec![90002, 90003]);
+        registry.insert_rows(&[
+            vec![json!(90002), json!("user_id"), json!("d"), json!(0), json!(20), Value::Null, json!("user_id")],
+            vec![json!(90003), json!("_mood"), json!("b"), json!(90004), json!(0), Value::Null, json!("mood[]")],
+        ]);
+        let mut out = Vec::new();
+        registry.missing(90001, &mut out);
+        assert_eq!(out, vec![90004]);
+        registry.insert_rows(&[vec![json!(90004), json!("mood"), json!("e"), json!(0), json!(0), json!(["ok", "sad"]), json!("mood")]]);
+        let mut out = Vec::new();
+        registry.missing(90001, &mut out);
+        assert!(out.is_empty());
+        let Type::Composite { fields, .. } = registry.render(90001) else { panic!("a composite") };
+        assert_eq!(fields[0].ty, Type::Scalar { name: "int8".into() });
+        assert_eq!(fields[1].ty, Type::Array { of: Box::new(Type::Enum { name: "mood".into(), labels: vec!["ok".into(), "sad".into()] }) });
+    }
+
+    #[test]
+    fn a_registry_that_loops_renders_nothing_rather_than_forever() {
+        let mut registry = TypeRegistry::default();
+        let row = vec![json!(90001), json!("knot"), json!("c"), json!(0), json!(0), Value::Null, json!("knot"), json!(["self"]), json!([90001]), json!([false])];
+        registry.insert_rows(&[row]);
+        let mut out = Vec::new();
+        registry.missing(90001, &mut out);
+        assert!(out.is_empty());
+        let _ = registry.render(90001);
     }
 }

@@ -33,6 +33,12 @@ pub enum Type {
     Array { of: Box<Type> },
     /// `json[b]_build_object(…)`: the keys in the order the SQL writes them.
     Object { fields: Vec<Field> },
+    /// A named composite (a table's row type, a `CREATE TYPE … AS (…)`) whose columns the
+    /// catalog gave: each field nullable unless the column is `NOT NULL`. Unlike an `Object`, its
+    /// fields are read in the position the value itself stands in: a driver hands the whole value
+    /// over as the text Postgres prints, and inside a JSON document the database writes it as an
+    /// object of its fields. A composite whose columns were not read stays `Scalar { "record" }`.
+    Composite { name: String, fields: Vec<Field> },
     /// `json[b]_agg(…)`: a JSON array of the item type.
     List { of: Box<Type>, nullable_items: bool },
     /// A `json`/`jsonb` value the engine could not explain.
