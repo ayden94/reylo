@@ -31,7 +31,7 @@
 //!
 //! SQLite additionally gets a type for an expression column from the same rules: `count` is
 //! `int8` as on Postgres, a literal is its kind, a cast is its target, `||` is text, a comparison
-//! is a boolean, and `anti_html` is text. Postgres already describes every type, so there the
+//! is a boolean, and `porgapi_html` is text. Postgres already describes every type, so there the
 //! rules only ever settle nullability.
 //!
 //! SQLite has no parse tree of its own to offer, so both dialects are read with libpg_query, the
@@ -201,7 +201,7 @@ pub struct Trust {
     /// trusts every name, which is what SQLite gets: nothing there can define a cast.
     pub cast_targets: Option<HashSet<String>>,
     /// Functions the host registers on its own connection, by name, with the type oid each
-    /// returns: NULL only when an argument is NULL. Anti's `anti_html` on SQLite is one.
+    /// returns: NULL only when an argument is NULL. PorgAPI's `porgapi_html` on SQLite is one.
     pub total: HashMap<String, u32>,
     /// Whether a parameter is a non-null value. A host whose callers cannot pass null (Porg
     /// types a parameter without it) sets this; by default a placeholder proves nothing.
@@ -1083,8 +1083,8 @@ mod tests {
         assert!(!resolve(label, Some(&[col(false, oid::TEXT), col(true, oid::TEXT)])).non_null);
         assert!(!resolve(label, None).non_null, "no probe, no proof");
         // On SQLite a leaf carries its described type through a function the host registered.
-        let host = Trust { total: [("anti_html".to_string(), oid::TEXT)].into_iter().collect(), ..Default::default() };
-        let h = plan("SELECT id, anti_html(title) AS title_html FROM todos WHERE owner_id = ?1 ORDER BY title", Dialect::Sqlite, &host);
+        let host = Trust { total: [("porgapi_html".to_string(), oid::TEXT)].into_iter().collect(), ..Default::default() };
+        let h = plan("SELECT id, porgapi_html(title) AS title_html FROM todos WHERE owner_id = ?1 ORDER BY title", Dialect::Sqlite, &host);
         assert_eq!(h.leaves.as_deref(), Some("SELECT title AS a0 FROM todos"));
         assert_eq!(resolve(h.head[1].as_ref().unwrap(), Some(&[col(false, oid::TEXT)])), Fact { non_null: true, type_oid: Some(oid::TEXT) });
         // RETURNING reads the written relation.

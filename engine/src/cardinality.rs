@@ -167,7 +167,7 @@ fn exactly_one_select(s: &SelectStmt, dialect: Dialect, trust: &Trust, catalog: 
 ///    key's columns are `NOT NULL`, since a unique index only lets NULLs repeat.
 ///
 /// The third is why an index changes an inferred type. The proof reads the index that exists at
-/// build time; `anti.lock` and the boot re-describe turn a later `CREATE`/`DROP INDEX` into a
+/// build time; `porgapi.lock` and the boot re-describe turn a later `CREATE`/`DROP INDEX` into a
 /// contract mismatch the deploy reports, rather than a shape that quietly drifts.
 pub fn at_most_one(sql: &str, dialect: Dialect, trust: &Trust, catalog: &Catalog) -> Result<(), String> {
     let s = one_select(sql, dialect)?;

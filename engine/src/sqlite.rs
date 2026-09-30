@@ -1060,12 +1060,12 @@ mod tests {
     }
 
     fn html() -> Extras {
-        Extras { total: vec![TotalFunction { name: "anti_html".into(), arity: 1, returns: oid::TEXT }] }
+        Extras { total: vec![TotalFunction { name: "porgapi_html".into(), arity: 1, returns: oid::TEXT }] }
     }
 
     #[test]
     fn a_host_function_prepares_and_is_typed_from_its_argument() {
-        let r = analyze_ddl("select anti_html(name) as h, anti_html(email) as e, upper(anti_html(:q)) as q from users", &ddl(), &html());
+        let r = analyze_ddl("select porgapi_html(name) as h, porgapi_html(email) as e, upper(porgapi_html(:q)) as q from users", &ddl(), &html());
         let a = &r.analysis;
         assert!(a.diagnostics.is_empty(), "{:?}", a.diagnostics);
         assert_eq!(col(a, "h"), ("text".into(), false));
@@ -1074,19 +1074,19 @@ mod tests {
         assert_eq!(r.declared, [None, None, None]);
         // The same call without the registration, and with the wrong argument count: SQLite's own
         // message, at the call.
-        let sql = "select id, anti_html(name) as h from users";
-        for (extras, message) in [(Extras::default(), "no such function: anti_html"), (Extras { total: vec![TotalFunction { name: "anti_html".into(), arity: 2, returns: oid::TEXT }] }, "wrong number of arguments to function anti_html()")] {
+        let sql = "select id, porgapi_html(name) as h from users";
+        for (extras, message) in [(Extras::default(), "no such function: porgapi_html"), (Extras { total: vec![TotalFunction { name: "porgapi_html".into(), arity: 2, returns: oid::TEXT }] }, "wrong number of arguments to function porgapi_html()")] {
             let a = analyze_ddl(sql, &ddl(), &extras).analysis;
             assert_eq!(a.diagnostics.len(), 1, "{:?}", a.diagnostics);
             assert_eq!(a.diagnostics[0].message, message);
-            assert_eq!((a.diagnostics[0].start, a.diagnostics[0].code), (sql.find("anti_html").unwrap(), 6));
+            assert_eq!((a.diagnostics[0].start, a.diagnostics[0].code), (sql.find("porgapi_html").unwrap(), 6));
             assert!(a.columns.is_empty());
         }
         // Any argument count, and a schema that calls the function replays.
-        let any = Extras { total: vec![TotalFunction { name: "anti_html".into(), arity: -1, returns: oid::TEXT }] };
+        let any = Extras { total: vec![TotalFunction { name: "porgapi_html".into(), arity: -1, returns: oid::TEXT }] };
         let mut schema = ddl();
-        schema.push("create view safe_users as select id, anti_html(name) as name from users".into());
-        let a = analyze_ddl("select name, anti_html(name, name) as twice from safe_users", &schema, &any).analysis;
+        schema.push("create view safe_users as select id, porgapi_html(name) as name from users".into());
+        let a = analyze_ddl("select name, porgapi_html(name, name) as twice from safe_users", &schema, &any).analysis;
         assert!(a.diagnostics.is_empty(), "{:?}", a.diagnostics);
         assert_eq!(col(&a, "name"), ("text".into(), false));
         assert_eq!(col(&a, "twice"), ("text".into(), false));

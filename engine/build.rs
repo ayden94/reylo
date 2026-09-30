@@ -70,7 +70,7 @@ fn main() {
         .define("SQLITE_OMIT_SHARED_CACHE", None)
         .define("SQLITE_TEMP_STORE", "3");
     if !target.starts_with("wasm32") {
-        // A native consumer of this rlib may link its own SQLite (Anti links rusqlite's bundled
+        // A native consumer of this rlib may link its own SQLite (PorgAPI links rusqlite's bundled
         // one), so the amalgamation's public API stays private to this translation unit: only
         // `porg_sqlite_analyze` and `porg_sqlite_free` are exported, and nothing here is
         // reachable from, or shadows, the other copy.
