@@ -70,6 +70,8 @@ type Response =
   | { status: "lexed"; lexed: Lexed }
   | { status: "need"; needs: Need[] }
   | { status: "analysis"; analysis: Analysis }
+  | { status: "config"; config: unknown }
+  | { status: "configError"; error: { message: string; start: number; end: number } }
   | { status: "error"; message: string };
 
 const WASM_PATH = new URL("../engine/porg_engine.wasm", import.meta.url);

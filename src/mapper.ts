@@ -4,24 +4,27 @@
 // cardinality directives, and SQLSTATE errors mapped into the .sql file.
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { basename, dirname, join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { serve } from "./rpc.ts";
 import { isPositional, lexPlaceholders } from "./lex.ts";
 import { engine, reason, AnswerCache, Unreachable, type Analysis } from "./engine.ts";
-import { conversion, defaultRepr, ident, renderParamType, renderType, type Conversion, type Repr } from "./render.ts";
+import { conversion, ident, renderParamType, renderType, type Conversion, type Repr } from "./render.ts";
+import { resolveProject, type Dialect } from "./project.ts";
 import { openMysqlDescriber, type MysqlDescriber } from "./mysql-describe.ts";
 import { openPostgresDescriber, type Describer } from "./describe.ts";
 import { openSqliteDescriber, sqlitePath, type SqliteDescriber } from "./sqlite-describe.ts";
 
-type Options = { dialect?: "postgres" | "sqlite" | "mysql"; source?: "database"; url?: string; urlEnv?: string; dates?: Repr["dates"]; bigint?: Repr["bigint"] };
 type Project = {
   projectDir: string;
-  options: Options;
+  /** The directory a relative SQLite path resolves against: the project file's, or the tsconfig's. */
+  root: string;
   url: string | undefined;
-  /** Where the URL came from, for a diagnostic: the option, the environment or `.env`. */
+  /** Where the URL came from, for a diagnostic: the project file, the environment or a `.env` file. */
   urlSource: string;
-  dialect: "postgres" | "sqlite" | "mysql";
+  dialect: Dialect;
   repr: Repr;
+  /** Why the project file cannot be used; every transform reports it. */
+  error: string | undefined;
   describer: Promise<Describer> | undefined;
   sqlite: Promise<SqliteDescriber> | undefined;
   mysql: Promise<MysqlDescriber> | undefined;
@@ -30,17 +33,6 @@ type Project = {
 };
 type CacheEntry = { hash: string; params: string[]; cardinality: string; dialect: string; text?: string; order?: string[]; convert?: Record<string, Conversion>; dates?: Repr["dates"]; bigint?: Repr["bigint"] };
 const projects = new Map<string, Project>();
-
-function readDotenv(dir: string): Record<string, string> {
-  const path = join(dir, ".env");
-  if (!existsSync(path)) return {};
-  const out: Record<string, string> = {};
-  for (const line of readFileSync(path, "utf8").split("\n")) {
-    const m = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/.exec(line);
-    if (m) out[m[1]!] = m[2]!.replace(/^(["'])(.*)\1$/, "$2");
-  }
-  return out;
-}
 
 /** The cache as it is on disk; a missing or half-written file is an empty cache. */
 function readCache(projectDir: string): Record<string, CacheEntry> {
@@ -69,7 +61,7 @@ function paramType(q: Analysis["params"][number], rendered: string): string {
 
 /** The diagnostic for a database that cannot be reached: where it was looked for, where that came from, and the driver's reason; never the credentials. */
 function cannotConnect(project: Project, e: unknown) {
-  if (project.dialect === "sqlite") return diag(`Cannot open the database ${sqlitePath(project.url ?? "", project.projectDir)} (${project.urlSource}): ${reason(e)}`, 0, 1, 5);
+  if (project.dialect === "sqlite") return diag(`Cannot open the database ${sqlitePath(project.url ?? "", project.root)} (${project.urlSource}): ${reason(e)}`, 0, 1, 5);
   let where = "the database";
   try {
     const u = new URL(project.url ?? "");
@@ -85,25 +77,16 @@ serve({
     const { protocolVersion } = (params ?? {}) as { protocolVersion?: number };
     return { protocolVersion: protocolVersion ?? 1, positionEncoding: "utf-8", diagnosticSource: "porg" };
   },
-  openProject(params) {
-    const p = params as { projectHandle: string; options?: Options; configFileName: string };
+  async openProject(params) {
+    const p = params as { projectHandle: string; options?: Record<string, unknown>; configFileName: string };
     const projectDir = dirname(p.configFileName);
-    const options = p.options ?? {};
-    const optionDiagnostics: { path: (string | number)[]; messageText: string; code: number }[] = [];
-    if (options.dialect !== undefined && !["postgres", "sqlite", "mysql"].includes(options.dialect)) optionDiagnostics.push({ path: ["dialect"], messageText: `Expected "postgres", "sqlite" or "mysql".`, code: 100 });
-    if (options.source !== undefined && options.source !== "database") optionDiagnostics.push({ path: ["source"], messageText: `Only "database" is implemented so far.`, code: 101 });
-    if (options.dates !== undefined && !["string", "Date", "temporal"].includes(options.dates)) optionDiagnostics.push({ path: ["dates"], messageText: `Expected "string" (ISO 8601 text, the default), "Date" or "temporal".`, code: 102 });
-    if (options.bigint !== undefined && !["string", "number", "bigint"].includes(options.bigint)) optionDiagnostics.push({ path: ["bigint"], messageText: `Expected "string" (the default), "number" or "bigint".`, code: 103 });
-    const repr: Repr = { dates: ["string", "Date", "temporal"].includes(options.dates as string) ? options.dates! : defaultRepr.dates, bigint: ["string", "number", "bigint"].includes(options.bigint as string) ? options.bigint! : defaultRepr.bigint };
-    const dotenv = readDotenv(projectDir);
-    const urlEnv = options.urlEnv ?? "DATABASE_URL";
-    const url = options.url ?? process.env[urlEnv] ?? dotenv[urlEnv];
-    const urlSource = options.url !== undefined ? `"url" in ${basename(p.configFileName)}` : process.env[urlEnv] !== undefined ? `${urlEnv} in the environment` : `${urlEnv} in .env`;
+    // Every setting lives in the project file, which PorgREST and PorgAPI read too.
+    const optionDiagnostics = Object.keys(p.options ?? {}).map((key) => ({ path: [key], messageText: `Porg reads its settings from .porg.toml, not from the content mapper's options; move "${key}" there.`, code: 104 }));
+    const resolved = resolveProject(await engine(), projectDir);
     const cache = readCache(projectDir);
-    const dialect = options.dialect ?? (url && /^(file:|sqlite:)/.test(url) ? "sqlite" : url && /^(mysql|mariadb):/.test(url) ? "mysql" : "postgres");
-    projects.set(p.projectHandle, { projectDir, options, url, urlSource, dialect, repr, describer: undefined, sqlite: undefined, mysql: undefined, answers: new AnswerCache(), cache });
-    const configIdentity = createHash("sha1").update(JSON.stringify([options, url ?? null])).digest("hex");
-    return { configIdentity, watchedFiles: [join(projectDir, ".env")], optionDiagnostics };
+    projects.set(p.projectHandle, { projectDir, root: resolved.root, url: resolved.url, urlSource: resolved.urlSource, dialect: resolved.dialect, repr: resolved.repr, error: resolved.error, describer: undefined, sqlite: undefined, mysql: undefined, answers: new AnswerCache(), cache });
+    const configIdentity = createHash("sha1").update(JSON.stringify([resolved.file ?? null, resolved.dialect, resolved.repr, resolved.url ?? null, resolved.error ?? null, p.options ?? null])).digest("hex");
+    return { configIdentity, watchedFiles: resolved.watched, optionDiagnostics };
   },
   async transform(params) {
     const p = params as { fileName: string; content: string; projectHandle: string };
@@ -147,8 +130,12 @@ serve({
       const at = sql.indexOf(cardinality);
       diagnostics.push(diag(`Unknown @returns value "${cardinality}"; expected many, one, maybeOne or none.`, at, cardinality.length, 3));
     }
+    if (project.error) {
+      diagnostics.push(diag(project.error, 0, 1, 11));
+      return emit("unknown", "unknown", cardinality, names);
+    }
     if (!project.url) {
-      diagnostics.push(diag(`No database URL: set ${project.options.urlEnv ?? "DATABASE_URL"} in the environment or .env, or "url" in the content mapper options.`, 0, 1, 4));
+      diagnostics.push(diag(`No database URL: set DATABASE_URL in the environment, .env.local or .env, or "url" in .porg.toml.`, 0, 1, 4));
       return emit("unknown", "unknown", cardinality, names);
     }
     const writeCache = (extra: Partial<CacheEntry> = {}, convert: Record<string, Conversion> = {}) => {
@@ -202,7 +189,7 @@ serve({
       return emit(names.length ? `{ ${paramTypes.join("; ")} }` : "Record<never, never>", columns.length ? `{ ${columns.join("; ")} }` : "never", inferred, names);
     }
     if (project.dialect === "sqlite") {
-      project.sqlite ??= openSqliteDescriber(project.url, project.projectDir);
+      project.sqlite ??= openSqliteDescriber(project.url, project.root);
       let sqlite: SqliteDescriber;
       try {
         sqlite = await project.sqlite;

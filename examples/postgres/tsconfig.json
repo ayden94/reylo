@@ -12,8 +12,7 @@
   "contentMappers": [
     {
       "package": "porg",
-      "extensions": [".sql"],
-      "options": { "dialect": "postgres" }
+      "extensions": [".sql"]
     }
   ],
   "include": ["src"],

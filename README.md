@@ -91,7 +91,7 @@ const user = await getUser.run(conn, { id: 1, skip: "" });
 //    ^? { id: number; name: string; email: string | null; big: string; n: string; at: string; j: unknown; flag: number; next_id: string } | null
 ```
 
-MySQL 8.4's prepare reports column types, NOT NULL and provenance, and infers a type per parameter from context, so no annotation is needed; `bigint` and `datetime` follow the `bigint` and `dates` options (strings by default; mysql2 decodes a `bigint` as a lossy `number`, which the runtime turns into text) and `decimal` is a string. The engine adds what the server does not say: the row count (`id` is the primary key, so `maybeOne`; an ungrouped aggregate is `one`; an `insert`, `update` or `delete` is `none`, MySQL having no RETURNING), and the shape of a `json_object` / `json_arrayagg` column, typed from its arguments:
+MySQL 8.4's prepare reports column types, NOT NULL and provenance, and infers a type per parameter from context, so no annotation is needed; `bigint` and `datetime` follow the `bigint` and `dates` settings (strings by default; mysql2 decodes a `bigint` as a lossy `number`, which the runtime turns into text) and `decimal` is a string. The engine adds what the server does not say: the row count (`id` is the primary key, so `maybeOne`; an ungrouped aggregate is `one`; an `insert`, `update` or `delete` is `none`, MySQL having no RETURNING), and the shape of a `json_object` / `json_arrayagg` column, typed from its arguments:
 
 ```sql
 select u.id,
@@ -102,15 +102,33 @@ where u.id = :id
 -- { id: number; posts: { id: number; title: string }[] } | null
 ```
 
-## Dates and 64-bit integers
+## The project file
 
-Every Postgres and MySQL driver decodes a timestamp as a `Date`, and they disagree on 64-bit integers: `pg`, `postgres` and Bun.sql return a string, mysql2 and the SQLite drivers a number that is lossy above 2^53, mariadb a BigInt (the measurements are in [docs/dates.md](./docs/dates.md)). Two mapper options name one representation; the rendered type follows it, and `run` produces it whatever the driver returned:
+Settings live in `.porg.toml`, which the mapper finds by walking up from the tsconfig's directory (`PORG_CONFIG` names another file). A project whose connection is `DATABASE_URL` needs no file; the content mapper itself takes no options in `tsconfig.json`.
 
-```jsonc
-"contentMappers": [{ "package": "porg", "extensions": [".sql"], "options": { "dates": "string", "bigint": "string" } }]
+```toml
+dialect = "postgres"                 # optional: the URL's scheme decides otherwise
+url = "${DATABASE_URL}"              # the default; the secret stays in the environment
+env_files = [".env.local", ".env"]   # the default; the process environment wins, then the first file that sets a variable
+
+[types]
+dates = "string"                     # "string" (the default), "Date" or "temporal"
+bigint = "string"                    # "string" (the default), "number" or "bigint"
 ```
 
-| Option | Value | `timestamptz` | `timestamp`, MySQL `datetime` / `timestamp` | `date` | `int8`, MySQL `bigint` |
+A key Porg does not know, or a `${VAR}` nothing sets, is an error on every `.sql` import that names the line and column in `.porg.toml`. The tables PorgREST and PorgAPI will read (`[rest]`, `[api]`, `[check]`, `[auth]`, `[live]`) are accepted as they are. A relative SQLite path in the URL resolves against the file's directory.
+
+## Dates and 64-bit integers
+
+Every Postgres and MySQL driver decodes a timestamp as a `Date`, and they disagree on 64-bit integers: `pg`, `postgres` and Bun.sql return a string, mysql2 and the SQLite drivers a number that is lossy above 2^53, mariadb a BigInt (the measurements are in [docs/dates.md](./docs/dates.md)). Two settings in the `[types]` table of `.porg.toml` name one representation; the rendered type follows it, and `run` produces it whatever the driver returned:
+
+```toml
+[types]
+dates = "string"
+bigint = "string"
+```
+
+| Setting | Value | `timestamptz` | `timestamp`, MySQL `datetime` / `timestamp` | `date` | `int8`, MySQL `bigint` |
 | --- | --- | --- | --- | --- | --- |
 | `dates` | `"string"` (default) | ISO 8601 with `Z`: `2026-01-02T03:04:05.678Z` | the stored wall clock, no zone: `2026-01-02T03:04:05.678` | `2026-01-02` | |
 | `dates` | `"Date"` | the driver's `Date` | the driver's `Date` | the driver's `Date` | |
@@ -121,5 +139,5 @@ Every Postgres and MySQL driver decodes a timestamp as a `Date`, and they disagr
 - A zone-less `timestamp` or `date` reaches Porg as a `Date` the driver built from wall-clock fields (local time in `pg`, `postgres`, PGlite, Bun.sql, mysql2 and mariadb; a `date` is UTC midnight in `postgres`, PGlite and Bun.sql), and Porg reads the fields back in that frame, so the text is the stored wall clock. A driver configured to return the text form (`pg` `types.setTypeParser`, `postgres` `types`, PGlite `parsers`, mysql2 and mariadb `dateStrings`) passes through under `"string"` and is parsed under `"temporal"`.
 - `"temporal"` makes the generated module import `porg/temporal`, which declares the global `Temporal` namespace from `temporal-spec`. At runtime Node 26 has a global `Temporal`; Bun does not, so assign a polyfill to `globalThis.Temporal` or `run` throws with that instruction.
 - `"bigint"` gives a `bigint`; `JSON.stringify` has no rule for one, so add a `BigInt.prototype.toJSON` or a replacer. A value above 2^53 that the driver already decoded as a number is lost before Porg sees it: mysql2 takes `supportBigNumbers: true, bigNumberStrings: true`, better-sqlite3 and bun:sqlite `safeIntegers`, node:sqlite `readBigInts`.
-- Inside a nested JSON shape the database serialized the value already, so the options do not apply there; SQLite has no date type and its integers follow the driver, so neither option changes a SQLite type.
+- Inside a nested JSON shape the database serialized the value already, so the settings do not apply there; SQLite has no date type and its integers follow the driver, so neither setting changes a SQLite type.
 - The runtime reads the column classes from the mapper's cache (`.porg/queries.json`); before the first `tsc --runExternalCode` run it returns the driver's values unchanged.

@@ -16,13 +16,7 @@
       "package": "porg",
       "extensions": [
         ".sql"
-      ],
-      "options": {
-        "dialect": "postgres",
-        "nested": {
-          "n": 1
-        }
-      }
+      ]
     }
   ],
   "include": [

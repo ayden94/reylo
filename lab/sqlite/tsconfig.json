@@ -16,10 +16,7 @@
       "package": "porg",
       "extensions": [
         ".sql"
-      ],
-      "options": {
-        "dialect": "sqlite"
-      }
+      ]
     }
   ],
   "include": [
