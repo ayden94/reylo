@@ -5,31 +5,109 @@
 //! nullability of the built-in functions, the type a function gives its arguments, the arithmetic
 //! rule, and the row-count proof from the unique keys. The host runs one query for the schema DDL;
 //! everything else happens inside the engine.
+//!
+//! Two entries share the code: [`analyze`], replayed through the [`Host`] like every dialect, and
+//! [`analyze_ddl`], for a host that holds a live connection and runs [`DDL_QUERY`] on it itself,
+//! with [`Extras`] naming the scalar functions it registers there.
 
 use crate::api::{Analysis, Column, Diagnostic, Param, Scope};
 use crate::dialect::Dialect;
 use crate::host::{as_str, Host, Lazy};
 use crate::lex::{self, Lexed, Target};
+use crate::pgtypes::oid;
 use crate::sqlite_tree::{self as tree, From, Node, Sel, Tree};
 use crate::types::Type;
 use std::collections::HashSet;
 
-/// The schema, as SQLite stores it; replayed into the engine's in-memory copy.
-const DDL_QUERY: &str = "select sql from sqlite_schema where sql is not null and type in ('table', 'view', 'index') order by rowid";
+/// The schema, as SQLite stores it: its `sql` column is the DDL the engine replays into its
+/// in-memory copy. The replayed entry asks the host for it; a host with a connection of its own
+/// runs it there and hands the rows to [`analyze_ddl`].
+pub const DDL_QUERY: &str = "select sql from sqlite_schema where sql is not null and type in ('table', 'view', 'index') order by rowid";
 
+/// A scalar function the host registers on its own connection, which the engine's replay cannot
+/// see: the replay registers a stub under the same name and argument count, so a statement calling
+/// it prepares, and the function table types a call as `returns`, NULL only when an argument is.
+/// The meaning of [`crate::infer::Trust::total`], plus the argument count SQLite resolves a call by.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TotalFunction {
+    pub name: String,
+    /// How many arguments it takes; -1 for any number.
+    pub arity: i32,
+    /// The type oid it returns ([`crate::pgtypes::oid`]), read as the storage class it lands in.
+    pub returns: u32,
+}
+
+/// What a host adds to SQLite on its own connection.
+#[derive(Debug, Clone, Default)]
+pub struct Extras {
+    pub total: Vec<TotalFunction>,
+}
+
+impl Extras {
+    /// The registration a call resolves to: SQLite prefers a host function over a built-in of the
+    /// same name and argument count.
+    fn function(&self, name: &str, args: usize) -> Option<&TotalFunction> {
+        self.total.iter().find(|f| f.name.eq_ignore_ascii_case(name) && (f.arity < 0 || f.arity as usize == args))
+    }
+}
+
+/// The storage class a value of this oid lands in on SQLite.
+fn oid_affinity(type_oid: u32) -> &'static str {
+    match type_oid {
+        oid::BOOL | oid::INT2 | oid::INT4 | oid::INT8 => "integer",
+        oid::FLOAT4 | oid::FLOAT8 => "real",
+        // 1042 is bpchar, 17 bytea, 1700 numeric.
+        oid::TEXT | oid::VARCHAR | oid::JSON | oid::JSONB | oid::UUID | 1042 => "text",
+        17 => "blob",
+        1700 => "numeric",
+        _ => "none",
+    }
+}
+
+/// [`analyze_ddl`]'s answer: the analysis, and what the tree adds for a host that types a result
+/// column by the spelling its table declares.
+#[derive(Debug, Clone)]
+pub struct SqliteAnalysis {
+    pub analysis: Analysis,
+    /// Per result column, the declared type of the table column it reads
+    /// (`sqlite3_column_decltype`, through subqueries and views); `None` for an expression. Empty
+    /// when the statement did not prepare.
+    pub declared: Vec<Option<String>>,
+    /// `sqlite3_stmt_readonly`; false when the statement did not prepare.
+    pub readonly: bool,
+}
+
+/// The replayed entry: the host answers [`DDL_QUERY`] (session-scoped), the rest is [`run`].
 pub fn analyze(sql: &str, lexed: &Lexed, host: &Host) -> Lazy<Analysis> {
     let rows = host.query(DDL_QUERY, Vec::new(), Scope::Session)?;
     let ddl: Vec<String> = match rows {
         Ok(rows) => rows.iter().filter_map(|r| r.first().and_then(as_str)).map(String::from).collect(),
         Err(e) => return Some(crate::postgres::bare(sql, lexed, Dialect::Sqlite, vec![diag(format!("Cannot read the schema: {}", e.message), 0, 1, 5)])),
     };
+    Some(run(sql, lexed, &ddl, &Extras::default()).analysis)
+}
+
+/// The direct entry, for a host with a connection of its own: `ddl` is the `sql` column of
+/// [`DDL_QUERY`] run there, `extras` the functions it registers there. No round trip; a lex
+/// error, a prepare error (SQLite's own message, at its offset) and a replay failure come back as
+/// diagnostics, as on the replayed path.
+pub fn analyze_ddl(sql: &str, ddl: &[String], extras: &Extras) -> SqliteAnalysis {
+    match crate::postgres::lexed(sql, Dialect::Sqlite) {
+        Ok(lexed) => run(sql, &lexed, ddl, extras),
+        Err(analysis) => SqliteAnalysis { analysis, declared: Vec::new(), readonly: false },
+    }
+}
+
+fn run(sql: &str, lexed: &Lexed, ddl: &[String], extras: &Extras) -> SqliteAnalysis {
+    let failed = |analysis: Analysis| SqliteAnalysis { analysis, declared: Vec::new(), readonly: false };
     // SQLite prepares the `?n` rewrite, not the author's text: its own `:name` ends at the first
     // dot, so `:auth.user_id` survives only as a number. `?n` is the lexer's n-th parameter, which
     // is how `params` matches them back, and an error offset maps back through the rewrite.
     let numbered = lex::rewrite(sql, lexed, Target::Numbered);
-    let t = match tree::analyze(&ddl, &numbered.sql) {
+    let functions: Vec<(&str, i32)> = extras.total.iter().map(|f| (f.name.as_str(), f.arity)).collect();
+    let t = match tree::analyze(ddl, &numbered.sql, &functions) {
         Ok(t) => t,
-        Err(message) => return Some(crate::postgres::bare(sql, lexed, Dialect::Sqlite, vec![diag(message, 0, sql.trim_end().len(), 6)])),
+        Err(message) => return failed(crate::postgres::bare(sql, lexed, Dialect::Sqlite, vec![diag(message, 0, sql.trim_end().len(), 6)])),
     };
     let mut diagnostics = Vec::new();
     if let Some(err) = &t.error {
@@ -37,18 +115,22 @@ pub fn analyze(sql: &str, lexed: &Lexed, host: &Host) -> Lazy<Analysis> {
         diagnostics.push(diag(err.message.clone(), start, if err.offset >= 0 { token_len(&sql[start..]) } else { sql.trim_end().len() }, 6));
         // A statement that fails against the replayed schema often fails because a replay step did.
         for e in &t.schema_errors {
-            diagnostics.push(diag(format!("The schema replay skipped statement {}: {}", e.index + 1, e.message), 0, 1, 8));
+            let message = match &e.function {
+                Some(name) => format!("The schema replay could not register the host function {name}: {}", e.message),
+                None => format!("The schema replay skipped statement {}: {}", e.index + 1, e.message),
+            };
+            diagnostics.push(diag(message, 0, 1, 8));
         }
-        return Some(crate::postgres::bare(sql, lexed, Dialect::Sqlite, diagnostics));
+        return failed(crate::postgres::bare(sql, lexed, Dialect::Sqlite, diagnostics));
     }
-    let a = Analyzer { tree: &t };
+    let a = Analyzer { tree: &t, extras };
     let (columns, kind) = a.columns();
     let params = a.params(lexed);
     let (cardinality, reason) = match crate::postgres::cardinality_directive(lexed, &mut diagnostics) {
         Some(c) => c,
         None => a.cardinality(),
     };
-    Some(Analysis {
+    let analysis = Analysis {
         kind,
         params,
         columns,
@@ -59,7 +141,8 @@ pub fn analyze(sql: &str, lexed: &Lexed, host: &Host) -> Lazy<Analysis> {
         directives: lexed.directives.clone(),
         diagnostics,
         unresolved: Vec::new(),
-    })
+    };
+    SqliteAnalysis { analysis, declared: t.columns.iter().map(|c| c.declared.clone()).collect(), readonly: t.readonly }
 }
 
 fn diag(message: impl Into<String>, start: usize, length: usize, code: u32) -> Diagnostic {
@@ -123,6 +206,7 @@ type ScopeStack<'a> = Vec<&'a [From]>;
 
 struct Analyzer<'a> {
     tree: &'a Tree,
+    extras: &'a Extras,
 }
 
 /// When a function's result can be NULL.
@@ -265,9 +349,12 @@ impl Analyzer<'_> {
                 Fact { ty: shared(&all), non_null: otherwise.is_some() && all.iter().all(|f| f.non_null) }
             }
             "select" => {
-                // A scalar subquery: its first column, NULL when it finds no row.
-                let ty = n.select.as_deref().map(|s| self.select_column(s, 0, scope).ty).unwrap_or(Type::Unknown);
-                Fact { ty, non_null: false }
+                // A scalar subquery: its first column, NULL when it finds no row, unless it always
+                // finds exactly one (an ungrouped aggregate: `(SELECT count(*) FROM t)`). Its
+                // column is then its own answer, so `(SELECT max(x) FROM t)` stays nullable.
+                let Some(sub) = n.select.as_deref() else { return Fact::unknown() };
+                let inner = self.select_column(sub, 0, scope);
+                Fact { ty: inner.ty, non_null: inner.non_null && self.exactly_one(sub).is_ok() }
             }
             _ => Fact::unknown(),
         }
@@ -287,6 +374,11 @@ impl Analyzer<'_> {
             Fact::new(aff, non_null)
         };
         let typed = |ty: Type, nulls: Nulls| Fact { ty, non_null: matches!(nulls, Nulls::Never) || (matches!(nulls, Nulls::IfArgs) && all_non_null) };
+        if !n.agg && !n.window {
+            if let Some(f) = self.extras.function(name, args.len()) {
+                return done(oid_affinity(f.returns), Nulls::IfArgs);
+            }
+        }
         if n.window {
             return match name {
                 "row_number" | "rank" | "dense_rank" | "ntile" => done("integer", Nulls::Never),
@@ -526,6 +618,9 @@ impl Analyzer<'_> {
     /// The type a built-in function gives its argument `i`, for a parameter written there.
     fn argument(&self, n: &Node, i: usize, scope: &ScopeStack) -> Ctx {
         let name = n.name.as_deref().unwrap_or("");
+        if !n.agg && !n.window && self.extras.function(name, n.args.len()).is_some() {
+            return Ctx::None;
+        }
         let text = || Ctx::Typed(Some(Fact::new("text", true)));
         let integer = || Ctx::Typed(Some(Fact::new("integer", true)));
         let real = || Ctx::Typed(Some(Fact::new("real", true)));
@@ -775,27 +870,15 @@ enum Slot {
 mod tests {
     use super::*;
 
-    fn tree(sql: &str) -> Tree {
-        let ddl = vec![
+    fn ddl() -> Vec<String> {
+        vec![
             "create table users (id integer primary key, name text not null, email text unique, score real, avatar blob, created_at text not null default current_timestamp)".to_string(),
             "create table posts (id integer primary key, user_id integer not null references users(id), title text not null, body text)".to_string(),
-        ];
-        tree::analyze(&ddl, sql).unwrap()
+        ]
     }
 
     fn analysis(sql: &str) -> Analysis {
-        let lexed = lex::lex(sql, Dialect::Sqlite).unwrap();
-        let answers = std::collections::HashMap::from([(
-            format!("query:{DDL_QUERY}|[]"),
-            crate::api::Answer::Rows { rows: tree("select 1").tables.keys().map(|_| Vec::new()).collect() },
-        )]);
-        let _ = answers;
-        let t = tree(&lex::rewrite(sql, &lexed, Target::Numbered).sql);
-        let a = Analyzer { tree: &t };
-        let (columns, kind) = a.columns();
-        let params = a.params(&lexed);
-        let (cardinality, reason) = a.cardinality();
-        Analysis { kind, params, columns, cardinality, cardinality_reason: reason, rewritten: lex::rewrite(sql, &lexed, Target::Question), style: lexed.style, directives: vec![], diagnostics: vec![], unresolved: vec![] }
+        analyze_ddl(sql, &ddl(), &Extras::default()).analysis
     }
 
     fn col(a: &Analysis, name: &str) -> (String, bool) {
@@ -896,6 +979,91 @@ mod tests {
         let a = analyzed(sql);
         assert_eq!(a.diagnostics.len(), 1, "{:?}", a.diagnostics);
         assert_eq!((a.diagnostics[0].start, a.diagnostics[0].length), (sql.find("nope").unwrap(), 4));
+    }
+
+    #[test]
+    fn the_direct_entry_reads_a_schema_it_is_handed() {
+        let ddl = vec![
+            "CREATE TABLE todos (id uuid PRIMARY KEY NOT NULL, owner_id text NOT NULL, org_id uuid, title varchar(200) NOT NULL, done boolean NOT NULL DEFAULT 0, UNIQUE (owner_id, title))".to_string(),
+            "CREATE INDEX todos_org ON todos (org_id)".to_string(),
+        ];
+        let sql = "SELECT t.id, t.title, t.org_id, t.done, count(*) OVER () AS n FROM todos t WHERE t.owner_id = :auth.user_id AND t.title = :title";
+        let r = analyze_ddl(sql, &ddl, &Extras::default());
+        let a = &r.analysis;
+        assert!(a.diagnostics.is_empty(), "{:?}", a.diagnostics);
+        assert_eq!(a.kind, "select");
+        assert!(r.readonly);
+        assert_eq!(col(a, "id"), ("numeric".into(), false));
+        assert_eq!(col(a, "title"), ("text".into(), false));
+        assert_eq!(col(a, "org_id"), ("numeric".into(), true));
+        assert_eq!(col(a, "n"), ("integer".into(), false));
+        assert_eq!(r.declared, [Some("uuid".to_string()), Some("varchar(200)".into()), Some("uuid".into()), Some("boolean".into()), None]);
+        assert_eq!(param(a, "auth.user_id"), "text");
+        assert_eq!(param(a, "title"), "text");
+        assert_eq!(a.cardinality, "maybeOne");
+        assert_eq!(a.rewritten.sql, "SELECT t.id, t.title, t.org_id, t.done, count(*) OVER () AS n FROM todos t WHERE t.owner_id = ? AND t.title = ?");
+        // A write: not read-only, and its RETURNING typed from the target.
+        let r = analyze_ddl("INSERT INTO todos (id, owner_id, title) VALUES (:id, :owner, :title) RETURNING id, done", &ddl, &Extras::default());
+        assert!(r.analysis.diagnostics.is_empty(), "{:?}", r.analysis.diagnostics);
+        assert!(!r.readonly);
+        assert_eq!((r.analysis.kind.as_str(), r.analysis.cardinality.as_str()), ("insert", "one"));
+        assert_eq!(col(&r.analysis, "done"), ("numeric".into(), false));
+        // A lex error comes back as the replayed path reports it.
+        let r = analyze_ddl("SELECT id FROM todos WHERE id = :a AND title = ?", &ddl, &Extras::default());
+        assert_eq!(r.analysis.diagnostics.len(), 1, "{:?}", r.analysis.diagnostics);
+        assert!(r.declared.is_empty() && !r.readonly);
+    }
+
+    fn html() -> Extras {
+        Extras { total: vec![TotalFunction { name: "anti_html".into(), arity: 1, returns: oid::TEXT }] }
+    }
+
+    #[test]
+    fn a_host_function_prepares_and_is_typed_from_its_argument() {
+        let r = analyze_ddl("select anti_html(name) as h, anti_html(email) as e, upper(anti_html(:q)) as q from users", &ddl(), &html());
+        let a = &r.analysis;
+        assert!(a.diagnostics.is_empty(), "{:?}", a.diagnostics);
+        assert_eq!(col(a, "h"), ("text".into(), false));
+        assert_eq!(col(a, "e"), ("text".into(), true));
+        assert_eq!(col(a, "q"), ("text".into(), true));
+        assert_eq!(r.declared, [None, None, None]);
+        // The same call without the registration, and with the wrong argument count: SQLite's own
+        // message, at the call.
+        let sql = "select id, anti_html(name) as h from users";
+        for (extras, message) in [(Extras::default(), "no such function: anti_html"), (Extras { total: vec![TotalFunction { name: "anti_html".into(), arity: 2, returns: oid::TEXT }] }, "wrong number of arguments to function anti_html()")] {
+            let a = analyze_ddl(sql, &ddl(), &extras).analysis;
+            assert_eq!(a.diagnostics.len(), 1, "{:?}", a.diagnostics);
+            assert_eq!(a.diagnostics[0].message, message);
+            assert_eq!((a.diagnostics[0].start, a.diagnostics[0].code), (sql.find("anti_html").unwrap(), 6));
+            assert!(a.columns.is_empty());
+        }
+        // Any argument count, and a schema that calls the function replays.
+        let any = Extras { total: vec![TotalFunction { name: "anti_html".into(), arity: -1, returns: oid::TEXT }] };
+        let mut schema = ddl();
+        schema.push("create view safe_users as select id, anti_html(name) as name from users".into());
+        let a = analyze_ddl("select name, anti_html(name, name) as twice from safe_users", &schema, &any).analysis;
+        assert!(a.diagnostics.is_empty(), "{:?}", a.diagnostics);
+        assert_eq!(col(&a, "name"), ("text".into(), false));
+        assert_eq!(col(&a, "twice"), ("text".into(), false));
+    }
+
+    #[test]
+    fn an_unregistered_function_fails_to_prepare() {
+        let sql = "select id, nope(name) from users";
+        let a = analysis(sql);
+        assert_eq!(a.diagnostics.len(), 1, "{:?}", a.diagnostics);
+        assert_eq!(a.diagnostics[0].message, "no such function: nope");
+        assert_eq!((a.diagnostics[0].start, a.diagnostics[0].length), (sql.find("nope").unwrap(), 4));
+    }
+
+    #[test]
+    fn a_scalar_subquery_is_non_null_only_when_it_always_finds_one_row() {
+        let a = analysis("select (select count(*) from posts p where p.user_id = u.id) as n, (select max(title) from posts) as top, (select title from posts limit 1) as one, (select count(*) from posts group by user_id) as g, (select 1) as k from users u");
+        assert_eq!(col(&a, "n"), ("integer".into(), false));
+        assert_eq!(col(&a, "top"), ("text".into(), true));
+        assert_eq!(col(&a, "one"), ("text".into(), true));
+        assert_eq!(col(&a, "g"), ("integer".into(), true));
+        assert_eq!(col(&a, "k"), ("integer".into(), false));
     }
 
     #[test]
