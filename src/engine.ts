@@ -12,6 +12,7 @@ export type EngineType =
   | { kind: "enum"; name: string; labels: string[] }
   | { kind: "array"; of: EngineType }
   | { kind: "object"; fields: { name: string; type: EngineType; nullable: boolean }[] }
+  | { kind: "composite"; name: string; fields: { name: string; type: EngineType; nullable: boolean }[] }
   | { kind: "list"; of: EngineType; nullable_items: boolean }
   | { kind: "json" }
   | { kind: "unknown" };

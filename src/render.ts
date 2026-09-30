@@ -53,15 +53,23 @@ export function renderType(t: EngineType, inJson = false, dialect: "postgres" | 
     case "scalar": return dialect === "sqlite" ? sqlite[t.name] ?? "unknown" : inJson ? json[t.name] ?? "unknown" : scalarType(t.name, repr);
     case "enum": return t.labels.length ? t.labels.map((l) => JSON.stringify(l)).join(" | ") : "string";
     case "array": {
-      if (t.of.kind === "scalar" && t.of.name === "record" && !inJson) return "string";
+      if (((t.of.kind === "scalar" && t.of.name === "record") || t.of.kind === "composite") && !inJson) return "string";
       const inner = renderType(t.of, inJson, dialect, repr);
       return /[|&]/.test(inner) ? `(${inner})[]` : `${inner}[]`;
     }
-    case "object": return t.fields.length ? `{ ${t.fields.map((f) => `${ident(f.name)}: ${renderType(f.type, true, dialect, repr)}${f.nullable ? " | null" : ""}`).join("; ")} }` : "Record<never, never>";
+    case "object": return renderFields(t.fields, dialect, repr);
+    // A composite whose columns the catalog gave: on the wire it is a row value like `record`,
+    // which no driver parses; inside a JSON document the database writes it as an object.
+    case "composite": return inJson ? renderFields(t.fields, dialect, repr) : "string";
     case "list": { const inner = renderType(t.of, true, dialect, repr) + (t.nullable_items ? " | null" : ""); return /[|&]/.test(inner) ? `(${inner})[]` : `${inner}[]`; }
     case "json": return "unknown";
     case "unknown": return "unknown";
   }
+}
+
+/** An object type of JSON-encoded fields, each nullable as the engine says. */
+function renderFields(fields: { name: string; type: EngineType; nullable: boolean }[], dialect: "postgres" | "sqlite" | "mysql", repr: Repr): string {
+  return fields.length ? `{ ${fields.map((f) => `${ident(f.name)}: ${renderType(f.type, true, dialect, repr)}${f.nullable ? " | null" : ""}`).join("; ")} }` : "Record<never, never>";
 }
 
 /**
