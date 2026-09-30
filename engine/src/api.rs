@@ -19,6 +19,8 @@ pub enum Request {
     Ping,
     /// Placeholders and directives only; no database.
     Lex { sql: String, dialect: Dialect },
+    /// The project file's text, `.porg.toml`.
+    Config { text: String },
     /// The whole analysis, given what the host has answered so far.
     Analyze {
         sql: String,
@@ -168,6 +170,8 @@ pub struct Analysis {
 pub enum Response {
     Ok { version: String, fingerprint: String },
     Lexed { lexed: lex::Lexed },
+    Config { config: crate::config::Project },
+    ConfigError { error: crate::config::ConfigError },
     Need { needs: Vec<Need> },
     Analysis { analysis: Analysis },
     Error { message: String },
@@ -207,6 +211,10 @@ pub fn call(request: &str) -> String {
         Ok(Request::Lex { sql, dialect }) => match lex::lex(&sql, dialect) {
             Ok(lexed) => Response::Lexed { lexed },
             Err(e) => Response::Error { message: e.message },
+        },
+        Ok(Request::Config { text }) => match crate::config::parse(&text) {
+            Ok(config) => Response::Config { config },
+            Err(error) => Response::ConfigError { error },
         },
         Ok(Request::Analyze { sql, dialect, mut answers }) => {
             crate::extension::unbundle(&mut answers);
