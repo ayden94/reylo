@@ -19,7 +19,7 @@ pub enum Request {
     Ping,
     /// Placeholders only; no database.
     Lex { sql: String, dialect: Dialect },
-    /// The project file's text, `.porg.toml`.
+    /// The project file's text, `.porg.yaml`.
     Config { text: String },
     /// The whole analysis, given what the host has answered so far.
     Analyze {
