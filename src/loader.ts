@@ -1,48 +1,35 @@
-// What every runtime hook emits for a .sql file: a module that builds the query
-// object from the text and the mapper's cache when it matches.
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
-import { lexPlaceholders } from "./lex.ts";
+// What every build step emits for a `.sql` file: a module that carries everything the query needs
+// at run time (the dialect, the statement as the engine rewrote it for the database, the binding
+// order, the row count the analysis proved), so that the running code reads no file and asks no
+// database. The analysis comes from `src/analyze.ts`: `.porg/` when it holds the statement for the
+// current schema, else the database. A build that has neither fails, because a module built
+// without the analysis would not do what its types say.
+import { dirname } from "node:path";
+import { Session } from "./analyze.ts";
 
-type CacheEntry = { hash: string; params: string[]; cardinality: string; dialect?: string; text?: string; order?: string[] };
+export type SqlModule = {
+  code: string;
+  /** The `.porg/` entry the module was built from. A bundler watches it, so that the module is built again when the type check analyzes the statement anew (after a migration). */
+  entry: string;
+};
 
-/** The mapper's cache that covers a `.sql` file: the nearest `.porg/queries.json` at or above it. A bundler adapter watches it, so that a module built before the mapper rewrote the statement is built again. */
-export function cacheFile(path: string): string | undefined {
-  for (let dir = dirname(path); ; dir = dirname(dir)) {
-    const cache = join(dir, ".porg", "queries.json");
-    if (existsSync(cache)) return cache;
-    if (dirname(dir) === dir) return undefined;
-  }
-}
-
-function cachedEntry(path: string, sql: string): CacheEntry | undefined {
-  const cache = cacheFile(path);
-  if (!cache) return undefined;
-  let entries: Record<string, CacheEntry>;
+export async function sqlModule(path: string, sql: string): Promise<SqlModule> {
+  const session = await Session.for(dirname(path));
+  const outcome = await session.analyze(sql);
+  if (!outcome.ok) throw new Error(`${path}: ${outcome.message}`);
+  const { analysis } = outcome;
+  let params: string[];
   try {
-    entries = JSON.parse(readFileSync(cache, "utf8"));
-  } catch {
-    return undefined;
+    params = session.lex(sql).params;
+  } catch (e) {
+    throw new Error(`${path}: ${(e as Error).message}`);
   }
-  const entry = entries[relative(dirname(dirname(cache)), path)];
-  return entry && entry.hash === sha1(sql) ? entry : undefined;
-}
-
-function sha1(text: string): string {
-  const { createHash } = process.getBuiltinModule("node:crypto") as typeof import("node:crypto");
-  return createHash("sha1").update(text).digest("hex");
-}
-
-export function sqlModuleSource(sql: string, path: string): string {
-  const cached = cachedEntry(path, sql);
-  const dialect = (cached?.dialect ?? "postgres") as "postgres" | "mysql" | "sqlite";
-  const params = cached?.params ?? lexPlaceholders(sql, dialect).params;
-  const cardinality = cached?.cardinality ?? "many";
-  const rewritten = cached?.text && cached.order ? `, text: ${JSON.stringify(cached.text)}, order: ${JSON.stringify(cached.order)}` : "";
-  return [
+  const code = [
     `import { defineQuery } from "porg";`,
     `export const sql = ${JSON.stringify(sql)};`,
     `export const params = ${JSON.stringify(params)};`,
-    `export default defineQuery({ dialect: ${JSON.stringify(dialect)}, sql, params, cardinality: ${JSON.stringify(cardinality)}${rewritten} });`,
+    `export default defineQuery({ dialect: ${JSON.stringify(session.project.dialect)}, sql, params, cardinality: ${JSON.stringify(analysis.cardinality)}, text: ${JSON.stringify(analysis.rewritten.sql)}, order: ${JSON.stringify(analysis.rewritten.order)} });`,
+    ``,
   ].join("\n");
+  return { code, entry: outcome.entry };
 }

@@ -9,6 +9,9 @@
   "engines": {
     "node": ">=24"
   },
+  "bin": {
+    "porg": "./src/cli.ts"
+  },
   "exports": {
     ".": "./src/index.ts",
     "./register": "./src/register.ts",

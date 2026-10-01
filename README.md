@@ -22,7 +22,15 @@ Porg is the root of this repository. [`porgapi/`](./porgapi) is PorgAPI, a web f
 
 `porg/vite` is a Vite, Rollup and Rolldown plugin; `porg/esbuild` is an esbuild plugin that `Bun.build` and `Bun.plugin` take as is; `porg/webpack-loader` is a loader for webpack, Rspack and Turbopack. Each turns a `.sql` import into the same module the runtime preload builds, so a bundled app needs no preload.
 
-Each adapter also watches the mapper's cache, so a dev server rebuilds a `.sql` module when the mapper rewrites its statement.
+Each adapter analyzes the statement as the type check does, so a build needs the database, or a `.porg/` that `porg generate` filled where the database could be reached (`.porg/` is the cache they all share, and git ignores it). The module it writes carries the analysis and reads nothing at run time. A dev server rebuilds a `.sql` module when the type check analyzes its statement again.
+
+```sh
+$ porg generate          # every .sql file the sources import, into .porg/
+.: postgres at localhost:5432/postgres (DATABASE_URL in .env)
+  analyzed  src/get_user.sql    maybeOne  id    12 ms
+  cached    src/list_users.sql  many      -      0 ms
+2 files in 1 project: 1 analyzed, 1 cached (0.1 s)
+```
 
 Next.js takes `porg/webpack-loader` for both of its bundlers, on the server only, so that a client component that imports a `.sql` file fails the build instead of shipping the statement to the browser. `next build` runs `tsc` without `--runExternalCode`, so the mapper cannot run inside it: turn that step off and run the type check before the build ([lab/nextjs](./lab/nextjs) is the whole setup, with Turbopack and webpack, in `next dev` and `next build`):
 

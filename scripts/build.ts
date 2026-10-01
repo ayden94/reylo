@@ -21,9 +21,10 @@ copyFileSync(join(root, "engine/porg_engine.wasm"), join(dist, "engine/porg_engi
 copyFileSync(join(root, "README.md"), join(dist, "README.md"));
 
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
-const { private: _private, scripts: _scripts, devDependencies: _dev, exports, typescript, ...rest } = pkg;
+const { private: _private, scripts: _scripts, devDependencies: _dev, bin, exports, typescript, ...rest } = pkg;
 const built = {
   ...rest,
+  bin: Object.fromEntries(Object.entries(bin as Record<string, string>).map(([name, path]) => [name, js(path)])),
   exports: Object.fromEntries(Object.entries(exports as Record<string, string>).map(([key, path]) => [key, { types: path.replace(/\.ts$/, ".d.ts"), default: js(path) }])),
   typescript: { ...typescript, contentMapper: { ...typescript.contentMapper, exec: (typescript.contentMapper.exec as string[]).map(js) } },
 };

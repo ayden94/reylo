@@ -16,7 +16,7 @@ test("one named form, the dialect's own positional form, and a position is its n
   assert.deepEqual(names("select $2::text, $1::int"), ["1", "2"]);
 });
 
-// Without the mapper's cache the runtime rewrites the statement itself (the loader's fallback).
+// Without the engine's rewritten statement (a query defined by hand) the runtime rewrites it itself.
 const capture = () => {
   const calls: { text: string; values?: unknown[] | undefined }[] = [];
   return { calls, client: { async query(text: string, values?: unknown[]) { calls.push({ text, values }); return { rows: [{}] }; } } };

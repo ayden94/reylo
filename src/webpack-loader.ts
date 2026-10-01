@@ -2,11 +2,22 @@
 // (not plugins) for a file type:
 //   webpack / Rspack:  module.rules: [{ test: /\.sql$/, use: "porg/webpack-loader" }]
 //   Turbopack:         turbopack: { rules: { "*.sql": { loaders: ["porg/webpack-loader"], as: "*.js" } } }
-import { cacheFile, sqlModuleSource } from "./loader.ts";
+import { sqlModule } from "./loader.ts";
 
-export default function porgSqlLoader(this: { resourcePath: string; addDependency(file: string): void }, source: string): string {
-  // The module carries the mapper's rewritten statement, so a new cache must rebuild it.
-  const cache = cacheFile(this.resourcePath);
-  if (cache) this.addDependency(cache);
-  return sqlModuleSource(source, this.resourcePath);
+type LoaderContext = {
+  resourcePath: string;
+  addDependency(file: string): void;
+  async(): (error: Error | null, code?: string) => void;
+};
+
+export default function porgSqlLoader(this: LoaderContext, source: string): void {
+  const done = this.async();
+  sqlModule(this.resourcePath, source).then(
+    ({ code, entry }) => {
+      // A new analysis of the statement (the type check's, after a migration) rebuilds the module.
+      this.addDependency(entry);
+      done(null, code);
+    },
+    (error: Error) => done(error),
+  );
 }

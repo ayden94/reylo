@@ -96,8 +96,20 @@ export class Engine {
   static async load(path: URL | string = WASM_PATH): Promise<Engine> {
     const module = await WA.compile(readFileSync(path));
     const wasi = new WASI({ version: "preview1", args: ["porg-engine"], env: {} });
-    const instance = await WA.instantiate(module, wasi.getImportObject());
-    wasi.initialize(instance as never);
+    // Bun's node:wasi has neither getImportObject nor initialize: it takes the imports from
+    // wasiImport, and its start(instance) only sets the memory of a reactor, which has no _start.
+    // Its random_get returns the length instead of 0 before Bun 1.4 (oven-sh/bun#35438), which
+    // the engine's first hash map reads as a failure, so it is replaced.
+    const bun = typeof (wasi as { getImportObject?: unknown }).getImportObject !== "function";
+    let instance: Instance;
+    const random_get = (ptr: number, len: number) => {
+      const memory = instance.exports.memory as Memory;
+      for (let at = 0; at < len; at += 65536) crypto.getRandomValues(new Uint8Array(memory.buffer, ptr + at, Math.min(65536, len - at)));
+      return 0;
+    };
+    instance = await WA.instantiate(module, bun ? { wasi_snapshot_preview1: { ...wasi.wasiImport, random_get } } : wasi.getImportObject());
+    if (bun) wasi.start(instance as never);
+    else wasi.initialize(instance as never);
     return new Engine(instance);
   }
 

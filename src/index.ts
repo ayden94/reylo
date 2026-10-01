@@ -59,7 +59,7 @@ export type QueryDefinition = {
   dialect: Dialect;
   sql: string;
   params: readonly string[];
-  /** The mapper's rewritten statement and its binding order, when the mapper's cache had them. */
+  /** The statement as the engine rewrote it for the database, and its binding order: every build step puts them in the module. */
   text?: string;
   order?: readonly string[];
   cardinality?: Cardinality;

@@ -242,9 +242,10 @@ function value(params: Record<string, unknown>, name: string) {
   return v === undefined ? null : v;
 }
 
-// Without the mapper's cache the runtime lexes the placeholders itself (`lex.ts`); the
-// engine's lexer is the authoritative one, and the two agree on every statement the
-// runtime fallback is meant for. Postgres numbers each distinct parameter once.
+// Without the engine's rewritten statement (a query defined by hand) the runtime lexes the
+// placeholders itself (`lex.ts`); the engine's lexer is the authoritative one, and the two agree
+// on every statement the runtime fallback is meant for. Postgres numbers each distinct parameter
+// once.
 function rewrite(query: QueryModule, params: Record<string, unknown>) {
   const { placeholders } = lexPlaceholders(query.sql, query.dialect);
   let text = "";
