@@ -82,7 +82,7 @@ type AggPlainRow = {
   n: string;
   total: string | null;
   mean: string | null;
-  latest: string | null;
+  latest: Date | null;
   titles: string | null;
   all_viewed: boolean | null;
   published: string;
@@ -119,7 +119,7 @@ type CtePlainRow = {
   title: string;
   body: string | null;
   // The CTE's own `where published_at is not null` proves it.
-  published_at: string;
+  published_at: Date;
 };
 const ctePlain1: CtePlainRow[] = null! as Awaited<ReturnType<typeof ctePlain.run>>;
 const ctePlain2: Awaited<ReturnType<typeof ctePlain.run>> = null! as CtePlainRow[];
@@ -167,7 +167,7 @@ type FnScalarRow = {
   email_or: string;
   not_ada: string | null;
   // now() and gen_random_uuid() never return NULL.
-  ts: string;
+  ts: Date;
   fresh: string;
   lowered: string | null;
 };
@@ -186,7 +186,7 @@ type FnSetofRow = {
   user_id: number | null;
   title: string | null;
   body: string | null;
-  published_at: string | null;
+  published_at: Date | null;
   views: number | null;
 };
 const fnSetof1: FnSetofRow[] = null! as Awaited<ReturnType<typeof fnSetof.run>>;
@@ -224,7 +224,7 @@ type ColumnsRow = {
   score: string | null;
   big: string;
   blob: Uint8Array | null;
-  created_at: string;
+  created_at: Date;
 };
 const columns1: ColumnsRow[] = null! as Awaited<ReturnType<typeof columns.run>>;
 const columns2: Awaited<ReturnType<typeof columns.run>> = null! as ColumnsRow[];
@@ -345,7 +345,7 @@ type ViewsRow = {
   name: string;
   email: string | null;
   posts: string;
-  last_at: string | null;
+  last_at: Date | null;
 };
 const views1: ViewsRow[] = null! as Awaited<ReturnType<typeof views.run>>;
 const views2: Awaited<ReturnType<typeof views.run>> = null! as ViewsRow[];
@@ -362,8 +362,8 @@ type CastsRow = {
   short_name: string;
   score_int: number | null;
   big_num: string;
-  day: string;
-  since: string;
+  day: Date;
+  since: Date;
   k: number | null;
   nothing: number | null;
 };

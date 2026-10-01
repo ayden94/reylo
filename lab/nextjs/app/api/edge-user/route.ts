@@ -6,7 +6,7 @@ export const runtime = "edge";
 
 const stub = {
   async query(text: string, values?: unknown[]) {
-    return { rows: [{ id: values?.[0], name: "stub", email: null, role: "member", tags: [], created_at: new Date(0), big: BigInt(7), text }] };
+    return { rows: [{ id: values?.[0], name: "stub", email: null, role: "member", tags: [], created_at: new Date(0), big: "7", text }] };
   },
 };
 

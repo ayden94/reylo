@@ -27,43 +27,44 @@ test("without a project file, DATABASE_URL comes from the environment, then .env
   assert.deepEqual([set.url, set.urlSource, set.dialect], ["file:./x.db", "DATABASE_URL in the environment", "sqlite"]);
 });
 
-test("the project file sits beside package.json, and its url, env files, param typing and types apply", async () => {
+test("the project file sits beside package.json, and its url, env files, strict and types apply", async () => {
   const e = await engine();
   const root = tree({
     "package.json": "{}",
-    ".porg.toml": 'url = "postgres://pooler/app"\ndirect_url = "mysql://root:${DB_PASSWORD}@127.0.0.1:3306/app"\nenv = ["secrets.env"]\nparam_typing = "strict"\n[types]\ndates = "temporal"\n[api]\nroutes = "api"\n',
+    ".porg.yaml": "url: postgres://pooler/app\ndirect_url: mysql://root:${DB_PASSWORD}@127.0.0.1:3306/app\nenv: [secrets.env]\nstrict: true\ntypes:\n  dates: temporal\napi:\n  routes: api\n",
     "secrets.env": "DB_PASSWORD=hunter2\n",
     "src/db/tsconfig.json": "{}",
   });
   // The tsconfig sits below the package; the project file is the package's.
   const r = resolveProject(e, join(root, "src/db"), {});
-  assert.equal(r.file, join(root, ".porg.toml"));
+  assert.equal(r.file, join(root, ".porg.yaml"));
   assert.equal(r.root, root);
   // The type check takes the direct connection, and the dialect is its scheme's.
   assert.equal(r.url, "mysql://root:hunter2@127.0.0.1:3306/app");
-  assert.equal(r.urlSource, '"direct_url" in ../../.porg.toml, DB_PASSWORD in ../../secrets.env');
+  assert.equal(r.urlSource, '"direct_url" in ../../.porg.yaml, DB_PASSWORD in ../../secrets.env');
   assert.equal(r.dialect, "mysql");
-  assert.equal(r.paramTyping, "strict");
-  assert.deepEqual(r.repr, { dates: "temporal", bigint: "string" });
+  assert.equal(r.strict, true);
+  // `dates` is the file's; `bigint` is MySQL's default, mysql2's number.
+  assert.deepEqual(r.repr, { dates: "temporal", bigint: "number" });
   assert.equal(r.error, undefined);
   assert.ok(r.watched.includes(join(root, "secrets.env")));
   // A package of its own below does not see the file above it.
-  const nested = tree({ "package.json": "{}", ".porg.toml": 'url = "file:./a.db"\n', "packages/web/package.json": "{}" });
+  const nested = tree({ "package.json": "{}", ".porg.yaml": "url: file:./a.db\n", "packages/web/package.json": "{}" });
   assert.equal(findProjectFile(join(nested, "packages/web"), {}), undefined);
   // PORG_CONFIG names the file instead.
-  const other = tree({ "elsewhere.toml": 'url = "file:./dev.db"\n' });
-  assert.equal(resolveProject(e, join(root, "src/db"), { PORG_CONFIG: join(other, "elsewhere.toml") }).dialect, "sqlite");
+  const other = tree({ "elsewhere.yaml": "url: file:./dev.db\n" });
+  assert.equal(resolveProject(e, join(root, "src/db"), { PORG_CONFIG: join(other, "elsewhere.yaml") }).dialect, "sqlite");
 });
 
 test("a key the library does not know, and a variable nothing sets, are errors that say where", async () => {
   const e = await engine();
-  const typo = tree({ "package.json": "{}", ".porg.toml": 'url = "postgres://x/db"\n\n[types]\ndatez = "Date"\n' });
-  assert.match(resolveProject(e, typo, {}).error!, /^\.porg\.toml:4:1: unknown field `datez`, expected `dates` or `bigint`/);
-  const unset = tree({ "package.json": "{}", ".porg.toml": 'url = "${NOPE}"\n' });
+  const typo = tree({ "package.json": "{}", ".porg.yaml": "url: postgres://x/db\n\ntypes:\n  datez: Date\n" });
+  assert.match(resolveProject(e, typo, {}).error!, /^\.porg\.yaml:4:3: types: unknown field `datez`, expected `dates` or `bigint`/);
+  const unset = tree({ "package.json": "{}", ".porg.yaml": "url: ${NOPE}\n" });
   const r = resolveProject(e, unset, {});
   assert.equal(r.url, undefined);
-  assert.match(r.error!, /^\.porg\.toml: "url" names \$\{NOPE\}, which neither the environment nor/);
+  assert.match(r.error!, /^\.porg\.yaml: "url" names \$\{NOPE\}, which neither the environment nor/);
   // A scheme Porg does not read names no dialect.
-  const odd = tree({ "package.json": "{}", ".porg.toml": 'url = "./dev.db"\n' });
-  assert.match(resolveProject(e, odd, {}).error!, /^Cannot tell the database from the URL \("url" in \.porg\.toml\)/);
+  const odd = tree({ "package.json": "{}", ".porg.yaml": "url: ./dev.db\n" });
+  assert.match(resolveProject(e, odd, {}).error!, /^Cannot tell the database from the URL \("url" in \.porg\.yaml\)/);
 });

@@ -10,7 +10,7 @@ type ExpectedRow = {
   email: string | null;
   role: "admin" | "member";
   tags: string[];
-  created_at: string;
+  created_at: Date;
   big: string | null;
   next_id: number;
 };
@@ -47,8 +47,8 @@ type ExpectedNested = {
 };
 const n1: ExpectedNested | null = null! as Awaited<ReturnType<typeof nested.run>>;
 const n2: Awaited<ReturnType<typeof nested.run>> = null! as ExpectedNested | null;
-const c1: { n: string; latest: string | null } = null! as Awaited<ReturnType<typeof count.run>>;
-const c2: Awaited<ReturnType<typeof count.run>> = null! as { n: string; latest: string | null };
+const c1: { n: string; latest: Date | null } = null! as Awaited<ReturnType<typeof count.run>>;
+const c2: Awaited<ReturnType<typeof count.run>> = null! as { n: string; latest: Date | null };
 const j1: { id: number; title: string; author: string | null; email: string | null }[] = null! as Awaited<ReturnType<typeof joined.run>>;
 const j2: Awaited<ReturnType<typeof joined.run>> = null! as { id: number; title: string; author: string | null; email: string | null }[];
 const cardinalities: ["maybeOne", "maybeOne", "one", "many"] = [query.cardinality, nested.cardinality, count.cardinality, joined.cardinality];

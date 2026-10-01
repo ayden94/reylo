@@ -1,7 +1,6 @@
 // The runtime query object behind `import query from "./file.sql"`.
 // Types come from the content mapper; values come from the runtime loader.
 import { execute, executeSync, type ClientFor, type Dialect, type SyncClientFor } from "./execute.ts";
-import { convertRows, type Conversion, type Repr } from "./convert.ts";
 import type { StandardJSONSchemaV1, StandardTypedV1 } from "./standard.ts";
 
 export type { ClientFor, Dialect, SyncClientFor } from "./execute.ts";
@@ -63,10 +62,6 @@ export type QueryDefinition = {
   /** The mapper's rewritten statement and its binding order, when the mapper's cache had them. */
   text?: string;
   order?: readonly string[];
-  /** The columns whose wire value `run` converts, and the representation the mapper chose. */
-  convert?: Record<string, Conversion>;
-  dates?: Repr["dates"];
-  bigint?: Repr["bigint"];
   cardinality?: Cardinality;
   jsonSchema?: { input: Record<string, unknown>; output: Record<string, unknown> };
 };
@@ -109,7 +104,6 @@ export function defineQuery<Params, Row, C extends Cardinality, D extends Dialec
     }
   }
   function materialize(rows: Row[]): Materialize<Row, C> {
-    if (def.convert) convertRows(rows, def.convert, { dates: def.dates ?? "string", bigint: def.bigint ?? "string" });
     switch (cardinality) {
       case "none":
         return undefined as Materialize<Row, C>;

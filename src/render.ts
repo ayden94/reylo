@@ -1,12 +1,24 @@
-// The engine's type model as TypeScript text. On the wire a driver decodes a Postgres value
-// its own way (int8 as a string, timestamps as Date); the mapper's `dates` and `bigint`
-// options pick the representation `run` hands back, and the rendered type follows them.
+// The engine's type model as TypeScript text. On the wire the project's driver decodes a value
+// its own way, and `run` returns what it decoded: Porg declares that type and converts nothing.
+// Drivers agree on little for two kinds of value: every Postgres and MySQL driver decodes a
+// timestamp as a Date unless told otherwise, but an int8 arrives as a string (pg, postgres,
+// Bun.sql, Neon), a number (mysql2, the SQLite drivers) or a BigInt (mariadb). The project
+// file's `types` names what the driver is set up to return, and the rendered type follows it.
 // Inside a JSON value the database has already serialized it, so the same type reads
-// differently there and the options do not apply.
+// differently there and the setting does not apply.
 import type { EngineType } from "./engine.ts";
-import { defaultRepr, type Conversion, type Repr } from "./convert.ts";
 
-export { defaultRepr, type Conversion, type Repr } from "./convert.ts";
+/** What the project's driver returns for temporal and 64-bit integer values. */
+export type Repr = { dates: "string" | "Date" | "temporal"; bigint: "string" | "number" | "bigint" };
+
+/** Each dialect's common drivers left at their defaults: pg, postgres, Bun.sql and Neon; mysql2; node:sqlite and better-sqlite3. */
+export const defaultReprs: Record<"postgres" | "mysql" | "sqlite", Repr> = {
+  postgres: { dates: "Date", bigint: "string" },
+  mysql: { dates: "Date", bigint: "number" },
+  // SQLite has no date type; an INTEGER is a number.
+  sqlite: { dates: "string", bigint: "number" },
+};
+export const defaultRepr: Repr = defaultReprs.postgres;
 
 const wire: Record<string, string> = {
   bool: "boolean",
@@ -36,7 +48,7 @@ const temporal: Record<string, string> = { timestamptz: "Temporal.Instant", time
 
 // SQLite: the engine names a column by its affinity; node:sqlite, better-sqlite3 and bun:sqlite
 // decode INTEGER and REAL as numbers, TEXT as strings and BLOB as Uint8Array. A NUMERIC column
-// holds whichever the row stored. SQLite has no date type, so `dates` has nothing to convert.
+// holds whichever the row stored. SQLite has no date type, so `dates` changes no SQLite type.
 const sqlite: Record<string, string> = { integer: "number", real: "number", text: "string", blob: "Uint8Array", numeric: "number | string" };
 
 export const ident = (name: string) => (/^[A-Za-z_$][\w$]*$/.test(name) ? name : JSON.stringify(name));
@@ -73,8 +85,8 @@ function renderFields(fields: { name: string; type: EngineType; nullable: boolea
 }
 
 /**
- * The type a parameter accepts. The `dates` and `bigint` options describe what `run` hands
- * back, not what a driver takes: every Postgres and MySQL driver serializes a `Date` or an ISO
+ * The type a parameter accepts. The `dates` and `bigint` settings describe what the driver
+ * returns, not what it takes: every Postgres and MySQL driver serializes a `Date` or an ISO
  * string for a timestamp, and a number, a BigInt or a digit string for a 64-bit integer, so a
  * value read back under any representation can be passed in again, and `limit :n` takes a number.
  */
@@ -88,11 +100,4 @@ export function renderParamType(t: EngineType, dialect: "postgres" | "sqlite" | 
     return /[|&]/.test(inner) ? `(${inner})[]` : `${inner}[]`;
   }
   return renderType(t, false, dialect, repr);
-}
-
-/** The runtime conversion a column's wire value needs, if any: a temporal scalar or int8, or an array of one. */
-export function conversion(t: EngineType): Conversion | undefined {
-  if (t.kind === "scalar") return t.name in temporal || t.name === "int8" ? (t.name as Conversion) : undefined;
-  if (t.kind === "array" && t.of.kind === "scalar") { const inner = conversion(t.of); return inner ? (`${inner}[]` as Conversion) : undefined; }
-  return undefined;
 }

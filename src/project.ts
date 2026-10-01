@@ -1,23 +1,23 @@
-// The project file, `.porg.toml`, and the connection it names. The file sits beside the project's
+// The project file, `.porg.yaml`, and the connection it names. The file sits beside the project's
 // `package.json` (the nearest one at or above the tsconfig's directory; `PORG_CONFIG` names
-// another file), is parsed by the engine so that every Porg tool reads the same TOML, and is
+// another file), is parsed by the engine so that every Porg tool reads the same YAML, and is
 // resolved here against the environment: the process environment first, then the `.env` files the
 // project file names under `env` (by default `.env.local`, then `.env`, beside it), and a `${VAR}`
 // in a URL is replaced from that. The URL's scheme names the dialect. A project without the file
-// behaves as if it held `url = "${DATABASE_URL}"`.
+// behaves as if it held `url: ${DATABASE_URL}`.
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { Engine } from "./engine.ts";
-import { defaultRepr, type Repr } from "./render.ts";
+import { defaultReprs, type Repr } from "./render.ts";
 
 export type Dialect = "postgres" | "sqlite" | "mysql";
 
-/** What the engine reads out of `.porg.toml`: the keys the library uses. */
+/** What the engine reads out of `.porg.yaml`: the keys the library uses. */
 export type ProjectFile = {
   url?: string;
   direct_url?: string;
   env?: string[];
-  param_typing?: "loose" | "strict";
+  strict?: boolean;
   types: { dates?: Repr["dates"]; bigint?: Repr["bigint"] };
 };
 
@@ -28,18 +28,19 @@ export type ResolvedProject = {
   root: string;
   dialect: Dialect;
   repr: Repr;
-  paramTyping: "loose" | "strict";
+  /** Whether a parameter the statement does not type is an error rather than `unknown`. */
+  strict: boolean;
   /** The connection the type check uses: `direct_url` when the file names one, else `url`. */
   url: string | undefined;
   /** Where the URL came from, for a diagnostic: never the URL itself. */
   urlSource: string;
   /** The files a change to which changes the project: the project file and the `.env` files. */
   watched: string[];
-  /** Why the project cannot be used, already placed (`.porg.toml:3:1: ...`); every transform reports it. */
+  /** Why the project cannot be used, already placed (`.porg.yaml:3:1: ...`); every transform reports it. */
   error: string | undefined;
 };
 
-export const PROJECT_FILE = ".porg.toml";
+export const PROJECT_FILE = ".porg.yaml";
 const DEFAULT_ENV_FILES = [".env.local", ".env"];
 
 /** The package directory: the nearest one at or above `from` that holds a `package.json`, else `from`. */
@@ -50,7 +51,7 @@ export function packageDir(from: string): string {
   }
 }
 
-/** The project file for a project directory: `PORG_CONFIG`, or `.porg.toml` beside the package's `package.json`. */
+/** The project file for a project directory: `PORG_CONFIG`, or `.porg.yaml` beside the package's `package.json`. */
 export function findProjectFile(from: string, env: Record<string, string | undefined> = process.env): string | undefined {
   if (env.PORG_CONFIG) return resolve(env.PORG_CONFIG);
   const candidate = join(packageDir(from), PROJECT_FILE);
@@ -138,6 +139,7 @@ export function resolveProject(engine: Engine, projectDir: string, env: Record<s
   }
   const dialect = url ? dialectOf(url) : "postgres";
   if (url && !dialect) error ??= `Cannot tell the database from the URL (${urlSource}): Porg reads postgres://, postgresql://, mysql://, mariadb://, file: and sqlite: URLs.`;
-  const repr: Repr = { dates: config.types.dates ?? defaultRepr.dates, bigint: config.types.bigint ?? defaultRepr.bigint };
-  return { file, root, dialect: dialect ?? "postgres", repr, paramTyping: config.param_typing ?? "loose", url, urlSource, watched: [...(file ? [file] : [join(root, PROJECT_FILE)]), ...envFiles], error };
+  const defaults = defaultReprs[dialect ?? "postgres"];
+  const repr: Repr = { dates: config.types.dates ?? defaults.dates, bigint: config.types.bigint ?? defaults.bigint };
+  return { file, root, dialect: dialect ?? "postgres", repr, strict: config.strict ?? false, url, urlSource, watched: [...(file ? [file] : [join(root, PROJECT_FILE)]), ...envFiles], error };
 }

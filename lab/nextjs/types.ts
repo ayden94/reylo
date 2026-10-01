@@ -9,7 +9,7 @@ type ExpectedRow = {
   email: string | null;
   role: "admin" | "member";
   tags: string[];
-  created_at: string;
+  created_at: Date;
   big: string | null;
 };
 export const a: ExpectedRow = null! as Row;

@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import { dirname, join, relative } from "node:path";
 import { serve } from "./rpc.ts";
 import { engine, reason, AnswerCache, Unreachable, type Analysis } from "./engine.ts";
-import { conversion, ident, renderParamType, renderType, type Conversion, type Repr } from "./render.ts";
+import { ident, renderParamType, renderType, type Repr } from "./render.ts";
 import { resolveProject, type Dialect } from "./project.ts";
 import { openMysqlDescriber, type MysqlDescriber } from "./mysql-describe.ts";
 import { openPostgresDescriber, type Describer } from "./describe.ts";
@@ -24,14 +24,14 @@ type Project = {
   repr: Repr;
   /** Why the project file cannot be used; every transform reports it. */
   error: string | undefined;
-  paramTyping: "loose" | "strict";
+  strict: boolean;
   describer: Promise<Describer> | undefined;
   sqlite: Promise<SqliteDescriber> | undefined;
   mysql: Promise<MysqlDescriber> | undefined;
   answers: AnswerCache;
   cache: Record<string, CacheEntry>;
 };
-type CacheEntry = { hash: string; params: string[]; cardinality: string; dialect: string; text?: string; order?: string[]; convert?: Record<string, Conversion>; dates?: Repr["dates"]; bigint?: Repr["bigint"] };
+type CacheEntry = { hash: string; params: string[]; cardinality: string; dialect: string; text?: string; order?: string[] };
 const projects = new Map<string, Project>();
 
 /** The cache as it is on disk; a missing or half-written file is an empty cache. */
@@ -77,11 +77,11 @@ serve({
     const p = params as { projectHandle: string; options?: Record<string, unknown>; configFileName: string };
     const projectDir = dirname(p.configFileName);
     // Every setting lives in the project file, which PorgREST and PorgAPI read too.
-    const optionDiagnostics = Object.keys(p.options ?? {}).map((key) => ({ path: [key], messageText: `Porg reads its settings from .porg.toml, not from the content mapper's options; move "${key}" there.`, code: 104 }));
+    const optionDiagnostics = Object.keys(p.options ?? {}).map((key) => ({ path: [key], messageText: `Porg reads its settings from .porg.yaml, not from the content mapper's options; move "${key}" there.`, code: 104 }));
     const resolved = resolveProject(await engine(), projectDir);
     const cache = readCache(projectDir);
-    projects.set(p.projectHandle, { projectDir, root: resolved.root, url: resolved.url, urlSource: resolved.urlSource, dialect: resolved.dialect, repr: resolved.repr, error: resolved.error, paramTyping: resolved.paramTyping, describer: undefined, sqlite: undefined, mysql: undefined, answers: new AnswerCache(), cache });
-    const configIdentity = createHash("sha1").update(JSON.stringify([resolved.file ?? null, resolved.dialect, resolved.repr, resolved.paramTyping, resolved.url ?? null, resolved.error ?? null, p.options ?? null])).digest("hex");
+    projects.set(p.projectHandle, { projectDir, root: resolved.root, url: resolved.url, urlSource: resolved.urlSource, dialect: resolved.dialect, repr: resolved.repr, error: resolved.error, strict: resolved.strict, describer: undefined, sqlite: undefined, mysql: undefined, answers: new AnswerCache(), cache });
+    const configIdentity = createHash("sha1").update(JSON.stringify([resolved.file ?? null, resolved.dialect, resolved.repr, resolved.strict, resolved.url ?? null, resolved.error ?? null, p.options ?? null])).digest("hex");
     return { configIdentity, watchedFiles: resolved.watched, optionDiagnostics };
   },
   async transform(params) {
@@ -124,15 +124,15 @@ serve({
       ({ params: names, placeholders } = (await engine()).lex(sql, project.dialect));
     } catch {}
     const cardinality = "many";
-    // `param_typing = "strict"`: a parameter nothing in the statement types is an error at its first use.
+    // `strict: true`: a parameter nothing in the statement types is an error at its first use.
     const strict = (analysis: Analysis) => {
-      if (project.paramTyping !== "strict") return;
+      if (!project.strict) return;
       for (const q of analysis.params) {
         if (q.type.kind !== "unknown") continue;
         const at = placeholders.find((h) => h.name === q.name);
         // The engine's offsets are UTF-8 bytes, as the diagnostics' are.
         const written = at ? Buffer.from(sql, "utf8").subarray(at.start, at.end).toString("utf8") : `:${q.name}`;
-        diagnostics.push(diag(`Nothing in the statement gives the parameter ${written} a type; cast it, as in cast(${written} as integer), or set param_typing = "loose" in .porg.toml.`, at?.start ?? 0, at ? at.end - at.start : 1, 12));
+        diagnostics.push(diag(`Nothing in the statement gives the parameter ${written} a type; cast it, as in cast(${written} as integer), or remove strict: true from .porg.yaml.`, at?.start ?? 0, at ? at.end - at.start : 1, 12));
       }
     };
     if (project.error) {
@@ -140,14 +140,12 @@ serve({
       return emit("unknown", "unknown", cardinality, names);
     }
     if (!project.url) {
-      diagnostics.push(diag(`No database URL: set DATABASE_URL in the environment, .env.local or .env, or "url" in .porg.toml.`, 0, 1, 4));
+      diagnostics.push(diag(`No database URL: set DATABASE_URL in the environment, .env.local or .env, or "url" in .porg.yaml.`, 0, 1, 4));
       return emit("unknown", "unknown", cardinality, names);
     }
-    const writeCache = (extra: Partial<CacheEntry> = {}, convert: Record<string, Conversion> = {}) => {
+    const writeCache = (extra: Partial<CacheEntry> = {}) => {
       const key = relative(project.projectDir, p.fileName);
-      // The runtime converts only the columns named here, to the representation named here.
-      const conversions = Object.keys(convert).length ? { convert, dates: project.repr.dates, bigint: project.repr.bigint } : {};
-      project.cache[key] = { hash: createHash("sha1").update(sql).digest("hex"), params: names, cardinality, dialect: project.dialect, ...extra, ...conversions };
+      project.cache[key] = { hash: createHash("sha1").update(sql).digest("hex"), params: names, cardinality, dialect: project.dialect, ...extra };
       // Two editors on one project run two mappers; each writes the whole file, so the write
       // is a rename and a reader never sees a half-written cache.
       const dir = join(project.projectDir, ".porg");
@@ -189,9 +187,7 @@ serve({
       // The server types a `?` from its context (LONGLONG against an int column, VAR_STRING
       // against a varchar, the target of a CAST); one it leaves untyped is `unknown`.
       const paramTypes = analysis.params.map((q) => `${ident(q.name)}: ${paramType(q, renderParamType(q.type, "mysql", project.repr))}`);
-      const convert: Record<string, Conversion> = {};
-      for (const c of analysis.columns) { const cls = conversion(c.type); if (cls) convert[c.name] = cls; }
-      writeCache({ cardinality: inferred, text: analysis.rewritten.sql, order: analysis.rewritten.order }, convert);
+      writeCache({ cardinality: inferred, text: analysis.rewritten.sql, order: analysis.rewritten.order });
       return emit(names.length ? `{ ${paramTypes.join("; ")} }` : "Record<never, never>", columns.length ? `{ ${columns.join("; ")} }` : "never", inferred, names);
     }
     if (project.dialect === "sqlite") {
@@ -257,9 +253,7 @@ serve({
     }
     const columns = analysis.columns.map((c) => `${ident(c.name)}: ${renderType(c.type, false, "postgres", project.repr)}${c.nullable ? " | null" : ""}`);
     const paramTypes = analysis.params.map((q) => `${ident(q.name)}: ${paramType(q, renderParamType(q.type, "postgres", project.repr))}`);
-    const convert: Record<string, Conversion> = {};
-    for (const c of analysis.columns) { const cls = conversion(c.type); if (cls) convert[c.name] = cls; }
-    writeCache({ cardinality: inferred, text: analysis.rewritten.sql, order: analysis.rewritten.order }, convert);
+    writeCache({ cardinality: inferred, text: analysis.rewritten.sql, order: analysis.rewritten.order });
     return emit(
       paramTypes.length ? `{ ${paramTypes.join("; ")} }` : "Record<never, never>",
       columns.length ? `{ ${columns.join("; ")} }` : "never",

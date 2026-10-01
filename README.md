@@ -12,7 +12,7 @@ Status: pre-alpha. Design notes and experiments live in this repository while th
 
 ## Repository
 
-Porg is the root of this repository. [`porgapi/`](./porgapi) is PorgAPI, a web framework where the backend is a directory of SQL files, imported with its history on 2026-09-19 so the two projects share one SQL analysis engine (`engine/`, a Cargo workspace member with `porgapi/engine/` and `pg-extension/`). [`AGENTS.md`](./AGENTS.md) describes the layout and the build gates of both; [`DESIGN.md`](./DESIGN.md) §20 records how the two implementations are being unified. [`ROADMAP.md`](./ROADMAP.md) lists the pieces, the order they ship in and the planned work, and [`docs/dialects.md`](./docs/dialects.md) what each SQL dialect can and cannot type.
+Porg is the root of this repository. [`porgapi/`](./porgapi) is PorgAPI, a web framework where the backend is a directory of SQL files, imported with its history on 2026-09-19 so the two projects share one SQL analysis engine (`engine/`, a Cargo workspace member with `porgapi/engine/` and `pg-extension/`). [`AGENTS.md`](./AGENTS.md) describes the layout and the build gates of both; [`DESIGN.md`](./DESIGN.md) §20 records how the two implementations are being unified. [`ROADMAP.md`](./ROADMAP.md) lists the pieces, the order they ship in and the planned work, and [`docs/dialects.md`](./docs/dialects.md) what each SQL dialect can and cannot type. `nub run build` writes the publishable package to `dist/`: the sources compiled to JavaScript with their declarations, and the engine. The repository's own `package.json` points at the TypeScript sources so the tests and labs need no build, and it is private, so only `dist/` can be published.
 
 ## The Postgres extension
 
@@ -53,7 +53,7 @@ where id = :id and name = :name
 ```ts
 import getUser from "./get_user.sql";
 const user = await getUser.run(sql, { id: 1, name: "ada" });
-//    ^? { id: number; name: string; email: string | null; role: "admin" | "member"; tags: string[]; created_at: string; next_id: number } | null
+//    ^? { id: number; name: string; email: string | null; role: "admin" | "member"; tags: string[]; created_at: Date; next_id: number } | null
 ```
 
 `with(client)` binds the query to a client, such as a transaction, and returns a function of the parameters: `const get = getUser.with(tx); await get({ id: 1, name: "ada" })`. A statement that takes no parameters takes no second argument: `await listUsers.run(sql)`. The client is always the caller's.
@@ -74,7 +74,7 @@ db.transaction(() => {
 })();
 ```
 
-Parameter types come from the server (`id: number`, `name: string`); `role` is an enum, `tags` a `text[]`, `email` nullable from the catalog, `next_id` non-null because `id` is and the built-in `+` never returns NULL for non-null operands; `| null` on the row because `id` is the primary key, so the `WHERE` matches at most one row. `created_at` is an ISO 8601 `string` and an `int8` a `string` because those are the default representations (see [Dates and 64-bit integers](#dates-and-64-bit-integers)).
+Parameter types come from the server (`id: number`, `name: string`); `role` is an enum, `tags` a `text[]`, `email` nullable from the catalog, `next_id` non-null because `id` is and the built-in `+` never returns NULL for non-null operands; `| null` on the row because `id` is the primary key, so the `WHERE` matches at most one row. `created_at` is a `Date` and an `int8` a `string` because that is what every Postgres driver returns by default, and `run` returns the driver's values (see [Dates and 64-bit integers](#dates-and-64-bit-integers)).
 
 Nested JSON keeps its shape. The engine reads the constructors out of the parse tree, has the database type their arguments as ordinary columns, and folds the catalog's `NOT NULL` and the outer joins back in:
 
@@ -136,41 +136,38 @@ where u.id = :id
 
 ## The project file
 
-Settings live in `.porg.toml` beside the project's `package.json` (the nearest one at or above the tsconfig; `PORG_CONFIG` names another file), one file per package. A project whose connection is `DATABASE_URL` needs no file; the content mapper itself takes no options in `tsconfig.json`.
+Settings live in `.porg.yaml` beside the project's `package.json` (the nearest one at or above the tsconfig; `PORG_CONFIG` names another file), one file per package. A project whose connection is `DATABASE_URL` needs no file; the content mapper itself takes no options in `tsconfig.json`.
 
-```toml
-url = "${DATABASE_URL}"              # the default; the secret stays in the environment; the scheme names the dialect
-direct_url = "${DIRECT_URL}"         # optional: a connection past a pooler, which the type check prefers
-env = [".env.local", ".env"]         # the default; the process environment wins, then the first file that sets a variable
-param_typing = "loose"               # the default; "strict" makes a parameter the statement does not type an error
-
-[types]
-dates = "string"                     # "string" (the default), "Date" or "temporal"
-bigint = "string"                    # "string" (the default), "number" or "bigint"
+```yaml
+url: ${DATABASE_URL}          # the default; the secret stays in the environment; the scheme names the dialect
+direct_url: ${DIRECT_URL}     # optional: a connection past a pooler, which the type check prefers
+env: [.env.local, .env]       # the default; the process environment wins, then the first file that sets a variable
+strict: true                  # optional: a parameter nothing in the statement types is an error instead of unknown
+types:                        # what the project's driver returns (see below)
+  dates: Date
+  bigint: string
 ```
 
-The URL's scheme names the dialect: `postgres://` and `postgresql://`, `mysql://` and `mariadb://`, `file:` and `sqlite:`. A key Porg does not know, or a `${VAR}` nothing sets, is an error on every `.sql` import that names the line and column in `.porg.toml`; the tables PorgREST and PorgAPI will read (`[rest]`, `[api]`) are accepted as they are. A relative SQLite path in the URL resolves against the package directory.
+The URL's scheme names the dialect: `postgres://` and `postgresql://`, `mysql://` and `mariadb://`, `file:` and `sqlite:`. A key Porg does not know, or a `${VAR}` nothing sets, is an error on every `.sql` import that names the line and column in `.porg.yaml`; the sections PorgREST and PorgAPI will read (`rest`, `api`) are accepted as they are. A relative SQLite path in the URL resolves against the package directory.
 
 ## Dates and 64-bit integers
 
-Every Postgres and MySQL driver decodes a timestamp as a `Date`, and they disagree on 64-bit integers: `pg`, `postgres` and Bun.sql return a string, mysql2 and the SQLite drivers a number that is lossy above 2^53, mariadb a BigInt (the measurements are in [docs/dates.md](./docs/dates.md)). Two settings in the `[types]` table of `.porg.toml` name one representation; the rendered type follows it, and `run` produces it whatever the driver returned:
+`run` returns the rows the driver returns: Porg declares their types and converts no value. Drivers disagree on two kinds of value. Every Postgres and MySQL driver decodes a timestamp as a `Date` unless it is set up otherwise, and a 64-bit integer arrives as a string (`pg`, `postgres`, Bun.sql, Neon), a number (mysql2 and the SQLite drivers, lossy above 2^53) or a BigInt (mariadb); the measurements are in [docs/dates.md](./docs/dates.md). The `types` section of `.porg.yaml` says what the project's driver returns, and the rendered type follows it:
 
-```toml
-[types]
-dates = "string"
-bigint = "string"
+```yaml
+types:
+  dates: Date       # the default on Postgres and MySQL; string or temporal for a driver set up to return those
+  bigint: string    # the default on Postgres; number is the default on MySQL and SQLite; bigint for mariadb
 ```
 
 | Setting | Value | `timestamptz` | `timestamp`, MySQL `datetime` / `timestamp` | `date` | `int8`, MySQL `bigint` |
 | --- | --- | --- | --- | --- | --- |
-| `dates` | `"string"` (default) | ISO 8601 with `Z`: `2026-01-02T03:04:05.678Z` | the stored wall clock, no zone: `2026-01-02T03:04:05.678` | `2026-01-02` | |
-| `dates` | `"Date"` | the driver's `Date` | the driver's `Date` | the driver's `Date` | |
-| `dates` | `"temporal"` | `Temporal.Instant` | `Temporal.PlainDateTime` | `Temporal.PlainDate` | |
-| `bigint` | `"string"` (default), `"number"`, `"bigint"` | | | | `string`, `number` or `bigint` |
+| `dates` | `Date` (default) | `Date` | `Date` | `Date` | |
+| `dates` | `string` | `string` | `string` | `string` | |
+| `dates` | `temporal` | `Temporal.Instant` | `Temporal.PlainDateTime` | `Temporal.PlainDate` | |
+| `bigint` | `string` (Postgres default), `number` (MySQL and SQLite default), `bigint` | | | | `string`, `number` or `bigint` |
 
-- The default is text on both because it is never lossy, `JSON.stringify(row)` round-trips, and the wire type then equals the JSON twin that `Json<T>` describes.
-- A zone-less `timestamp` or `date` reaches Porg as a `Date` the driver built from wall-clock fields (local time in `pg`, `postgres`, PGlite, Bun.sql, mysql2 and mariadb; a `date` is UTC midnight in `postgres`, PGlite and Bun.sql), and Porg reads the fields back in that frame, so the text is the stored wall clock. A driver configured to return the text form (`pg` `types.setTypeParser`, `postgres` `types`, PGlite `parsers`, mysql2 and mariadb `dateStrings`) passes through under `"string"` and is parsed under `"temporal"`.
-- `"temporal"` makes the generated module reference TypeScript's own `esnext.temporal` lib, which declares the global `Temporal` namespace, so the types resolve whatever `lib` the project sets. At runtime Node 26 has a global `Temporal`; Bun does not, so assign a polyfill to `globalThis.Temporal` or `run` throws with that instruction.
-- `"bigint"` gives a `bigint`; `JSON.stringify` has no rule for one, so add a `BigInt.prototype.toJSON` or a replacer. A value above 2^53 that the driver already decoded as a number is lost before Porg sees it: mysql2 takes `supportBigNumbers: true, bigNumberStrings: true`, better-sqlite3 and bun:sqlite `safeIntegers`, node:sqlite `readBigInts`.
-- Inside a nested JSON shape the database serialized the value already, so the settings do not apply there; SQLite has no date type and its integers follow the driver, so neither setting changes a SQLite type.
-- The runtime reads the column classes from the mapper's cache (`.porg/queries.json`); before the first `tsc --runExternalCode` run it returns the driver's values unchanged.
+- The setting has to match the driver, because Porg does not see the driver's options: `pg` with a `types.setTypeParser` for timestamps, `postgres` with its `types` option, or mysql2 and mariadb with `dateStrings: true` return text and need `dates: string`; mysql2 with `supportBigNumbers: true, bigNumberStrings: true` needs `bigint: string`; mariadb returns a BigInt by default and needs `bigint: bigint`.
+- `temporal` makes the generated module reference TypeScript's own `esnext.temporal` lib, which declares the global `Temporal` namespace, so the types resolve whatever `lib` the project sets; the driver builds the values ([lab/repr](./lab/repr) sets up `postgres` to).
+- `bigint` gives a `bigint`; `JSON.stringify` has no rule for one, so add a `BigInt.prototype.toJSON` or a replacer.
+- Inside a nested JSON shape the database serialized the value already, so the settings do not apply there; SQLite has no date type and its integers follow the driver.
