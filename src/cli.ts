@@ -1,37 +1,35 @@
 #!/usr/bin/env node
-// `porg generate`: analyzes the `.sql` files a project imports into `.porg/`, the cache that the
-// type check and the build steps share, and prints one line per file. A build that runs where the
-// database cannot be reached (a CI job, a container build) runs on what it wrote; where the
-// database can be reached, it only saves the build the round trips.
+// `porg generate`: analyzes every `.sql` file under the given directories into `.porg/`, the cache
+// that the type check and the build steps share, and prints one line per file. A build that runs
+// where the database cannot be reached (a CI job, a container build) runs on what it wrote; where
+// the database can be reached, it only saves the build the round trips.
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { Session } from "./analyze.ts";
 
 const USAGE = `Usage: porg generate [paths...] [--force]
 
-Analyzes every .sql file that the sources under the paths (by default the current directory)
-import, and every .sql file named, into .porg/: the cache that the type check and the build steps
-read. --force analyzes each file against the database even when .porg/ holds it.`;
+Analyzes every .sql file under the paths (by default the current directory) into .porg/: the
+cache that the type check and the build steps read. A file that is not one query (a migration)
+is listed and skipped. --force analyzes each file against the database even when .porg/ holds it.`;
 
-// Directories that hold no source of the project's own; a directory whose name starts with a dot
+// Directories that hold no query of the project's own; a directory whose name starts with a dot
 // (.git, .porg, .next) is skipped as well.
 const SKIP = new Set(["node_modules", "dist", "build", "out", "target", "coverage"]);
-const SOURCE = /\.[cm]?[jt]sx?$/;
-// A specifier that ends in `.sql` after `from`, `import` or `require(`: a static import or
-// re-export, a side-effect import, a dynamic import, a require.
-const SPECIFIER = /(?:\bfrom|\bimport|\brequire)\s*\(?\s*(["'])([^"'\n]+?\.sql)(?:\?[^"'\n]*)?\1/g;
 
-type Row = { file: string; status: "analyzed" | "cached" | "error"; detail: string } | { file: string; status: "analyzed" | "cached"; cardinality: string; params: string; ms: number };
+type Row =
+  | { file: string; status: "analyzed" | "cached"; cardinality: string; params: string; ms: number }
+  | { file: string; status: "error" | "skipped"; detail: string };
 
 const shown = (path: string) => relative(process.cwd(), path) || ".";
 
-function* sources(dir: string): Generator<string> {
+function* sqlFiles(dir: string): Generator<string> {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
     if (e.name.startsWith(".")) continue;
     const full = join(dir, e.name);
     if (e.isDirectory()) {
-      if (!SKIP.has(e.name)) yield* sources(full);
-    } else if (e.isFile() && SOURCE.test(e.name)) yield full;
+      if (!SKIP.has(e.name)) yield* sqlFiles(full);
+    } else if (e.isFile() && e.name.endsWith(".sql")) yield full;
   }
 }
 
@@ -40,6 +38,10 @@ function position(text: string, offset: number): string {
   const lines = Buffer.from(text, "utf8").subarray(0, offset).toString("utf8").split("\n");
   return `${lines.length}:${lines.at(-1)!.length + 1}`;
 }
+
+// A file that holds DDL or several statements is not a query: a migration or a schema file, which
+// nothing imports. The engine says so (or the server refuses to prepare several commands).
+const NOT_A_QUERY = /^only SELECT, INSERT, UPDATE, DELETE and MERGE statements are typed|^expected exactly one statement|^cannot insert multiple commands into a prepared statement/;
 
 async function generate(args: string[]): Promise<number> {
   const force = args.includes("--force");
@@ -51,37 +53,29 @@ async function generate(args: string[]): Promise<number> {
   const paths = args.filter((a) => !a.startsWith("-"));
   const started = performance.now();
 
-  // The `.sql` files, each with the files that import it.
-  const files = new Map<string, string[]>();
-  const skipped: string[] = [];
-  const add = (file: string, by: string) => files.set(file, [...(files.get(file) ?? []), by]);
-  const scan = (source: string) => {
-    for (const m of readFileSync(source, "utf8").matchAll(SPECIFIER)) {
-      const specifier = m[2]!;
-      if (specifier.startsWith("./") || specifier.startsWith("../")) add(resolve(dirname(source), specifier), source);
-      else if (isAbsolute(specifier)) add(specifier, source);
-      else skipped.push(`"${specifier}" in ${shown(source)}`);
-    }
-  };
+  const files = new Set<string>();
   for (const arg of paths.length ? paths : ["."]) {
     const full = resolve(arg);
     if (!existsSync(full)) {
       console.error(`porg generate: ${arg} does not exist.`);
       return 2;
     }
-    if (statSync(full).isDirectory()) for (const source of sources(full)) scan(source);
-    else if (full.endsWith(".sql")) add(full, full);
-    else scan(full);
+    if (statSync(full).isDirectory()) for (const file of sqlFiles(full)) files.add(file);
+    else if (full.endsWith(".sql")) files.add(full);
+    else {
+      console.error(`porg generate: ${arg} is not a .sql file or a directory.`);
+      return 2;
+    }
   }
 
   // One project per `.porg.yaml` (or package): each has its database and its `.porg/`.
   const projects = new Map<Session, string[]>();
-  for (const file of [...files.keys()].sort()) {
+  for (const file of [...files].sort()) {
     const session = await Session.for(dirname(file));
     projects.set(session, [...(projects.get(session) ?? []), file]);
   }
 
-  const count = { analyzed: 0, cached: 0, error: 0 };
+  const count = { analyzed: 0, cached: 0, skipped: 0, error: 0 };
   for (const [session, list] of projects) {
     const { project } = session;
     console.log(`${shown(session.root)}: ${project.dialect} at ${session.where()} (${project.urlSource})`);
@@ -99,10 +93,6 @@ async function generate(args: string[]): Promise<number> {
     if (unusable) console.log(`  ${unusable}`);
     const rows: Row[] = [];
     for (const file of list) {
-      if (!existsSync(file)) {
-        rows.push({ file, status: "error", detail: `no such file; imported by ${files.get(file)!.map(shown).join(", ")}` });
-        continue;
-      }
       if (unusable) {
         rows.push({ file, status: "error", detail: "not analyzed" });
         continue;
@@ -116,6 +106,11 @@ async function generate(args: string[]): Promise<number> {
         continue;
       }
       const { analysis } = outcome;
+      const notAQuery = analysis.diagnostics.find((d) => NOT_A_QUERY.test(d.message));
+      if (notAQuery) {
+        rows.push({ file, status: "skipped", detail: `not a query: ${notAQuery.message.replace(/ \(\w+\)$/, "")}` });
+        continue;
+      }
       if (analysis.diagnostics.length) {
         rows.push({ file, status: "error", detail: analysis.diagnostics.map((d) => `${shown(file)}:${position(sql, d.start)}: ${d.message}`).join("\n") });
         continue;
@@ -136,11 +131,10 @@ async function generate(args: string[]): Promise<number> {
   }
   for (const session of Session.opened()) await session.close();
 
-  if (skipped.length) console.log(`Skipped ${skipped.length} ${skipped.length === 1 ? "import" : "imports"} that ${skipped.length === 1 ? "is not a relative path" : "are not relative paths"}: ${skipped.join(", ")}.`);
   const total = files.size;
-  const parts = (["analyzed", "cached", "error"] as const).filter((k) => count[k]).map((k) => `${count[k]} ${k === "error" ? (count[k] === 1 ? "error" : "errors") : k}`);
+  const parts = (["analyzed", "cached", "skipped", "error"] as const).filter((k) => count[k]).map((k) => `${count[k]} ${k === "error" ? (count[k] === 1 ? "error" : "errors") : k}`);
   const seconds = ((performance.now() - started) / 1000).toFixed(1);
-  console.log(total ? `${total} ${total === 1 ? "file" : "files"} in ${projects.size} ${projects.size === 1 ? "project" : "projects"}: ${parts.join(", ")} (${seconds} s)` : `No .sql imports found under ${(paths.length ? paths : ["."]).join(", ")}.`);
+  console.log(total ? `${total} ${total === 1 ? "file" : "files"} in ${projects.size} ${projects.size === 1 ? "project" : "projects"}: ${parts.join(", ")} (${seconds} s)` : `No .sql files under ${(paths.length ? paths : ["."]).join(", ")}.`);
   return count.error ? 1 : 0;
 }
 

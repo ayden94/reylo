@@ -14,21 +14,20 @@ function porg(cwd: string, ...args: string[]) {
   return { status: r.status, out: r.stdout.replace(/ +\d+ ms$/gm, " _ ms").replace(/\(\d+\.\d s\)/, "(_ s)"), err: r.stderr };
 }
 
-test("porg generate analyzes the .sql files the sources import, and prints one line per file", () => {
+test("porg generate analyzes every .sql file under the paths, and prints one line per file", () => {
   // The CLI sees its working directory as the real path (/private/var on macOS).
   const root = realpathSync(mkdtempSync(join(tmpdir(), "porg-cli-")));
   writeFileSync(join(root, "package.json"), "{}");
   const db = new DatabaseSync(join(root, "app.db"));
   db.exec("create table users (id integer primary key, name text not null)");
   db.close();
-  mkdirSync(join(root, "src", "queries"), { recursive: true });
-  mkdirSync(join(root, "node_modules", "dep"), { recursive: true });
+  for (const dir of ["src/queries", "node_modules/dep", ".next"]) mkdirSync(join(root, dir), { recursive: true });
   writeFileSync(join(root, "src", "queries", "user.sql"), "select id, name from users where id = :id");
   writeFileSync(join(root, "src", "queries", "count.sql"), "select count(*) as n from users");
   writeFileSync(join(root, "src", "queries", "bad.sql"), "select id\nfrom nope");
-  writeFileSync(join(root, "src", "main.ts"), [`import user from "./queries/user.sql";`, `const count = await import("./queries/count.sql");`, `import bad from "./queries/bad.sql";`, `import gone from "./queries/gone.sql";`, `import aliased from "@/queries/user.sql";`].join("\n"));
-  // Dependencies are not the project's sources.
-  writeFileSync(join(root, "node_modules", "dep", "index.js"), `import x from "./x.sql";`);
+  // Dependencies and build output are not the project's queries.
+  writeFileSync(join(root, "node_modules", "dep", "x.sql"), "select 1");
+  writeFileSync(join(root, ".next", "y.sql"), "select 1");
 
   const first = porg(root, "generate");
   assert.equal(first.status, 1, first.err);
@@ -36,10 +35,8 @@ test("porg generate analyzes the .sql files the sources import, and prints one l
     `.: sqlite at ${join(root, "app.db")} (DATABASE_URL in the environment)`,
     `  error     src/queries/bad.sql    src/queries/bad.sql:1:1: no such table: nope`,
     `  analyzed  src/queries/count.sql  one       - _ ms`,
-    `  error     src/queries/gone.sql   no such file; imported by src/main.ts`,
     `  analyzed  src/queries/user.sql   maybeOne  id _ ms`,
-    `Skipped 1 import that is not a relative path: "@/queries/user.sql" in src/main.ts.`,
-    `4 files in 1 project: 2 analyzed, 2 errors (_ s)`,
+    `3 files in 1 project: 2 analyzed, 1 error (_ s)`,
     ``,
   ].join("\n"));
 
@@ -60,5 +57,6 @@ test("porg generate analyzes the .sql files the sources import, and prints one l
   assert.match(forced.out, /^  error     src\/queries\/user\.sql  --force needs the database$/m);
 
   assert.equal(porg(root, "generate", "--watch").status, 2);
+  assert.equal(porg(root, "generate", "package.json").status, 2);
   assert.equal(porg(root, "frobnicate").status, 2);
 });

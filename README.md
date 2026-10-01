@@ -25,7 +25,7 @@ Porg is the root of this repository. [`porgapi/`](./porgapi) is PorgAPI, a web f
 Each adapter analyzes the statement as the type check does, so a build needs the database, or a `.porg/` that `porg generate` filled where the database could be reached (`.porg/` is the cache they all share, and git ignores it). The module it writes carries the analysis and reads nothing at run time. A dev server rebuilds a `.sql` module when the type check analyzes its statement again.
 
 ```sh
-$ porg generate          # every .sql file the sources import, into .porg/
+$ porg generate          # every .sql file under the current directory, into .porg/
 .: postgres at localhost:5432/postgres (DATABASE_URL in .env)
   analyzed  src/get_user.sql    maybeOne  id    12 ms
   cached    src/list_users.sql  many      -      0 ms
