@@ -23,7 +23,7 @@ Each job runs in its own process: Node 26.7.0 by default, Node 24.19.0 for the s
 | mysql2 | 3.24.5, 3.15.3, 2.3.3 | MySQL 8.4, MySQL 8.0 | promise Pool, Connection, PoolConnection, PoolConnection inside `beginTransaction()`; callback Pool, Connection and PoolConnection passed without `.promise()` |
 | mariadb | 3.5.4, 3.4.5, 2.5.6 | MariaDB 11, MySQL 8.4 | Pool, Connection, PoolConnection, PoolConnection inside `beginTransaction()`; `mariadb/callback` Connection, Pool, and PoolConnection inside `beginTransaction()` |
 | @planetscale/database | 2.0.0, 1.20.2 | MySQL 8.4 behind ps-http-sim | `connect()` Connection, Client, `conn.transaction(tx)` |
-| better-sqlite3 | 13.0.3, 12.11.1 (11.10.0, 9.6.0, 8.7.0: see below) | SQLite file | Database, `db.transaction(fn)` |
+| better-sqlite3 | 13.0.3, 12.11.1; 11.10.0 on Node 24 from a source build (9.6.0, 8.7.0: see below) | SQLite file | Database, `db.transaction(fn)` |
 | node:sqlite | Node 26.7.0, Node 24.19.0 | SQLite file | DatabaseSync, DatabaseSync inside BEGIN/COMMIT, `db.createTagStore()`, `db.createTagStore().db` |
 | bun:sqlite | Bun 1.3.14 | SQLite file | Database, `db.transaction(fn)` |
 | @libsql/client | 0.17.4, 0.18.0, 0.15.15, 0.14.0 | SQLite file (`file:` URL) | Client, `client.transaction("write")` |
@@ -88,7 +88,7 @@ Everything else passed on the first run, including every transaction shape liste
 
 ## Re-run
 
-The re-run tested src/execute.ts c46b8b73fe74 and src/index.ts 0dac6252558a, after the orchestrator's fixes for the three porg failures: 46 jobs, 179 client shapes and 2913 rows. The results are 2868 pass, 2 fail, 39 unsupported and 4 not run. A last run over src/execute.ts 3292aea4ccac, which changes only the client types (see the type check below), gives the same rows. [RESULTS.md](RESULTS.md) has every row.
+The re-run tested src/execute.ts c46b8b73fe74 and src/index.ts 0dac6252558a, after the orchestrator's fixes for the three porg failures: 46 jobs, 179 client shapes and 2913 rows. The results are 2868 pass, 2 fail, 39 unsupported and 4 not run. A run over src/execute.ts 3292aea4ccac, which changes only the client types (see the type check below), gives the same rows. The last run adds better-sqlite3 11.10.0 on Node 24 from a source build (below): 46 jobs and 2933 rows, with 2889 pass, 2 fail, 39 unsupported and 3 not run. [RESULTS.md](RESULTS.md) has every row.
 
 | Rows | Result | Diagnosis |
 | --- | --- | --- |
@@ -98,7 +98,8 @@ The re-run tested src/execute.ts c46b8b73fe74 and src/index.ts 0dac6252558a, aft
 | node:sqlite `db.createTagStore()`, Node 26.7 and 24.19 | unsupported (2 rows, S9) | porg refuses the store with its own TypeError, which ends "A tag store is not a client: pass its database, store.db." |
 | node:sqlite `db.createTagStore().db`, Node 26.7 and 24.19 | pass (32 rows) | The store's database is a DatabaseSync |
 | @planetscale/database 1.20.2, S8 on the Connection and inside `conn.transaction` | fail (2 rows) | ps-http-sim's session lock, as in the first run. The raw probe fails the same way |
-| pg 7.18.2; better-sqlite3 11.10.0, 9.6.0, 8.7.0 | not run (4 rows) | As in the first run |
+| pg 7.18.2; better-sqlite3 9.6.0, 8.7.0 | not run (3 rows) | As in the first run |
+| better-sqlite3 11.10.0 on Node 24.19 | pass (21 rows) | From a source build against Node 24's headers; see below |
 
 Two driver behaviours show up as details on passing rows:
 
@@ -128,7 +129,7 @@ These were checked as expected:
 ## Not tested
 
 - **pg 7.18.2.** It cannot connect on any Node that runs porg (see the first run). A shape-only test would add nothing, because its API is the same `query(text, values)` → `{ rows }` as pg 8.
-- **better-sqlite3 11.10.0, 9.6.0 and 8.7.0.** No prebuilt binary exists for Node 26 (ABI 147). The first install failed because a global node-gyp 3.8.0 on PATH still expects Python 2, so native-old/ builds with npm's node-gyp 13 instead (`PATH=<dir with a node-gyp shim>:$PATH nub install`). Under a machine load average of 60 to 130 the build was stopped after 32 minutes, still compiling sqlite3.c, so the runner records these three lines as not run. Once `native-old/node_modules/bs3-*/build/Release/better_sqlite3.node` exists, `./run.sh --only better-sqlite3` runs them.
+- **better-sqlite3 9.6.0 and 8.7.0** (1.8 and 1.3 percent of the package's downloads). No prebuilt binary exists for Node 24 (ABI 137) or 26 (ABI 147), so they run only from a source build in native-old/ against Node 24's headers, which was not made for these two. 11.10.0 (18 percent) is in the same position and runs that way: its source does not compile against Node 26's V8 (it calls `Object::GetPrototype`, `Context::GetIsolate` and `PropertyCallbackInfo::This`, which V8 removed), and it compiles against Node 24's (`node <npm's node-gyp.js> rebuild --release` with Node 24.19 in `native-old/node_modules/bs3-11`, about 85 minutes at a load average near 100), so the runner runs these lines on Node 24. The first install had failed because a global node-gyp 3.8.0 on PATH still expects Python 2, so native-old/ builds with npm's node-gyp 13.
 - **miniflare 5.** The version npm tags `latest` (5.20260926.1-alpha and later, which wrangler 4.144 depends on) rejects the v4 constructor options (`modules`, `script`, `d1Databases`) and wants a new `workers: [{ config }]` format, so the D1 job uses miniflare 4.20260730.0. D1 is reached through Miniflare's Node proxy, not from inside a Worker.
 - **The real Neon and PlanetScale services.** Both are live against local stand-ins: Neon's proxy image (built 2026-03-27) and ps-http-sim. The real services could differ in details such as PlanetScale's session concurrency.
 - **Neon's HTTP `transaction()`** takes an array of queries built by the `sql` function, not a client, so a porg query cannot join it. D1 has no interactive transaction either (`batch()` takes prepared statements).

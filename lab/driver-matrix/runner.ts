@@ -61,7 +61,10 @@ for (const [alias, v] of [["planetscale-2", "2.0.0"], ["planetscale-1", "1.20.2"
 
 // SQLite
 for (const [alias, v] of [["bs3-13", "13.0.3"], ["bs3-12", "12.11.1"]]) add({ id: `better-sqlite3@${v}`, bin: NODE26, file: "drivers/sync-sqlite.ts", args: ["--lib", alias, "--version", v], sqlite: true, meta: { pkg: "better-sqlite3", version: v, target: "SQLite file", runtime: n26 } });
-for (const [alias, v] of [["bs3-11", "11.10.0"], ["bs3-9", "9.6.0"], ["bs3-8", "8.7.0"]]) add({ id: `better-sqlite3@${v}`, bin: NODE26, file: "drivers/sync-sqlite.ts", args: ["--lib", alias, "--version", v, "--from", "native-old"], sqlite: true, meta: { pkg: "better-sqlite3", version: v, target: "SQLite file", runtime: n26 } });
+// These lines have no prebuilt binary for Node 24 or 26, and their source does not compile against Node 26's V8
+// (11.10.0 calls Object::GetPrototype, Context::GetIsolate and PropertyCallbackInfo::This, which V8 removed), so
+// they run on Node 24, the other Node porg supports, from a source build in native-old/ against Node 24's headers.
+for (const [alias, v] of [["bs3-11", "11.10.0"], ["bs3-9", "9.6.0"], ["bs3-8", "8.7.0"]]) add({ id: `better-sqlite3@${v}`, bin: NODE24, file: "drivers/sync-sqlite.ts", args: ["--lib", alias, "--version", v, "--from", "native-old"], sqlite: true, meta: { pkg: "better-sqlite3", version: v, target: "SQLite file", runtime: "node 24.19.0" } });
 add({ id: "node:sqlite@26", bin: NODE26, file: "drivers/sync-sqlite.ts", args: ["--lib", "node:sqlite"], sqlite: true, meta: { pkg: "node:sqlite", version: "26.7.0", target: "SQLite file", runtime: n26 } });
 add({ id: "node:sqlite@24", bin: NODE24, file: "drivers/sync-sqlite.ts", args: ["--lib", "node:sqlite"], sqlite: true, meta: { pkg: "node:sqlite", version: "24.19.0", target: "SQLite file", runtime: "node 24.19.0" } });
 add({ id: "bun:sqlite", bin: BUN, file: "drivers/sync-sqlite.ts", args: ["--lib", "bun:sqlite"], sqlite: true, meta: { pkg: "bun:sqlite", version: "1.3.14", target: "SQLite file", runtime: "bun" } });
@@ -96,7 +99,7 @@ function nativeOldMissing(spec: Spec): string | null {
   try {
     abi = execFileSync(spec.bin, ["-p", "process.versions.modules"], { encoding: "utf8" }).trim();
   } catch {}
-  return `no prebuilt binary for Node ${spec.meta.runtime.replace("node ", "")} (ABI ${abi}), and native-old/ has no source build of it (on 2026-09-30 the source build did not finish in 32 minutes; see README)`;
+  return `no prebuilt binary for Node ${spec.meta.runtime.replace("node ", "")} (ABI ${abi}), and native-old/ has no source build of it against that Node's headers (see README)`;
 }
 
 function runOne(spec: Spec): Promise<JobRun> {
