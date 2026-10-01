@@ -1,10 +1,10 @@
 // The runtime query object behind `import query from "./file.sql"`.
 // Types come from the content mapper; values come from the runtime loader.
-import { execute, type ClientFor, type Dialect, type RunResult } from "./execute.ts";
+import { execute, executeSync, type ClientFor, type Dialect, type SyncClientFor } from "./execute.ts";
 import { convertRows, type Conversion, type Repr } from "./convert.ts";
 import type { StandardJSONSchemaV1, StandardTypedV1 } from "./standard.ts";
 
-export type { ClientFor, Dialect, RunResult } from "./execute.ts";
+export type { ClientFor, Dialect, SyncClientFor } from "./execute.ts";
 
 /** How many rows a statement returns: `none` is a data-modifying statement without RETURNING. */
 export type Cardinality = "many" | "one" | "maybeOne" | "none";
@@ -39,13 +39,18 @@ export interface Query<Params, Row, C extends Cardinality, D extends Dialect>
   readonly "~porg": PorgTypes<Params, Row, C>;
   /**
    * Runs the statement on the client, or on a transaction or connection taken from it; the
-   * parameters may be left out when the statement takes none. The result is a promise, except
-   * on a synchronous SQLite client (better-sqlite3, node:sqlite, bun:sqlite), where it is the
-   * value itself and an error is thrown, so `run` works inside their `db.transaction(fn)`.
+   * parameters may be left out when the statement takes none. Always a promise, which rejects
+   * with the driver's own error.
    */
-  run<Client extends ClientFor<D>>(client: Client, ...params: ParamsArg<Params>): RunResult<Client, Materialize<Row, C>>;
+  run(client: ClientFor<D>, ...params: ParamsArg<Params>): Promise<Materialize<Row, C>>;
+  /**
+   * Runs the statement on a synchronous SQLite client (better-sqlite3, node:sqlite, bun:sqlite)
+   * and returns the result itself, throwing the driver's error, so it works inside their
+   * `db.transaction(fn)`, whose function cannot await.
+   */
+  runSync(client: SyncClientFor<D>, ...params: ParamsArg<Params>): Materialize<Row, C>;
   /** The statement bound to a client, such as a transaction: `const get = q.with(tx); await get({ id: 1 })`. */
-  with<Client extends ClientFor<D>>(client: Client): (...params: ParamsArg<Params>) => RunResult<Client, Materialize<Row, C>>;
+  with(client: ClientFor<D>): (...params: ParamsArg<Params>) => Promise<Materialize<Row, C>>;
 }
 
 /** The parameters argument: required when the statement takes any, optional when it takes none. */
@@ -90,11 +95,18 @@ export function defineQuery<Params, Row, C extends Cardinality, D extends Dialec
     },
     "~porg": undefined as unknown as PorgTypes<Params, Row, C>,
     run: ((client: ClientFor<D>, params?: Params) => run(client, params ?? ({} as Params))) as Query<Params, Row, C, D>["run"],
+    runSync: ((client: SyncClientFor<D>, params?: Params) => materialize(executeSync(client, query, (params ?? {}) as Record<string, unknown>) as Row[])) as Query<Params, Row, C, D>["runSync"],
     with: ((client: ClientFor<D>) => (params?: Params) => run(client, params ?? ({} as Params))) as Query<Params, Row, C, D>["with"],
   };
-  function run(client: ClientFor<D>, params: Params): Materialize<Row, C> | Promise<Materialize<Row, C>> {
-    const rows = execute(client, query, params as Record<string, unknown>);
-    return Array.isArray(rows) ? materialize(rows as Row[]) : rows.then((rows) => materialize(rows as Row[]));
+  // A synchronous client answers before run returns, but its rows and its error still come
+  // back through the promise, so run means the same on every client.
+  function run(client: ClientFor<D>, params: Params): Promise<Materialize<Row, C>> {
+    try {
+      const rows = execute(client, query, params as Record<string, unknown>);
+      return Array.isArray(rows) ? Promise.resolve(materialize(rows as Row[])) : rows.then((rows) => materialize(rows as Row[]));
+    } catch (error) {
+      return Promise.reject(error);
+    }
   }
   function materialize(rows: Row[]): Materialize<Row, C> {
     if (def.convert) convertRows(rows, def.convert, { dates: def.dates ?? "string", bigint: def.bigint ?? "string" });

@@ -35,11 +35,11 @@ The packages are installed side by side under npm aliases (`"pg-7": "npm:pg@7.18
 
 ## Scenarios
 
-Every scenario asserts its result. Each call also checks porg's return contract: `run` returns a promise and never throws synchronously on an asynchronous client, and returns the value itself and throws on a synchronous SQLite client (better-sqlite3, node:sqlite, bun:sqlite).
+Every scenario asserts its result. Each call also checks porg's return contract: `run` returns a promise on every client and never throws synchronously. S0 checks `runSync` as well: it returns the value itself and throws on a synchronous SQLite client (better-sqlite3, node:sqlite, bun:sqlite), and on any other client it throws porg's TypeError before it calls the client.
 
 | Id | Checks |
 | --- | --- |
-| S0 | The return contract on a select and on a syntax error, and which client method porg called |
+| S0 | The return contract of `run` and `runSync` on a select and on a syntax error, and which client method porg called |
 | S1a | Integer, text, boolean and null parameters; the returned row (SQLite gets 1 for the boolean, since it has no boolean type) |
 | S1b | An omitted (undefined) parameter binds NULL |
 | S2a–S2e | Three rows for `many`; the row for `one`; null for `maybeOne` on zero rows; porg's "Expected at most one row, got 2" on two; `with(client)(params)` |
@@ -49,11 +49,11 @@ Every scenario asserts its result. Each call also checks porg's return contract:
 | S5a, S5b | One named parameter used twice, through the runtime lexer and through the mapper's `text` and `order` |
 | S6a, S6b | A syntax error and a unique violation reject with the driver's own error and code (SQLSTATE 42601 and 23505, ER_PARSE_ERROR and ER_DUP_ENTRY, SQLITE_ERROR and SQLITE_CONSTRAINT), never porg's TypeError |
 | S7a–S7d, S7n | On a transaction: a committed write is visible; a rolled-back write is not; a savepoint rollback keeps the outer write; a failing statement rolls the whole transaction back and its error reaches the caller; a write without parameters commits |
-| S7e | On better-sqlite3 and bun:sqlite `db.transaction(fn)`: a row read inside the function is usable synchronously |
+| S7e | On better-sqlite3 and bun:sqlite `db.transaction(fn)`, where S7a–S7d call `runSync`: a row read inside the function is usable synchronously |
 | S8 | 20 queries in flight on the shape resolve with the right rows |
 | S9 | An unsupported client: `run` rejects with porg's own TypeError |
 
-Visibility is always checked with a raw count through the driver, never through porg. A raw count also runs before each job as a preflight, so a driver that cannot reach its server at all is reported once as "not run" instead of failing every scenario. [drivers/control.ts](drivers/control.ts) holds the failing controls: a client that binds every integer plus one, a transaction whose rollback commits, and a synchronous database declared asynchronous. 29 of their 37 rows fail, and each of the 8 that pass is a scenario that the breakage does not touch.
+Visibility is always checked with a raw count through the driver, never through porg. A raw count also runs before each job as a preflight, so a driver that cannot reach its server at all is reported once as "not run" instead of failing every scenario. [drivers/control.ts](drivers/control.ts) holds the failing controls: a client that binds every integer plus one, a transaction whose rollback commits, a synchronous database declared asynchronous, and a `db.transaction(fn)` whose statements answer through a promise. 19 of their 42 rows fail, and each of the 23 that pass is a scenario that the breakage does not touch. Since `run` returns a promise on every client, a synchronous database declared asynchronous changes only what S0 expects of `runSync`, so 15 of the 23 are its rows.
 
 ## Servers
 
@@ -88,7 +88,7 @@ Everything else passed on the first run, including every transaction shape liste
 
 ## Re-run
 
-The re-run tested src/execute.ts c46b8b73fe74 and src/index.ts 0dac6252558a, after the orchestrator's fixes for the three porg failures: 46 jobs, 179 client shapes and 2913 rows. The results are 2868 pass, 2 fail, 39 unsupported and 4 not run. A run over src/execute.ts 3292aea4ccac, which changes only the client types (see the type check below), gives the same rows. The last run adds better-sqlite3 11.10.0 on Node 24 from a source build (below): 46 jobs and 2933 rows, with 2889 pass, 2 fail, 39 unsupported and 3 not run. [RESULTS.md](RESULTS.md) has every row.
+The re-run tested src/execute.ts c46b8b73fe74 and src/index.ts 0dac6252558a, after the orchestrator's fixes for the three porg failures: 46 jobs, 179 client shapes and 2913 rows. The results are 2868 pass, 2 fail, 39 unsupported and 4 not run. A run over src/execute.ts 3292aea4ccac, which changes only the client types (see the type check below), gives the same rows. The run after it adds better-sqlite3 11.10.0 on Node 24 from a source build (below): 46 jobs and 2933 rows, with 2889 pass, 2 fail, 39 unsupported and 3 not run. The last run, over src/execute.ts 332f629f3f63, where `run` returns a promise on every client and `runSync` is new, gives the same counts. [RESULTS.md](RESULTS.md) has every row.
 
 | Rows | Result | Diagnosis |
 | --- | --- | --- |
@@ -108,7 +108,7 @@ Two driver behaviours show up as details on passing rows:
 
 ## Type check
 
-[typecheck/check.ts](typecheck/check.ts) generates [typecheck/cases.ts](typecheck/cases.ts), which declares one value of each client type and passes it to `run` on a Postgres, a MySQL and a SQLite query. It also checks the type `run` and `with(...)(...)` return, then runs the repository's tsc (7.1.0-dev.20260918.1) and maps each diagnostic back to its line. Against the final src (src/execute.ts 3292aea4ccac), all 462 cases over 94 client types are as expected: none is wrongly accepted and none is wrongly rejected. [typecheck/RESULTS.md](typecheck/RESULTS.md) lists every case.
+[typecheck/check.ts](typecheck/check.ts) generates [typecheck/cases.ts](typecheck/cases.ts), which declares one value of each client type and passes it to `run` on a Postgres, a MySQL and a SQLite query. It also checks the type `run`, `with(...)(...)` and `runSync` return (a promise from `run` and `with` on every client, the value from `runSync` on a synchronous SQLite client) and that `runSync` rejects every other client, then runs the repository's tsc (7.1.0-dev.20260918.1) and maps each diagnostic back to its line. Against the final src (src/execute.ts 332f629f3f63), all 552 cases over 94 client types are as expected: none is wrongly accepted and none is wrongly rejected. [typecheck/RESULTS.md](typecheck/RESULTS.md) lists every case.
 
 Against the re-run's src (c46b8b73fe74), 21 were wrongly accepted. Each was closed with a property that only the right client has, used in the type alone: `PgQueryClient` has `escapeId?: never` (mariadb has `escapeId()`), `LibsqlClient` requires `executeMultiple()` (libSQL 0.14 to 0.18 have it, mariadb does not), and the MySQL and SQLite unions take `BunSqlClient`, which requires Bun's `commitDistributed()` beside `unsafe()` (postgres.js has no such method).
 

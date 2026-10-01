@@ -58,7 +58,7 @@ const user = await getUser.run(sql, { id: 1, name: "ada" });
 
 `with(client)` binds the query to a client, such as a transaction, and returns a function of the parameters: `const get = getUser.with(tx); await get({ id: 1, name: "ada" })`. A statement that takes no parameters takes no second argument: `await listUsers.run(sql)`. The client is always the caller's.
 
-`run` takes the client object of the driver the project already uses, or a transaction, savepoint or connection taken from it, and Porg imports no driver: pg (Pool, Client, PoolClient), postgres.js and Bun.sql (with `begin`, `savepoint` and `reserve`), PGlite (with `transaction`), Neon (Pool, Client and `neon()`), pg-promise (with `task` and `tx`) and @vercel/postgres; mysql2 and mariadb (promise or callback API) and PlanetScale's serverless driver 1.x (with `transaction`; 2.0 binds no parameters, so it runs only statements without any); better-sqlite3, node:sqlite, bun:sqlite, @libsql/client (with `transaction()`), Cloudflare D1, sqlite3 and sqlite. The query's dialect narrows which of them it accepts. A parameter left out binds NULL on every driver. On better-sqlite3, node:sqlite and bun:sqlite, which answer synchronously, `run` returns the result itself rather than a promise and throws on an error, so it works inside their `db.transaction(fn)`, whose function cannot await:
+`run` takes the client object of the driver the project already uses, or a transaction, savepoint or connection taken from it, and Porg imports no driver: pg (Pool, Client, PoolClient), postgres.js and Bun.sql (with `begin`, `savepoint` and `reserve`), PGlite (with `transaction`), Neon (Pool, Client and `neon()`), pg-promise (with `task` and `tx`) and @vercel/postgres; mysql2 and mariadb (promise or callback API) and PlanetScale's serverless driver 1.x (with `transaction`; 2.0 binds no parameters, so it runs only statements without any); better-sqlite3, node:sqlite, bun:sqlite, @libsql/client (with `transaction()`), Cloudflare D1, sqlite3 and sqlite. The query's dialect narrows which of them it accepts. A parameter left out binds NULL on every driver. `run` always returns a promise, which rejects with the driver's own error. On better-sqlite3, node:sqlite and bun:sqlite, which answer synchronously, `runSync` returns the result itself and throws the error, so it works inside their `db.transaction(fn)`, whose function cannot await; any other client is a type error, and a `TypeError` before anything runs:
 
 ```ts
 // postgres.js and Bun.sql: the transaction and the savepoint are clients.
@@ -66,11 +66,11 @@ await sql.begin(async (tx) => {
   const user = await getUser.run(tx, { id: 1, name: "ada" });
   await tx.savepoint((sp) => rename.run(sp, { id: user!.id, name: "bo" }));
 });
-// better-sqlite3 and bun:sqlite: the row comes back at once, and an error (a constraint, or a
-// statement that returns the wrong number of rows) rolls the whole transaction back.
+// better-sqlite3 and bun:sqlite: runSync hands the row back at once, and an error (a constraint,
+// or a statement that returns the wrong number of rows) rolls the whole transaction back.
 db.transaction(() => {
-  const { id } = insertUser.run(db, { name: "ada" });
-  insertPost.run(db, { user_id: id, title: "hello" });
+  const { id } = insertUser.runSync(db, { name: "ada" });
+  insertPost.runSync(db, { user_id: id, title: "hello" });
 })();
 ```
 

@@ -57,7 +57,7 @@ export type MariadbCallbackClient = {
 };
 /**
  * better-sqlite3, node:sqlite's DatabaseSync and bun:sqlite's Database, which answer at once:
- * `run` returns the result itself on them, not a promise, so it works inside their
+ * `runSync` takes them and returns the result itself, so it works inside their
  * `db.transaction(fn)`, whose function must not await.
  */
 export type SyncSqliteClient = {
@@ -89,8 +89,8 @@ export type ClientFor<D extends Dialect> = D extends "postgres"
     ? MysqlExecuteClient | Mysql2CallbackClient | MariadbClient | MariadbCallbackClient | BunSqlClient
     : SyncSqliteClient | D1Client | LibsqlClient | Sqlite3Client | SqlitePromiseClient | BunSqlClient;
 
-/** What running a statement on a client gives: the value itself on a synchronous SQLite client, a promise of it on any other. */
-export type RunResult<Client, T> = Client extends SyncSqliteClient ? T : Promise<T>;
+/** The clients `runSync` takes: the synchronous SQLite drivers, and none for Postgres or MySQL. */
+export type SyncClientFor<D extends Dialect> = D extends "sqlite" ? SyncSqliteClient : never;
 
 export type QueryModule<D extends Dialect = Dialect> = {
   readonly dialect: D;
@@ -117,17 +117,31 @@ export function execute<D extends Dialect>(
   params: Record<string, unknown> = {},
 ): unknown[] | Promise<unknown[]> {
   const c = client as AnyClient;
-  if (query.dialect === "sqlite" && isSyncSqlite(c)) {
-    const { text, values } = statement(query, params);
-    const prepared = c.prepare(text);
-    // better-sqlite3 refuses all() on a statement that returns no rows.
-    if (prepared.reader === false) {
-      prepared.run(...values);
-      return [];
-    }
-    return prepared.all(...values);
-  }
+  if (query.dialect === "sqlite" && isSyncSqlite(c)) return executeSyncSqlite(c, query, params);
   return executeAsync(c, query, params);
+}
+
+/** The synchronous path alone, for `runSync`: any other client is refused before anything runs. */
+export function executeSync<D extends Dialect>(client: SyncClientFor<D>, query: QueryModule<D>, params: Record<string, unknown> = {}): unknown[] {
+  const c = client as unknown as AnyClient;
+  const refuse = (why: string) => new TypeError(`runSync takes a synchronous SQLite client (better-sqlite3, node:sqlite or bun:sqlite); ${why}. run takes every client.`);
+  if (query.dialect !== "sqlite") throw refuse(`a ${query.dialect} statement has none`);
+  if (!isSyncSqlite(c)) throw refuse("this client answers through a promise");
+  const rows = executeSyncSqlite(c, query, params);
+  if (Array.isArray(rows)) return rows;
+  rows.catch(() => {});
+  throw refuse("this client's statement answered with a promise");
+}
+
+function executeSyncSqlite(c: AnyClient, query: QueryModule, params: Record<string, unknown>): unknown[] | Promise<unknown[]> {
+  const { text, values } = statement(query, params);
+  const prepared = c.prepare(text);
+  // better-sqlite3 refuses all() on a statement that returns no rows.
+  if (prepared.reader === false) {
+    prepared.run(...values);
+    return [];
+  }
+  return prepared.all(...values);
 }
 
 // A SQLite client with prepare() whose statements answer at once. D1 (batch()), sqlite3 and

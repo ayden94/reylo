@@ -226,17 +226,9 @@ export async function call(ctx: Ctx, q: any, client: Client, params?: Record<str
     if (via === "with") r = params === undefined ? q.with(client)() : q.with(client)(params);
     else r = params === undefined ? q.run(client) : q.run(client, params);
   } catch (e) {
-    if (ctx.kind === "async") throw new Violation(`run threw synchronously on an asynchronous client: ${describe(e)}`);
-    throw e;
+    throw new Violation(`run threw synchronously: ${describe(e)}`);
   }
-  if (ctx.kind === "sync" && isThenable(r)) {
-    (r as Promise<unknown>).then(
-      () => {},
-      () => {},
-    );
-    throw new Violation("run returned a promise on a synchronous SQLite client; expected the value itself");
-  }
-  if (ctx.kind === "async" && !isThenable(r)) throw new Violation(`run returned ${r === null ? "null" : typeof r} instead of a promise on an asynchronous client`);
+  if (!isThenable(r)) throw new Violation(`run returned ${r === null ? "null" : typeof r} instead of a promise`);
   try {
     return await r;
   } catch (e) {
@@ -321,7 +313,7 @@ const S9 = "S9 unsupported client: run() rejects with porg's TypeError";
 
 export const SCENARIOS: Scenario[] = [
   {
-    id: "S0 run() returns a promise, or the value on a sync client",
+    id: "S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere",
     on: "client",
     params: false,
     async run(ctx, client, q) {
@@ -333,12 +325,10 @@ export const SCENARIOS: Scenario[] = [
       } catch (e) {
         threw = e;
       }
-      if (threw) throw ctx.kind === "async" ? new Violation(`run threw synchronously: ${describe(threw)}`) : threw;
-      const got = isThenable(r) ? "a promise" : "the value";
-      if (isThenable(r)) await r;
+      if (threw) throw new Violation(`run threw synchronously: ${describe(threw)}`);
+      if (!isThenable(r)) throw new Violation(`run returned ${r === null ? "null" : typeof r}; expected a promise`);
+      await r;
       const dispatched = via.stop();
-      const want = ctx.kind === "sync" ? "the value" : "a promise";
-      if (got !== want) throw new Violation(`run returned ${got}; expected ${want} on this ${ctx.kind === "sync" ? "synchronous SQLite" : "asynchronous"} client`);
       let errThrew = false;
       let e2: unknown;
       try {
@@ -346,10 +336,31 @@ export const SCENARIOS: Scenario[] = [
       } catch {
         errThrew = true;
       }
-      if (isThenable(e2)) await (e2 as Promise<unknown>).then(() => {}, () => {});
-      if (ctx.kind === "async" && errThrew) throw new Violation("run threw synchronously on a failing statement; expected a rejected promise");
-      if (ctx.kind === "sync" && !errThrew) throw new Violation("run did not throw synchronously on a failing statement");
-      return `porg called ${dispatched}; returned ${got}; a failing statement ${errThrew ? "threw synchronously" : "rejected"}`;
+      if (errThrew) throw new Violation("run threw synchronously on a failing statement; expected a rejected promise");
+      await (e2 as Promise<unknown>).then(() => {}, () => {});
+      if (ctx.kind === "sync") {
+        const rows = q.many.runSync(client);
+        if (isThenable(rows)) throw new Violation("runSync returned a promise on a synchronous SQLite client");
+        let syncThrew = false;
+        try {
+          q.syntax.runSync(client);
+        } catch {
+          syncThrew = true;
+        }
+        if (!syncThrew) throw new Violation("runSync did not throw on a failing statement");
+        return `porg called ${dispatched}; run returned a promise and rejected on a failing statement; runSync returned the value and threw`;
+      }
+      const sent = spy(client);
+      let refused: unknown = null;
+      try {
+        q.many.runSync(client);
+      } catch (e) {
+        refused = e;
+      }
+      const calledByRunSync = sent.stop();
+      if (!(refused instanceof TypeError) || !/^runSync takes a synchronous SQLite client/.test(refused.message)) throw new Violation(`runSync on an asynchronous client did not throw porg's TypeError: ${describe(refused)}`);
+      if (!calledByRunSync.startsWith("no method") && !calledByRunSync.startsWith("the client as a function")) throw new Violation(`runSync called ${calledByRunSync} before refusing the client`);
+      return `porg called ${dispatched}; run returned a promise and rejected on a failing statement; runSync refused the client before calling it`;
     },
   },
   {
@@ -553,7 +564,7 @@ export const SCENARIOS: Scenario[] = [
       const tag = newTag(ctx, "S7a");
       const trap = promiseTrap();
       db.transaction(() => {
-        trap.check(q.insert.run(db, { tag, n: 1 }));
+        trap.check(q.insert.runSync(db, { tag, n: 1 }));
       })();
       trap.assertNone();
       eq(await ctx.job.count(tag), 1, "raw count after commit");
@@ -567,7 +578,7 @@ export const SCENARIOS: Scenario[] = [
       const trap = promiseTrap();
       try {
         db.transaction(() => {
-          trap.check(q.insert.run(db, { tag, n: 1 }));
+          trap.check(q.insert.runSync(db, { tag, n: 1 }));
           throw sentinel();
         })();
       } catch (e) {
@@ -585,11 +596,11 @@ export const SCENARIOS: Scenario[] = [
       const inner = newTag(ctx, "S7c-inner");
       const trap = promiseTrap();
       db.transaction(() => {
-        trap.check(q.insert.run(db, { tag: outer, n: 1 }));
+        trap.check(q.insert.runSync(db, { tag: outer, n: 1 }));
         try {
           // A transaction function called inside another runs as a savepoint.
           db.transaction(() => {
-            trap.check(q.insert.run(db, { tag: inner, n: 2 }));
+            trap.check(q.insert.runSync(db, { tag: inner, n: 2 }));
             throw sentinel();
           })();
         } catch (e) {
@@ -609,8 +620,8 @@ export const SCENARIOS: Scenario[] = [
       let err: unknown = null;
       try {
         db.transaction(() => {
-          trap.check(q.insert.run(db, { tag, n: 1 }));
-          trap.check(q.dup.run(db, { k: "taken" }));
+          trap.check(q.insert.runSync(db, { tag, n: 1 }));
+          trap.check(q.dup.runSync(db, { k: "taken" }));
         })();
       } catch (e) {
         err = e;
@@ -618,7 +629,7 @@ export const SCENARIOS: Scenario[] = [
       const leaked = await trap.settle();
       const count = await ctx.job.count(tag);
       if (err === null) {
-        throw new Mismatch(`transaction() did not throw, so it committed (raw count ${count})${leaked.length ? `; run returned promises and the error arrived as a rejection instead: ${leaked.join("; ")}` : ""}`);
+        throw new Mismatch(`transaction() did not throw, so it committed (raw count ${count})${leaked.length ? `; runSync returned promises and the error arrived as a rejection instead: ${leaked.join("; ")}` : ""}`);
       }
       const seen = expectDriverError(err, ctx.job.dialect, "dup");
       eq(count, 0, "raw count after the failed transaction");
@@ -631,8 +642,8 @@ export const SCENARIOS: Scenario[] = [
     async run(ctx, db, q) {
       const tag = newTag(ctx, "S7e");
       const got = db.transaction(() => {
-        q.insert.run(db, { tag, n: 5 });
-        const row = q.byTag.run(db, { tag });
+        q.insert.runSync(db, { tag, n: 5 });
+        const row = q.byTag.runSync(db, { tag });
         if (isThenable(row)) {
           (row as Promise<unknown>).then(
             () => {},
@@ -642,7 +653,7 @@ export const SCENARIOS: Scenario[] = [
         }
         return row;
       })();
-      if (got === "a promise") throw new Violation("run returned a promise inside transaction(fn); the row is not usable there");
+      if (got === "a promise") throw new Violation("runSync returned a promise inside transaction(fn); the row is not usable there");
       eq(got, { n: 5 }, "row read inside the transaction");
     },
   },
@@ -695,7 +706,7 @@ function spy(client: Client): { stop(): string } {
   };
 }
 
-/** Collects promises that run() returned inside a synchronous transaction(fn), where it must return values. */
+/** Collects promises that runSync() returned inside a synchronous transaction(fn), where it must return values. */
 function promiseTrap() {
   const promises: Promise<unknown>[] = [];
   return {
@@ -704,7 +715,7 @@ function promiseTrap() {
     },
     assertNone() {
       for (const p of promises) p.then(() => {}, () => {});
-      if (promises.length) throw new Violation(`run returned ${promises.length} promise(s) inside transaction(fn); expected values`);
+      if (promises.length) throw new Violation(`runSync returned ${promises.length} promise(s) inside transaction(fn); expected values`);
     },
     async settle(): Promise<string[]> {
       const out: string[] = [];

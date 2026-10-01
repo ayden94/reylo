@@ -2,7 +2,8 @@
 // the scenarios can fail at all (a green matrix with no failing control is no evidence).
 //   --case pg      PGlite behind a client that binds each integer parameter plus one, and a
 //                  transaction whose "rollback" commits and whose failure is swallowed
-//   --case sqlite  a node:sqlite database declared asynchronous, so the return-discipline check must fire
+//   --case sqlite  a node:sqlite database declared asynchronous, so runSync must refuse it and does not;
+//                  and a transaction(fn) whose statements answer through a promise, so runSync must throw
 import { args, callbackTx, requireFrom, runJob, seedSql, type TxOps } from "../lib/harness.ts";
 
 const a = args();
@@ -13,11 +14,37 @@ if (a.case === "sqlite") {
   await runJob(meta, async () => {
     const db = new DatabaseSync(":memory:");
     db.exec(seedSql("sqlite"));
+    // better-sqlite3's transaction(fn), nesting as savepoints, over statements whose all() is async.
+    let depth = 0;
+    const promised = {
+      prepare: (sql: string) => {
+        const statement = db.prepare(sql);
+        return { all: async (...params: any[]) => statement.all(...params) };
+      },
+      transaction: (fn: () => unknown) => () => {
+        const name = `sp${depth}`;
+        db.exec(depth ? `SAVEPOINT ${name}` : "BEGIN");
+        depth++;
+        try {
+          const result = fn();
+          depth--;
+          db.exec(depth ? `RELEASE ${name}` : "COMMIT");
+          return result;
+        } catch (e) {
+          depth--;
+          db.exec(depth ? `ROLLBACK TO ${name}; RELEASE ${name}` : "ROLLBACK");
+          throw e;
+        }
+      },
+    };
     return {
       ...meta,
       dialect: "sqlite",
       count: async (tag) => (db.prepare("select count(*) as n from scratch where tag = ?").get(tag) as any).n,
-      shapes: [{ name: "sync client declared async", kind: "async", scope: (fn) => fn(db) }],
+      shapes: [
+        { name: "sync client declared async", kind: "async", scope: (fn) => fn(db) },
+        { name: "db.transaction(fn) whose statements answer through a promise", kind: "sync", syncTx: promised },
+      ],
     };
   });
 } else {

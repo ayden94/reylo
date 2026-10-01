@@ -17,7 +17,7 @@ type Entry = {
   type: string;
   /** The dialects whose queries must accept it; every other dialect must reject it. */
   accepts: Dialect[];
-  /** run() on its own dialect is typed as the value itself (a synchronous SQLite client), else as a promise. */
+  /** runSync() accepts it and is typed as the row (a synchronous SQLite client); run() is a promise on every client. */
   sync?: boolean;
   note?: string;
 };
@@ -144,7 +144,7 @@ const lines: string[] = [
   'const pgQ = defineQuery<Params, Row, "one", "postgres">({ dialect: "postgres", sql: "select id, name from t where id = :id", params: ["id"] });',
   'const myQ = defineQuery<Params, Row, "one", "mysql">({ dialect: "mysql", sql: "select id, name from t where id = :id", params: ["id"] });',
   'const sqQ = defineQuery<Params, Row, "one", "sqlite">({ dialect: "sqlite", sql: "select id, name from t where id = :id", params: ["id"] });',
-  "/** The kind of what run() is typed to return: a promise, or the row itself. */",
+  "/** The kind of what run() or runSync() is typed to return: a promise, or the row itself. */",
   'declare function kind<T>(v: T): [T] extends [PromiseLike<unknown>] ? "promise" : [T] extends [Row] ? "value" : "other";',
   "",
 ];
@@ -159,13 +159,20 @@ entries.forEach((e, i) => {
   }
   const own = e.accepts.length === 1 ? e.accepts[0]! : e.accepts.length ? "postgres" : null;
   if (own) {
-    const want = e.sync ? "value" : "promise";
     let id = cases.length;
-    lines.push(`/*@${id}*/ { const k: "${want}" = kind(${qFor[own]}.run(${v}, { id: 1 })); void k; }`);
-    cases.push({ id, line: lines.length, entry: e, check: `run(...) is typed as ${want === "value" ? "the row" : "a promise"}`, expect: "accepted" });
+    lines.push(`/*@${id}*/ { const k: "promise" = kind(${qFor[own]}.run(${v}, { id: 1 })); void k; }`);
+    cases.push({ id, line: lines.length, entry: e, check: "run(...) is typed as a promise", expect: "accepted" });
     id = cases.length;
-    lines.push(`/*@${id}*/ { const k: "${want}" = kind(${qFor[own]}.with(${v})({ id: 1 })); void k; }`);
-    cases.push({ id, line: lines.length, entry: e, check: `with(...)(...) is typed as ${want === "value" ? "the row" : "a promise"}`, expect: "accepted" });
+    lines.push(`/*@${id}*/ { const k: "promise" = kind(${qFor[own]}.with(${v})({ id: 1 })); void k; }`);
+    cases.push({ id, line: lines.length, entry: e, check: "with(...)(...) is typed as a promise", expect: "accepted" });
+    id = cases.length;
+    if (e.sync) {
+      lines.push(`/*@${id}*/ { const k: "value" = kind(${qFor[own]}.runSync(${v}, { id: 1 })); void k; }`);
+      cases.push({ id, line: lines.length, entry: e, check: "runSync(...) is typed as the row", expect: "accepted" });
+    } else {
+      lines.push(`/*@${id}*/ ${qFor[own]}.runSync(${v}, { id: 1 });`);
+      cases.push({ id, line: lines.length, entry: e, check: "runSync(...) is refused", expect: "rejected" });
+    }
   }
 });
 lines.push("");

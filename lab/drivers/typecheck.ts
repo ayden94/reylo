@@ -51,20 +51,28 @@ declare const sqlite3: Sqlite3Database, sqlite: SqliteDatabase;
 declare const d1: D1Database, d1Session: D1DatabaseSession;
 for (const c of [bs3, nodeDb, bunDb, libsql, libsqlTx, sqlite3, sqlite, d1, d1Session, bunSql, bunTx]) execute(c, sqq, { id: 1 });
 
-// `run` hands back the value itself on a synchronous SQLite client, and a promise on any other.
+// `run` is a promise on every client; `runSync` takes only a synchronous SQLite client and hands back the row.
 declare const pgQuery: Query<{ id: number }, { id: number }, "one", "postgres">;
 declare const liteQuery: Query<{ id: number }, { id: number }, "one", "sqlite">;
-const syncRow: { id: number } = liteQuery.run(bs3, { id: 1 });
-const syncNode: { id: number } = liteQuery.run(nodeDb, { id: 1 });
-const syncBun: { id: number } = liteQuery.with(bunDb)({ id: 1 });
+const asyncBs3: Promise<{ id: number }> = liteQuery.run(bs3, { id: 1 });
+const asyncBun: Promise<{ id: number }> = liteQuery.with(bunDb)({ id: 1 });
 const asyncD1: Promise<{ id: number }> = liteQuery.run(d1, { id: 1 });
 const asyncLibsql: Promise<{ id: number }> = liteQuery.run(libsqlTx, { id: 1 });
 const asyncPg: Promise<{ id: number }> = pgQuery.run(poolClient, { id: 1 });
 const asyncTx: Promise<{ id: number }> = pgQuery.with(sqlTx)({ id: 1 });
-// @ts-expect-error a synchronous client's result is not a promise
-liteQuery.run(bs3, { id: 1 }).then;
-// @ts-expect-error an asynchronous client's result is a promise, not the row
-const notSync: { id: number } = liteQuery.run(libsql, { id: 1 });
+const syncRow: { id: number } = liteQuery.runSync(bs3, { id: 1 });
+const syncNode: { id: number } = liteQuery.runSync(nodeDb, { id: 1 });
+const syncBun: { id: number } = liteQuery.runSync(bunDb, { id: 1 });
+// @ts-expect-error run's result is a promise even on a synchronous client
+const notRow: { id: number } = liteQuery.run(bs3, { id: 1 });
+// @ts-expect-error runSync takes no client that answers through a promise
+liteQuery.runSync(libsql, { id: 1 });
+// @ts-expect-error runSync takes no client that answers through a promise
+liteQuery.runSync(d1, { id: 1 });
+// @ts-expect-error a postgres statement has no synchronous client
+pgQuery.runSync(pool, { id: 1 });
+// @ts-expect-error a postgres statement has no synchronous client, not even a SQLite one
+pgQuery.runSync(bs3, { id: 1 });
 
 // Expected errors: wrong dialect for the client.
 // @ts-expect-error a sqlite database cannot run a postgres query

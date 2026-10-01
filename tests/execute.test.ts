@@ -210,7 +210,7 @@ test("parameters must be an object; an array would bind { 1: ... } off by one", 
   assert.throws(() => execute(new DatabaseSync(":memory:"), lite, [1] as never), /must be an object/);
 });
 
-test("run: on a synchronous client the value comes back at once and an error is thrown, so db.transaction(fn) rolls back", () => {
+test("runSync: on a synchronous client the value comes back at once and an error is thrown, so db.transaction(fn) rolls back", () => {
   const db = new DatabaseSync(":memory:");
   db.exec("create table users (id integer primary key, email text unique)");
   const insert = defineQuery<{ email: string }, { id: number }, "one", "sqlite">({ dialect: "sqlite", sql: "insert into users (email) values (:email) returning id", params: ["email"], cardinality: "one" });
@@ -226,14 +226,37 @@ test("run: on a synchronous client the value comes back at once and an error is 
       throw e;
     }
   };
-  const first = insert.run(db, { email: "ada@example.com" });
+  const first = insert.runSync(db, { email: "ada@example.com" });
   assert.equal(first.id, 1);
   assert.throws(() => transaction(() => {
-    insert.run(db, { email: "bo@example.com" });
-    insert.run(db, { email: "ada@example.com" }); // the unique constraint fails here
+    insert.runSync(db, { email: "bo@example.com" });
+    insert.runSync(db, { email: "ada@example.com" }); // the unique constraint fails here
   }), /UNIQUE constraint failed/);
-  assert.equal(count.run(db).n, 1, "the transaction's first insert was rolled back");
-  assert.throws(() => defineQuery<{}, unknown, "one", "sqlite">({ dialect: "sqlite", sql: "select 1 where 0", params: [], cardinality: "one" }).run(db), /Expected exactly one row, got 0/);
+  assert.equal(count.runSync(db).n, 1, "the transaction's first insert was rolled back");
+  assert.throws(() => defineQuery<{}, unknown, "one", "sqlite">({ dialect: "sqlite", sql: "select 1 where 0", params: [], cardinality: "one" }).runSync(db), /Expected exactly one row, got 0/);
+});
+
+test("run: on a synchronous client the statement runs at once, and its rows and its error still come through the promise", async () => {
+  const db = new DatabaseSync(":memory:");
+  db.exec("create table users (id integer primary key, email text unique)");
+  const insert = defineQuery<{ email: string }, { id: number }, "one", "sqlite">({ dialect: "sqlite", sql: "insert into users (email) values (:email) returning id", params: ["email"], cardinality: "one" });
+  const pending = insert.run(db, { email: "ada@example.com" });
+  assert.ok(pending instanceof Promise);
+  assert.equal((db.prepare("select count(*) as n from users").get() as { n: number }).n, 1, "the insert ran before run returned");
+  assert.equal((await pending).id, 1);
+  let duplicate: unknown;
+  assert.doesNotThrow(() => void (duplicate = insert.run(db, { email: "ada@example.com" })));
+  await assert.rejects(duplicate as Promise<unknown>, /UNIQUE constraint failed/);
+});
+
+test("runSync: a client that answers through a promise, or a Postgres or MySQL statement, is refused before anything runs", () => {
+  let called = false;
+  const libsql = { execute: async () => ((called = true), { rows: [] }), executeMultiple: async () => {} };
+  const lite = defineQuery<{}, unknown, "many", "sqlite">({ dialect: "sqlite", sql: "select 1", params: [] });
+  assert.throws(() => lite.runSync(libsql as never), /runSync takes a synchronous SQLite client .*answers through a promise\. run takes every client/);
+  const pgq = defineQuery<{}, unknown, "many", "postgres">({ dialect: "postgres", sql: "select 1", params: [] });
+  assert.throws(() => pgq.runSync({ query: async () => ((called = true), { rows: [] }) } as never), /a postgres statement has none/);
+  assert.equal(called, false);
 });
 
 test("run: on an asynchronous client every failure is a rejection, never a throw", async () => {
