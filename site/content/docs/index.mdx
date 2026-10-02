@@ -509,6 +509,7 @@ Each SQL type maps to a TypeScript type.
 | `TEXT` | `string` |
 | `BLOB` | `Uint8Array` |
 | `NUMERIC`, `BOOLEAN`, `DATE`, `DATETIME` | `number \| string` |
+| No type, or `ANY` in a `STRICT` table | `unknown` |
 | `json_object(…)`, `json_group_array(…)` | `string` |
 
 </Tab>
