@@ -420,6 +420,48 @@ pub fn rewrite_with(sql: &str, lexed: &Lexed, target: Target, decorate: &dyn Fn(
     Rewritten { sql: out, order, spans }
 }
 
+/// Whether the text is one statement whose first keyword (past whitespace and comments) is one
+/// of `kinds`, or an opening parenthesis: nothing but whitespace, semicolons and comments may
+/// follow its first semicolon outside the text spans. SQLite prepares only the first statement
+/// of the text, and a MySQL server prepares DDL, so a migration file would otherwise come back
+/// typed; Postgres's parse refuses both (`AnalyzeError` in `analyze.rs`).
+pub fn one_statement(sql: &str, lexed: &Lexed, kinds: &[&str]) -> Result<(), String> {
+    let bytes = sql.as_bytes();
+    let is_comment = |start: usize| sql[start..].starts_with("--") || sql[start..].starts_with("/*");
+    let past_comments = |mut i: usize| loop {
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        match lexed.opaque.iter().find(|&&(start, _)| start == i && is_comment(start)) {
+            Some(&(_, end)) => i = end,
+            None => return i,
+        }
+    };
+    let in_text = |i: usize| lexed.opaque.iter().any(|&(start, end)| start <= i && i < end);
+    if let Some(semicolon) = (0..bytes.len()).find(|&i| bytes[i] == b';' && !in_text(i)) {
+        let mut i = semicolon + 1;
+        loop {
+            i = past_comments(i);
+            if i < bytes.len() && bytes[i] == b';' {
+                i += 1;
+            } else {
+                break;
+            }
+        }
+        if i < bytes.len() {
+            return Err("expected exactly one statement".into());
+        }
+    }
+    let start = past_comments(0);
+    let word = sql[start..].chars().take_while(|c| c.is_ascii_alphabetic()).collect::<String>().to_ascii_lowercase();
+    if kinds.contains(&word.as_str()) || sql[start..].starts_with('(') {
+        return Ok(());
+    }
+    let named: Vec<String> = kinds.iter().filter(|k| **k != "with").map(|k| k.to_ascii_uppercase()).collect();
+    let (last, rest) = named.split_last().map_or(("", &[][..]), |(l, r)| (l.as_str(), r));
+    Err(format!("only {} and {last} statements are typed", rest.join(", ")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -586,5 +628,20 @@ mod tests {
         let sql = "select ?, ?";
         let l = lex(sql, Dialect::Mysql).unwrap();
         assert_eq!(rewrite(sql, &l, Target::Question).order, ["1", "2"]);
+    }
+
+    #[test]
+    fn one_statement_of_a_typed_kind() {
+        const SQLITE: &[&str] = &["select", "with", "values", "insert", "replace", "update", "delete"];
+        let check = |sql: &str| one_statement(sql, &lex(sql, Dialect::Sqlite).unwrap(), SQLITE);
+        assert_eq!(check("select 1"), Ok(()));
+        assert_eq!(check("-- the user\n/* by id */ SELECT id from users where id = :id;"), Ok(()));
+        assert_eq!(check("select 1;\n-- a trailing comment\n;\n"), Ok(()));
+        assert_eq!(check("select ';' as a"), Ok(()));
+        assert_eq!(check("with x as (select 1) delete from t where id in (select * from x)"), Ok(()));
+        assert_eq!(check("select 1; select 2").unwrap_err(), "expected exactly one statement");
+        assert_eq!(check("create table t (id integer primary key);\ncreate index i on t (id);").unwrap_err(), "expected exactly one statement");
+        assert_eq!(check("create table t (id integer primary key)").unwrap_err(), "only SELECT, VALUES, INSERT, REPLACE, UPDATE and DELETE statements are typed");
+        assert_eq!(check("pragma table_info(t)").unwrap_err(), "only SELECT, VALUES, INSERT, REPLACE, UPDATE and DELETE statements are typed");
     }
 }

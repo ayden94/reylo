@@ -21,7 +21,14 @@ use std::collections::{HashMap, HashSet};
 /// comma-joined table names, because MySQL binds no arrays.
 const UNIQUE_KEYS_QUERY: &str = "select table_name, index_name, column_name from information_schema.statistics where table_schema = database() and non_unique = 0 and find_in_set(table_name, ?) order by table_name, index_name, seq_in_index";
 
+/// The statements the MySQL analysis types. A server prepares DDL too, so a migration would
+/// otherwise come back typed as a statement that returns no rows.
+const KINDS: &[&str] = &["select", "with", "table", "values", "insert", "replace", "update", "delete"];
+
 pub fn analyze(sql: &str, lexed: &Lexed, host: &Host) -> Lazy<Analysis> {
+    if let Err(message) = lex::one_statement(sql, lexed, KINDS) {
+        return Some(crate::postgres::bare(sql, lexed, Dialect::Mysql, vec![Diagnostic { message, start: 0, length: sql.trim_end().len().max(1), code: 10 }]));
+    }
     let rewritten = lex::rewrite(sql, lexed, Target::Question);
     let raw = host.describe_mysql(&rewritten.sql)?;
     let raw = match raw {

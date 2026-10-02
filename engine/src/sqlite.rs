@@ -104,8 +104,14 @@ pub fn analyze_ddl(sql: &str, ddl: &[String], extras: &Extras) -> SqliteAnalysis
     }
 }
 
+/// The statements the SQLite analysis types: what a `.sql` query file holds, and never a migration.
+const KINDS: &[&str] = &["select", "with", "values", "insert", "replace", "update", "delete"];
+
 fn run(sql: &str, lexed: &Lexed, ddl: &[String], extras: &Extras) -> SqliteAnalysis {
     let failed = |analysis: Analysis| SqliteAnalysis { analysis, declared: Vec::new(), readonly: false, unique_keys: HashMap::new() };
+    if let Err(message) = lex::one_statement(sql, lexed, KINDS) {
+        return failed(crate::postgres::bare(sql, lexed, Dialect::Sqlite, vec![diag(message, 0, sql.trim_end().len(), 10)]));
+    }
     // SQLite prepares the `?n` rewrite, not the author's text: its own `:name` ends at the first
     // dot, so `:auth.user_id` survives only as a number. `?n` is the lexer's n-th parameter, which
     // is how `params` matches them back, and an error offset maps back through the rewrite.
