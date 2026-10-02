@@ -20,7 +20,7 @@ Porg is the root of this repository. [`porgapi/`](./porgapi) is PorgAPI, a web f
 
 ## Bundlers
 
-`porg/vite` is a Vite, Rollup and Rolldown plugin; `porg/esbuild` is an esbuild plugin that `Bun.build` and `Bun.plugin` take as is; `porg/webpack-loader` is a loader for webpack, Rspack and Turbopack. Each turns a `.sql` import into the same module the runtime preload builds, so a bundled app needs no preload.
+`porg/vite` is a Vite, Rollup and Rolldown plugin; `porg/esbuild` is an esbuild plugin that `Bun.build` and `Bun.plugin` take as is; `porg/webpack-loader` is a loader for webpack, Rspack and Turbopack; `porg/jest` is a Jest transformer (`transform: { "\\.sql$": "porg/jest" }`), because Jest loads test code through its own runtime, which the preload never reaches ([lab/jest](./lab/jest)), while Vitest takes `porg/vite`. Each turns a `.sql` import into the same module the runtime preload builds, so a bundled app needs no preload.
 
 Each adapter analyzes the statement as the type check does, so a build needs the database, or a `.porg/` that `porg generate` filled where the database could be reached (`.porg/` is the cache they all share, and git ignores it). The module it writes carries the analysis and reads nothing at run time. A dev server rebuilds a `.sql` module when the type check analyzes its statement again.
 

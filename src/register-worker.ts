@@ -1,6 +1,7 @@
-// The worker behind `porg/register` (`src/register.ts`): it builds a `.sql` file's module, which
-// can take a database round trip, while the loading thread blocks on `done`. It imports the
-// loader only when asked, so that a failure to load it is an answer and not a silent worker.
+// The worker behind `src/bridge.ts` (`porg/register`, `porg/jest`): it builds a `.sql` file's
+// module, which can take a database round trip, while the loading thread blocks on `done`. It
+// imports the loader only when asked, so that a failure to load it is an answer and not a silent
+// worker.
 import { parentPort } from "node:worker_threads";
 import type { MessagePort } from "node:worker_threads";
 
