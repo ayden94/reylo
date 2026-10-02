@@ -8,6 +8,8 @@ const config = {
   devIndicators: false,
   // The repository root has a lockfile of its own; the site is a project by itself.
   turbopack: { root: import.meta.dirname },
+  // Twoslash (lib/twoslash.ts) loads TypeScript at build time; it is never bundled.
+  serverExternalPackages: ['typescript', 'twoslash'],
 };
 
 const withMDX = createMDX();

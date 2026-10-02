@@ -9,22 +9,30 @@ from users
 where id = :id and name = :name
 ```
 
-```ts title="main.ts"
+```ts twoslash title="main.ts"
+// Twoslash runs TypeScript 6, which cannot run a content mapper: get_user.d.sql.ts is the module
+// Porg's mapper returned for get_user.sql (tsc --runExternalCode, against the schema below).
+// @allowArbitraryExtensions
+// @filename: get_user.d.sql.ts
+import type { Query } from "porg";
+export type Params = { id: number; name: string };
+export type Row = { id: number; name: string; email: string | null; role: "admin" | "member"; tags: string[]; created_at: Date; next_id: number };
+export declare const sql: "select id, name, email, role, tags, created_at, id + 1 as next_id\nfrom users\nwhere id = :id and name = :name\n";
+export declare const params: readonly ["id", "name"];
+declare const query: Query<{ id: number; name: string }, { id: number; name: string; email: string | null; role: "admin" | "member"; tags: string[]; created_at: Date; next_id: number }, "maybeOne", "postgres">;
+export default query;
+// @filename: guard.ts
+import getUser from "./get_user.sql";
+// @ts-expect-error: fails the build if the porg types stop resolving and the query becomes `any`.
+const typed: string = getUser;
+// @filename: main.ts
+// ---cut---
 import postgres from "postgres";
 import getUser from "./get_user.sql";
 
 const sql = postgres(process.env.DATABASE_URL!);
 
 const user = await getUser.run(sql, { id: 1, name: "ada" });
-// user: {
-//   id: number;
-//   name: string;
-//   email: string | null;
-//   role: "admin" | "member";
-//   tags: string[];
-//   created_at: Date;
-//   next_id: number;
-// } | null
 ```
 
 Every type above comes from the database.
