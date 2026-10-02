@@ -6,7 +6,7 @@
 //! to resolve, and a `${VAR}` in a URL stays as written. There is no dialect key: the URL's scheme
 //! names the dialect. A key the library does not know is an error, so a typo does not pass for a
 //! default; the sections of the two servers (`rest`, `api`) are accepted as they are and read by
-//! those servers.
+//! those servers. `cli` says which files `porg generate` analyzes.
 
 use serde::{Deserialize, Serialize};
 
@@ -29,6 +29,8 @@ pub struct Project {
     pub strict: Option<bool>,
     #[serde(default)]
     pub types: Types,
+    #[serde(default, skip_serializing_if = "Cli::is_empty")]
+    pub cli: Cli,
     #[serde(default, skip_serializing)]
     pub rest: Option<serde_yaml::Value>,
     #[serde(default, skip_serializing)]
@@ -44,6 +46,24 @@ pub struct Types {
     pub dates: Option<Dates>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bigint: Option<Bigint>,
+}
+
+/// The files `porg generate` analyzes, as globs relative to the project file: `include` replaces
+/// the default (every `.sql` file), and `exclude` adds to what is always left out (dependencies,
+/// build output, directories whose name starts with a dot, and what git ignores).
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Cli {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exclude: Option<Vec<String>>,
+}
+
+impl Cli {
+    fn is_empty(&self) -> bool {
+        self.include.is_none() && self.exclude.is_none()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -95,7 +115,7 @@ mod tests {
 
     #[test]
     fn reads_the_library_keys_and_leaves_the_later_sections_alone() {
-        let p = parse("url: ${DATABASE_URL}\ndirect_url: ${DIRECT_URL}\nenv: [.env]\nstrict: true\ntypes:\n  dates: temporal\n  bigint: bigint\napi:\n  routes: api\nrest:\n  anything: { x: 1 }\n").unwrap();
+        let p = parse("url: ${DATABASE_URL}\ndirect_url: ${DIRECT_URL}\nenv: [.env]\nstrict: true\ntypes:\n  dates: temporal\n  bigint: bigint\ncli:\n  include: [src/**/*.sql]\n  exclude: [src/legacy/**]\napi:\n  routes: api\nrest:\n  anything: { x: 1 }\n").unwrap();
         assert_eq!(p.url.as_deref(), Some("${DATABASE_URL}"));
         assert_eq!(p.direct_url.as_deref(), Some("${DIRECT_URL}"));
         assert_eq!(p.env, Some(vec![".env".to_string()]));
@@ -103,7 +123,7 @@ mod tests {
         assert_eq!((p.types.dates, p.types.bigint), (Some(Dates::Temporal), Some(Bigint::Bigint)));
         assert!(p.api.is_some() && p.rest.is_some());
         // What a host reads back: the later sections are not its business.
-        assert_eq!(serde_json::to_value(&p).unwrap(), serde_json::json!({ "url": "${DATABASE_URL}", "direct_url": "${DIRECT_URL}", "env": [".env"], "strict": true, "types": { "dates": "temporal", "bigint": "bigint" } }));
+        assert_eq!(serde_json::to_value(&p).unwrap(), serde_json::json!({ "url": "${DATABASE_URL}", "direct_url": "${DIRECT_URL}", "env": [".env"], "strict": true, "types": { "dates": "temporal", "bigint": "bigint" }, "cli": { "include": ["src/**/*.sql"], "exclude": ["src/legacy/**"] } }));
         assert_eq!(parse("").unwrap(), Project::default());
         assert_eq!(parse("# nothing yet\n").unwrap(), Project::default());
     }
@@ -118,6 +138,8 @@ mod tests {
         let e = parse(text).unwrap_err();
         assert!(e.message.contains("unknown variant `iso`"), "{}", e.message);
         assert!(text[e.start..].starts_with("iso"), "{e:?}");
+        let e = parse("cli:\n  ignore: [x]\n").unwrap_err();
+        assert!(e.message.contains("unknown field `ignore`"), "{}", e.message);
         let e = parse("strict: sometimes\n").unwrap_err();
         assert!(e.message.contains("invalid type"), "{}", e.message);
     }
