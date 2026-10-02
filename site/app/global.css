@@ -94,15 +94,49 @@ button {
 html .prose {
   font-weight: 400;
 
+  /* An h2 opens a section: larger, ruled off the section above. An h3 is a step inside it. */
   h2 {
     color: var(--color-fd-headings);
     border-bottom: 1px solid var(--color-fd-border);
-    @apply py-3 mt-14;
-    letter-spacing: -0.01em;
+    font-size: 1.75rem;
+    font-weight: 650;
+    line-height: 1.25;
+    @apply py-3 mt-16;
+    letter-spacing: -0.02em;
   }
 
   & > h3 {
-    @apply mt-8;
+    font-size: 1.15rem;
+    font-weight: 600;
+    @apply mt-9;
+  }
+
+  /* The link icon sits in the margin to the left of the heading, always visible. */
+  .porg-heading {
+    position: relative;
+    scroll-margin-top: 7rem;
+  }
+
+  .porg-anchor {
+    position: absolute;
+    left: -1.75rem;
+    top: 50%;
+    translate: 0 -50%;
+    display: inline-flex;
+    padding: 0.25rem;
+    border-radius: 0.25rem;
+    color: color-mix(in oklab, var(--color-fd-muted-foreground) 55%, transparent);
+    cursor: pointer;
+    transition: color 120ms;
+  }
+
+  .porg-anchor:hover {
+    color: var(--color-fd-muted-foreground);
+  }
+
+  h2 > .porg-anchor {
+    /* The rule's padding sits below the text; center on the text line, not the box. */
+    top: calc(50% - 0.0625rem);
   }
 
   /* Links keep the text colour; the yellow is the rule beneath the word. */

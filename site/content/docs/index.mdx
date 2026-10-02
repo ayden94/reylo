@@ -4,9 +4,7 @@ description: Import a .sql file and get a fully typed query, checked against the
 ---
 
 ```sql title="get_user.sql"
-select id, name, email, role, tags, created_at, id + 1 as next_id
-from users
-where id = :id and name = :name
+select id, name, email from users where id = :id
 ```
 
 ```ts twoslash title="main.ts"
@@ -15,11 +13,11 @@ where id = :id and name = :name
 // @allowArbitraryExtensions
 // @filename: get_user.d.sql.ts
 import type { Query } from "porg";
-export type Params = { id: number; name: string };
-export type Row = { id: number; name: string; email: string | null; role: "admin" | "member"; tags: string[]; created_at: Date; next_id: number };
-export declare const sql: "select id, name, email, role, tags, created_at, id + 1 as next_id\nfrom users\nwhere id = :id and name = :name\n";
-export declare const params: readonly ["id", "name"];
-declare const query: Query<{ id: number; name: string }, { id: number; name: string; email: string | null; role: "admin" | "member"; tags: string[]; created_at: Date; next_id: number }, "maybeOne", "postgres">;
+export type Params = { id: number };
+export type Row = { id: number; name: string; email: string | null };
+export declare const sql: "select id, name, email from users where id = :id\n";
+export declare const params: readonly ["id"];
+declare const query: Query<{ id: number }, { id: number; name: string; email: string | null }, "maybeOne", "postgres">;
 export default query;
 // @filename: guard.ts
 import getUser from "./get_user.sql";
@@ -32,7 +30,7 @@ import getUser from "./get_user.sql";
 
 const sql = postgres(process.env.DATABASE_URL!);
 
-const user = await getUser.run(sql, { id: 1, name: "ada" });
+const user = await getUser.run(sql, { id: 1 });
 ```
 
 Every type above comes from the database.
@@ -66,18 +64,20 @@ create table posts (
 
 ## How it works
 
-Porg is a [content mapper](https://github.com/microsoft/typescript-go/pull/4712), a feature new in TypeScript 7.1. A content mapper is a package that turns a file type TypeScript does not know into a typed module, in the type checker and in the editor.
+Porg is a [content mapper](https://github.com/microsoft/typescript-go/pull/4712), a feature new in TypeScript 7.1: a package that turns a file TypeScript does not know into a typed module, in the type checker and in the editor. Bundlers have loaded `.sql` files for years, and content mappers are the missing half, so a loader is now type safe from end to end.
 
-Bundlers have loaded `.sql` and other files as modules for years, but the type checker could not see inside them. Content mappers are the missing half: a loader is now type safe from end to end.
+```text
+get_user.sql  →  Porg  →  your database  →  { id: number; name: string; email: string | null } | null
+```
 
-To type a query, Porg sends it to your running database, which prepares it without running it. The database reports what the query takes and what it returns:
+To type a query, Porg sends it to your running database, which prepares it without running it. The database reports:
 
 - the parameter types
 - the column types
 - nullability, from `NOT NULL` and outer joins
 - the row count, from primary and unique keys
 
-Porg connects through the driver your project already uses: `pg`, `postgres` or `mysql2`, or `node:sqlite` for SQLite. It keeps each answer in `.porg/` and asks again when the schema changes.
+Porg connects through the driver your project already uses, and keeps each answer in `.porg/` until the schema changes.
 
 ## Setup
 
@@ -85,20 +85,18 @@ Install Porg and point it at your database, then add it to each tool that loads 
 
 ### Install
 
-```npm
+```sh
 npm install porg
-npm install -D typescript@next
+npm install -D typescript@next   # content mappers are in the TypeScript 7.1 dev builds
 ```
 
-Content mappers are in the TypeScript 7.1 dev builds (`typescript@next`). Porg needs Node 24 or later.
-
-Porg reads `DATABASE_URL` from the environment, or from `.env.local` or `.env` next to `package.json`:
+Porg needs Node 24 or later. It reads `DATABASE_URL` from the environment, or from `.env.local` or `.env` next to `package.json`:
 
 ```sh title=".env"
 DATABASE_URL=postgres://localhost:5432/app   # mysql://… for MySQL, file:./app.db for SQLite
 ```
 
-Other settings go in a `.porg.yaml` file: see [The project file](/details#the-project-file).
+Other settings go in `.porg.yaml`: see [The project file](/details#the-project-file).
 
 ### TypeScript
 
@@ -106,10 +104,10 @@ Add Porg to `tsconfig.json`:
 
 ```jsonc title="tsconfig.json"
 {
-  "compilerOptions": {
-    // ...
-  },
-  "contentMappers": [{ "package": "porg", "extensions": [".sql"] }]
+  "compilerOptions": { /* ... */ },
+  "contentMappers": [ // [!code ++]
+    { "package": "porg", "extensions": [".sql"] } // [!code ++]
+  ] // [!code ++]
 }
 ```
 
@@ -127,8 +125,23 @@ Type-check with `--runExternalCode`. Without the flag, `tsc` ignores content map
 
 The editor needs the TypeScript 7.1 language server, with content mappers on.
 
-<Tabs items={["VS Code and Cursor", "Zed"]}>
-<Tab value="VS Code and Cursor">
+<Tabs items={["VS Code", "Cursor", "Zed"]}>
+<Tab value="VS Code">
+
+1. Install the **TypeScript (Native Preview)** extension (`TypeScriptTeam.native-preview`).
+2. Turn it on:
+
+   ```json title=".vscode/settings.json"
+   {
+     "typescript.experimental.useTsgo": true,
+     "js/ts.contentMappers.enabled": true
+   }
+   ```
+
+3. Trust the workspace. The extension runs no content mapper in an untrusted workspace.
+
+</Tab>
+<Tab value="Cursor">
 
 1. Install the **TypeScript (Native Preview)** extension (`TypeScriptTeam.native-preview`).
 2. Turn it on:
@@ -177,23 +190,22 @@ Zed shows no errors inside a `.sql` file: see [Editors](/details#editors).
 
 ### Runtimes
 
-A preload turns each `.sql` import into a module as it loads.
+A preload turns each `.sql` import into a module as it loads:
 
-```sh tab="Node"
+```sh
 node --import porg/register main.ts
-
-# or for every node process
-export NODE_OPTIONS="--import porg/register"
 ```
 
-```sh tab="Bun"
-bun --preload porg/register main.ts
+Bun and nub read the preload from their config files, so no flag is needed:
 
-# or for every bun command: preload = ["porg/register"] in bunfig.toml
+```toml title="bunfig.toml"
+preload = ["porg/register"]
 ```
 
-```sh tab="nub"
-nub --import porg/register main.ts
+```jsonc title="nub.jsonc"
+{
+  "preload": ["porg/register"]
+}
 ```
 
 ### Bundlers and frameworks
@@ -201,9 +213,7 @@ nub --import porg/register main.ts
 A bundler plugin turns each `.sql` import into a module at build time, so a bundled app needs no preload.
 
 <Accordions type="multiple">
-<Accordion title="Vite and every Vite-based framework" id="setup-vite">
-
-One plugin covers Vite and the frameworks built on it: SvelteKit, Nuxt, Astro, React Router, SolidStart, Qwik, and Vitest.
+<Accordion title="Vite" id="setup-vite">
 
 ```ts title="vite.config.ts"
 import { defineConfig } from "vite";
@@ -213,8 +223,6 @@ export default defineConfig({
   plugins: [porg()],
 });
 ```
-
-A framework with its own config file takes the plugin in that file's `vite.plugins`. Rollup and Rolldown take the same plugin.
 
 </Accordion>
 <Accordion title="Next.js" id="setup-nextjs">
@@ -253,7 +261,7 @@ The type check of `next build` cannot run content mappers, so the scripts run th
 ```
 
 </Accordion>
-<Accordion title="esbuild and Bun.build" id="setup-esbuild">
+<Accordion title="esbuild" id="setup-esbuild">
 
 ```js title="build.mjs"
 import * as esbuild from "esbuild";
@@ -268,19 +276,24 @@ await esbuild.build({
 });
 ```
 
+</Accordion>
+<Accordion title="Bun" id="setup-bun">
+
+Bun's bundler takes the esbuild plugin:
+
 ```ts title="build.ts"
 import porg from "porg/esbuild";
 
 await Bun.build({
   entrypoints: ["main.ts"],
   target: "bun",
-  plugins: [porg()], // Bun.build takes the esbuild plugin
+  plugins: [porg()],
   outdir: "dist",
 });
 ```
 
 </Accordion>
-<Accordion title="webpack and Rspack" id="setup-webpack">
+<Accordion title="webpack" id="setup-webpack">
 
 ```js title="webpack.config.mjs"
 export default {
@@ -291,7 +304,17 @@ export default {
 };
 ```
 
-Rspack takes the same rule.
+</Accordion>
+<Accordion title="Rspack" id="setup-rspack">
+
+```js title="rspack.config.mjs"
+export default {
+  // ...
+  module: {
+    rules: [{ test: /\.sql$/, use: "porg/webpack-loader" }],
+  },
+};
+```
 
 </Accordion>
 <Accordion title="Jest" id="setup-jest">
@@ -306,7 +329,7 @@ export default {
 ```
 
 ```sh
-NODE_OPTIONS=--experimental-vm-modules npx jest
+NODE_OPTIONS=--experimental-vm-modules npx jest   # Jest runs ES modules only behind this Node flag
 ```
 
 Vitest needs only the Vite plugin.
@@ -314,13 +337,46 @@ Vitest needs only the Vite plugin.
 </Accordion>
 </Accordions>
 
-## Write queries
+## Basic usage
 
-A `.sql` file holds one statement. Porg types its parameters, its columns, and how many rows it returns.
+Write the query in a `.sql` file:
+
+```sql title="get_user.sql"
+select id, name, email from users where id = :id
+```
+
+Import it, and run it with a client from your driver:
+
+```ts title="main.ts"
+import postgres from "postgres";
+import getUser from "./get_user.sql";
+
+const sql = postgres(process.env.DATABASE_URL!);
+
+const user = await getUser.run(sql, { id: 1 });
+// { id: number; name: string; email: string | null } | null
+```
+
+The query has a few more members:
+
+```ts
+import type { Params, Row } from "./get_user.sql"; // its parameter and row types
+
+const get = getUser.with(tx);        // bind a client once, such as a transaction
+await get({ id: 1 });
+
+getUser.runSync(db, { id: 1 });      // better-sqlite3, node:sqlite and bun:sqlite answer synchronously
+
+getUser.sql;                         // the statement as written
+getUser.params;                      // ["id"]
+getUser.cardinality;                 // "maybeOne"
+```
+
+## Type inference
+
+Porg puts no limits on the query: any syntax, any built-in function, *the full expressive power of your SQL dialect*. Each example shows a statement and the types Porg infers: the parameters, and what `run` resolves to.
 
 ### Parameters
-
-Write a parameter as `:name`, on every dialect.
 
 ```sql title="search.sql"
 select id, name from users
@@ -328,17 +384,11 @@ where name like :pattern and role = :role
 ```
 
 ```ts
-import search from "./search.sql";
-
-await search.run(sql, { pattern: "a%", role: "admin" });
-// params: { pattern: string; role: "admin" | "member" }
+type Params = { pattern: string; role: "admin" | "member" };
+type Result = { id: number; name: string }[];
 ```
 
-More on parameters, from positional forms to `null`: see [Parameters](/details#parameters).
-
-### Columns and nullability
-
-Column types and `NOT NULL` come from the schema. Outer joins and expressions decide the rest.
+### Nullability
 
 ```sql title="user_posts.sql"
 select u.name, p.title, coalesce(p.title, '') as label
@@ -347,17 +397,24 @@ left join posts p on p.user_id = u.id
 ```
 
 ```ts
-const rows = await userPosts.run(sql);
-// {
-//   name: string;          not null in the table
-//   title: string | null;  the outer side of a left join
-//   label: string;         coalesce with a non-null default
-// }[]
+type Result = {
+  name: string;          // not null in the table
+  title: string | null;  // the outer side of a left join
+  label: string;         // coalesce with a non-null default
+}[];
+```
+
+### Enums, arrays and dates
+
+```sql title="profiles.sql"
+select role, tags, created_at from users
+```
+
+```ts
+type Result = { role: "admin" | "member"; tags: string[]; created_at: Date }[];
 ```
 
 ### Row count
-
-The statement and the schema decide how many rows a query returns, and `run` resolves to the matching type.
 
 ```sql
 -- get_user.sql
@@ -374,20 +431,45 @@ delete from users where id = :id
 ```
 
 ```ts
-await getUser.run(sql, { id: 1 });     // Row | null    a primary-key match, or limit 1
-await countUsers.run(sql);             // Row           an aggregate without group by
-await listUsers.run(sql);              // Row[]         anything else
-await deleteUser.run(sql, { id: 1 });  // void          a write without returning
+type GetUser = Row | null;  // a primary-key match, or limit 1
+type CountUsers = Row;      // an aggregate without group by
+type ListUsers = Row[];     // anything else
+type DeleteUser = void;     // a write without returning
+```
+
+### Returning
+
+```sql title="create_user.sql"
+insert into users (name, email) values (:name, :email)
+returning id
+```
+
+```ts
+type Params = { name: string; email: string | null };
+type Result = { id: number };
+```
+
+### Common table expressions
+
+```sql title="post_counts.sql"
+with counts as (
+  select user_id, count(*)::int as posts from posts group by user_id
+)
+select u.name, coalesce(c.posts, 0) as posts
+from users u
+left join counts c on c.user_id = u.id
+```
+
+```ts
+type Result = { name: string; posts: number }[];
 ```
 
 ### Nested JSON
 
-JSON built in the statement keeps its shape.
-
 ```sql title="user_with_posts.sql"
 select u.id, u.name,
   coalesce((
-    select jsonb_agg(jsonb_build_object('id', p.id, 'title', p.title, 'body', p.body, 'at', p.published_at))
+    select jsonb_agg(jsonb_build_object('id', p.id, 'title', p.title, 'at', p.published_at))
     from posts p where p.user_id = u.id
   ), '[]') as posts
 from users u
@@ -395,52 +477,17 @@ where u.id = :id
 ```
 
 ```ts
-const user = await userWithPosts.run(sql, { id: 1 });
-// {
-//   id: number;
-//   name: string;
-//   posts: { id: number; title: string; body: string | null; at: string | null }[];
-// } | null
+type Params = { id: number };
+type Result = {
+  id: number;
+  name: string;
+  posts: { id: number; title: string; at: string | null }[];
+} | null;
 ```
 
-Inside JSON, a timestamp is the string the database wrote.
+## Supported drivers
 
-### The module
-
-A `.sql` import exports the query and its types.
-
-```ts
-import getUser from "./get_user.sql";                // the query
-import type { Params, Row } from "./get_user.sql";   // its parameter and row types
-
-getUser.sql;          // the statement as written
-getUser.params;       // ["id", "name"]
-getUser.cardinality;  // "maybeOne"
-```
-
-## Run queries
-
-Pass `run` the client of your driver and the parameters. It returns a promise of the driver's rows.
-
-```ts
-const user = await getUser.run(sql, { id: 1, name: "ada" });
-const users = await listUsers.run(sql); // no parameters, no second argument
-```
-
-The `with` method binds a client once:
-
-```ts
-const get = getUser.with(tx); // a transaction from your driver is a client too
-await get({ id: 1, name: "ada" });
-```
-
-The synchronous SQLite drivers take `runSync`:
-
-```ts
-const user = getUser.runSync(db, { id: 1 }); // better-sqlite3, node:sqlite, bun:sqlite
-```
-
-Porg imports no driver. It works with the client of any of these:
+Porg imports no driver. Pass `run` the client of any of these:
 
 - Postgres
   - `pg`
@@ -462,6 +509,8 @@ Porg imports no driver. It works with the client of any of these:
   - Cloudflare D1
   - `sqlite3`
   - `sqlite`
+
+A transaction, savepoint or connection from these clients works too: see [Transactions](/details#transactions-and-synchronous-drivers).
 
 ## Data types
 
@@ -523,7 +572,7 @@ Each SQL type maps to a TypeScript type.
 </Tab>
 </Tabs>
 
-Drivers disagree on dates and 64-bit integers. On Postgres and MySQL, the `types` section of `.porg.yaml` says what your driver returns:
+Drivers disagree on dates and 64-bit integers. The `types` section of `.porg.yaml` says what your driver returns:
 
 ```yaml title=".porg.yaml"
 types:

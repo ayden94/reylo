@@ -12,7 +12,7 @@ url: ${DATABASE_URL}          # the default; the scheme names the dialect
 direct_url: ${DIRECT_URL}     # a connection past a pooler, which the type check prefers
 env: [.env.local, .env]       # the default; the process environment wins
 strict: true                  # a parameter nothing types is an error, not unknown
-types:                        # what the driver returns (Postgres and MySQL)
+types:                        # what the driver returns
   dates: Date
   bigint: string
 cli:                          # which files porg generate reads, relative to this file
