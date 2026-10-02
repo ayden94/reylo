@@ -111,8 +111,14 @@ pub fn analyze_ddl(sql: &str, ddl: &[String], extras: &Extras) -> SqliteAnalysis
     }
 }
 
+/// The statements the SQLite analysis types: what a `.sql` query file holds, and never a migration.
+const KINDS: &[&str] = &["select", "with", "values", "insert", "replace", "update", "delete"];
+
 fn run(sql: &str, lexed: &Lexed, ddl: &[String], extras: &Extras) -> SqliteAnalysis {
     let failed = |analysis: Analysis| SqliteAnalysis { analysis, declared: Vec::new(), readonly: false, unique_keys: HashMap::new(), booleans: Vec::new() };
+    if let Err(message) = lex::one_statement(sql, lexed, KINDS) {
+        return failed(crate::postgres::bare(sql, lexed, Dialect::Sqlite, vec![diag(message, 0, sql.trim_end().len(), 10)]));
+    }
     // SQLite prepares the `?n` rewrite, not the author's text: its own `:name` ends at the first
     // dot, so `:auth.user_id` survives only as a number. `?n` is the lexer's n-th parameter, which
     // is how `params` matches them back, and an error offset maps back through the rewrite.
@@ -140,10 +146,7 @@ fn run(sql: &str, lexed: &Lexed, ddl: &[String], extras: &Extras) -> SqliteAnaly
     let (columns, kind) = a.columns();
     let booleans = a.booleans();
     let params = a.params(lexed);
-    let (cardinality, reason) = match crate::postgres::cardinality_directive(lexed, &mut diagnostics) {
-        Some(c) => c,
-        None => a.cardinality(),
-    };
+    let (cardinality, reason) = a.cardinality();
     let analysis = Analysis {
         kind,
         params,
@@ -152,7 +155,6 @@ fn run(sql: &str, lexed: &Lexed, ddl: &[String], extras: &Extras) -> SqliteAnaly
         cardinality_reason: reason,
         rewritten: lex::rewrite(sql, lexed, Target::Question),
         style: lexed.style,
-        directives: lexed.directives.clone(),
         diagnostics,
         unresolved: Vec::new(),
     };
@@ -1069,9 +1071,9 @@ mod tests {
         assert_eq!(param(&a, "auth.id"), "integer");
         assert_eq!(a.rewritten.sql, "select name from users where email = ? and id = ? and score > ?");
         assert_eq!(a.rewritten.order, ["auth.email", "auth.id", "auth.email"]);
-        // Positional forms: SQLite's `?3` is the lexer's `$3`, and a bare `?` its `?1`.
-        assert_eq!(param(&analyzed("select name from users where id = ?3"), "$3"), "integer");
-        assert_eq!(param(&analyzed("select name from users where email = ?"), "?1"), "text");
+        // Positional forms: SQLite's `?3` is the parameter `3`, and a bare `?` the next number.
+        assert_eq!(param(&analyzed("select name from users where id = ?3"), "3"), "integer");
+        assert_eq!(param(&analyzed("select name from users where email = ?"), "1"), "text");
         // An error SQLite reports in the rewrite lands on the author's text.
         let sql = "select :auth.user_id, nope from users";
         let a = analyzed(sql);

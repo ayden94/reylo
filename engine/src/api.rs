@@ -17,8 +17,10 @@ use std::collections::HashMap;
 pub enum Request {
     /// Round-trip check: answers with the engine version.
     Ping,
-    /// Placeholders and directives only; no database.
+    /// Placeholders only; no database.
     Lex { sql: String, dialect: Dialect },
+    /// The project file's text, `.porg.yaml`.
+    Config { text: String },
     /// The whole analysis, given what the host has answered so far.
     Analyze {
         sql: String,
@@ -157,7 +159,6 @@ pub struct Analysis {
     pub cardinality_reason: Option<String>,
     pub rewritten: lex::Rewritten,
     pub style: lex::Style,
-    pub directives: Vec<lex::Directive>,
     pub diagnostics: Vec<Diagnostic>,
     /// Paths inside JSON columns the engine could not type, for a message.
     pub unresolved: Vec<String>,
@@ -168,6 +169,8 @@ pub struct Analysis {
 pub enum Response {
     Ok { version: String, fingerprint: String },
     Lexed { lexed: lex::Lexed },
+    Config { config: crate::config::Project },
+    ConfigError { error: crate::config::ConfigError },
     Need { needs: Vec<Need> },
     Analysis { analysis: Analysis },
     Error { message: String },
@@ -207,6 +210,10 @@ pub fn call(request: &str) -> String {
         Ok(Request::Lex { sql, dialect }) => match lex::lex(&sql, dialect) {
             Ok(lexed) => Response::Lexed { lexed },
             Err(e) => Response::Error { message: e.message },
+        },
+        Ok(Request::Config { text }) => match crate::config::parse(&text) {
+            Ok(config) => Response::Config { config },
+            Err(error) => Response::ConfigError { error },
         },
         Ok(Request::Analyze { sql, dialect, mut answers }) => {
             crate::extension::unbundle(&mut answers);

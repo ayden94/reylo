@@ -131,7 +131,7 @@ fn catalog_rows(host: &Host, functions: &[String], relations: &[String]) -> Lazy
 pub(crate) fn lexed(sql: &str, dialect: Dialect) -> Result<Lexed, Analysis> {
     let lexed = match lex::lex(sql, dialect) {
         Ok(l) => l,
-        Err(e) => return Err(bare(sql, &Lexed { params: vec![], placeholders: vec![], directives: vec![], style: Style::None, opaque: vec![] }, dialect, vec![diag(e.message, e.offset, 1, 1)])),
+        Err(e) => return Err(bare(sql, &Lexed { params: vec![], placeholders: vec![], style: Style::None, opaque: vec![] }, dialect, vec![diag(e.message, e.offset, 1, 1)])),
     };
     if lexed.style == Style::Mixed {
         let first = lexed.placeholders.iter().find(|p| lex::is_positional(&p.name)).expect("a mixed statement has a positional placeholder");
@@ -145,34 +145,21 @@ fn diag(message: impl Into<String>, start: usize, length: usize, code: u32) -> D
     Diagnostic { message: message.into(), start, length: length.max(1), code }
 }
 
-/// What the engine answers when it cannot describe: every parameter unknown, no columns, the
-/// cardinality the directive names or `many`.
-pub(crate) fn bare(sql: &str, lexed: &Lexed, dialect: Dialect, mut diagnostics: Vec<Diagnostic>) -> Analysis {
+/// What the engine answers when it cannot describe: every parameter unknown, no columns, and
+/// `many` rows.
+pub(crate) fn bare(sql: &str, lexed: &Lexed, dialect: Dialect, diagnostics: Vec<Diagnostic>) -> Analysis {
     let target = if dialect == Dialect::Postgres { Target::Dollar } else { Target::Question };
     let rewritten = lex::rewrite(sql, lexed, target);
-    let (cardinality, _) = cardinality_directive(lexed, &mut diagnostics).unwrap_or(("many".to_string(), None));
     Analysis {
         kind: String::new(),
         params: lexed.params.iter().map(|n| Param { name: n.clone(), ty: Type::Unknown, type_name: String::new(), nullable: false }).collect(),
         columns: Vec::new(),
-        cardinality,
+        cardinality: "many".to_string(),
         cardinality_reason: None,
         rewritten,
         style: lexed.style,
-        directives: lexed.directives.clone(),
         diagnostics,
         unresolved: Vec::new(),
-    }
-}
-
-/// `-- @returns one|maybeOne|many|none`, when the statement carries one.
-pub(crate) fn cardinality_directive(lexed: &Lexed, diagnostics: &mut Vec<Diagnostic>) -> Option<(String, Option<String>)> {
-    let d = lexed.directives.iter().find(|d| d.name == "returns")?;
-    if ["many", "one", "maybeOne", "none"].contains(&d.value.as_str()) {
-        Some((d.value.clone(), None))
-    } else {
-        diagnostics.push(diag(format!("Unknown @returns value \"{}\"; expected many, one, maybeOne or none.", d.value), d.start, d.end - d.start, 3));
-        None
     }
 }
 
@@ -313,10 +300,7 @@ impl<'a> Engine<'a> {
             .collect();
 
         // Row count.
-        let (cardinality, reason) = match cardinality_directive(lexed, &mut diagnostics) {
-            Some(c) => c,
-            None => self.cardinality(&rewritten.sql, parsed.as_ref(), &described, &trust, &catalog),
-        };
+        let (cardinality, reason) = self.cardinality(&rewritten.sql, parsed.as_ref(), &described, &trust, &catalog);
 
         Some(Analysis {
             kind: parsed.as_ref().map(|p| p.statement.to_string()).unwrap_or_default(),
@@ -326,7 +310,6 @@ impl<'a> Engine<'a> {
             cardinality_reason: reason,
             rewritten,
             style: lexed.style,
-            directives: lexed.directives.clone(),
             diagnostics,
             unresolved,
         })
@@ -756,7 +739,7 @@ impl<'a> Engine<'a> {
         }
         let casts = self.casts.borrow();
         lex::rewrite_with(sql, &lexed, Target::Dollar, &|name, rendered| {
-            let cast = name.strip_prefix('$').and_then(|n| n.parse::<usize>().ok()).and_then(|n| casts.get(n.wrapping_sub(1)).cloned().flatten());
+            let cast = name.parse::<usize>().ok().and_then(|n| casts.get(n.wrapping_sub(1)).cloned().flatten());
             match cast {
                 Some(c) => format!("({rendered}::{c})"),
                 None => rendered.to_string(),

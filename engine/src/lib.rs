@@ -5,6 +5,7 @@
 pub mod analyze;
 pub mod api;
 pub mod cardinality;
+pub mod config;
 pub mod dialect;
 pub mod extension;
 pub mod host;
