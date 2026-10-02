@@ -4,7 +4,7 @@ import { ThemeSwitch } from 'fumadocs-ui/layouts/shared/slots/theme-switch';
 import { githubUrl } from '@/lib/layout.shared';
 
 /**
- * The one bar above the page: the name, the repository and the theme switch. Fumadocs' own docs
+ * The one bar above each page: the name, the Details page, the repository and the theme switch. Fumadocs' own docs
  * header shows only on small screens, where it opens the sidebar tree; this page has no tree, so
  * the bar is the same at every width, full width, in the place of a banner.
  */
@@ -18,6 +18,9 @@ export function Header() {
         Porg
       </a>
       <div className="flex-1" />
+      <a href="/details" className="text-sm text-fd-muted-foreground transition-colors hover:text-fd-foreground">
+        Details
+      </a>
       <a
         href={githubUrl}
         rel="noreferrer noopener"

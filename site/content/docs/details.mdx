@@ -1,0 +1,226 @@
+---
+title: Details
+description: The parts of Porg you need less often, from the project file to builds without a database and the limits of each dialect.
+---
+
+## The project file
+
+Every key is optional. A project whose connection is `DATABASE_URL` needs no file.
+
+```yaml title=".porg.yaml"
+url: ${DATABASE_URL}          # the default; the scheme names the dialect
+direct_url: ${DIRECT_URL}     # a connection past a pooler, which the type check prefers
+env: [.env.local, .env]       # the default; the process environment wins
+strict: true                  # a parameter nothing types is an error, not unknown
+types:                        # what the driver returns (Postgres and MySQL)
+  dates: Date
+  bigint: string
+cli:                          # which files porg generate reads, relative to this file
+  include: ["src/**/*.sql"]   # instead of every .sql file
+  exclude: ["src/legacy/**"]  # in addition to node_modules, build output and what git ignores
+```
+
+The scheme of the URL names the dialect:
+
+| Scheme | Dialect |
+| --- | --- |
+| `postgres://`, `postgresql://` | Postgres |
+| `mysql://`, `mariadb://` | MySQL |
+| `file:`, `sqlite:` | SQLite (a relative path starts at the package directory) |
+
+- An unknown key, or a `${VAR}` that nothing sets, is an error on every `.sql` import, at its line and column.
+- The file sits next to `package.json`. The `PORG_CONFIG` variable names a file elsewhere.
+- Porg takes no options in `tsconfig.json`.
+
+## Builds without a database
+
+Every step that loads a `.sql` file (the type check, a plugin, the preload) analyzes it against the database and keeps the result in `.porg/`. A later step reads the entry instead of asking again.
+
+- Porg writes a `.gitignore` into `.porg/`; never commit it.
+- While the database answers, an entry from another schema is analyzed again.
+- While the database cannot be reached, the entries are used as they are.
+- A statement that `.porg/` lacks, with no database, is an error.
+
+To build where the database cannot be reached, such as a CI job or a container build, fill `.porg/` first where it can be reached, and carry it to the build:
+
+```text
+$ porg generate
+postgres at localhost:5432/postgres (DATABASE_URL in .env)
+  src/admin/find_by_email.sql  ✗
+  src/admin/set_email.sql      ✓
+  src/queries/count_users.sql  ✓
+  src/queries/create_user.sql  ✓
+  src/queries/get_user.sql     ✓
+  src/queries/list_users.sql   ✓
+
+src/admin/find_by_email.sql:1:12: column "nmae" does not exist (42703)
+  1 | select id, nmae
+    |            ^^^^
+
+Skipped 2 files that are not one query (a migration?): migrations/0001_init.sql, migrations/0002_email.sql
+
+✗ 1 of 6 queries failed (0.2 s)
+```
+
+The command reads every `.sql` file under the given paths (by default the current directory). It leaves out `node_modules`, build output, directories whose names start with a dot and, in a git repository, what git ignores. The `cli` section of the project file changes the set. With `--force`, it asks the database even for a statement `.porg/` holds. It exits with 1 when a query fails.
+
+## Parameters
+
+A statement can use its database's own positional form instead of `:name`. The key is then the number.
+
+```sql
+select * from users where id = $1   -- Postgres; ? on MySQL, ? and ?NNN on SQLite
+```
+
+```ts
+await getUser.run(sql, { 1: 42 });
+```
+
+Mixing the two styles in one statement is an error.
+
+A parameter is a value, never a name. A table or a column cannot be a parameter:
+
+```sql
+select * from :table                                   -- a syntax error
+select * from users order by :column                   -- sorts by a constant
+select * from users order by case when :sort = 'name' then name end
+```
+
+A parameter that nothing in the statement types is `unknown` (on SQLite, one that only a function receives, or a bare `select :x`). A cast types it, and `strict: true` in the project file makes it an error:
+
+```sql
+select length(cast(:text as text)) as n
+```
+
+A parameter takes `null` only where the statement allows it:
+
+```sql
+update users set email = :email where id = :id   -- email: string | null, the column is nullable
+select * from users where role = coalesce(:role, role)   -- role: "admin" | "member" | null
+```
+
+A parameter left out binds `NULL`.
+
+## The row count at run time
+
+| The statement | Row count | `run` resolves to |
+| --- | --- | --- |
+| A primary-key or unique-key match, or `limit 1` | `maybeOne` | `Row \| null` |
+| An aggregate without `group by`, a one-row `insert … returning` | `one` | `Row` |
+| An `insert`, `update` or `delete` without `returning` | `none` | `void` |
+| Anything else | `many` | `Row[]` |
+
+At run time, a `one` query throws unless it gets exactly one row, and a `maybeOne` query throws when it gets more than one. No directive overrides the count.
+
+## One statement per file
+
+A `.sql` file holds one `select`, `insert`, `update` or `delete`, or `merge` on Postgres and `replace` on SQLite and MySQL. A file of DDL or of several statements, such as a migration, is an error when it is imported, and `porg generate` skips it.
+
+## Dates and 64-bit integers
+
+| Setting | Value | `timestamptz` | `timestamp`, MySQL `DATETIME` | `date` | `bigint` |
+| --- | --- | --- | --- | --- | --- |
+| `dates` | `Date` (default) | `Date` | `Date` | `Date` | |
+| `dates` | `string` | `string` | `string` | `string` | |
+| `dates` | `temporal` | `Temporal.Instant` | `Temporal.PlainDateTime` | `Temporal.PlainDate` | |
+| `bigint` | `string` (Postgres default), `number` (MySQL default), `bigint` | | | | `string`, `number` or `bigint` |
+
+The setting has to match the driver, because Porg does not see the driver's options:
+
+- `dates: string` for `pg` with a timestamp `types.setTypeParser`, `postgres` with its `types` option, or mysql2 and mariadb with `dateStrings: true`
+- `bigint: string` for mysql2 with `supportBigNumbers` and `bigNumberStrings`
+- `bigint: bigint` for mariadb, which returns a BigInt by default
+
+The `temporal` value types the values with TypeScript's `esnext.temporal` lib; the driver builds them. Inside nested JSON the database wrote the value already, so the settings do not apply there. On SQLite they change nothing.
+
+## Transactions and synchronous drivers
+
+A transaction, a savepoint or a connection taken from a client is a client too:
+
+```ts
+// postgres.js and Bun.sql
+await sql.begin(async (tx) => {
+  const user = await getUser.run(tx, { id: 1, name: "ada" });
+  await tx.savepoint((sp) => renameUser.run(sp, { id: user!.id, name: "bo" }));
+});
+```
+
+On better-sqlite3, `node:sqlite` and `bun:sqlite`, `runSync` returns the result and throws the error, so it works inside `db.transaction(fn)`, whose function cannot await:
+
+```ts
+db.transaction(() => {
+  const { id } = insertUser.runSync(db, { name: "ada" });
+  insertPost.runSync(db, { user_id: id, title: "hello" });
+})();
+```
+
+What each client takes:
+
+- `pg`: Pool, Client and PoolClient
+- postgres.js and Bun.sql: the client, `begin`, `savepoint` and `reserve`
+- PGlite: the client and `transaction`
+- Neon: Pool, Client and `neon()`
+- pg-promise: the database, `task` and `tx`
+- mysql2 and mariadb: the promise or the callback API
+- PlanetScale: the client and `transaction`; driver 2.0 binds no parameters, so it runs only statements without any
+- `@libsql/client`: the client and `transaction()`
+
+## Dialect limits
+
+### Postgres
+
+- A function's body is opaque: its result has its declared type.
+
+### MySQL
+
+- MySQL has no `returning`: a write resolves to `void`, and the insert id is untyped.
+- Nullability is the server's flag: sound for `NOT NULL`, cautious for string and date functions.
+- A prepare error has no position, so the error covers the whole statement.
+- Porg is tested against MySQL 8.4, not MariaDB.
+
+### SQLite
+
+- A declared type is an affinity, not a constraint: a column in a table without `strict` can hold a value of another type.
+- SQLite has no date, time or boolean type. A date in a `text` column is a `string`; a column declared `boolean`, `date` or `datetime` is `number | string`.
+- The result of a function the application registers, or of `json_extract`, `->` and `->>`, is `unknown`.
+- A parameter may be `null` only where it is written whole to a nullable column.
+- JSON built in the statement is a `string`: the driver returns the text.
+
+## Editors
+
+### VS Code and Cursor
+
+To suggest the extension to everyone who opens the project:
+
+```json title=".vscode/extensions.json"
+{ "recommendations": ["TypeScriptTeam.native-preview"] }
+```
+
+The editor's environment is not your shell's. Keep `DATABASE_URL` in `.env` or `.env.local`, where Porg finds it.
+
+### Zed
+
+- Zed does not send `.sql` files to the language server, so an error inside one shows nowhere in Zed. The query's types become `unknown`; `tsc --noEmit --runExternalCode` shows the error.
+- The types follow a `.sql` file each time it is saved.
+- After a change to `binary.path`, close the window and open it again.
+- In a monorepo whose TypeScript is installed at the root, `binary.path` points at that copy.
+
+## Bundlers and runtimes
+
+- **Next.js**: a client component that imports a `.sql` file fails the build, so the statement never reaches the browser. On the edge runtime, use a driver that needs no TCP socket.
+- **Vite**: import `.sql` files from server code only. The module carries the statement, and the plugin does not stop a browser bundle from importing it.
+- **esbuild**: `buildSync` runs no plugins, so use `build`.
+- **Bun**: without the preload, Bun imports a `.sql` file as its path and reports no error.
+- **Jest without ES modules**: Porg's runtime is an ES module, which a CommonJS run cannot `require`, so babel-jest compiles it too:
+
+```js title="jest.config.js"
+module.exports = {
+  transform: {
+    "\\.sql$": "porg/jest",
+    "\\.[jt]s$": ["babel-jest", { plugins: ["@babel/plugin-transform-modules-commonjs"] }],
+  },
+  transformIgnorePatterns: ["/node_modules/(?!porg/)"],
+};
+```
+
+A CommonJS test reads the query as `require("./get_user.sql").default`.

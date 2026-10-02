@@ -27,55 +27,85 @@ const user = await getUser.run(sql, { id: 1, name: "ada" });
 // } | null
 ```
 
-Porg is a TypeScript 7.1 content mapper. The type checker hands it each `.sql` file; Porg parses the statement, checks it against the database's catalog, and returns a typed module. Every type above comes from the database:
+Every type above comes from the database.
+
+<Accordions type="single">
+<Accordion title="The schema behind the examples">
 
 ```sql title="schema.sql"
-create type user_role as enum ('admin', 'member');
+create type user_role as enum ('admin', 'member');  -- role: "admin" | "member"
+
 create table users (
-  id serial primary key,
-  name text not null,
-  email text,
+  id serial primary key,                            -- the primary key: at most one row, so `| null`
+  name text not null,                               -- name: string
+  email text,                                       -- email: string | null
   role user_role not null default 'member',
-  tags text[] not null default '{}',
-  created_at timestamptz not null default now()
+  tags text[] not null default '{}',                -- tags: string[]
+  created_at timestamptz not null default now()     -- created_at: Date
+);
+
+create table posts (
+  id serial primary key,
+  user_id integer not null references users (id),
+  title text not null,
+  body text,
+  published_at timestamptz
 );
 ```
 
-- `id` and `name` are parameters; their types come from the server.
-- `email` is nullable because the column is.
-- `role` is the enum's labels. `tags` is a `text[]`.
-- `next_id` is non-null: `id` is, and `+` never returns NULL for non-null operands.
-- The row is `| null` because `id` is the primary key, so the `where` matches at most one row.
-- `created_at` is a `Date` because that is what every Postgres driver returns by default.
+</Accordion>
+</Accordions>
 
-## Requirements
+## How it works
 
-- **TypeScript 7.1 dev builds** (`typescript@next`). Content mappers are not in TypeScript 7.0.
-- **The type check runs with `--runExternalCode`.** A content mapper runs code, so `tsc` ignores `contentMappers` without the flag.
-- **Node 24 or later.**
-- **A database the type check can reach**, or a `.porg/` cache that `porg generate` filled (see [Builds and CI](#builds-and-ci)).
-- **The project's driver.** The type check talks to the database through the driver the project installs: `postgres` or `pg` for Postgres, `mysql2` for MySQL. SQLite uses `node:sqlite`.
+Porg is a [content mapper](https://github.com/microsoft/typescript-go/pull/4712), a feature new in TypeScript 7.1. A content mapper is a package that turns a file type TypeScript does not know into a typed module, in the type checker and in the editor.
 
-## Install
+Bundlers have loaded `.sql` and other files as modules for years, but the type checker could not see inside them. Content mappers are the missing half: a loader is now type safe from end to end.
+
+To type a query, Porg sends it to your running database, which prepares it without running it. The database reports what the query takes and what it returns:
+
+- the parameter types
+- the column types
+- nullability, from `NOT NULL` and outer joins
+- the row count, from primary and unique keys
+
+Porg connects through the driver your project already uses: `pg`, `postgres` or `mysql2`, or `node:sqlite` for SQLite. It keeps each answer in `.porg/` and asks again when the schema changes.
+
+## Setup
+
+Install Porg and point it at your database, then add it to each tool that loads your code.
+
+### Install
 
 ```npm
-npm install porg postgres
+npm install porg
 npm install -D typescript@next
 ```
 
-Add the content mapper to `tsconfig.json`. `contentMappers` is a top-level key, next to `compilerOptions`, and it carries through `extends`.
+Content mappers are in the TypeScript 7.1 dev builds (`typescript@next`). Porg needs Node 24 or later.
 
-```json title="tsconfig.json"
+Porg reads `DATABASE_URL` from the environment, or from `.env.local` or `.env` next to `package.json`:
+
+```sh title=".env"
+DATABASE_URL=postgres://localhost:5432/app   # mysql://… for MySQL, file:./app.db for SQLite
+```
+
+Other settings go in a `.porg.yaml` file: see [The project file](/details#the-project-file).
+
+### TypeScript
+
+Add Porg to `tsconfig.json`:
+
+```jsonc title="tsconfig.json"
 {
   "compilerOptions": {
-    "strict": true,
-    "noEmit": true
+    // ...
   },
   "contentMappers": [{ "package": "porg", "extensions": [".sql"] }]
 }
 ```
 
-Type-check with the flag:
+Type-check with `--runExternalCode`. Without the flag, `tsc` ignores content mappers.
 
 ```json title="package.json"
 {
@@ -85,240 +115,87 @@ Type-check with the flag:
 }
 ```
 
-`tsc` emits no JavaScript for a `.sql` file. To run the code, add the plugin for your bundler or the preload for your runtime: see [Setup](#setup).
+### Editors
 
-## Connect
+The editor needs the TypeScript 7.1 language server, with content mappers on.
 
-Porg reads `DATABASE_URL` from the environment, or from `.env.local` or `.env` beside the project's `package.json` (the nearest one at or above `tsconfig.json`). The environment wins, then the first file that sets the variable.
-
-```sh title=".env"
-DATABASE_URL=postgres://localhost:5432/postgres
-```
-
-The URL's scheme names the dialect:
-
-| Scheme | Dialect |
-| --- | --- |
-| `postgres://`, `postgresql://` | Postgres |
-| `mysql://`, `mariadb://` | MySQL |
-| `file:`, `sqlite:` | SQLite (a relative path resolves against the package directory) |
-
-For anything else, add a `.porg.yaml` beside `package.json`. Every key is optional; a project whose connection is `DATABASE_URL` needs no file.
-
-```yaml title=".porg.yaml"
-url: ${DATABASE_URL}          # the default; the secret stays in the environment; the scheme names the dialect
-direct_url: ${DIRECT_URL}     # optional: a connection past a pooler, which the type check prefers
-env: [.env.local, .env]       # the default; the process environment wins, then the first file that sets a variable
-strict: true                  # optional: a parameter nothing in the statement types is an error instead of unknown
-types:                        # what the project's driver returns (see below)
-  dates: Date
-  bigint: string
-cli:                          # optional: which files porg generate analyzes, relative to this file
-  include: ["src/**/*.sql"]   # instead of every .sql file
-  exclude: ["src/legacy/**"]  # in addition to node_modules, build output and what git ignores
-```
-
-- An unknown key, or a `${VAR}` that nothing sets, is an error on every `.sql` import. The error names the line and column in `.porg.yaml`.
-- `PORG_CONFIG` names a project file somewhere else.
-- The content mapper takes no options in `tsconfig.json`. All settings live in `.porg.yaml`.
-
-## Write queries
-
-A `.sql` file holds one statement: a `select`, `insert`, `update` or `delete` (also `merge` on Postgres, `replace` on SQLite and MySQL). A file of DDL or of several statements, such as a migration, is an error.
-
-### Parameters
-
-Write parameters as `:name` in every dialect. The parameter object is `{ name: ... }`.
-
-```sql title="search.sql"
-select id, name from users
-where name like :pattern and role = :role
-```
-
-A statement can use its database's own positional form instead: `$1` on Postgres, `?` on MySQL, `?` and `?NNN` on SQLite. The key is then the number: `where id = $1` takes `{ 1: ... }`. Mixing the two styles in one statement is an error.
-
-- **A parameter is a value.** `select * from :table` is a syntax error. `order by :col` sorts by a constant; write `order by case when :sort = 'name' then name end` instead.
-- **A parameter nothing types is `unknown`.** A cast types it: `cast(:x as integer)`. With `strict: true` in `.porg.yaml`, an untyped parameter is an error.
-- **A parameter takes `null` only where the statement allows it**: the statement tests it for null or coalesces it (Postgres), or writes it whole to a nullable column (Postgres and SQLite).
-- **A parameter left out binds NULL.**
-
-### What is inferred
-
-- Parameter types.
-- Column names and types.
-- Nullability, from the catalog's `NOT NULL`, outer joins and the expressions.
-- The row count, from the statement and the schema. There is no directive to override it.
-
-| The statement | Row count | `run` resolves to |
-| --- | --- | --- |
-| A primary-key or unique-key equality, or `limit 1` | `maybeOne` | `Row \| null` |
-| An aggregate without `group by`, a one-row `insert … returning` | `one` | `Row` |
-| An `insert`, `update` or `delete` without `returning` | `none` | `void` |
-| Anything else | `many` | `Row[]` |
-
-At run time, a `one` query throws unless it gets exactly one row, and a `maybeOne` query throws if it gets more than one.
-
-### Nested JSON (Postgres)
-
-JSON built in the statement keeps its shape. Porg reads the constructors out of the parse tree and types their arguments:
-
-```sql title="user_with_posts.sql"
-select u.id, u.name,
-  coalesce((select jsonb_agg(jsonb_build_object('id', p.id, 'title', p.title, 'body', p.body, 'at', p.published_at)) from posts p where p.user_id = u.id), '[]') as posts
-from users u
-where u.id = :id
-```
-
-```ts
-const user = await userWithPosts.run(sql, { id: 1 });
-// user: {
-//   id: number;
-//   name: string;
-//   posts: { id: number; title: string; body: string | null; at: string | null }[];
-// } | null
-```
-
-Inside JSON the values are what the database serialized: a timestamp is a `string` there.
-
-### What a `.sql` module exports
-
-```ts
-import getUser from "./get_user.sql";                // the query
-import type { Params, Row } from "./get_user.sql";   // its parameter and row types
-
-getUser.sql;          // the statement as written
-getUser.params;       // the parameter names, in binding order
-getUser.cardinality;  // "many" | "one" | "maybeOne" | "none"
-```
-
-## Run queries
-
-`run` takes the client of the driver the project already uses, and the parameters. It returns a promise of the driver's rows. The promise rejects with the driver's own error.
-
-```ts
-const user = await getUser.run(sql, { id: 1, name: "ada" });
-const users = await listUsers.run(sql); // a statement without parameters takes no second argument
-```
-
-`with(client)` binds the query to a client, such as a transaction:
-
-```ts
-const get = getUser.with(tx);
-await get({ id: 1, name: "ada" });
-```
-
-A transaction, savepoint or connection taken from a client is a client too:
-
-```ts
-// postgres.js and Bun.sql: the transaction and the savepoint are clients.
-await sql.begin(async (tx) => {
-  const user = await getUser.run(tx, { id: 1, name: "ada" });
-  await tx.savepoint((sp) => rename.run(sp, { id: user!.id, name: "bo" }));
-});
-```
-
-On better-sqlite3, `node:sqlite` and `bun:sqlite`, which answer synchronously, `runSync` returns the result itself and throws the error. It works inside their `db.transaction(fn)`, whose function cannot await. Any other client is a type error.
-
-```ts
-// better-sqlite3 and bun:sqlite: an error rolls the whole transaction back.
-db.transaction(() => {
-  const { id } = insertUser.runSync(db, { name: "ada" });
-  insertPost.runSync(db, { user_id: id, title: "hello" });
-})();
-```
-
-Porg imports no driver. The client is always yours. The query's dialect narrows which clients `run` accepts:
-
-| Dialect | Clients |
-| --- | --- |
-| Postgres | `pg` (Pool, Client, PoolClient), postgres.js and Bun.sql (with `begin`, `savepoint` and `reserve`), PGlite (with `transaction`), Neon (Pool, Client and `neon()`), pg-promise (with `task` and `tx`), `@vercel/postgres` |
-| MySQL | mysql2 and mariadb (promise or callback API), PlanetScale's serverless driver 1.x (with `transaction`) |
-| SQLite | better-sqlite3, `node:sqlite`, `bun:sqlite`, `@libsql/client` (with `transaction()`), Cloudflare D1, sqlite3, sqlite |
-
-PlanetScale's driver 2.0 binds no parameters, so it runs only statements without any.
-
-## Setup
-
-The type check gives the types. A bundler plugin or a runtime preload turns each `.sql` import into a module for the running code. Each analyzes the statement as the type check does, from `.porg/` or the database.
-
-<Accordions type="multiple">
-<Accordion title="TypeScript" id="setup-typescript">
-
-Add the content mapper to `tsconfig.json`:
-
-```json title="tsconfig.json"
-{
-  "contentMappers": [{ "package": "porg", "extensions": [".sql"] }]
-}
-```
-
-Run the check with `--runExternalCode`:
-
-```sh
-tsc --noEmit --runExternalCode
-```
-
-Without the flag, `tsc` ignores `contentMappers` and every `.sql` import is "Cannot find module". A tool that runs its own type check without the flag cannot run the mapper. `next build` is one: see Next.js below.
-
-</Accordion>
-<Accordion title="VS Code and Cursor" id="setup-vscode">
+<Tabs items={["VS Code and Cursor", "Zed"]}>
+<Tab value="VS Code and Cursor">
 
 1. Install the **TypeScript (Native Preview)** extension (`TypeScriptTeam.native-preview`).
-2. Turn it on, with content mappers enabled (the default):
+2. Turn it on:
 
-```json title=".vscode/settings.json"
-{
-  "typescript.experimental.useTsgo": true,
-  "js/ts.contentMappers.enabled": true
-}
+   ```json title=".vscode/settings.json"
+   {
+     "typescript.experimental.useTsgo": true,
+     "js/ts.contentMappers.enabled": true
+   }
+   ```
+
+3. Trust the workspace. The extension runs no content mapper in an untrusted workspace.
+
+</Tab>
+<Tab value="Zed">
+
+1. Install the **TypeScript Language Server** extension by Zed Industries (search for "tsgo").
+2. Point it at the project's TypeScript, with content mappers on:
+
+   ```jsonc title=".zed/settings.json"
+   {
+     "languages": {
+       "TypeScript": {
+         "language_servers": ["typescript-ls", "!vtsls", "!typescript-language-server", "..."]
+       },
+       "TSX": {
+         "language_servers": ["typescript-ls", "!vtsls", "!typescript-language-server", "..."]
+       }
+     },
+     "lsp": {
+       "typescript-ls": {
+         // the extension's own download is TypeScript 7.0, which has no content mappers
+         "binary": { "path": "node_modules/typescript/bin/tsc", "arguments": ["--lsp", "--stdio"] },
+         "initialization_options": { "runExternalCode": true }
+       }
+     }
+   }
+   ```
+
+3. Trust the folder. In restricted mode, Zed starts no language server.
+
+Zed shows no errors inside a `.sql` file: see [Editors](/details#editors).
+
+</Tab>
+</Tabs>
+
+### Runtimes
+
+A preload turns each `.sql` import into a module as it loads.
+
+```sh tab="Node"
+node --import porg/register main.ts
+
+# or for every node process
+export NODE_OPTIONS="--import porg/register"
 ```
 
-3. Trust the workspace. The extension does not run in an untrusted workspace, because a content mapper runs code from `node_modules`.
+```sh tab="Bun"
+bun --preload porg/register main.ts
 
-To suggest the extension to everyone who opens the project:
-
-```json title=".vscode/extensions.json"
-{ "recommendations": ["TypeScriptTeam.native-preview"] }
+# or for every bun command: preload = ["porg/register"] in bunfig.toml
 ```
 
-The mapper runs with the editor's environment, not your shell's. Keep `DATABASE_URL` in `.env` or `.env.local`, where Porg finds it.
-
-</Accordion>
-<Accordion title="Zed" id="setup-zed">
-
-1. Install the **TypeScript Language Server** extension by Zed Industries: open the Extensions page (`cmd-shift-x`) and search for "tsgo".
-2. Add `.zed/settings.json` to the project. It makes the extension's server run the project's own TypeScript with content mappers on:
-
-```jsonc title=".zed/settings.json"
-{
-  "languages": {
-    "TypeScript": {
-      "language_servers": ["typescript-ls", "!vtsls", "!typescript-language-server", "..."]
-    },
-    "TSX": {
-      "language_servers": ["typescript-ls", "!vtsls", "!typescript-language-server", "..."]
-    }
-  },
-  "lsp": {
-    "typescript-ls": {
-      // The extension downloads the latest TypeScript from npm, which has no content mappers yet.
-      "binary": { "path": "node_modules/typescript/bin/tsc", "arguments": ["--lsp", "--stdio"] },
-      "initialization_options": { "runExternalCode": true }
-    }
-  }
-}
+```sh tab="nub"
+nub --import porg/register main.ts
 ```
 
-3. Trust the folder. In restricted mode Zed ignores `.zed/settings.json` and starts no language server; click **Trust and Continue**.
+### Bundlers and frameworks
 
-- The types follow a `.sql` file each time it is saved.
-- Zed does not send `.sql` files to the language server, so an error inside a `.sql` file does not show in Zed: the query's parameters and rows become `unknown` instead. Run `tsc --noEmit --runExternalCode` to see the error.
-- After a change to `binary.path`, close the window and open it again.
+A bundler plugin turns each `.sql` import into a module at build time, so a bundled app needs no preload.
 
-</Accordion>
-<Accordion title="Vite" id="setup-vite">
+<Accordions type="multiple">
+<Accordion title="Vite and every Vite-based framework" id="setup-vite">
 
-`porg/vite` is one plugin for Vite and every framework built on it: SvelteKit, Nuxt, Astro, React Router (and Remix), SolidStart, Qwik, and Vitest.
+One plugin covers Vite and the frameworks built on it: SvelteKit, Nuxt, Astro, React Router, SolidStart, Qwik, and Vitest.
 
 ```ts title="vite.config.ts"
 import { defineConfig } from "vite";
@@ -329,26 +206,12 @@ export default defineConfig({
 });
 ```
 
-Where a framework keeps the Vite config in its own file, the plugin goes in that file's `vite.plugins`: `nuxt.config.ts` for Nuxt, `astro.config.mjs` for Astro, `app.config.ts` for SolidStart. Vitest reads `vite.config.ts`, or takes the same `plugins` in `vitest.config.ts`.
-
-Import `.sql` files from server code only. The module carries the statement, and the plugin does not stop a browser bundle from importing it.
-
-The same plugin works in Rollup and Rolldown:
-
-```js title="rollup.config.mjs"
-import porg from "porg/vite";
-
-export default {
-  input: "main.mjs",
-  plugins: [porg()],
-  output: { dir: "dist", format: "es" },
-};
-```
+A framework with its own config file takes the plugin in that file's `vite.plugins`. Rollup and Rolldown take the same plugin.
 
 </Accordion>
 <Accordion title="Next.js" id="setup-nextjs">
 
-Next.js takes `porg/webpack-loader` for both of its bundlers, on the server only. A client component that imports a `.sql` file then fails the build instead of shipping the statement to the browser.
+The loader runs in both of Next.js's bundlers, on the server only.
 
 ```ts title="next.config.ts"
 import type { NextConfig } from "next";
@@ -369,7 +232,7 @@ const nextConfig: NextConfig = {
 export default nextConfig;
 ```
 
-`next build` runs its own type check without `--runExternalCode`, so the mapper cannot run there and every `.sql` import is an error. Turn that step off (`ignoreBuildErrors` above) and run the real check before the build. `next typegen` writes the route types the check reads.
+The type check of `next build` cannot run content mappers, so the scripts run the real check first:
 
 ```json title="package.json"
 {
@@ -381,10 +244,8 @@ export default nextConfig;
 }
 ```
 
-Route handlers, server components and edge route handlers can import `.sql` files. On the edge runtime, use a driver that does not need TCP sockets.
-
 </Accordion>
-<Accordion title="esbuild" id="setup-esbuild">
+<Accordion title="esbuild and Bun.build" id="setup-esbuild">
 
 ```js title="build.mjs"
 import * as esbuild from "esbuild";
@@ -394,15 +255,10 @@ await esbuild.build({
   entryPoints: ["main.ts"],
   bundle: true,
   platform: "node",
-  format: "esm",
   plugins: [porg()],
   outfile: "dist/main.js",
 });
 ```
-
-`buildSync` runs no plugins, so use `build`.
-
-`Bun.build` takes the same plugin:
 
 ```ts title="build.ts"
 import porg from "porg/esbuild";
@@ -410,7 +266,7 @@ import porg from "porg/esbuild";
 await Bun.build({
   entrypoints: ["main.ts"],
   target: "bun",
-  plugins: [porg()],
+  plugins: [porg()], // Bun.build takes the esbuild plugin
   outdir: "dist",
 });
 ```
@@ -427,51 +283,12 @@ export default {
 };
 ```
 
-Rspack takes the same rule in `rspack.config.mjs`.
-
-</Accordion>
-<Accordion title="Node" id="setup-node">
-
-Preload `porg/register`:
-
-```sh
-node --import porg/register src/main.ts
-```
-
-Or set it once for every `node` process:
-
-```sh
-NODE_OPTIONS="--import porg/register"
-```
-
-The preload builds each `.sql` module as it loads, from `.porg/` or the database.
-
-</Accordion>
-<Accordion title="nub" id="setup-nub">
-
-```sh
-nub --import porg/register src/main.ts
-```
-
-</Accordion>
-<Accordion title="Bun" id="setup-bun">
-
-```sh
-bun --preload porg/register src/main.ts
-```
-
-Or preload it for every `bun` command:
-
-```toml title="bunfig.toml"
-preload = ["porg/register"]
-```
-
-Without the preload, Bun imports a `.sql` file as its path, a string, and reports no error. The first query then fails.
+Rspack takes the same rule.
 
 </Accordion>
 <Accordion title="Jest" id="setup-jest">
 
-Jest loads test code through its own runtime, which the Node preload never reaches. Use the transformer instead, and run Jest with ES modules on:
+Jest loads test code through its own runtime, which a preload never reaches, so it takes a transformer:
 
 ```js title="jest.config.js"
 export default {
@@ -484,90 +301,265 @@ export default {
 NODE_OPTIONS=--experimental-vm-modules npx jest
 ```
 
-Porg's runtime is an ES module, which a CommonJS run cannot `require`. Without `--experimental-vm-modules`, let babel-jest compile it to CommonJS, and read the query as `require("./get_user.sql").default`:
-
-```js title="jest.config.js"
-module.exports = {
-  transform: {
-    "\\.sql$": "porg/jest",
-    "\\.[jt]s$": ["babel-jest", { plugins: ["@babel/plugin-transform-modules-commonjs"] }],
-  },
-  transformIgnorePatterns: ["/node_modules/(?!porg/)"],
-};
-```
-
-Vitest needs nothing more than `porg/vite` (see Vite).
+Vitest needs only the Vite plugin.
 
 </Accordion>
 </Accordions>
 
-## Builds and CI
+## Write queries
 
-Every build step (the type check, a bundler plugin, the preload) analyzes each statement against the database and keeps the result in `.porg/`, one entry per statement. A later step reads the entry instead of asking the database again.
+A `.sql` file holds one statement. Porg types its parameters, its columns, and how many rows it returns.
 
-- `.porg/` is a cache. Porg writes a `.gitignore` into it; never commit it.
-- While the database answers, an entry analyzed against another schema is analyzed again.
-- While the database cannot be reached, the entries are used as they are.
-- A statement that `.porg/` lacks, with no database, is an error that names the host and the reason. A build fails rather than emit a module without the analysis.
+### Parameters
 
-To build without a database (a CI job, a container build), fill `.porg/` first where the database can be reached, and carry it to the build (a CI cache, a build stage):
+Write a parameter as `:name`, on every dialect.
 
-```sh
-porg generate [paths...] [--force]
+```sql title="search.sql"
+select id, name from users
+where name like :pattern and role = :role
 ```
 
-`porg generate` analyzes every `.sql` file under the paths (by default the current directory) into `.porg/`. It leaves out `node_modules`, build output, directories whose names start with a dot and, in a git repository, what git ignores. The `cli` section of `.porg.yaml` sets which files it reads (see [Connect](#connect)). A file that is not one query, such as a migration, is skipped. `--force` analyzes each file against the database even when `.porg/` holds it.
+```ts
+import search from "./search.sql";
 
-```text
-$ porg generate
-postgres at localhost:5432/postgres (DATABASE_URL in .env)
-  src/admin/find_by_email.sql  ✗
-  src/admin/set_email.sql      ✓
-  src/queries/get_user.sql     ✓
-
-src/admin/find_by_email.sql:1:12: column "nmae" does not exist (42703)
-  1 | select id, nmae
-    |            ^^^^
-
-Skipped 2 files that are not one query (a migration?): migrations/0001_init.sql, migrations/0002_email.sql
-
-✗ 1 of 3 queries failed (0.4 s)
+await search.run(sql, { pattern: "a%", role: "admin" });
+// params: { pattern: string; role: "admin" | "member" }
 ```
 
-It exits 1 when a query fails.
+More on parameters, from positional forms to `null`: see [Parameters](/details#parameters).
 
-## Dates and 64-bit integers
+### Columns and nullability
 
-`run` returns the rows the driver returns. Porg declares their types and converts no value. Drivers disagree on two kinds of value, so the `types` section of `.porg.yaml` says what your driver returns:
+Column types and `NOT NULL` come from the schema. Outer joins and expressions decide the rest.
+
+```sql title="user_posts.sql"
+select u.name, p.title, coalesce(p.title, '') as label
+from users u
+left join posts p on p.user_id = u.id
+```
+
+```ts
+const rows = await userPosts.run(sql);
+// {
+//   name: string;          not null in the table
+//   title: string | null;  the outer side of a left join
+//   label: string;         coalesce with a non-null default
+// }[]
+```
+
+### Row count
+
+The statement and the schema decide how many rows a query returns, and `run` resolves to the matching type.
+
+```sql
+-- get_user.sql
+select * from users where id = :id
+
+-- count_users.sql
+select count(*) from users
+
+-- list_users.sql
+select * from users
+
+-- delete_user.sql
+delete from users where id = :id
+```
+
+```ts
+await getUser.run(sql, { id: 1 });     // Row | null    a primary-key match, or limit 1
+await countUsers.run(sql);             // Row           an aggregate without group by
+await listUsers.run(sql);              // Row[]         anything else
+await deleteUser.run(sql, { id: 1 });  // void          a write without returning
+```
+
+### Nested JSON
+
+JSON built in the statement keeps its shape.
+
+```sql title="user_with_posts.sql"
+select u.id, u.name,
+  coalesce((
+    select jsonb_agg(jsonb_build_object('id', p.id, 'title', p.title, 'body', p.body, 'at', p.published_at))
+    from posts p where p.user_id = u.id
+  ), '[]') as posts
+from users u
+where u.id = :id
+```
+
+```ts
+const user = await userWithPosts.run(sql, { id: 1 });
+// {
+//   id: number;
+//   name: string;
+//   posts: { id: number; title: string; body: string | null; at: string | null }[];
+// } | null
+```
+
+Inside JSON, a timestamp is the string the database wrote.
+
+### The module
+
+A `.sql` import exports the query and its types.
+
+```ts
+import getUser from "./get_user.sql";                // the query
+import type { Params, Row } from "./get_user.sql";   // its parameter and row types
+
+getUser.sql;          // the statement as written
+getUser.params;       // ["id", "name"]
+getUser.cardinality;  // "maybeOne"
+```
+
+## Run queries
+
+Pass `run` the client of your driver and the parameters. It returns a promise of the driver's rows.
+
+```ts
+const user = await getUser.run(sql, { id: 1, name: "ada" });
+const users = await listUsers.run(sql); // no parameters, no second argument
+```
+
+The `with` method binds a client once:
+
+```ts
+const get = getUser.with(tx); // a transaction from your driver is a client too
+await get({ id: 1, name: "ada" });
+```
+
+The synchronous SQLite drivers take `runSync`:
+
+```ts
+const user = getUser.runSync(db, { id: 1 }); // better-sqlite3, node:sqlite, bun:sqlite
+```
+
+Porg imports no driver. It works with the client of any of these:
+
+- Postgres
+  - `pg`
+  - `postgres` (postgres.js)
+  - `Bun.sql`
+  - `@electric-sql/pglite`
+  - `@neondatabase/serverless`
+  - `pg-promise`
+  - `@vercel/postgres`
+- MySQL
+  - `mysql2`
+  - `mariadb`
+  - `@planetscale/database` (1.x)
+- SQLite
+  - `better-sqlite3`
+  - `node:sqlite`
+  - `bun:sqlite`
+  - `@libsql/client`
+  - Cloudflare D1
+  - `sqlite3`
+  - `sqlite`
+
+## Data types
+
+Each SQL type maps to a TypeScript type.
+
+<Tabs items={["Postgres", "MySQL", "SQLite"]}>
+<Tab value="Postgres">
+
+| SQL type | TypeScript |
+| --- | --- |
+| `smallint`, `integer` | `number` |
+| `bigint` | `string` |
+| `real`, `double precision` | `number` |
+| `numeric` | `string` |
+| `text`, `varchar`, `char` | `string` |
+| `boolean` | `boolean` |
+| `uuid` | `string` |
+| `date`, `timestamp`, `timestamptz` | `Date` |
+| `time`, `timetz`, `interval` | `string` |
+| `json`, `jsonb` | `unknown` |
+| `jsonb_build_object(…)`, `jsonb_agg(…)` | the object or array it builds |
+| `bytea` | `Uint8Array` |
+| An array | an array of its element type |
+| An enum | the union of its labels |
+| A domain | its base type |
+| `inet`, `cidr`, `money`, ranges | `string` |
+
+</Tab>
+<Tab value="MySQL">
+
+| SQL type | TypeScript |
+| --- | --- |
+| `TINYINT`, `SMALLINT`, `INT`, `YEAR` | `number` |
+| `BOOLEAN` | `number` (0 or 1) |
+| `BIGINT` | `number` |
+| `DECIMAL` | `string` |
+| `FLOAT`, `DOUBLE` | `number` |
+| `CHAR`, `VARCHAR`, `TEXT` | `string` |
+| `ENUM`, `SET` | `string` |
+| `DATE`, `DATETIME`, `TIMESTAMP` | `Date` |
+| `TIME` | `string` |
+| `JSON` | `unknown` |
+| `json_object(…)`, `json_arrayagg(…)` | the object or array it builds |
+| `BINARY`, `BLOB` | `Uint8Array` |
+
+</Tab>
+<Tab value="SQLite">
+
+| Declared type | TypeScript |
+| --- | --- |
+| `INTEGER` | `number` |
+| `REAL` | `number` |
+| `TEXT` | `string` |
+| `BLOB` | `Uint8Array` |
+| `NUMERIC`, `BOOLEAN`, `DATE`, `DATETIME` | `number \| string` |
+| `json_object(…)`, `json_group_array(…)` | `string` |
+
+</Tab>
+</Tabs>
+
+Drivers disagree on dates and 64-bit integers. On Postgres and MySQL, the `types` section of `.porg.yaml` says what your driver returns:
 
 ```yaml title=".porg.yaml"
 types:
-  dates: Date       # the default on Postgres and MySQL; string or temporal for a driver set up to return those
-  bigint: string    # the default on Postgres; number is the default on MySQL and SQLite; bigint for mariadb
+  dates: Date     # Date (the default), string or temporal
+  bigint: string  # string (the Postgres default), number (the MySQL default) or bigint
 ```
 
-| Setting | Value | `timestamptz` | `timestamp`, MySQL `datetime` / `timestamp` | `date` | `int8`, MySQL `bigint` |
-| --- | --- | --- | --- | --- | --- |
-| `dates` | `Date` (default) | `Date` | `Date` | `Date` | |
-| `dates` | `string` | `string` | `string` | `string` | |
-| `dates` | `temporal` | `Temporal.Instant` | `Temporal.PlainDateTime` | `Temporal.PlainDate` | |
-| `bigint` | `string` (Postgres default), `number` (MySQL and SQLite default), `bigint` | | | | `string`, `number` or `bigint` |
-
-- The setting has to match the driver, because Porg does not see the driver's options. `pg` with a `types.setTypeParser` for timestamps, `postgres` with its `types` option, or mysql2 and mariadb with `dateStrings: true` return text and need `dates: string`. mysql2 with `supportBigNumbers: true, bigNumberStrings: true` needs `bigint: string`. mariadb returns a BigInt by default and needs `bigint: bigint`.
-- `temporal` types the values with TypeScript's own `esnext.temporal` lib. The driver builds the values.
-- `JSON.stringify` has no rule for a `bigint`: add a `BigInt.prototype.toJSON` or a replacer.
-- Inside nested JSON the database serialized the value already, so the settings do not apply there. SQLite has no date type, and its integers follow the driver.
+Which driver option needs which setting: see [Dates and 64-bit integers](/details#dates-and-64-bit-integers).
 
 ## Dialects
 
-Postgres is the reference dialect. MySQL and SQLite work, but they type less: some facts their databases do not give, and some Porg does not read yet.
+Postgres is the reference dialect. MySQL and SQLite type less: see [Dialect limits](/details#dialect-limits).
 
-| | Postgres | MySQL 8.4 | SQLite |
-| --- | --- | --- | --- |
-| Column types | Exact: enums with their labels, domains as their base type, arrays, composites | An `ENUM` is `string`, `BOOLEAN` is a number, `DECIMAL` is a string | The declared affinity; no date, time or boolean type |
-| Parameter types | From the server | From the server | Only where SQLite places the parameter: a comparison with a column, an `insert` or `update` column, a `cast`, `limit` and `offset` |
-| A parameter that may be null | Tested for null, coalesced, or written to a nullable column | None | Written to a nullable column |
-| Nested JSON | Typed objects and lists | Typed from `json_object` and `json_arrayagg` | `string` |
-| Writes | `returning` is typed like a `select` | No `returning`: every write is `none` | `returning` is typed like a `select` |
+### Postgres
 
-The details, and what would close each gap, are in [docs/dialects.md](https://github.com/colinhacks/lando/blob/main/docs/dialects.md).
+Porg prepares the statement on the server and reads the description of its parameters and columns. It then reads the catalog for `NOT NULL`, keys and enum labels.
+
+| What | Where it comes from |
+| --- | --- |
+| Parameter types | the server's description of the prepared statement |
+| Column types | the server's description; an enum as its labels, a domain as its base type |
+| Nullability | `NOT NULL` in the catalog, outer joins, the expressions |
+| Row count | primary and unique keys, aggregates, `limit 1`, `returning` |
+| Nested JSON | `jsonb_build_object`, `jsonb_agg` and `to_jsonb`, typed from their arguments |
+
+### MySQL
+
+Porg prepares the statement on the server, which reports the column types, `NOT NULL`, and a type for each parameter from its context. Porg adds the row count and the shape of JSON built in the statement.
+
+| What | Where it comes from |
+| --- | --- |
+| Parameter types | the server's prepare |
+| Column types | the server's prepare |
+| Nullability | the server's `NOT NULL` flag |
+| Row count | primary and unique keys, aggregates; a write is `void` (MySQL has no `returning`) |
+| Nested JSON | `json_object` and `json_arrayagg`, typed from their arguments |
+
+### SQLite
+
+Porg reads the schema from the database file and prepares the statement against its own copy of SQLite. SQLite then reports where every column and parameter comes from.
+
+| What | Where it comes from |
+| --- | --- |
+| Parameter types | where SQLite places the parameter: a comparison with a column, an `insert` or `update` column, a `cast`, `limit` and `offset` |
+| Column types | the declared type's affinity |
+| Nullability | `NOT NULL` in the table, outer joins, Porg's table of SQLite's built-in functions |
+| Row count | unique indexes and `integer primary key` |
+| Nested JSON | `string` |

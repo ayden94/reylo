@@ -6,10 +6,12 @@ import { DocsBody, DocsDescription, DocsPage, DocsTitle } from 'fumadocs-ui/layo
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 
-// The whole site is this one page: content/docs/index.mdx, with its table of contents and no
-// sidebar tree.
-export default function Page() {
-  const page = source.getPage([]);
+type Props = { params: Promise<{ slug?: string[] }> };
+
+// Two pages: content/docs/index.mdx at / and content/docs/details.mdx at /details, each with its
+// table of contents and no sidebar tree.
+export default async function Page({ params }: Props) {
+  const page = source.getPage((await params).slug ?? []);
   if (!page) notFound();
   const MDX = page.data.body;
 
@@ -36,8 +38,12 @@ export default function Page() {
   );
 }
 
-export function generateMetadata(): Metadata {
-  const page = source.getPage([]);
+export function generateStaticParams() {
+  return source.generateParams();
+}
+
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  const page = source.getPage((await params).slug ?? []);
   if (!page) notFound();
-  return { title: page.data.title, description: page.data.description };
+  return { title: page.slugs.length ? `${page.data.title} · Porg` : page.data.title, description: page.data.description };
 }
