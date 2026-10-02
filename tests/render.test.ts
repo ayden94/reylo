@@ -63,3 +63,18 @@ test("a composite with no columns inside a document is an empty object", () => {
   assert.equal(renderType({ kind: "composite", name: "empty", fields: [] }, true), "Record<never, never>");
   assert.equal(renderType({ kind: "composite", name: "empty", fields: [] }, false), "string");
 });
+
+test("a SQLite INTEGER follows the bigint setting, as an int8 does elsewhere; dates changes no SQLite type", () => {
+  const sqlite = (bigint: Repr["bigint"]): Repr => ({ dates: "string", bigint });
+  assert.equal(renderType(scalar("integer"), false, "sqlite", sqlite("number")), "number");
+  assert.equal(renderType(scalar("integer"), false, "sqlite", sqlite("bigint")), "bigint");
+  assert.equal(renderType(scalar("integer"), false, "sqlite", sqlite("string")), "string");
+  // A NUMERIC column holds whichever storage class the row stored.
+  assert.equal(renderType(scalar("numeric"), false, "sqlite", sqlite("number")), "number | string");
+  assert.equal(renderType(scalar("numeric"), false, "sqlite", sqlite("bigint")), "bigint | number | string");
+  assert.equal(renderType(scalar("real"), false, "sqlite", sqlite("bigint")), "number");
+  assert.equal(renderType(scalar("text"), false, "sqlite", { dates: "Date", bigint: "number" }), "string");
+  // The driver binds a number or a BigInt whatever it returns.
+  assert.equal(renderParamType(scalar("integer"), "sqlite", sqlite("number")), "number");
+  assert.equal(renderParamType(scalar("integer"), "sqlite", sqlite("bigint")), "number | bigint");
+});

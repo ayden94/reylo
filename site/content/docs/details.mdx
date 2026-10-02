@@ -118,20 +118,20 @@ A `.sql` file holds one `select`, `insert`, `update` or `delete`, or `merge` on 
 
 ## Dates and 64-bit integers
 
-| Setting | Value | `timestamptz` | `timestamp`, MySQL `DATETIME` | `date` | `bigint` |
+| Setting | Value | `timestamptz` | `timestamp`, MySQL `DATETIME` | `date` | `bigint`, SQLite `INTEGER` |
 | --- | --- | --- | --- | --- | --- |
 | `dates` | `Date` (default) | `Date` | `Date` | `Date` | |
 | `dates` | `string` | `string` | `string` | `string` | |
 | `dates` | `temporal` | `Temporal.Instant` | `Temporal.PlainDateTime` | `Temporal.PlainDate` | |
-| `bigint` | `string` (Postgres default), `number` (MySQL default), `bigint` | | | | `string`, `number` or `bigint` |
+| `bigint` | `string` (Postgres default), `number` (MySQL and SQLite default), `bigint` | | | | `string`, `number` or `bigint` |
 
 The setting has to match the driver, because Porg does not see the driver's options:
 
 - `dates: string` for `pg` with a timestamp `types.setTypeParser`, `postgres` with its `types` option, or mysql2 and mariadb with `dateStrings: true`
 - `bigint: string` for mysql2 with `supportBigNumbers` and `bigNumberStrings`
-- `bigint: bigint` for mariadb, which returns a BigInt by default
+- `bigint: bigint` for mariadb, which returns a BigInt by default, and for better-sqlite3 and bun:sqlite with `safeIntegers`
 
-The `temporal` value types the values with TypeScript's `esnext.temporal` lib; the driver builds them. Inside nested JSON the database wrote the value already, so the settings do not apply there. On SQLite they change nothing.
+The `temporal` value types the values with TypeScript's `esnext.temporal` lib; the driver builds them. Inside nested JSON the database wrote the value already, so the settings do not apply there. SQLite has no date type, so `dates` changes no SQLite type.
 
 ## Transactions and synchronous drivers
 

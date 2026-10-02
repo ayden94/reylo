@@ -171,7 +171,7 @@ The URL's scheme names the dialect: `postgres://` and `postgresql://`, `mysql://
 ```yaml
 types:
   dates: Date       # the default on Postgres and MySQL; string or temporal for a driver set up to return those
-  bigint: string    # the default on Postgres; number is the default on MySQL; bigint for mariadb
+  bigint: string    # the default on Postgres; number is the default on MySQL and SQLite; bigint for mariadb
 ```
 
 | Setting | Value | `timestamptz` | `timestamp`, MySQL `datetime` / `timestamp` | `date` | `int8`, MySQL `bigint` |
@@ -179,9 +179,9 @@ types:
 | `dates` | `Date` (default) | `Date` | `Date` | `Date` | |
 | `dates` | `string` | `string` | `string` | `string` | |
 | `dates` | `temporal` | `Temporal.Instant` | `Temporal.PlainDateTime` | `Temporal.PlainDate` | |
-| `bigint` | `string` (Postgres default), `number` (MySQL default), `bigint` | | | | `string`, `number` or `bigint` |
+| `bigint` | `string` (Postgres default), `number` (MySQL and SQLite default), `bigint` | | | | `string`, `number` or `bigint` |
 
 - The setting has to match the driver, because Porg does not see the driver's options: `pg` with a `types.setTypeParser` for timestamps, `postgres` with its `types` option, or mysql2 and mariadb with `dateStrings: true` return text and need `dates: string`; mysql2 with `supportBigNumbers: true, bigNumberStrings: true` needs `bigint: string`; mariadb returns a BigInt by default and needs `bigint: bigint`.
 - `temporal` makes the generated module reference TypeScript's own `esnext.temporal` lib, which declares the global `Temporal` namespace, so the types resolve whatever `lib` the project sets; the driver builds the values ([lab/repr](./lab/repr) sets up `postgres` to).
 - `bigint` gives a `bigint`; `JSON.stringify` has no rule for one, so add a `BigInt.prototype.toJSON` or a replacer.
-- Inside a nested JSON shape the database serialized the value already, so the settings do not apply there; SQLite has no date type and its integers follow the driver.
+- Inside a nested JSON shape the database serialized the value already, so the settings do not apply there. SQLite has no date type, so `dates` changes no SQLite type; a SQLite `INTEGER` follows `bigint` (better-sqlite3's and bun:sqlite's `safeIntegers` and node:sqlite's `readBigInts` return a BigInt, libsql's `intMode` a string or a BigInt).

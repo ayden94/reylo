@@ -109,11 +109,10 @@ serve({
     // MySQL binds by position, so a name used twice is two values; the declared names stay unique.
     const order = dialect === "mysql" ? names : analysis.rewritten.order;
     if (analysis.diagnostics.some((d) => d.code === 6) || (dialect === "postgres" && analysis.kind === "")) return emit("unknown", "unknown", inferred, order);
-    // SQLite has no date or 64-bit type of its own, so the project's `types` settings do not apply.
-    const columns = analysis.columns.map((c) => `${ident(c.name)}: ${dialect === "sqlite" ? renderType(c.type, false, "sqlite") : renderType(c.type, false, dialect, project.repr)}${c.nullable ? " | null" : ""}`);
+    const columns = analysis.columns.map((c) => `${ident(c.name)}: ${renderType(c.type, false, dialect, project.repr)}${c.nullable ? " | null" : ""}`);
     // A parameter is typed from its context (a column it is compared with or written to, a CAST);
     // one no context types is `unknown`.
-    const paramTypes = analysis.params.map((q) => `${ident(q.name)}: ${paramType(q, dialect === "sqlite" ? renderType(q.type, false, "sqlite") : renderParamType(q.type, dialect, project.repr))}`);
+    const paramTypes = analysis.params.map((q) => `${ident(q.name)}: ${paramType(q, renderParamType(q.type, dialect, project.repr))}`);
     return emit(paramTypes.length ? `{ ${paramTypes.join("; ")} }` : "Record<never, never>", columns.length ? `{ ${columns.join("; ")} }` : "never", inferred, order);
   },
   async closeProject(params) {

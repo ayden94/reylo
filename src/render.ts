@@ -46,10 +46,19 @@ const json: Record<string, string> = {
 };
 const temporal: Record<string, string> = { timestamptz: "Temporal.Instant", timestamp: "Temporal.PlainDateTime", date: "Temporal.PlainDate" };
 
-// SQLite: the engine names a column by its affinity; node:sqlite, better-sqlite3 and bun:sqlite
-// decode INTEGER and REAL as numbers, TEXT as strings and BLOB as Uint8Array. A NUMERIC column
-// holds whichever the row stored. SQLite has no date type, so `dates` changes no SQLite type.
-const sqlite: Record<string, string> = { integer: "number", real: "number", text: "string", blob: "Uint8Array", numeric: "number | string" };
+// SQLite: the engine names a column by its affinity; the drivers decode REAL as a number, TEXT as
+// a string and BLOB as a Uint8Array. An INTEGER is a 64-bit integer, which the `bigint` setting
+// describes as for the other dialects: a number by default, a BigInt under better-sqlite3's and
+// bun:sqlite's safeIntegers or node:sqlite's readBigInts, a string or a BigInt under libsql's
+// intMode. A NUMERIC column holds whichever the row stored. SQLite has no date type, so `dates`
+// changes no SQLite type.
+const sqlite: Record<string, string> = { real: "number", text: "string", blob: "Uint8Array" };
+
+function sqliteScalar(name: string, repr: Repr): string {
+  if (name === "integer") return repr.bigint;
+  if (name === "numeric") return [...new Set([repr.bigint, "number", "string"])].join(" | ");
+  return sqlite[name] ?? "unknown";
+}
 
 export const ident = (name: string) => (/^[A-Za-z_$][\w$]*$/.test(name) ? name : JSON.stringify(name));
 
@@ -62,7 +71,7 @@ export function scalarType(name: string, repr: Repr): string {
 
 export function renderType(t: EngineType, inJson = false, dialect: "postgres" | "sqlite" | "mysql" = "postgres", repr: Repr = defaultRepr): string {
   switch (t.kind) {
-    case "scalar": return dialect === "sqlite" ? sqlite[t.name] ?? "unknown" : inJson ? json[t.name] ?? "unknown" : scalarType(t.name, repr);
+    case "scalar": return dialect === "sqlite" ? sqliteScalar(t.name, repr) : inJson ? json[t.name] ?? "unknown" : scalarType(t.name, repr);
     case "enum": return t.labels.length ? t.labels.map((l) => JSON.stringify(l)).join(" | ") : "string";
     case "array": {
       if (((t.of.kind === "scalar" && t.of.name === "record") || t.of.kind === "composite") && !inJson) return "string";
@@ -95,6 +104,8 @@ export function renderParamType(t: EngineType, dialect: "postgres" | "sqlite" | 
     if (t.name === "int8") return "number | bigint | string";
     if (t.name in temporal) return "Date | string";
   }
+  // A SQLite driver binds a number or a BigInt for an INTEGER, whatever it returns.
+  if (t.kind === "scalar" && dialect === "sqlite" && t.name === "integer") return repr.bigint === "number" ? "number" : `number | ${repr.bigint}`;
   if (t.kind === "array") {
     const inner = renderParamType(t.of, dialect, repr);
     return /[|&]/.test(inner) ? `(${inner})[]` : `${inner}[]`;

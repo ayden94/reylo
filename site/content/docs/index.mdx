@@ -577,7 +577,7 @@ Drivers disagree on dates and 64-bit integers. The `types` section of `.porg.yam
 ```yaml title=".porg.yaml"
 types:
   dates: Date     # Date (the default), string or temporal
-  bigint: string  # string (the Postgres default), number (the MySQL default) or bigint
+  bigint: string  # string (the Postgres default), number (the MySQL and SQLite default) or bigint
 ```
 
 Which driver option needs which setting: see [Dates and 64-bit integers](/details#dates-and-64-bit-integers).
