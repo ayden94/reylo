@@ -181,6 +181,8 @@ pub struct Node {
     pub not_null: bool,
     pub rowid: bool,
     pub outer: bool,
+    /// The column's table is STRICT.
+    pub strict: bool,
     pub resolved: Option<bool>,
     // variable, function
     pub name: Option<String>,

@@ -186,6 +186,18 @@ impl Fact {
     }
 }
 
+/// The type of a table column's values: its affinity, except that a column declared with no type,
+/// or `ANY` in a STRICT table, holds a value of any storage class. (`ANY` in a table that is not
+/// STRICT is a declared type like any other, with NUMERIC affinity.)
+fn column_type(declared: &str, aff: &str, strict: bool) -> Type {
+    let declared = declared.trim();
+    if declared.is_empty() || (strict && declared.eq_ignore_ascii_case("any")) {
+        Type::Unknown
+    } else {
+        affinity_type(aff)
+    }
+}
+
 /// An affinity name as the type model; `none` is unknown.
 fn affinity_type(aff: &str) -> Type {
     match aff {
@@ -256,9 +268,10 @@ impl Analyzer<'_> {
             .enumerate()
             .map(|(i, public)| {
                 let fact = facts.get(i).cloned().unwrap_or_else(Fact::unknown);
-                // A column SQLite could not type but names from a table: its declared affinity.
+                // A column SQLite could not type but names from a table: its declared affinity. The
+                // fact for a column declared without a type, or `ANY`, is already unknown on purpose.
                 let fact = match (&fact.ty, &public.declared) {
-                    (Type::Unknown, Some(declared)) => Fact { ty: affinity_type(affinity(declared)), non_null: fact.non_null },
+                    (Type::Unknown, Some(declared)) => Fact { ty: column_type(declared, affinity(declared), true), non_null: fact.non_null },
                     _ => fact,
                 };
                 let type_name = scalar_name(&fact.ty).unwrap_or("").to_string();
@@ -375,7 +388,11 @@ impl Analyzer<'_> {
             }
         }
         let aff = n.affinity.as_deref().unwrap_or(&n.aff);
-        Fact::new(aff, (n.not_null || n.rowid) && !n.outer)
+        let ty = match &n.declared {
+            Some(declared) if !n.rowid => column_type(declared, aff, n.strict),
+            _ => affinity_type(aff),
+        };
+        Fact { ty, non_null: (n.not_null || n.rowid) && !n.outer }
     }
 
     // ---- expressions -------------------------------------------------------------------------
@@ -595,7 +612,7 @@ impl Analyzer<'_> {
     fn table_column(&self, table: &str, column: &str) -> Option<Fact> {
         let info = self.tree.tables.get(table)?;
         let col = info.columns.iter().find(|c| c.name.eq_ignore_ascii_case(column))?;
-        Some(Fact::new(&col.affinity, col.not_null || info.rowid_alias.as_deref().is_some_and(|a| a.eq_ignore_ascii_case(column))))
+        Some(Fact { ty: column_type(&col.declared, &col.affinity, info.strict), non_null: col.not_null || info.rowid_alias.as_deref().is_some_and(|a| a.eq_ignore_ascii_case(column)) })
     }
 
     fn walk_select(&self, sel: &Sel, scope: &ScopeStack, targets: &[Option<Fact>], found: &mut Vec<(String, Fact)>) {
@@ -1079,6 +1096,22 @@ mod tests {
         let a = analyzed(sql);
         assert_eq!(a.diagnostics.len(), 1, "{:?}", a.diagnostics);
         assert_eq!((a.diagnostics[0].start, a.diagnostics[0].length), (sql.find("nope").unwrap(), 4));
+    }
+
+    #[test]
+    fn a_column_declared_without_a_type_holds_any_value() {
+        let ddl = vec!["CREATE TABLE t (a, b TEXT, c ANY)".to_string(), "CREATE TABLE s (x ANY, y INTEGER) STRICT".to_string()];
+        let r = analyze_ddl("SELECT t.a, t.b, s.x, s.y FROM t, s WHERE t.a = :a AND s.x = :x", &ddl, &Extras::default());
+        let a = &r.analysis;
+        assert!(a.diagnostics.is_empty(), "{:?}", a.diagnostics);
+        assert_eq!(col(a, "a"), ("unknown".into(), true));
+        assert_eq!(col(a, "b"), ("text".into(), true));
+        assert_eq!(col(a, "x"), ("unknown".into(), true));
+        assert_eq!(col(a, "y"), ("integer".into(), true));
+        assert_eq!((param(a, "a"), param(a, "x")), ("unknown".into(), "unknown".into()));
+        // In a table that is not STRICT, `ANY` is a declared type with NUMERIC affinity, not a wildcard.
+        let r = analyze_ddl("SELECT c FROM t", &ddl, &Extras::default());
+        assert_eq!(col(&r.analysis, "c"), ("numeric".into(), true));
     }
 
     #[test]
