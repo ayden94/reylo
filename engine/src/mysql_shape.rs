@@ -25,13 +25,16 @@ pub struct Plan {
     /// Result column alias → its shape, in projection order.
     pub columns: Vec<(String, Shape)>,
     pub probes: Vec<Probe>,
+    /// The leaves (probe, index) whose expression is a truth value: MySQL types a comparison as
+    /// an integer, but writes it into a JSON document as `true` or `false`.
+    pub booleans: Vec<(usize, usize)>,
 }
 
 /// Read one statement's JSON constructors; the probes come back as text for the build to prepare.
 pub fn plan(q: &Query) -> Plan {
     let SetExpr::Select(select) = q.body.as_ref() else { return Plan::default() };
     let with = q.with.as_ref().map(|w| format!("{w} ")).unwrap_or_default();
-    let mut b = Builder { stack: vec![(0, select.from.clone())], next_ctx: 0, drafts: Vec::new(), overflowed: false };
+    let mut b = Builder { stack: vec![(0, select.from.clone())], next_ctx: 0, drafts: Vec::new(), overflowed: false, booleans: Vec::new() };
     let mut columns = Vec::new();
     for item in &select.projection {
         // The server names an unaliased expression by its text, which no build reproduces
@@ -51,7 +54,7 @@ pub fn plan(q: &Query) -> Plan {
         }
     }
     let probes = b.drafts.iter().map(|d| Probe { sql: text(&with, &d.items, &d.from), wider: d.wider.as_ref().map(|f| text(&with, &d.items, f)) }).collect();
-    Plan { columns, probes }
+    Plan { columns, probes, booleans: b.booleans }
 }
 
 /// The statement without its subquery items, and the projection indexes it keeps: prepared, it
@@ -112,6 +115,7 @@ struct Builder {
     next_ctx: usize,
     drafts: Vec<Draft>,
     overflowed: bool,
+    booleans: Vec<(usize, usize)>,
 }
 
 struct Draft {
@@ -199,6 +203,9 @@ impl Builder {
         };
         let index = self.drafts[probe].items.len();
         self.drafts[probe].items.push(e.clone());
+        if is_truth_value(e) {
+            self.booleans.push((probe, index));
+        }
         Shape::Column { probe, index }
     }
 
@@ -285,6 +292,20 @@ fn string_const(e: &Expr) -> Option<String> {
 
 /// A constant that is never NULL, so a `coalesce` over it is never NULL: a literal, or an empty
 /// `json_array()` / `json_object()`.
+/// Whether an expression is a truth value, which a JSON constructor writes as `true` or `false`.
+fn is_truth_value(e: &Expr) -> bool {
+    use ast::{BinaryOperator as B, UnaryOperator as U};
+    match e {
+        Expr::Nested(inner) => is_truth_value(inner),
+        Expr::Value(v) => matches!(v.value, Value::Boolean(_)),
+        Expr::BinaryOp { op, .. } => matches!(op, B::Eq | B::NotEq | B::Lt | B::LtEq | B::Gt | B::GtEq | B::Spaceship | B::And | B::Or | B::Xor),
+        Expr::UnaryOp { op: U::Not, .. } => true,
+        Expr::IsNull(_) | Expr::IsNotNull(_) | Expr::IsTrue(_) | Expr::IsNotTrue(_) | Expr::IsFalse(_) | Expr::IsNotFalse(_) | Expr::IsUnknown(_) | Expr::IsNotUnknown(_) => true,
+        Expr::InList { .. } | Expr::InSubquery { .. } | Expr::Between { .. } | Expr::Like { .. } | Expr::RLike { .. } | Expr::Exists { .. } => true,
+        _ => false,
+    }
+}
+
 fn is_non_null_const(e: &Expr) -> bool {
     match e {
         Expr::Value(v) => !matches!(v.value, Value::Null | Value::Placeholder(_)),
@@ -319,6 +340,14 @@ mod tests {
         let posts = Shape::Array { items: Box::new(Shape::Object { fields: vec![("id".into(), Shape::Column { probe: 0, index: 0 }), ("title".into(), Shape::Column { probe: 0, index: 1 })], non_null: true }), non_null: true };
         let meta = Shape::Object { fields: vec![("email".into(), Shape::Column { probe: 1, index: 0 }), ("n".into(), Shape::Column { probe: 1, index: 1 })], non_null: true };
         assert_eq!(plan.columns, vec![("posts".to_string(), posts), ("meta".to_string(), meta)]);
+    }
+
+    #[test]
+    fn a_truth_value_inside_a_constructor_is_marked_boolean() {
+        let q = query("select json_object('t', true, 'c', u.id > 0, 'in', u.id in (1, 2), 'not', not (u.id = 1), 'n', u.id, 's', u.name) as o from users u");
+        let plan = plan(&q);
+        assert_eq!(plan.probes[0].sql, "SELECT true, u.id > 0, u.id IN (1, 2), NOT (u.id = 1), u.id, u.name FROM users u");
+        assert_eq!(plan.booleans, vec![(0, 0), (0, 1), (0, 2), (0, 3)]);
     }
 
     #[test]

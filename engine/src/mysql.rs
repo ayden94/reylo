@@ -83,7 +83,7 @@ pub fn analyze(sql: &str, lexed: &Lexed, host: &Host) -> Lazy<Analysis> {
             return None;
         }
         for (name, shape) in &plan.columns {
-            let (ty, non_null) = resolve(shape, &outcomes);
+            let (ty, non_null) = resolve(shape, &outcomes, &plan.booleans);
             shaped.push((name.clone(), ty, non_null));
         }
     }
@@ -191,23 +191,24 @@ fn param_type(code: u32, charset: u32) -> (Type, &'static str) {
 }
 
 /// One shape plus its probes' prepares as the column's type and whether it is never NULL.
-fn resolve(shape: &Shape, outcomes: &[Option<MysqlDescribe>]) -> (Type, bool) {
+fn resolve(shape: &Shape, outcomes: &[Option<MysqlDescribe>], booleans: &[(usize, usize)]) -> (Type, bool) {
     match shape {
         Shape::Object { fields, non_null } => {
             let fields = fields
                 .iter()
                 .map(|(k, s)| {
-                    let (ty, nn) = resolve(s, outcomes);
+                    let (ty, nn) = resolve(s, outcomes, booleans);
                     Field { name: k.clone(), ty, nullable: !nn }
                 })
                 .collect();
             (Type::Object { fields }, *non_null)
         }
         Shape::Array { items, non_null } => {
-            let (ty, nn) = resolve(items, outcomes);
+            let (ty, nn) = resolve(items, outcomes, booleans);
             (Type::List { of: Box::new(ty), nullable_items: !nn }, *non_null)
         }
         Shape::Column { probe, index } => match outcomes.get(*probe).and_then(|o| o.as_ref()).and_then(|o| o.columns.get(*index)) {
+            Some(c) if booleans.contains(&(*probe, *index)) => (Type::Scalar { name: "bool".into() }, c.flags & 1 != 0),
             Some(c) => (column_type(c.r#type, c.charset).0, c.flags & 1 != 0),
             None => (Type::Unknown, false),
         },
