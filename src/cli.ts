@@ -41,7 +41,7 @@ function position(text: string, offset: number): string {
 
 // A file that holds DDL or several statements is not a query: a migration or a schema file, which
 // nothing imports. The engine says so (or the server refuses to prepare several commands).
-const NOT_A_QUERY = /^only SELECT, INSERT, UPDATE, DELETE and MERGE statements are typed|^expected exactly one statement|^cannot insert multiple commands into a prepared statement/;
+const NOT_A_QUERY = /^only SELECT, .* statements are typed|^expected exactly one statement|^cannot insert multiple commands into a prepared statement/;
 
 async function generate(args: string[]): Promise<number> {
   const force = args.includes("--force");

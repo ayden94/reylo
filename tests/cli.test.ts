@@ -21,10 +21,13 @@ test("porg generate analyzes every .sql file under the paths, and prints one lin
   const db = new DatabaseSync(join(root, "app.db"));
   db.exec("create table users (id integer primary key, name text not null)");
   db.close();
-  for (const dir of ["src/queries", "node_modules/dep", ".next"]) mkdirSync(join(root, dir), { recursive: true });
+  for (const dir of ["src/queries", "migrations", "node_modules/dep", ".next"]) mkdirSync(join(root, dir), { recursive: true });
   writeFileSync(join(root, "src", "queries", "user.sql"), "select id, name from users where id = :id");
   writeFileSync(join(root, "src", "queries", "count.sql"), "select count(*) as n from users");
   writeFileSync(join(root, "src", "queries", "bad.sql"), "select id\nfrom nope");
+  // A migration is listed and skipped: it is not one query.
+  writeFileSync(join(root, "migrations", "0001.sql"), "create table posts (id integer primary key);\ncreate index posts_id on posts (id);");
+  writeFileSync(join(root, "migrations", "0002.sql"), "alter table posts add column title text");
   // Dependencies and build output are not the project's queries.
   writeFileSync(join(root, "node_modules", "dep", "x.sql"), "select 1");
   writeFileSync(join(root, ".next", "y.sql"), "select 1");
@@ -33,10 +36,12 @@ test("porg generate analyzes every .sql file under the paths, and prints one lin
   assert.equal(first.status, 1, first.err);
   assert.equal(first.out, [
     `.: sqlite at ${join(root, "app.db")} (DATABASE_URL in the environment)`,
+    `  skipped   migrations/0001.sql    not a query: expected exactly one statement`,
+    `  skipped   migrations/0002.sql    not a query: only SELECT, VALUES, INSERT, REPLACE, UPDATE and DELETE statements are typed`,
     `  error     src/queries/bad.sql    src/queries/bad.sql:1:1: no such table: nope`,
     `  analyzed  src/queries/count.sql  one       - _ ms`,
     `  analyzed  src/queries/user.sql   maybeOne  id _ ms`,
-    `3 files in 1 project: 2 analyzed, 1 error (_ s)`,
+    `5 files in 1 project: 2 analyzed, 2 skipped, 1 error (_ s)`,
     ``,
   ].join("\n"));
 
