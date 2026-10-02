@@ -25,6 +25,7 @@ test("porg generate analyzes every .sql file of the project, and prints each fil
   writeFileSync(join(root, "src", "queries", "user.sql"), "select id, name from users where id = :id");
   writeFileSync(join(root, "src", "queries", "count.sql"), "select count(*) as n from users");
   writeFileSync(join(root, "src", "queries", "bad.sql"), "select id\nfrom nope");
+  writeFileSync(join(root, "src", "queries", "typo.sql"), "selec id from users");
   // A migration is skipped: it is not one query.
   writeFileSync(join(root, "migrations", "0001.sql"), "create table posts (id integer primary key);\ncreate index posts_id on posts (id);");
   writeFileSync(join(root, "migrations", "0002.sql"), "alter table posts add column title text");
@@ -41,19 +42,25 @@ test("porg generate analyzes every .sql file of the project, and prints each fil
     `sqlite at ${join(root, "app.db")} (DATABASE_URL in the environment)`,
     `  src/queries/bad.sql    ✗`,
     `  src/queries/count.sql  ✓`,
+    `  src/queries/typo.sql   ✗`,
     `  src/queries/user.sql   ✓`,
     ``,
-    // SQLite names no place in the statement, so no line of it is shown.
+    // SQLite names no place for this error, so no line of the statement is shown.
     `src/queries/bad.sql:1:1: no such table: nope`,
+    ``,
+    // A misspelt keyword is an error, not a statement that is not a query.
+    `src/queries/typo.sql:1:1: near "selec": syntax error`,
+    `  1 | selec id from users`,
+    `    | ^^^^^`,
     ``,
     `Skipped 2 files that are not one query (a migration?): migrations/0001.sql, migrations/0002.sql`,
     ``,
-    `✗ 1 of 3 queries failed (_ s)`,
+    `✗ 2 of 4 queries failed (_ s)`,
     ``,
   ].join("\n"));
 
   // .porg.yaml narrows the files; a file named on the command line is analyzed as named.
-  writeFileSync(join(root, ".porg.yaml"), `cli:\n  include: ["src/**/*.sql"]\n  exclude: ["**/bad.sql"]\n`);
+  writeFileSync(join(root, ".porg.yaml"), `cli:\n  include: ["src/**/*.sql"]\n  exclude: ["**/bad.sql", "**/typo.sql"]\n`);
   const configured = porg(root, "generate");
   assert.equal(configured.status, 0, configured.err);
   assert.match(configured.out, /^  src\/queries\/count\.sql  ✓\n  src\/queries\/user\.sql   ✓\n\n✓ 2 queries typed \(_ s\)\n$/m);
