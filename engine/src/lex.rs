@@ -420,6 +420,17 @@ pub fn rewrite_with(sql: &str, lexed: &Lexed, target: Target, decorate: &dyn Fn(
     Rewritten { sql: out, order, spans }
 }
 
+/// The first keywords of the statements SQLite and MySQL know that are not queries: DDL,
+/// transaction control, session settings and the like. A first word outside this list and
+/// outside the typed kinds is left to the database, whose syntax error names it (`selec`).
+const NOT_QUERIES: &[&str] = &[
+    "alter", "analyze", "attach", "begin", "binlog", "cache", "call", "change", "check", "checksum", "clone", "commit", "create", "deallocate",
+    "describe", "desc", "detach", "do", "drop", "end", "execute", "explain", "flush", "get", "grant", "handler", "help", "import", "install",
+    "kill", "load", "lock", "optimize", "pragma", "prepare", "purge", "reindex", "release", "rename", "repair", "reset", "resignal", "restart",
+    "revoke", "rollback", "savepoint", "set", "show", "shutdown", "signal", "start", "stop", "truncate", "uninstall", "unlock", "use",
+    "vacuum", "xa",
+];
+
 /// Whether the text is one statement whose first keyword (past whitespace and comments) is one
 /// of `kinds`, or an opening parenthesis: nothing but whitespace, semicolons and comments may
 /// follow its first semicolon outside the text spans. SQLite prepares only the first statement
@@ -454,7 +465,7 @@ pub fn one_statement(sql: &str, lexed: &Lexed, kinds: &[&str]) -> Result<(), Str
     }
     let start = past_comments(0);
     let word = sql[start..].chars().take_while(|c| c.is_ascii_alphabetic()).collect::<String>().to_ascii_lowercase();
-    if kinds.contains(&word.as_str()) || sql[start..].starts_with('(') {
+    if kinds.contains(&word.as_str()) || sql[start..].starts_with('(') || !NOT_QUERIES.contains(&word.as_str()) {
         return Ok(());
     }
     let named: Vec<String> = kinds.iter().filter(|k| **k != "with").map(|k| k.to_ascii_uppercase()).collect();
@@ -643,5 +654,7 @@ mod tests {
         assert_eq!(check("create table t (id integer primary key);\ncreate index i on t (id);").unwrap_err(), "expected exactly one statement");
         assert_eq!(check("create table t (id integer primary key)").unwrap_err(), "only SELECT, VALUES, INSERT, REPLACE, UPDATE and DELETE statements are typed");
         assert_eq!(check("pragma table_info(t)").unwrap_err(), "only SELECT, VALUES, INSERT, REPLACE, UPDATE and DELETE statements are typed");
+        // A misspelt keyword is a syntax error the database reports, not a statement of another kind.
+        assert_eq!(check("selec id from users"), Ok(()));
     }
 }
