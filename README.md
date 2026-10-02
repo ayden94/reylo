@@ -85,7 +85,7 @@ db.transaction(() => {
 })();
 ```
 
-Parameter types come from the server (`id: number`, `name: string`); `role` is an enum, `tags` a `text[]`, `email` nullable from the catalog, `next_id` non-null because `id` is and the built-in `+` never returns NULL for non-null operands; `| null` on the row because `id` is the primary key, so the `WHERE` matches at most one row. `created_at` is a `Date` and an `int8` a `string` because that is what every Postgres driver returns by default, and `run` returns the driver's values (see [Dates and 64-bit integers](#dates-and-64-bit-integers)).
+Parameter types come from the server (`id: number`, `name: string`); `role` is an enum, `tags` a `text[]`, `email` nullable from the catalog, `next_id` non-null because `id` is and the built-in `+` never returns NULL for non-null operands; `| null` on the row because `id` is the primary key, so the `WHERE` matches at most one row. `created_at` is a `Date` and an `int8` a `string` because that is what `pg`, postgres.js, Bun.sql and Neon return by default, and `run` returns the driver's values (see [Dates and 64-bit integers](#dates-and-64-bit-integers)).
 
 Nested JSON keeps its shape. The engine reads the constructors out of the parse tree, has the database type their arguments as ordinary columns, and folds the catalog's `NOT NULL` and the outer joins back in:
 
@@ -124,17 +124,17 @@ SQLite has no describe for a parameter or an expression, so the engine carries S
 ### MySQL
 
 ```sql
-select id, name, email, big, n, at, j, flag, id + 1 as next_id
+select id, name, email, big, n, at, j, flag, raw, id + 1 as next_id
 from users
 where id = :id and name <> :skip
 ```
 
 ```ts
 const user = await getUser.run(conn, { id: 1, skip: "" });
-//    ^? { id: number; name: string; email: string | null; big: string; n: string; at: string; j: unknown; flag: number; next_id: string } | null
+//    ^? { id: number; name: string; email: string | null; big: number; n: string; at: Date; j: unknown; flag: number; raw: Uint8Array | null; next_id: number } | null
 ```
 
-MySQL 8.4's prepare reports column types, NOT NULL and provenance, and infers a type per parameter from context, so no annotation is needed; `bigint` and `datetime` follow the `bigint` and `dates` settings (strings by default; mysql2 decodes a `bigint` as a lossy `number`, which the runtime turns into text) and `decimal` is a string. The engine adds what the server does not say: the row count (`id` is the primary key, so `maybeOne`; an ungrouped aggregate is `one`; an `insert`, `update` or `delete` is `none`, MySQL having no RETURNING), and the shape of a `json_object` / `json_arrayagg` column, typed from its arguments:
+MySQL 8.4's prepare reports column types, NOT NULL and provenance, and infers a type per parameter from context, so no annotation is needed; `bigint` and `datetime` follow the `bigint` and `dates` settings (by default a `number` and a `Date`, what mysql2 returns; mysql2's `number` is lossy above 2^53) and `decimal` is a string. The engine adds what the server does not say: the row count (`id` is the primary key, so `maybeOne`; an ungrouped aggregate is `one`; an `insert`, `update` or `delete` is `none`, MySQL having no RETURNING), and the shape of a `json_object` / `json_arrayagg` column, typed from its arguments:
 
 ```sql
 select u.id,
@@ -171,7 +171,7 @@ The URL's scheme names the dialect: `postgres://` and `postgresql://`, `mysql://
 ```yaml
 types:
   dates: Date       # the default on Postgres and MySQL; string or temporal for a driver set up to return those
-  bigint: string    # the default on Postgres; number is the default on MySQL and SQLite; bigint for mariadb
+  bigint: string    # the default on Postgres; number is the default on MySQL; bigint for mariadb
 ```
 
 | Setting | Value | `timestamptz` | `timestamp`, MySQL `datetime` / `timestamp` | `date` | `int8`, MySQL `bigint` |
@@ -179,7 +179,7 @@ types:
 | `dates` | `Date` (default) | `Date` | `Date` | `Date` | |
 | `dates` | `string` | `string` | `string` | `string` | |
 | `dates` | `temporal` | `Temporal.Instant` | `Temporal.PlainDateTime` | `Temporal.PlainDate` | |
-| `bigint` | `string` (Postgres default), `number` (MySQL and SQLite default), `bigint` | | | | `string`, `number` or `bigint` |
+| `bigint` | `string` (Postgres default), `number` (MySQL default), `bigint` | | | | `string`, `number` or `bigint` |
 
 - The setting has to match the driver, because Porg does not see the driver's options: `pg` with a `types.setTypeParser` for timestamps, `postgres` with its `types` option, or mysql2 and mariadb with `dateStrings: true` return text and need `dates: string`; mysql2 with `supportBigNumbers: true, bigNumberStrings: true` needs `bigint: string`; mariadb returns a BigInt by default and needs `bigint: bigint`.
 - `temporal` makes the generated module reference TypeScript's own `esnext.temporal` lib, which declares the global `Temporal` namespace, so the types resolve whatever `lib` the project sets; the driver builds the values ([lab/repr](./lab/repr) sets up `postgres` to).
