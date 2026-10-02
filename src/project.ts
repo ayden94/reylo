@@ -19,7 +19,11 @@ export type ProjectFile = {
   env?: string[];
   strict?: boolean;
   types: { dates?: Repr["dates"]; bigint?: Repr["bigint"] };
+  cli?: Cli;
 };
+
+/** The files `porg generate` analyzes, as globs relative to the project file's directory. */
+export type Cli = { include?: string[]; exclude?: string[] };
 
 export type ResolvedProject = {
   /** The project file, when there is one. */
@@ -30,6 +34,8 @@ export type ResolvedProject = {
   repr: Repr;
   /** Whether a parameter the statement does not type is an error rather than `unknown`. */
   strict: boolean;
+  /** Which files `porg generate` analyzes: `include` replaces every `.sql` file, `exclude` adds to what is left out. */
+  cli: Cli;
   /** The connection the type check uses: `direct_url` when the file names one, else `url`. */
   url: string | undefined;
   /** Where the URL came from, for a diagnostic: never the URL itself. */
@@ -141,5 +147,5 @@ export function resolveProject(engine: Engine, projectDir: string, env: Record<s
   if (url && !dialect) error ??= `Cannot tell the database from the URL (${urlSource}): Porg reads postgres://, postgresql://, mysql://, mariadb://, file: and sqlite: URLs.`;
   const defaults = defaultReprs[dialect ?? "postgres"];
   const repr: Repr = { dates: config.types.dates ?? defaults.dates, bigint: config.types.bigint ?? defaults.bigint };
-  return { file, root, dialect: dialect ?? "postgres", repr, strict: config.strict ?? false, url, urlSource, watched: [...(file ? [file] : [join(root, PROJECT_FILE)]), ...envFiles], error };
+  return { file, root, dialect: dialect ?? "postgres", repr, strict: config.strict ?? false, cli: config.cli ?? {}, url, urlSource, watched: [...(file ? [file] : [join(root, PROJECT_FILE)]), ...envFiles], error };
 }

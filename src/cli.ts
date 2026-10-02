@@ -1,42 +1,60 @@
 #!/usr/bin/env node
-// `porg generate`: analyzes every `.sql` file under the given directories into `.porg/`, the cache
-// that the type check and the build steps share, and prints one line per file. A build that runs
-// where the database cannot be reached (a CI job, a container build) runs on what it wrote; where
-// the database can be reached, it only saves the build the round trips.
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+// `porg generate`: analyzes every `.sql` file of the project into `.porg/`, the cache that the type
+// check and the build steps share, and prints each file with a mark and every error in full. A
+// build that runs where the database cannot be reached (a CI job, a container build) runs on what
+// it wrote; where the database can be reached, it only saves the build the round trips.
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { dirname, relative, resolve } from "node:path";
+import { styleText } from "node:util";
+import { glob } from "tinyglobby";
 import { Session } from "./analyze.ts";
 
 const USAGE = `Usage: porg generate [paths...] [--force]
 
 Analyzes every .sql file under the paths (by default the current directory) into .porg/: the
 cache that the type check and the build steps read. A file that is not one query (a migration)
-is listed and skipped. --force analyzes each file against the database even when .porg/ holds it.`;
+is skipped. --force analyzes each file against the database even when .porg/ holds it.
 
-// Directories that hold no query of the project's own; a directory whose name starts with a dot
-// (.git, .porg, .next) is skipped as well.
-const SKIP = new Set(["node_modules", "dist", "build", "out", "target", "coverage"]);
+Which files are queries can be set in .porg.yaml; the globs are relative to it:
 
-type Row =
-  | { file: string; status: "analyzed" | "cached"; cardinality: string; params: string; ms: number }
-  | { file: string; status: "error" | "skipped"; detail: string };
+  cli:
+    include: ["src/**/*.sql"]   # instead of every .sql file
+    exclude: ["src/legacy/**"]  # in addition to dependencies, build output and what git ignores`;
+
+// Never the project's own queries: dependencies and build output. A directory whose name starts
+// with a dot (.git, .porg, .next) is left out too, because a glob's `*` does not match a dot.
+const EXCLUDE = ["**/node_modules/**", "**/{dist,build,out,target,coverage}/**"];
 
 const shown = (path: string) => relative(process.cwd(), path) || ".";
+const paint = (format: Parameters<typeof styleText>[0], text: string) => styleText(format, text);
 
-function* sqlFiles(dir: string): Generator<string> {
-  for (const e of readdirSync(dir, { withFileTypes: true })) {
-    if (e.name.startsWith(".")) continue;
-    const full = join(dir, e.name);
-    if (e.isDirectory()) {
-      if (!SKIP.has(e.name)) yield* sqlFiles(full);
-    } else if (e.isFile() && e.name.endsWith(".sql")) yield full;
-  }
+async function sqlFiles(dir: string, include = ["**/*.sql"], exclude: string[] = []): Promise<string[]> {
+  const files = await glob(include, { cwd: dir, ignore: [...EXCLUDE, ...exclude], absolute: true });
+  return files.filter((f) => f.endsWith(".sql"));
 }
 
-/** 1-based line and column of a UTF-8 byte offset, as an editor shows them. */
-function position(text: string, offset: number): string {
-  const lines = Buffer.from(text, "utf8").subarray(0, offset).toString("utf8").split("\n");
-  return `${lines.length}:${lines.at(-1)!.length + 1}`;
+/** The files among `files` that git ignores; none where git is missing or `dir` is not in a repository. */
+function gitIgnored(dir: string, files: string[]): Set<string> {
+  if (!files.length) return new Set();
+  const r = spawnSync("git", ["check-ignore", "-z", "--stdin"], { cwd: dir, input: files.join("\0"), encoding: "utf8" });
+  // 0: some are ignored; 1: none is; 128 or no status: not a repository, or no git.
+  return r.status === 0 ? new Set(r.stdout.split("\0").filter(Boolean).map((f) => resolve(dir, f))) : new Set();
+}
+
+/** The place of a byte offset and the line that holds it, with a caret under the span, as an editor underlines it. */
+function located(text: string, start: number, length: number): { at: string; frame: string[] } {
+  const bytes = Buffer.from(text, "utf8");
+  const before = bytes.subarray(0, start).toString("utf8");
+  const lineNumber = before.split("\n").length;
+  const column = before.length - before.lastIndexOf("\n") - 1;
+  const line = text.split("\n")[lineNumber - 1]!.replace(/\r$/, "");
+  const span = Math.max(1, Math.min(bytes.subarray(start, start + length).toString("utf8").length, line.length - column));
+  const gutter = String(lineNumber);
+  return {
+    at: `${lineNumber}:${column + 1}`,
+    frame: [`  ${paint("dim", `${gutter} |`)} ${line}`, `  ${paint("dim", `${" ".repeat(gutter.length)} |`)} ${line.slice(0, column).replace(/[^\t]/g, " ")}${paint("red", "^".repeat(span))}`],
+  };
 }
 
 // A file that holds DDL or several statements is not a query: a migration or a schema file, which
@@ -53,32 +71,48 @@ async function generate(args: string[]): Promise<number> {
   const paths = args.filter((a) => !a.startsWith("-"));
   const started = performance.now();
 
-  const files = new Set<string>();
+  // A file named on the command line is analyzed as named; a directory is searched.
+  const named = new Set<string>();
+  const found = new Set<string>();
   for (const arg of paths.length ? paths : ["."]) {
     const full = resolve(arg);
     if (!existsSync(full)) {
       console.error(`porg generate: ${arg} does not exist.`);
       return 2;
     }
-    if (statSync(full).isDirectory()) for (const file of sqlFiles(full)) files.add(file);
-    else if (full.endsWith(".sql")) files.add(full);
+    if (statSync(full).isDirectory()) {
+      const files = await sqlFiles(full);
+      const ignored = gitIgnored(full, files);
+      for (const file of files) if (!ignored.has(file)) found.add(file);
+    } else if (full.endsWith(".sql")) named.add(full);
     else {
       console.error(`porg generate: ${arg} is not a .sql file or a directory.`);
       return 2;
     }
   }
 
-  // One project per `.porg.yaml` (or package): each has its database and its `.porg/`.
+  // One project per `.porg.yaml` (or package): each has its database, its `.porg/` and its `cli` globs.
   const projects = new Map<Session, string[]>();
-  for (const file of [...files].sort()) {
+  for (const file of [...named, ...found].sort()) {
     const session = await Session.for(dirname(file));
     projects.set(session, [...(projects.get(session) ?? []), file]);
   }
-
-  const count = { analyzed: 0, cached: 0, skipped: 0, error: 0 };
   for (const [session, list] of projects) {
+    const { include, exclude } = session.project.cli;
+    if (!include && !exclude) continue;
+    const allowed = new Set(await sqlFiles(session.root, include, exclude));
+    projects.set(session, list.filter((f) => named.has(f) || allowed.has(f)));
+  }
+
+  let typed = 0;
+  const failed: string[] = [];
+  const skipped: string[] = [];
+  const errors: string[][] = [];
+  for (const [session, list] of projects) {
+    if (!list.length) continue;
     const { project } = session;
-    console.log(`${shown(session.root)}: ${project.dialect} at ${session.where()} (${project.urlSource})`);
+    const here = session.root === process.cwd() ? "" : `${shown(session.root)}: `;
+    console.log(paint("dim", `${here}${project.dialect} at ${session.where()} (${project.urlSource})`));
     // A project that cannot be used at all is said once, above its files.
     let unusable = project.error ?? (project.url ? undefined : `No database URL: set DATABASE_URL in the environment, .env.local or .env, or "url" in .porg.yaml.`);
     let offline = false;
@@ -87,55 +121,62 @@ async function generate(args: string[]): Promise<number> {
       if (schema.fatal) unusable = schema.error;
       else if (schema.value === null) {
         offline = true;
-        console.log(`  ${session.cannotConnect(schema.error)}; the files are read from .porg/ as they are.`);
+        console.log(paint("dim", `${session.cannotConnect(schema.error)}; the files are read from .porg/ as they are.`));
       }
     }
-    if (unusable) console.log(`  ${unusable}`);
-    const rows: Row[] = [];
+    if (unusable) errors.push([paint("red", unusable)]);
+    const rows: { file: string; ok: boolean }[] = [];
     for (const file of list) {
+      const fail = (...lines: string[]) => {
+        rows.push({ file, ok: false });
+        errors.push(lines);
+      };
       if (unusable) {
-        rows.push({ file, status: "error", detail: "not analyzed" });
+        rows.push({ file, ok: false });
         continue;
       }
       const sql = readFileSync(file, "utf8");
-      const t = performance.now();
       const outcome = await session.analyze(sql, { force });
-      const ms = performance.now() - t;
       if (!outcome.ok) {
-        rows.push({ file, status: "error", detail: offline ? (force ? "--force needs the database" : "not in .porg/") : outcome.message });
+        fail(`${paint("bold", shown(file))}: ${offline ? (force ? "--force needs the database, which cannot be reached" : "not in .porg/, and the database cannot be reached") : outcome.message}`);
         continue;
       }
-      const { analysis } = outcome;
-      const notAQuery = analysis.diagnostics.find((d) => NOT_A_QUERY.test(d.message));
-      if (notAQuery) {
-        rows.push({ file, status: "skipped", detail: `not a query: ${notAQuery.message.replace(/ \(\w+\)$/, "")}` });
+      const { diagnostics } = outcome.analysis;
+      if (diagnostics.some((d) => NOT_A_QUERY.test(d.message))) {
+        skipped.push(file);
         continue;
       }
-      if (analysis.diagnostics.length) {
-        rows.push({ file, status: "error", detail: analysis.diagnostics.map((d) => `${shown(file)}:${position(sql, d.start)}: ${d.message}`).join("\n") });
+      if (diagnostics.length) {
+        fail(...diagnostics.flatMap((d) => {
+          const { at, frame } = located(sql, d.start, d.length);
+          // An error that spans the whole statement has no place in it (SQLite names none).
+          const whole = d.start === 0 && d.length >= Buffer.byteLength(sql.trimEnd());
+          return [`${paint("bold", `${shown(file)}:${at}`)}: ${d.message}`, ...(whole ? [] : frame)];
+        }));
         continue;
       }
-      rows.push({ file, status: outcome.source === "cache" ? "cached" : "analyzed", cardinality: analysis.cardinality, params: analysis.params.map((p) => p.name).join(", ") || "-", ms });
+      rows.push({ file, ok: true });
     }
     const width = Math.max(...rows.map((r) => shown(r.file).length));
-    const paramsWidth = Math.max(0, ...rows.map((r) => ("params" in r ? r.params.length : 0)));
-    for (const row of rows) {
-      count[row.status]++;
-      const head = `  ${row.status.padEnd(8)}  ${shown(row.file).padEnd(width)}  `;
-      if ("detail" in row) {
-        const [first, ...more] = row.detail.split("\n");
-        console.log(`${head}${first}`);
-        for (const line of more) console.log(`${"".padEnd(head.length)}${line}`);
-      } else console.log(`${head}${row.cardinality.padEnd(8)}  ${row.params.padEnd(paramsWidth)}  ${String(Math.round(row.ms)).padStart(4)} ms`);
+    for (const { file, ok } of rows) {
+      if (ok) typed++;
+      else failed.push(file);
+      console.log(`  ${shown(file).padEnd(width)}  ${ok ? paint("green", "✓") : paint("red", "✗")}`);
     }
   }
   for (const session of Session.opened()) await session.close();
 
-  const total = files.size;
-  const parts = (["analyzed", "cached", "skipped", "error"] as const).filter((k) => count[k]).map((k) => `${count[k]} ${k === "error" ? (count[k] === 1 ? "error" : "errors") : k}`);
+  for (const lines of errors) console.log(`\n${lines.join("\n")}`);
+  if (skipped.length) {
+    const listed = skipped.slice(0, 3).map(shown).join(", ") + (skipped.length > 3 ? ` and ${skipped.length - 3} more` : "");
+    console.log(paint("dim", `\nSkipped ${skipped.length === 1 ? "1 file that is" : `${skipped.length} files that are`} not one query (a migration?): ${listed}`));
+  }
   const seconds = ((performance.now() - started) / 1000).toFixed(1);
-  console.log(total ? `${total} ${total === 1 ? "file" : "files"} in ${projects.size} ${projects.size === 1 ? "project" : "projects"}: ${parts.join(", ")} (${seconds} s)` : `No .sql files under ${(paths.length ? paths : ["."]).join(", ")}.`);
-  return count.error ? 1 : 0;
+  const total = typed + failed.length;
+  if (failed.length) console.log(`\n${paint("red", "✗")} ${failed.length} of ${total} ${total === 1 ? "query" : "queries"} failed (${seconds} s)`);
+  else if (typed) console.log(`\n${paint("green", "✓")} ${typed} ${typed === 1 ? "query" : "queries"} typed (${seconds} s)`);
+  else if (!skipped.length) console.log(`No .sql files under ${(paths.length ? paths : ["."]).join(", ")}.`);
+  return failed.length ? 1 : 0;
 }
 
 const [command, ...rest] = process.argv.slice(2);

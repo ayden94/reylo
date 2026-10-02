@@ -10,56 +10,64 @@ const CLI = join(import.meta.dirname, "..", "src", "cli.ts");
 
 function porg(cwd: string, ...args: string[]) {
   const r = spawnSync(process.execPath, ["--no-warnings", CLI, ...args], { cwd, encoding: "utf8", env: { PATH: process.env.PATH, DATABASE_URL: "file:./app.db" } });
-  // The timing varies from run to run; everything else is the readout.
-  return { status: r.status, out: r.stdout.replace(/ +\d+ ms$/gm, " _ ms").replace(/\(\d+\.\d s\)/, "(_ s)"), err: r.stderr };
+  // The time varies from run to run; everything else is the readout.
+  return { status: r.status, out: r.stdout.replace(/\(\d+\.\d s\)/, "(_ s)"), err: r.stderr };
 }
 
-test("porg generate analyzes every .sql file under the paths, and prints one line per file", () => {
+test("porg generate analyzes every .sql file of the project, and prints each file with a mark and every error in full", () => {
   // The CLI sees its working directory as the real path (/private/var on macOS).
   const root = realpathSync(mkdtempSync(join(tmpdir(), "porg-cli-")));
   writeFileSync(join(root, "package.json"), "{}");
   const db = new DatabaseSync(join(root, "app.db"));
   db.exec("create table users (id integer primary key, name text not null)");
   db.close();
-  for (const dir of ["src/queries", "migrations", "node_modules/dep", ".next"]) mkdirSync(join(root, dir), { recursive: true });
+  for (const dir of ["src/queries", "migrations", "node_modules/dep", ".next", "generated"]) mkdirSync(join(root, dir), { recursive: true });
   writeFileSync(join(root, "src", "queries", "user.sql"), "select id, name from users where id = :id");
   writeFileSync(join(root, "src", "queries", "count.sql"), "select count(*) as n from users");
   writeFileSync(join(root, "src", "queries", "bad.sql"), "select id\nfrom nope");
-  // A migration is listed and skipped: it is not one query.
+  // A migration is skipped: it is not one query.
   writeFileSync(join(root, "migrations", "0001.sql"), "create table posts (id integer primary key);\ncreate index posts_id on posts (id);");
   writeFileSync(join(root, "migrations", "0002.sql"), "alter table posts add column title text");
-  // Dependencies and build output are not the project's queries.
+  // Dependencies, build output and what git ignores are not the project's queries.
   writeFileSync(join(root, "node_modules", "dep", "x.sql"), "select 1");
   writeFileSync(join(root, ".next", "y.sql"), "select 1");
+  writeFileSync(join(root, "generated", "z.sql"), "select 1");
+  writeFileSync(join(root, ".gitignore"), "generated/\n");
+  assert.equal(spawnSync("git", ["init", "-q"], { cwd: root }).status, 0);
 
   const first = porg(root, "generate");
   assert.equal(first.status, 1, first.err);
   assert.equal(first.out, [
-    `.: sqlite at ${join(root, "app.db")} (DATABASE_URL in the environment)`,
-    `  skipped   migrations/0001.sql    not a query: expected exactly one statement`,
-    `  skipped   migrations/0002.sql    not a query: only SELECT, VALUES, INSERT, REPLACE, UPDATE and DELETE statements are typed`,
-    `  error     src/queries/bad.sql    src/queries/bad.sql:1:1: no such table: nope`,
-    `  analyzed  src/queries/count.sql  one       - _ ms`,
-    `  analyzed  src/queries/user.sql   maybeOne  id _ ms`,
-    `5 files in 1 project: 2 analyzed, 2 skipped, 1 error (_ s)`,
+    `sqlite at ${join(root, "app.db")} (DATABASE_URL in the environment)`,
+    `  src/queries/bad.sql    ✗`,
+    `  src/queries/count.sql  ✓`,
+    `  src/queries/user.sql   ✓`,
+    ``,
+    // SQLite names no place in the statement, so no line of it is shown.
+    `src/queries/bad.sql:1:1: no such table: nope`,
+    ``,
+    `Skipped 2 files that are not one query (a migration?): migrations/0001.sql, migrations/0002.sql`,
+    ``,
+    `✗ 1 of 3 queries failed (_ s)`,
     ``,
   ].join("\n"));
 
-  // Named files are analyzed as named; the second run reads .porg/.
-  const second = porg(root, "generate", "src/queries/user.sql", "src/queries/count.sql");
-  assert.equal(second.status, 0, second.err);
-  assert.match(second.out, /^  cached    src\/queries\/count\.sql  one       - _ ms$/m);
-  assert.match(second.out, /^2 files in 1 project: 2 cached \(_ s\)$/m);
+  // .porg.yaml narrows the files; a file named on the command line is analyzed as named.
+  writeFileSync(join(root, ".porg.yaml"), `cli:\n  include: ["src/**/*.sql"]\n  exclude: ["**/bad.sql"]\n`);
+  const configured = porg(root, "generate");
+  assert.equal(configured.status, 0, configured.err);
+  assert.match(configured.out, /^  src\/queries\/count\.sql  ✓\n  src\/queries\/user\.sql   ✓\n\n✓ 2 queries typed \(_ s\)\n$/m);
+  assert.equal(porg(root, "generate", "src/queries/bad.sql").status, 1);
 
   // Without the database the cache still answers, and --force cannot.
   renameSync(join(root, "app.db"), join(root, "gone.db"));
   const offline = porg(root, "generate", "src/queries/user.sql");
   assert.equal(offline.status, 0, offline.err);
-  assert.match(offline.out, /^  Cannot open the database .*app\.db \(DATABASE_URL in the environment\): .*; the files are read from \.porg\/ as they are\.$/m);
-  assert.match(offline.out, /^  cached    src\/queries\/user\.sql  maybeOne  id _ ms$/m);
+  assert.match(offline.out, /^Cannot open the database .*app\.db \(DATABASE_URL in the environment\): .*; the files are read from \.porg\/ as they are\.$/m);
+  assert.match(offline.out, /^  src\/queries\/user\.sql  ✓$/m);
   const forced = porg(root, "generate", "--force", "src/queries/user.sql");
   assert.equal(forced.status, 1);
-  assert.match(forced.out, /^  error     src\/queries\/user\.sql  --force needs the database$/m);
+  assert.match(forced.out, /^src\/queries\/user\.sql: --force needs the database, which cannot be reached$/m);
 
   assert.equal(porg(root, "generate", "--watch").status, 2);
   assert.equal(porg(root, "generate", "package.json").status, 2);

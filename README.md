@@ -25,12 +25,15 @@ Porg is the root of this repository. [`porgapi/`](./porgapi) is PorgAPI, a web f
 Each adapter analyzes the statement as the type check does, so a build needs the database, or a `.porg/` that `porg generate` filled where the database could be reached (`.porg/` is the cache they all share, and git ignores it). The module it writes carries the analysis and reads nothing at run time. A dev server rebuilds a `.sql` module when the type check analyzes its statement again.
 
 ```sh
-$ porg generate          # every .sql file under the current directory, into .porg/
-.: postgres at localhost:5432/postgres (DATABASE_URL in .env)
-  analyzed  src/get_user.sql    maybeOne  id    12 ms
-  cached    src/list_users.sql  many      -      0 ms
-2 files in 1 project: 1 analyzed, 1 cached (0.1 s)
+$ porg generate          # every .sql file of the project, into .porg/
+postgres at localhost:5432/postgres (DATABASE_URL in .env)
+  src/get_user.sql    ✓
+  src/list_users.sql  ✓
+
+✓ 2 queries typed (0.1 s)
 ```
+
+It leaves out `node_modules`, build output, dot directories and what git ignores, skips a file that is not one query (a migration), and prints every error in full; the `cli` section of `.porg.yaml` sets which files it reads.
 
 Next.js takes `porg/webpack-loader` for both of its bundlers, on the server only, so that a client component that imports a `.sql` file fails the build instead of shipping the statement to the browser. `next build` runs `tsc` without `--runExternalCode`, so the mapper cannot run inside it: turn that step off and run the type check before the build ([lab/nextjs](./lab/nextjs) is the whole setup, with Turbopack and webpack, in `next dev` and `next build`):
 
@@ -48,7 +51,7 @@ const nextConfig: NextConfig = {
 
 ## Examples
 
-Parameters are written `:name` in every dialect, the form mysql2's `namedPlaceholders` and SQLite use. The engine lexes them out and rewrites them to the database's own placeholder (`$1` for Postgres, `?` for MySQL and SQLite) when the mapper describes the statement; the rewritten text and its binding order land in `.porg/queries.json`, and `run` binds through them, so the parameter object is `{ name: ... }` everywhere. A statement may use its database's own positional form instead (`$1` on Postgres, `?` on MySQL, `?` and `?NNN` on SQLite), and the key is the position's number: `where id = $1` takes `{ 1: ... }`, and a bare `?` is one past the largest number before it, as SQLite numbers it. Mixing the two styles in one statement is an error, and so is a form the database would misread (`$name` or `@name` on SQLite, `$name` on Postgres, `?2` on MySQL); MySQL's `@name` is a user variable and stays one. The engine infers the row count from the statement and the schema on every dialect (a primary-key equality is `maybeOne`, `LIMIT 1` is `maybeOne`, an ungrouped aggregate `one`, a one-row `INSERT … RETURNING` `one`, a data-modifying statement without RETURNING `none`); there is no directive to override it. A parameter nothing in the statement types is `unknown`; `cast(:x as integer)` types it, and the database enforces the cast. A parameter is typed without null unless the statement lets the caller pass one: it tests the parameter for null or coalesces it (Postgres), or writes it whole to a nullable column (Postgres and SQLite).
+Parameters are written `:name` in every dialect, the form mysql2's `namedPlaceholders` and SQLite use. The engine lexes them out and rewrites them to the database's own placeholder (`$1` for Postgres, `?` for MySQL and SQLite) when the mapper describes the statement; the rewritten text and its binding order are part of the module the import becomes, and `run` binds through them, so the parameter object is `{ name: ... }` everywhere. A statement may use its database's own positional form instead (`$1` on Postgres, `?` on MySQL, `?` and `?NNN` on SQLite), and the key is the position's number: `where id = $1` takes `{ 1: ... }`, and a bare `?` is one past the largest number before it, as SQLite numbers it. Mixing the two styles in one statement is an error, and so is a form the database would misread (`$name` or `@name` on SQLite, `$name` on Postgres, `?2` on MySQL); MySQL's `@name` is a user variable and stays one. The engine infers the row count from the statement and the schema on every dialect (a primary-key equality is `maybeOne`, `LIMIT 1` is `maybeOne`, an ungrouped aggregate `one`, a one-row `INSERT … RETURNING` `one`, a data-modifying statement without RETURNING `none`); there is no directive to override it. A parameter nothing in the statement types is `unknown`; `cast(:x as integer)` types it, and the database enforces the cast. A parameter is typed without null unless the statement lets the caller pass one: it tests the parameter for null or coalesces it (Postgres), or writes it whole to a nullable column (Postgres and SQLite).
 
 ### Postgres
 
@@ -154,6 +157,9 @@ strict: true                  # optional: a parameter nothing in the statement t
 types:                        # what the project's driver returns (see below)
   dates: Date
   bigint: string
+cli:                          # optional: which files porg generate analyzes, relative to this file
+  include: ["src/**/*.sql"]   # instead of every .sql file
+  exclude: ["src/legacy/**"]  # in addition to node_modules, build output and what git ignores
 ```
 
 The URL's scheme names the dialect: `postgres://` and `postgresql://`, `mysql://` and `mariadb://`, `file:` and `sqlite:`. A key Porg does not know, or a `${VAR}` nothing sets, is an error on every `.sql` import that names the line and column in `.porg.yaml`; the sections PorgREST and PorgAPI will read (`rest`, `api`) are accepted as they are. A relative SQLite path in the URL resolves against the package directory.
