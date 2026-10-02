@@ -286,7 +286,34 @@ The mapper runs with the editor's environment, not your shell's. Keep `DATABASE_
 </Accordion>
 <Accordion title="Zed" id="setup-zed">
 
-{/* TODO(zed) */}
+1. Install the **TypeScript Language Server** extension by Zed Industries: open the Extensions page (`cmd-shift-x`) and search for "tsgo".
+2. Add `.zed/settings.json` to the project. It makes the extension's server run the project's own TypeScript with content mappers on:
+
+```jsonc title=".zed/settings.json"
+{
+  "languages": {
+    "TypeScript": {
+      "language_servers": ["typescript-ls", "!vtsls", "!typescript-language-server", "..."]
+    },
+    "TSX": {
+      "language_servers": ["typescript-ls", "!vtsls", "!typescript-language-server", "..."]
+    }
+  },
+  "lsp": {
+    "typescript-ls": {
+      // The extension downloads the latest TypeScript from npm, which has no content mappers yet.
+      "binary": { "path": "node_modules/typescript/bin/tsc", "arguments": ["--lsp", "--stdio"] },
+      "initialization_options": { "runExternalCode": true }
+    }
+  }
+}
+```
+
+3. Trust the folder. In restricted mode Zed ignores `.zed/settings.json` and starts no language server; click **Trust and Continue**.
+
+- The types follow a `.sql` file each time it is saved.
+- Zed does not send `.sql` files to the language server, so an error inside a `.sql` file does not show in Zed: the query's parameters and rows become `unknown` instead. Run `tsc --noEmit --runExternalCode` to see the error.
+- After a change to `binary.path`, close the window and open it again.
 
 </Accordion>
 <Accordion title="Vite" id="setup-vite">
