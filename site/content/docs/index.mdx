@@ -77,7 +77,7 @@ To type a query, Porg sends it to your running database, which prepares it witho
 - nullability, from `NOT NULL` and outer joins
 - the row count, from primary and unique keys
 
-Porg connects through the driver your project already uses, and keeps each answer in `.porg/` until the schema changes.
+Porg connects through your project's `postgres`, `pg` or `mysql2` if it has one, and otherwise through a client of its own, and keeps each answer in `.porg/` until the schema changes.
 
 ## Setup
 

@@ -1,6 +1,8 @@
-// The JavaScript half of analysis: run Parse/Describe against the project's own
-// Postgres client. Drivers are resolved from the PROJECT directory, never from
-// porg's own dependencies, so every driver stays an optional peer.
+// The JavaScript half of analysis: run Parse/Describe through a Postgres client. The
+// project's own `postgres` or `pg` comes first, resolved from the PROJECT directory, so
+// its environment holds (pg reads a .pgpass file, for one); a project with neither, such
+// as one on Bun.sql or Neon's serverless driver, is described through the postgres.js
+// that porg itself depends on.
 import { createRequire } from "node:module";
 import { Unreachable } from "./engine.ts";
 
@@ -32,15 +34,35 @@ function settled(e: unknown): Error {
 /** How long a connection attempt may take: the transform waits on it, in the editor and in CI. */
 const CONNECT_TIMEOUT_SECONDS = 10;
 
+/**
+ * postgres.js sends a URL parameter it does not know to the server as a setting, and the server
+ * refuses `channel_binding`, which Neon's URLs carry. postgres.js cannot bind the channel either,
+ * so a URL that requires it has the server's certificate verified instead.
+ */
+export function forPostgresJs(url: string): { url: string; ssl?: "verify-full" } {
+  const q = url.indexOf("?");
+  if (q < 0) return { url };
+  const params = new URLSearchParams(url.slice(q + 1));
+  const binding = params.get("channel_binding");
+  if (binding === null) return { url };
+  params.delete("channel_binding");
+  const rest = params.toString();
+  const stripped = url.slice(0, q) + (rest ? `?${rest}` : "");
+  return binding === "require" ? { url: stripped, ssl: "verify-full" } : { url: stripped };
+}
+
 export async function openPostgresDescriber(projectDir: string, url: string): Promise<Describer> {
-  const require = createRequire(projectDir.replace(/\/?$/, "/package.json"));
-  const resolve = (name: string) => { try { return require.resolve(name); } catch { return undefined; } };
+  const project = createRequire(projectDir.replace(/\/?$/, "/package.json"));
+  const resolve = (name: string) => { try { return project.resolve(name); } catch { return undefined; } };
   const rethrow = (e: unknown): never => { throw settled(e); };
 
-  const porsager = resolve("postgres");
-  if (porsager) {
-    const postgres = (await import(porsager)).default as (url: string, o?: object) => any;
-    const sql = postgres(url, { max: 1, prepare: false, onnotice: () => {}, connect_timeout: CONNECT_TIMEOUT_SECONDS });
+  // The project's postgres.js, else the project's pg, else porg's own postgres.js.
+  const projectPostgres = resolve("postgres");
+  const pgPath = projectPostgres ? undefined : resolve("pg");
+  if (!pgPath) {
+    const postgres = (await import(projectPostgres ?? createRequire(import.meta.url).resolve("postgres"))).default as (url: string, o?: object) => any;
+    const target = forPostgresJs(url);
+    const sql = postgres(target.url, { max: 1, prepare: false, onnotice: () => {}, connect_timeout: CONNECT_TIMEOUT_SECONDS, ...(target.ssl && { ssl: target.ssl }) });
     // postgres.js runs these queries one at a time and connects again for each one queued behind
     // a failure, so five transforms against a host that never answers would wait five timeouts
     // (ending the client does not release the queue). The first failure answers every call that
@@ -77,57 +99,53 @@ export async function openPostgresDescriber(projectDir: string, url: string): Pr
     };
   }
 
-  const pgPath = resolve("pg");
-  if (pgPath) {
-    const pg = (await import(pgPath)).default as any;
-    const client = new pg.Client({ connectionString: url, connectionTimeoutMillis: CONNECT_TIMEOUT_SECONDS * 1000 });
-    // A connection that drops while idle is reported as an event; unheard, it ends the process.
-    // The next call fails on the closed client and reopens it.
-    client.on("error", () => {});
-    await client.connect().catch(rethrow);
-    return {
-      driver: "pg",
-      // node-postgres has no public describe, but it accepts any "submittable"
-      // object in client.query (pg-cursor works this way). This one sends
-      // Parse + Describe + Sync and collects the descriptions; parameterDescription
-      // and noData are not routed to the query by pg, so they are read off the
-      // connection while the query is active.
-      describe(text) {
-        return new Promise<Described>((resolve, reject) => {
-          const out: Described = { params: [], columns: [] };
-          let con: any;
-          const cleanup = () => { con?.off("parameterDescription", onParam); con?.off("noData", onNoData); };
-          const onParam = (m: any) => { out.params = (m.dataTypeIDs as number[]).map((oid) => ({ oid })); };
-          const onNoData = () => { out.columns = []; };
-          const submittable = {
-            submit(connection: any) {
-              con = connection;
-              con.on("parameterDescription", onParam);
-              con.on("noData", onNoData);
-              con.parse({ name: "", text, types: [] });
-              con.describe({ type: "S", name: "" });
-              con.sync();
-            },
-            handleRowDescription(m: any) {
-              out.columns = (m.fields as any[]).map((f) => ({ name: f.name, oid: f.dataTypeID, table: f.tableID, attnum: f.columnID }));
-            },
-            handleParseComplete() {},
-            handleDataRow() {},
-            handleCommandComplete() {},
-            handleEmptyQuery() {},
-            handlePortalSuspended() {},
-            // pg drops the active query on an error message before ReadyForQuery,
-            // so the rejection cannot wait for handleReadyForQuery.
-            handleError(err: Error) { cleanup(); reject(settled(err)); },
-            handleReadyForQuery() { cleanup(); resolve(out); },
-          };
-          client.query(submittable);
-        });
-      },
-      query: async (text, params = []) => (await client.query(text, params).catch(rethrow)).rows,
-      values: async (text, params = []) => (await client.query({ text, values: params, rowMode: "array" }).catch(rethrow)).rows,
-      close: () => client.end(),
-    };
-  }
-  throw new Error(`No Postgres client found in ${projectDir}; install "postgres" or "pg".`);
+  const pg = (await import(pgPath)).default as any;
+  const client = new pg.Client({ connectionString: url, connectionTimeoutMillis: CONNECT_TIMEOUT_SECONDS * 1000 });
+  // A connection that drops while idle is reported as an event; unheard, it ends the process.
+  // The next call fails on the closed client and reopens it.
+  client.on("error", () => {});
+  await client.connect().catch(rethrow);
+  return {
+    driver: "pg",
+    // node-postgres has no public describe, but it accepts any "submittable"
+    // object in client.query (pg-cursor works this way). This one sends
+    // Parse + Describe + Sync and collects the descriptions; parameterDescription
+    // and noData are not routed to the query by pg, so they are read off the
+    // connection while the query is active.
+    describe(text) {
+      return new Promise<Described>((resolve, reject) => {
+        const out: Described = { params: [], columns: [] };
+        let con: any;
+        const cleanup = () => { con?.off("parameterDescription", onParam); con?.off("noData", onNoData); };
+        const onParam = (m: any) => { out.params = (m.dataTypeIDs as number[]).map((oid) => ({ oid })); };
+        const onNoData = () => { out.columns = []; };
+        const submittable = {
+          submit(connection: any) {
+            con = connection;
+            con.on("parameterDescription", onParam);
+            con.on("noData", onNoData);
+            con.parse({ name: "", text, types: [] });
+            con.describe({ type: "S", name: "" });
+            con.sync();
+          },
+          handleRowDescription(m: any) {
+            out.columns = (m.fields as any[]).map((f) => ({ name: f.name, oid: f.dataTypeID, table: f.tableID, attnum: f.columnID }));
+          },
+          handleParseComplete() {},
+          handleDataRow() {},
+          handleCommandComplete() {},
+          handleEmptyQuery() {},
+          handlePortalSuspended() {},
+          // pg drops the active query on an error message before ReadyForQuery,
+          // so the rejection cannot wait for handleReadyForQuery.
+          handleError(err: Error) { cleanup(); reject(settled(err)); },
+          handleReadyForQuery() { cleanup(); resolve(out); },
+        };
+        client.query(submittable);
+      });
+    },
+    query: async (text, params = []) => (await client.query(text, params).catch(rethrow)).rows,
+    values: async (text, params = []) => (await client.query({ text, values: params, rowMode: "array" }).catch(rethrow)).rows,
+    close: () => client.end(),
+  };
 }

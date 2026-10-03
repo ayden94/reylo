@@ -41,6 +41,7 @@
     "typescript": "^7.1.0-dev.20260918.1"
   },
   "dependencies": {
+    "postgres": "^3.4.9",
     "tinyglobby": "^0.2.17"
   }
 }
