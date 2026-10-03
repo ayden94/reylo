@@ -37,8 +37,9 @@ pub struct Project {
     pub api: Option<serde_yaml::Value>,
 }
 
-/// What the project's driver returns for the values no JSON type holds exactly. Porg declares
-/// these types; the driver's own settings decide the values.
+/// What the project's driver returns for the values drivers disagree on. Porg declares these
+/// types; the driver's own settings decide the values. Each key overrides the defaults of the
+/// driver the host found in the project's `package.json`, and means the same on every dialect.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Types {
@@ -46,6 +47,38 @@ pub struct Types {
     pub dates: Option<Dates>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bigint: Option<Bigint>,
+    /// Postgres `numeric`, MySQL `DECIMAL`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decimal: Option<Decimal>,
+    /// A JSON value: parsed by the driver, or the text the database wrote.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub json: Option<Json>,
+    /// Postgres `bytea`, MySQL `BINARY` and `BLOB`, SQLite `BLOB`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub binary: Option<Binary>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Decimal {
+    String,
+    Number,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Json {
+    Parsed,
+    String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum Binary {
+    Uint8Array,
+    Buffer,
+    ArrayBuffer,
+    #[serde(rename = "number[]")]
+    NumberArray,
 }
 
 /// The files `porg generate` analyzes, as globs relative to the project file: `include` replaces
@@ -115,7 +148,7 @@ mod tests {
 
     #[test]
     fn reads_the_library_keys_and_leaves_the_later_sections_alone() {
-        let p = parse("url: ${DATABASE_URL}\ndirect_url: ${DIRECT_URL}\nenv: [.env]\nstrict: true\ntypes:\n  dates: temporal\n  bigint: bigint\ncli:\n  include: [src/**/*.sql]\n  exclude: [src/legacy/**]\napi:\n  routes: api\nrest:\n  anything: { x: 1 }\n").unwrap();
+        let p = parse("url: ${DATABASE_URL}\ndirect_url: ${DIRECT_URL}\nenv: [.env]\nstrict: true\ntypes:\n  dates: temporal\n  bigint: bigint\n  decimal: number\n  json: string\n  binary: number[]\ncli:\n  include: [src/**/*.sql]\n  exclude: [src/legacy/**]\napi:\n  routes: api\nrest:\n  anything: { x: 1 }\n").unwrap();
         assert_eq!(p.url.as_deref(), Some("${DATABASE_URL}"));
         assert_eq!(p.direct_url.as_deref(), Some("${DIRECT_URL}"));
         assert_eq!(p.env, Some(vec![".env".to_string()]));
@@ -123,7 +156,7 @@ mod tests {
         assert_eq!((p.types.dates, p.types.bigint), (Some(Dates::Temporal), Some(Bigint::Bigint)));
         assert!(p.api.is_some() && p.rest.is_some());
         // What a host reads back: the later sections are not its business.
-        assert_eq!(serde_json::to_value(&p).unwrap(), serde_json::json!({ "url": "${DATABASE_URL}", "direct_url": "${DIRECT_URL}", "env": [".env"], "strict": true, "types": { "dates": "temporal", "bigint": "bigint" }, "cli": { "include": ["src/**/*.sql"], "exclude": ["src/legacy/**"] } }));
+        assert_eq!(serde_json::to_value(&p).unwrap(), serde_json::json!({ "url": "${DATABASE_URL}", "direct_url": "${DIRECT_URL}", "env": [".env"], "strict": true, "types": { "dates": "temporal", "bigint": "bigint", "decimal": "number", "json": "string", "binary": "number[]" }, "cli": { "include": ["src/**/*.sql"], "exclude": ["src/legacy/**"] } }));
         assert_eq!(parse("").unwrap(), Project::default());
         assert_eq!(parse("# nothing yet\n").unwrap(), Project::default());
     }
