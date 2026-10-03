@@ -1,0 +1,25 @@
+[package]
+name = "porg-engine"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Porg's SQL analysis engine: parse (pg_query for Postgres, SQLite's own resolved tree for SQLite), placeholder lexing, cardinality, expression nullability and nested JSON shapes, built to one WebAssembly artifact."
+
+[lib]
+name = "porg_engine"
+crate-type = ["cdylib", "rlib"]
+
+[build-dependencies]
+cc = "1"
+
+[dependencies]
+pg_query = "6.2"
+sqlparser = { version = "0.63", default-features = false, features = ["std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+indexmap = { version = "2", features = ["serde"] }
+serde_yaml = "0.9"
+
+# The crates.io `pg_query` source plus the WebAssembly patch in `vendor/` is applied by `build.sh`;
+# the `[patch]` that points cargo at the copy, and the release profile, are the workspace's
+# (`../Cargo.toml`).
