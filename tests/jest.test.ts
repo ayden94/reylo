@@ -15,32 +15,32 @@ function run(bin: string, args: string[], nodeOptions = "") {
   return { status: r.status, output: r.stdout + r.stderr };
 }
 
-const cache = mkdtempSync(join(tmpdir(), "motherload-jest-"));
+const cache = mkdtempSync(join(tmpdir(), "dotsql-jest-"));
 const jest = (args: string[], nodeOptions?: string) => run("jest/bin/jest.js", ["--ci", `--cacheDirectory=${cache}`, ...args], nodeOptions);
 
 test("setup", { skip }, () => {
   assert.equal(spawnSync(process.execPath, ["setup.mjs"], { cwd: lab }).status, 0);
 });
 
-test("Jest's runtime never asks Node's loader: the motherload/register preload leaves a .sql file to Jest, which reads it as JavaScript", { skip }, () => {
-  const r = jest(["--config", JSON.stringify({ watchman: false, testPathIgnorePatterns: ["/node_modules/", "/probe/"], extensionsToTreatAsEsm: [".sql"] })], "--experimental-vm-modules --import motherload/register");
+test("Jest's runtime never asks Node's loader: the dotsql/register preload leaves a .sql file to Jest, which reads it as JavaScript", { skip }, () => {
+  const r = jest(["--config", JSON.stringify({ watchman: false, testPathIgnorePatterns: ["/node_modules/", "/probe/"], extensionsToTreatAsEsm: [".sql"] })], "--experimental-vm-modules --import dotsql/register");
   assert.equal(r.status, 1, r.output);
   assert.match(r.output, /SyntaxError: Unexpected identifier 'id'/);
 });
 
-test("motherload/jest: a CommonJS run, with motherload's runtime compiled to CommonJS by babel-jest", { skip }, () => {
+test("dotsql/jest: a CommonJS run, with dotsql's runtime compiled to CommonJS by babel-jest", { skip }, () => {
   const r = jest(["-c", "jest.cjs.config.cjs", "query.test.cjs"]);
   assert.equal(r.status, 0, r.output);
   assert.match(r.output, /Tests:\s+1 passed, 1 total/);
 });
 
-test("motherload/jest: an ESM run (--experimental-vm-modules), a CommonJS and an ESM test", { skip }, () => {
+test("dotsql/jest: an ESM run (--experimental-vm-modules), a CommonJS and an ESM test", { skip }, () => {
   const r = jest(["-c", "jest.esm.config.cjs"], "--experimental-vm-modules");
   assert.equal(r.status, 0, r.output);
   assert.match(r.output, /Tests:\s+2 passed, 2 total/);
 });
 
-test("Vitest needs nothing beyond motherload/vite", { skip }, () => {
+test("Vitest needs nothing beyond dotsql/vite", { skip }, () => {
   const r = run("vitest/vitest.mjs", ["run"]);
   assert.equal(r.status, 0, r.output);
   assert.match(r.output, /Tests\s+1 passed/);

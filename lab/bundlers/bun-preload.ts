@@ -1,2 +1,2 @@
-import motherload from "motherload/esbuild";
-Bun.plugin(motherload());
+import dotsql from "dotsql/esbuild";
+Bun.plugin(dotsql());

@@ -35,25 +35,25 @@ The packages are installed side by side under npm aliases (`"pg-7": "npm:pg@7.18
 
 ## Scenarios
 
-Every scenario asserts its result. Each call also checks motherload's return contract: `run` returns a promise on every client and never throws synchronously. S0 checks `runSync` as well: it returns the value itself and throws on a synchronous SQLite client (better-sqlite3, node:sqlite, bun:sqlite), and on any other client it throws motherload's TypeError before it calls the client.
+Every scenario asserts its result. Each call also checks dotsql's return contract: `run` returns a promise on every client and never throws synchronously. S0 checks `runSync` as well: it returns the value itself and throws on a synchronous SQLite client (better-sqlite3, node:sqlite, bun:sqlite), and on any other client it throws dotsql's TypeError before it calls the client.
 
 | Id | Checks |
 | --- | --- |
-| S0 | The return contract of `run` and `runSync` on a select and on a syntax error, and which client method motherload called |
+| S0 | The return contract of `run` and `runSync` on a select and on a syntax error, and which client method dotsql called |
 | S1a | Integer, text, boolean and null parameters; the returned row (SQLite gets 1 for the boolean, since it has no boolean type) |
 | S1b | An omitted (undefined) parameter binds NULL |
-| S2a–S2e | Three rows for `many`; the row for `one`; null for `maybeOne` on zero rows; motherload's "Expected at most one row, got 2" on two; `with(client)(params)` |
-| S3 | An INSERT without RETURNING (cardinality `none`) resolves undefined; the row is read back through motherload and counted through the driver |
-| S3n | The same with the values written into the SQL, so motherload passes no parameters |
+| S2a–S2e | Three rows for `many`; the row for `one`; null for `maybeOne` on zero rows; dotsql's "Expected at most one row, got 2" on two; `with(client)(params)` |
+| S3 | An INSERT without RETURNING (cardinality `none`) resolves undefined; the row is read back through dotsql and counted through the driver |
+| S3n | The same with the values written into the SQL, so dotsql passes no parameters |
 | S4 | INSERT ... RETURNING (Postgres and SQLite) |
 | S5a, S5b | One named parameter used twice, through the runtime lexer and through the mapper's `text` and `order` |
-| S6a, S6b | A syntax error and a unique violation reject with the driver's own error and code (SQLSTATE 42601 and 23505, ER_PARSE_ERROR and ER_DUP_ENTRY, SQLITE_ERROR and SQLITE_CONSTRAINT), never motherload's TypeError |
+| S6a, S6b | A syntax error and a unique violation reject with the driver's own error and code (SQLSTATE 42601 and 23505, ER_PARSE_ERROR and ER_DUP_ENTRY, SQLITE_ERROR and SQLITE_CONSTRAINT), never dotsql's TypeError |
 | S7a–S7d, S7n | On a transaction: a committed write is visible; a rolled-back write is not; a savepoint rollback keeps the outer write; a failing statement rolls the whole transaction back and its error reaches the caller; a write without parameters commits |
 | S7e | On better-sqlite3 and bun:sqlite `db.transaction(fn)`, where S7a–S7d call `runSync`: a row read inside the function is usable synchronously |
 | S8 | 20 queries in flight on the shape resolve with the right rows |
-| S9 | An unsupported client: `run` rejects with motherload's own TypeError |
+| S9 | An unsupported client: `run` rejects with dotsql's own TypeError |
 
-Visibility is always checked with a raw count through the driver, never through motherload. A raw count also runs before each job as a preflight, so a driver that cannot reach its server at all is reported once as "not run" instead of failing every scenario. [drivers/control.ts](drivers/control.ts) holds the failing controls: a client that binds every integer plus one, a transaction whose rollback commits, a synchronous database declared asynchronous, and a `db.transaction(fn)` whose statements answer through a promise. 19 of their 42 rows fail, and each of the 23 that pass is a scenario that the breakage does not touch. Since `run` returns a promise on every client, a synchronous database declared asynchronous changes only what S0 expects of `runSync`, so 15 of the 23 are its rows.
+Visibility is always checked with a raw count through the driver, never through dotsql. A raw count also runs before each job as a preflight, so a driver that cannot reach its server at all is reported once as "not run" instead of failing every scenario. [drivers/control.ts](drivers/control.ts) holds the failing controls: a client that binds every integer plus one, a transaction whose rollback commits, a synchronous database declared asynchronous, and a `db.transaction(fn)` whose statements answer through a promise. 19 of their 42 rows fail, and each of the 23 that pass is a scenario that the breakage does not touch. Since `run` returns a promise on every client, a synchronous database declared asynchronous changes only what S0 expects of `runSync`, so 15 of the 23 are its rows.
 
 ## Servers
 
@@ -77,25 +77,25 @@ The first run tested src/execute.ts 1b03ae48c322: 46 jobs and 2495 rows, with 23
 
 | Failure | Rows | Diagnosis |
 | --- | --- | --- |
-| mariadb 3.5.4, 3.4.5 and 2.5.6 through `mariadb/callback` (Connection), on MariaDB 11 and on MySQL 8.4 | 13 per job, 78 in all | motherload saw `batch` and `query` and called `query(text, values)` without a callback. The callback API then returns a command object, not a promise, and `Array.isArray(result) ? result : []` turned it into `[]`. Reads came back empty, writes still ran, and errors were lost: S6a resolved `[]` and S6b resolved undefined |
-| @planetscale/database 2.0.0, all three shapes | 46 | Version 2.0 removed parameter binding from `execute`: it throws "Query parameters are not supported: pass a complete SQL string and options to execute(query, options)" for any array second argument, including the empty array motherload passed for a statement without parameters |
-| node:sqlite `db.createTagStore()`, Node 26.7 and 24.19 | 15 per Node | motherload saw `all` and took the store for a sqlite3 Database, calling `all(text, values, callback)`. Node threw its own TypeError, "First argument must be an array of strings (template literal)", instead of motherload's unsupported-client error |
-| @planetscale/database 1.20.2, S8 on the Connection and inside `conn.transaction` | 2 | Not motherload. ps-http-sim answers HTTP 403 ("session already in use") to concurrent requests on one session. The driver alone does the same: [probes/planetscale-session.mjs](probes/planetscale-session.mjs) |
-| pg 7.18.2 (not run) | 1 | Not motherload. The preflight, a raw `pool.query`, ends in "Connection terminated due to connection timeout" on Node 26: pg 7 predates the stream changes of Node 14 ([node-postgres#2317](https://github.com/brianc/node-postgres/issues/2317)). No Node version runs both motherload (type stripping needs Node 22.6 or later; motherload's `engines` says 24) and pg 7 |
-| better-sqlite3 11.10.0, 9.6.0 and 8.7.0 (not run) | 3 | Not motherload. None of them has a prebuilt binary for Node 26 (ABI 147), so they build from source (see below) |
+| mariadb 3.5.4, 3.4.5 and 2.5.6 through `mariadb/callback` (Connection), on MariaDB 11 and on MySQL 8.4 | 13 per job, 78 in all | dotsql saw `batch` and `query` and called `query(text, values)` without a callback. The callback API then returns a command object, not a promise, and `Array.isArray(result) ? result : []` turned it into `[]`. Reads came back empty, writes still ran, and errors were lost: S6a resolved `[]` and S6b resolved undefined |
+| @planetscale/database 2.0.0, all three shapes | 46 | Version 2.0 removed parameter binding from `execute`: it throws "Query parameters are not supported: pass a complete SQL string and options to execute(query, options)" for any array second argument, including the empty array dotsql passed for a statement without parameters |
+| node:sqlite `db.createTagStore()`, Node 26.7 and 24.19 | 15 per Node | dotsql saw `all` and took the store for a sqlite3 Database, calling `all(text, values, callback)`. Node threw its own TypeError, "First argument must be an array of strings (template literal)", instead of dotsql's unsupported-client error |
+| @planetscale/database 1.20.2, S8 on the Connection and inside `conn.transaction` | 2 | Not dotsql. ps-http-sim answers HTTP 403 ("session already in use") to concurrent requests on one session. The driver alone does the same: [probes/planetscale-session.mjs](probes/planetscale-session.mjs) |
+| pg 7.18.2 (not run) | 1 | Not dotsql. The preflight, a raw `pool.query`, ends in "Connection terminated due to connection timeout" on Node 26: pg 7 predates the stream changes of Node 14 ([node-postgres#2317](https://github.com/brianc/node-postgres/issues/2317)). No Node version runs both dotsql (type stripping needs Node 22.6 or later; dotsql's `engines` says 24) and pg 7 |
+| better-sqlite3 11.10.0, 9.6.0 and 8.7.0 (not run) | 3 | Not dotsql. None of them has a prebuilt binary for Node 26 (ABI 147), so they build from source (see below) |
 
 Everything else passed on the first run, including every transaction shape listed above.
 
 ## Re-run
 
-The re-run tested src/execute.ts c46b8b73fe74 and src/index.ts 0dac6252558a, after the orchestrator's fixes for the three motherload failures: 46 jobs, 179 client shapes and 2913 rows. The results are 2868 pass, 2 fail, 39 unsupported and 4 not run. A run over src/execute.ts 3292aea4ccac, which changes only the client types (see the type check below), gives the same rows. The run after it adds better-sqlite3 11.10.0 on Node 24 from a source build (below): 46 jobs and 2933 rows, with 2889 pass, 2 fail, 39 unsupported and 3 not run. The last run, over src/execute.ts 332f629f3f63, where `run` returns a promise on every client and `runSync` is new, gives the same counts. [RESULTS.md](RESULTS.md) has every row.
+The re-run tested src/execute.ts c46b8b73fe74 and src/index.ts 0dac6252558a, after the orchestrator's fixes for the three dotsql failures: 46 jobs, 179 client shapes and 2913 rows. The results are 2868 pass, 2 fail, 39 unsupported and 4 not run. A run over src/execute.ts 3292aea4ccac, which changes only the client types (see the type check below), gives the same rows. The run after it adds better-sqlite3 11.10.0 on Node 24 from a source build (below): 46 jobs and 2933 rows, with 2889 pass, 2 fail, 39 unsupported and 3 not run. The last run, over src/execute.ts 332f629f3f63, where `run` returns a promise on every client and `runSync` is new, gives the same counts. [RESULTS.md](RESULTS.md) has every row.
 
 | Rows | Result | Diagnosis |
 | --- | --- | --- |
-| mariadb 3.5.4, 3.4.5 and 2.5.6, every shape on both servers | pass (690 rows) | motherload now calls `query(text, values, callback)` and takes whichever answers: the callback on `mariadb/callback`, the returned promise on the promise API. S0 shows `query()`; S6a and S6b get SqlError 1064 and 1062 |
+| mariadb 3.5.4, 3.4.5 and 2.5.6, every shape on both servers | pass (690 rows) | dotsql now calls `query(text, values, callback)` and takes whichever answers: the callback on `mariadb/callback`, the returned promise on the promise API. S0 shows `query()`; S6a and S6b get SqlError 1064 and 1062 |
 | @planetscale/database 2.0.0: S0, S2a, S3n, S6a, S7n on all three shapes | pass (13 rows) | A statement without parameters now reaches `execute(text)` with no second argument |
-| @planetscale/database 2.0.0: every scenario with parameters | unsupported (37 rows) | motherload refuses the statement with its TypeError "@planetscale/database 2.0 binds no parameters, ..." and the row checks that its `cause` is PlanetScale's error. By design: 2.0 takes no parameters, and motherload does not escape values into SQL. Version 2.0 has 1,217 downloads a week against 457,670 for 1.x |
-| node:sqlite `db.createTagStore()`, Node 26.7 and 24.19 | unsupported (2 rows, S9) | motherload refuses the store with its own TypeError, which ends "A tag store is not a client: pass its database, store.db." |
+| @planetscale/database 2.0.0: every scenario with parameters | unsupported (37 rows) | dotsql refuses the statement with its TypeError "@planetscale/database 2.0 binds no parameters, ..." and the row checks that its `cause` is PlanetScale's error. By design: 2.0 takes no parameters, and dotsql does not escape values into SQL. Version 2.0 has 1,217 downloads a week against 457,670 for 1.x |
+| node:sqlite `db.createTagStore()`, Node 26.7 and 24.19 | unsupported (2 rows, S9) | dotsql refuses the store with its own TypeError, which ends "A tag store is not a client: pass its database, store.db." |
 | node:sqlite `db.createTagStore().db`, Node 26.7 and 24.19 | pass (32 rows) | The store's database is a DatabaseSync |
 | @planetscale/database 1.20.2, S8 on the Connection and inside `conn.transaction` | fail (2 rows) | ps-http-sim's session lock, as in the first run. The raw probe fails the same way |
 | pg 7.18.2; better-sqlite3 9.6.0, 8.7.0 | not run (3 rows) | As in the first run |
@@ -103,8 +103,8 @@ The re-run tested src/execute.ts c46b8b73fe74 and src/index.ts 0dac6252558a, aft
 
 Two driver behaviours show up as details on passing rows:
 
-- On a pg connection (a Client, a PoolClient, a pg-promise task or tx), S8's 20 concurrent queries work, but pg 8.23 prints "Calling client.query() when the client is already executing a query is deprecated and will be removed in pg@9.0". motherload issues one query per `run`, so the concurrency is the caller's.
-- A statement that fails inside an open Postgres transaction aborts it. On postgres.js `sql.begin` and `tx.savepoint`, pg-promise's nested `t.tx`, and Bun.sql's `tx.savepoint`, the enclosing commit then fails with the driver's error. The 12 rows where this happens record it and pass, because motherload already returned the driver's error.
+- On a pg connection (a Client, a PoolClient, a pg-promise task or tx), S8's 20 concurrent queries work, but pg 8.23 prints "Calling client.query() when the client is already executing a query is deprecated and will be removed in pg@9.0". dotsql issues one query per `run`, so the concurrency is the caller's.
+- A statement that fails inside an open Postgres transaction aborts it. On postgres.js `sql.begin` and `tx.savepoint`, pg-promise's nested `t.tx`, and Bun.sql's `tx.savepoint`, the enclosing commit then fails with the driver's error. The 12 rows where this happens record it and pass, because dotsql already returned the driver's error.
 
 ## Type check
 
@@ -128,11 +128,11 @@ These were checked as expected:
 
 ## Not tested
 
-- **pg 7.18.2.** It cannot connect on any Node that runs motherload (see the first run). A shape-only test would add nothing, because its API is the same `query(text, values)` → `{ rows }` as pg 8.
+- **pg 7.18.2.** It cannot connect on any Node that runs dotsql (see the first run). A shape-only test would add nothing, because its API is the same `query(text, values)` → `{ rows }` as pg 8.
 - **better-sqlite3 9.6.0 and 8.7.0** (1.8 and 1.3 percent of the package's downloads). No prebuilt binary exists for Node 24 (ABI 137) or 26 (ABI 147), so they run only from a source build in native-old/ against Node 24's headers, which was not made for these two. 11.10.0 (18 percent) is in the same position and runs that way: its source does not compile against Node 26's V8 (it calls `Object::GetPrototype`, `Context::GetIsolate` and `PropertyCallbackInfo::This`, which V8 removed), and it compiles against Node 24's (`node <npm's node-gyp.js> rebuild --release` with Node 24.19 in `native-old/node_modules/bs3-11`, about 85 minutes at a load average near 100), so the runner runs these lines on Node 24. The first install had failed because a global node-gyp 3.8.0 on PATH still expects Python 2, so native-old/ builds with npm's node-gyp 13.
 - **miniflare 5.** The version npm tags `latest` (5.20260926.1-alpha and later, which wrangler 4.144 depends on) rejects the v4 constructor options (`modules`, `script`, `d1Databases`) and wants a new `workers: [{ config }]` format, so the D1 job uses miniflare 4.20260730.0. D1 is reached through Miniflare's Node proxy, not from inside a Worker.
 - **The real Neon and PlanetScale services.** Both are live against local stand-ins: Neon's proxy image (built 2026-03-27) and ps-http-sim. The real services could differ in details such as PlanetScale's session concurrency.
-- **Neon's HTTP `transaction()`** takes an array of queries built by the `sql` function, not a client, so a motherload query cannot join it. D1 has no interactive transaction either (`batch()` takes prepared statements).
+- **Neon's HTTP `transaction()`** takes an array of queries built by the `sql` function, not a client, so a dotsql query cannot join it. D1 has no interactive transaction either (`batch()` takes prepared statements).
 - **Other server and driver pairs:** mysql2 and Bun.sql against MariaDB, @libsql/client against a sqld server (`http:` or `ws:` URLs), PGlite through `PGliteWorker`, `pg-native`, Neon's `arrayMode`, and better-sqlite3 or the npm drivers under Bun.
 - **Other runtimes:** Deno, and a Cloudflare Worker's own D1 binding.
 

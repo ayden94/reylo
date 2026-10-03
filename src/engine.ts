@@ -73,7 +73,7 @@ type Response =
 
 const WASM_PATH = new URL("../engine/porg_engine.wasm", import.meta.url);
 
-// The WebAssembly namespace is a global in every runtime motherload supports; it is typed here
+// The WebAssembly namespace is a global in every runtime dotsql supports; it is typed here
 // rather than through the DOM lib.
 type Memory = { buffer: ArrayBuffer };
 type Instance = { exports: Record<string, unknown> };

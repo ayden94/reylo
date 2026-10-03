@@ -1,14 +1,14 @@
 {
-  "name": "motherload-example-postgres",
+  "name": "dotsql-example-postgres",
   "private": true,
   "type": "module",
   "scripts": {
     "setup": "psql \"$DATABASE_URL\" -f setup.sql",
     "typecheck": "tsc --noEmit --runExternalCode",
-    "start": "node --import motherload/register src/main.ts"
+    "start": "node --import dotsql/register src/main.ts"
   },
   "dependencies": {
-    "motherload": "link:../..",
+    "dotsql": "link:../..",
     "postgres": "^3.4.9"
   },
   "devDependencies": {

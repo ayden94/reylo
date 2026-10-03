@@ -1,4 +1,4 @@
-// Which loader handles a .sql file inside a Jest process: Node's own (where motherload/register installs
+// Which loader handles a .sql file inside a Jest process: Node's own (where dotsql/register installs
 // its hooks) or Jest's sandboxed require. Appends one JSON line per run to ../probe.jsonl. Two
 // copies, so that Jest runs them in two workers.
 const { appendFileSync } = require("node:fs");

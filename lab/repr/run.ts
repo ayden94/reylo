@@ -1,7 +1,7 @@
 import postgres from "postgres";
 import query from "./query.sql";
-// motherload declares what the driver returns and converts nothing, so the driver builds the values
-// `.motherload.yaml` names: Temporal for timestamptz, timestamp and date (and their arrays, which
+// dotsql declares what the driver returns and converts nothing, so the driver builds the values
+// `.dotsql.yaml` names: Temporal for timestamptz, timestamp and date (and their arrays, which
 // postgres parses element by element), and a BigInt for int8.
 const temporal = (oid: number, from: (text: string) => unknown) => ({ to: oid, from: [oid], serialize: String, parse: from });
 const sql = postgres("postgres://localhost:5432/postgres", {

@@ -1,8 +1,8 @@
 {
-  "name": "motherload-driver-matrix",
+  "name": "dotsql-driver-matrix",
   "private": true,
   "type": "module",
-  "description": "Live test matrix for the database-client dispatch of motherload's run(): every driver version and client shape",
+  "description": "Live test matrix for the database-client dispatch of dotsql's run(): every driver version and client shape",
   "scripts": {
     "matrix": "./run.sh",
     "setup": "./setup.sh"

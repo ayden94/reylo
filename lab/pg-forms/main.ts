@@ -1,4 +1,4 @@
-// A snapshot of what motherload's Postgres analysis produces for one statement form per file.
+// A snapshot of what dotsql's Postgres analysis produces for one statement form per file.
 // Every type below is what the engine emits (the file type-checks green), and a
 // `// WRONG: expected <X>` would mark a place where that is still weaker than the database's
 // truth; there is none left.
@@ -151,7 +151,7 @@ const cteDml4: CteDmlParams = null! as { uid: number; title: string };
 // ---------------------------------------------------------------------------
 // 6. DECLARE: a cursor statement and a DO block
 // ---------------------------------------------------------------------------
-// Neither is a statement motherload types, and the engine says so on the statement (`porg10: only
+// Neither is a statement dotsql types, and the engine says so on the statement (`porg10: only
 // SELECT, INSERT, UPDATE, DELETE and MERGE statements are typed`) rather than handing back
 // `unknown` in silence. A mapper error stops the type check, so the two files live in
 // `untyped/`, a project of their own whose check must fail with exactly those two errors.

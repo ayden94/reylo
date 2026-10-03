@@ -1,6 +1,6 @@
-// One preload for every runtime: `node --import motherload/register`, `nub --import motherload/register`,
-// `bun --preload motherload/register` (or bunfig.toml). It is the build step for code that runs
-// unbundled: each `.sql` file becomes its module (`src/loader.ts`) as it loads, from `.motherload/` or
+// One preload for every runtime: `node --import dotsql/register`, `nub --import dotsql/register`,
+// `bun --preload dotsql/register` (or bunfig.toml). It is the build step for code that runs
+// unbundled: each `.sql` file becomes its module (`src/loader.ts`) as it loads, from `.dotsql/` or
 // the database. Node's load hook (module.registerHooks) and Bun's plugin under `require()` must
 // answer synchronously, while the analysis waits on the database, so they ask `src/bridge.ts`,
 // which blocks on a worker thread.
@@ -13,7 +13,7 @@ declare const Bun: undefined | { plugin(p: { name: string; setup(build: { onLoad
 if (!(workerData as { porgWorker?: boolean } | null)?.porgWorker) {
   if (typeof Bun !== "undefined") {
     Bun.plugin({
-      name: "motherload-sql",
+      name: "dotsql-sql",
       setup(build) {
         build.onLoad({ filter: /\.sql$/ }, (args) => ({ loader: "js", contents: sqlModuleSync(args.path) }));
       },

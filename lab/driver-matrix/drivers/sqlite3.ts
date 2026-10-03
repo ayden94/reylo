@@ -1,6 +1,6 @@
 // The sqlite3 package's callback Database, and the sqlite package's promise wrapper over it
 // (--wrapper sqlite), on a database file the runner seeded (--file).
-//   sqlite3: the Database, and BEGIN/COMMIT inside db.serialize(), where motherload's statement has to
+//   sqlite3: the Database, and BEGIN/COMMIT inside db.serialize(), where dotsql's statement has to
 //            queue in order with the db.run("BEGIN") and db.run("COMMIT") around it.
 //   sqlite:  the Database from open({ filename, driver }), and BEGIN/COMMIT by exec().
 import { args, manualTx, notRun, requireFrom, runJob, type Body, type TxOps } from "../lib/harness.ts";
@@ -58,7 +58,7 @@ await runJob(meta, async () => {
     const d = new sqlite3.Database(a.file!, (e: unknown) => (e ? reject(e) : resolve(d)));
   });
   const run = (sql: string, params: unknown[] = []) => new Promise<void>((resolve, reject) => db.run(sql, params, (e: unknown) => (e ? reject(e) : resolve())));
-  // Every statement of the transaction is queued inside one db.serialize() callback; motherload's
+  // Every statement of the transaction is queued inside one db.serialize() callback; dotsql's
   // run() issues its statement synchronously, so it lands between BEGIN and COMMIT.
   const serialized = (steps: (string | Body)[]) =>
     new Promise<void>((resolve, reject) => {

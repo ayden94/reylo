@@ -9,7 +9,7 @@ import { sqlModule } from "../src/loader.ts";
 
 // A SQLite project: a package, its database, and DATABASE_URL naming it.
 function project(): { root: string; env: Record<string, string> } {
-  const root = mkdtempSync(join(tmpdir(), "motherload-analyze-"));
+  const root = mkdtempSync(join(tmpdir(), "dotsql-analyze-"));
   writeFileSync(join(root, "package.json"), "{}");
   const db = new DatabaseSync(join(root, "app.db"));
   db.exec("create table users (id integer primary key, name text not null)");
@@ -17,7 +17,7 @@ function project(): { root: string; env: Record<string, string> } {
   return { root, env: { DATABASE_URL: "file:./app.db" } };
 }
 
-// Each session stands for a process of its own: the type check, a build, motherload generate.
+// Each session stands for a process of its own: the type check, a build, dotsql generate.
 async function analyze(root: string, env: Record<string, string>, sql: string, options: { force?: boolean } = {}) {
   const session = await Session.open(root, env);
   try {
@@ -29,16 +29,16 @@ async function analyze(root: string, env: Record<string, string>, sql: string, o
 
 const SELECT = "select id, name from users where id = :id";
 
-test("a statement is analyzed against the database once, and read from .motherload/ by every process after", async () => {
+test("a statement is analyzed against the database once, and read from .dotsql/ by every process after", async () => {
   const { root, env } = project();
   const first = await analyze(root, env, SELECT);
   assert.ok(first.ok);
   assert.equal(first.source, "database");
   assert.equal(first.analysis.cardinality, "maybeOne");
-  assert.ok(first.entry.startsWith(join(root, ".motherload", "queries")));
+  assert.ok(first.entry.startsWith(join(root, ".dotsql", "queries")));
   assert.ok(existsSync(first.entry));
   // The directory keeps itself out of git.
-  assert.match(readFileSync(join(root, ".motherload", ".gitignore"), "utf8"), /^\*$/m);
+  assert.match(readFileSync(join(root, ".dotsql", ".gitignore"), "utf8"), /^\*$/m);
   const second = await analyze(root, env, SELECT);
   assert.ok(second.ok);
   assert.deepEqual([second.source, second.entry, second.analysis], ["cache", first.entry, first.analysis]);
@@ -59,7 +59,7 @@ test("a change to the schema makes the entry stale, and the statement is analyze
   assert.equal(after.entry, before.entry);
 });
 
-test("without the database, .motherload/ answers as it is, and a statement it lacks is an error that names motherload generate", async () => {
+test("without the database, .dotsql/ answers as it is, and a statement it lacks is an error that names dotsql generate", async () => {
   const { root, env } = project();
   assert.ok((await analyze(root, env, SELECT)).ok);
   renameSync(join(root, "app.db"), join(root, "gone.db"));
@@ -69,8 +69,8 @@ test("without the database, .motherload/ answers as it is, and a statement it la
   const missing = await analyze(root, env, "select name from users");
   assert.ok(!missing.ok);
   assert.equal(missing.code, 5);
-  assert.match(missing.message, /^Cannot open the database .*app\.db .*\.motherload has no analysis of this statement, so run motherload generate where the database can be reached\.$/);
-  // --force asks the database even for a statement .motherload/ holds.
+  assert.match(missing.message, /^Cannot open the database .*app\.db .*\.dotsql has no analysis of this statement, so run dotsql generate where the database can be reached\.$/);
+  // --force asks the database even for a statement .dotsql/ holds.
   const forced = await analyze(root, env, SELECT, { force: true });
   assert.ok(!forced.ok);
 });
@@ -85,7 +85,7 @@ test("the module a build step emits carries the analysis and reads nothing at ru
     const { code, entry } = await sqlModule(file, SELECT);
     assert.ok(existsSync(entry));
     assert.equal(code, [
-      `import { defineQuery } from "motherload";`,
+      `import { defineQuery } from "dotsql";`,
       `export const sql = ${JSON.stringify(SELECT)};`,
       `export const params = ["id"];`,
       `export default defineQuery({ dialect: "sqlite", sql, params, cardinality: "maybeOne", text: "select id, name from users where id = ?", order: ["id"] });`,
@@ -94,7 +94,7 @@ test("the module a build step emits carries the analysis and reads nothing at ru
     // A build (a process of its own) that has neither the database nor the entry fails instead of guessing.
     for (const session of Session.opened()) await session.close();
     renameSync(join(root, "app.db"), join(root, "gone.db"));
-    await assert.rejects(sqlModule(file, "select name from users"), /user\.sql: Cannot open the database .*run motherload generate/);
+    await assert.rejects(sqlModule(file, "select name from users"), /user\.sql: Cannot open the database .*run dotsql generate/);
   } finally {
     for (const session of Session.opened()) await session.close();
   }

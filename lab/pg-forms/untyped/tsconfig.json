@@ -9,6 +9,6 @@
     "skipLibCheck": true,
     "allowImportingTsExtensions": true
   },
-  "contentMappers": [{ "package": "motherload", "extensions": [".sql"] }],
+  "contentMappers": [{ "package": "dotsql", "extensions": [".sql"] }],
   "include": ["."]
 }

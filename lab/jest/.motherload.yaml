@@ -1,2 +1,0 @@
-# The SQLite database setup.mjs creates; the tests analyze query.sql against it, or read .motherload/.
-url: file:./lab.db

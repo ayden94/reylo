@@ -8,7 +8,7 @@ importers:
 
   .:
     dependencies:
-      motherload:
+      dotsql:
         specifier: link:../..
         version: link:../..
       postgres:

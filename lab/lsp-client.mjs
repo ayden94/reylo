@@ -10,7 +10,7 @@ import { pathToFileURL } from "node:url";
 const [projectDir, file, line, character] = process.argv.slice(2);
 const root = resolve(projectDir);
 const target = resolve(root, file);
-const tsc = spawn(process.env.MOTHERLOAD_TSC ?? resolve(root, "node_modules/.bin/tsc"), ["--lsp", "--stdio"], { cwd: root, stdio: ["pipe", "pipe", "inherit"] });
+const tsc = spawn(process.env.DOTSQL_TSC ?? resolve(root, "node_modules/.bin/tsc"), ["--lsp", "--stdio"], { cwd: root, stdio: ["pipe", "pipe", "inherit"] });
 let seq = 0;
 const pending = new Map();
 const send = (method, params, isNotification = false) => {
@@ -41,7 +41,7 @@ tsc.stdout.on("data", (chunk) => {
       tsc.stdin.write(`Content-Length: ${body.length}\r\n\r\n`); tsc.stdin.write(body);
     }
     else if (msg.method === "textDocument/publishDiagnostics") diagnostics.push(msg.params);
-    else if (msg.method === "window/logMessage" && /mapper|motherload/i.test(msg.params?.message ?? "")) console.log("LOG", msg.params.message.replace(/\n/g, " ").slice(0, 300));
+    else if (msg.method === "window/logMessage" && /mapper|dotsql/i.test(msg.params?.message ?? "")) console.log("LOG", msg.params.message.replace(/\n/g, " ").slice(0, 300));
   }
 });
 console.log("sending initialize");

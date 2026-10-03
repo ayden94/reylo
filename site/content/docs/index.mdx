@@ -1,5 +1,5 @@
 ---
-title: motherload
+title: dotsql
 description: Import a .sql file and get a fully typed query, checked against the real database.
 ---
 
@@ -9,10 +9,10 @@ select id, name, email from users where id = :id
 
 ```ts twoslash title="main.ts"
 // Twoslash runs TypeScript 6, which cannot run a content mapper: get_user.d.sql.ts is the module
-// motherload's mapper returned for get_user.sql (tsc --runExternalCode, against the schema below).
+// dotsql's mapper returned for get_user.sql (tsc --runExternalCode, against the schema below).
 // @allowArbitraryExtensions
 // @filename: get_user.d.sql.ts
-import type { Query } from "motherload";
+import type { Query } from "dotsql";
 export type Params = { id: number };
 export type Values = [id: number];
 export type Row = { id: number; name: string; email: string | null };
@@ -22,7 +22,7 @@ declare const query: Query<{ id: number }, { id: number; name: string; email: st
 export default query;
 // @filename: guard.ts
 import getUser from "./get_user.sql";
-// @ts-expect-error: fails the build if the motherload types stop resolving and the query becomes `any`.
+// @ts-expect-error: fails the build if the dotsql types stop resolving and the query becomes `any`.
 const typed: string = getUser;
 // @filename: main.ts
 // ---cut---
@@ -65,51 +65,51 @@ create table posts (
 
 ## How it works
 
-motherload is a [content mapper](https://github.com/microsoft/typescript-go/pull/4712), a feature new in TypeScript 7.1: a package that turns a file TypeScript does not know into a typed module, in the type checker and in the editor. Bundlers have loaded `.sql` files for years, and content mappers are the missing half, so a loader is now type safe from end to end.
+dotsql is a [content mapper](https://github.com/microsoft/typescript-go/pull/4712), a feature new in TypeScript 7.1: a package that turns a file TypeScript does not know into a typed module, in the type checker and in the editor. Bundlers have loaded `.sql` files for years, and content mappers are the missing half, so a loader is now type safe from end to end.
 
 ```text
-get_user.sql  →  motherload  →  your database  →  { id: number; name: string; email: string | null } | null
+get_user.sql  →  dotsql  →  your database  →  { id: number; name: string; email: string | null } | null
 ```
 
-To type a query, motherload sends it to your running database, which prepares it without running it. The database reports:
+To type a query, dotsql sends it to your running database, which prepares it without running it. The database reports:
 
 - the parameter types
 - the column types
 - nullability, from `NOT NULL` and outer joins
 - the row count, from primary and unique keys
 
-motherload connects through your project's `postgres`, `pg` or `mysql2`, and keeps each answer in `.motherload/` until the schema changes.
+dotsql connects through your project's `postgres`, `pg` or `mysql2`, and keeps each answer in `.dotsql/` until the schema changes.
 
 ## Setup
 
-Install motherload and point it at your database, then add it to each tool that loads your code.
+Install dotsql and point it at your database, then add it to each tool that loads your code.
 
 ### Install
 
 ```sh
-npm install motherload
+npm install dotsql
 npm install -D typescript@next   # content mappers are in the TypeScript 7.1 dev builds
 ```
 
-motherload also needs one of these drivers in your project, as a peer dependency, whichever driver your application runs on: `postgres` or `pg` for Postgres, `mysql2` for MySQL. SQLite needs none.
+dotsql also needs one of these drivers in your project, as a peer dependency, whichever driver your application runs on: `postgres` or `pg` for Postgres, `mysql2` for MySQL. SQLite needs none.
 
-motherload needs Node 24 or later. It reads `DATABASE_URL` from the environment, or from `.env.local` or `.env` next to `package.json`:
+dotsql needs Node 24 or later. It reads `DATABASE_URL` from the environment, or from `.env.local` or `.env` next to `package.json`:
 
 ```sh title=".env"
 DATABASE_URL=postgres://localhost:5432/app   # mysql://… for MySQL, file:./app.db for SQLite
 ```
 
-Other settings go in `.motherload.yaml`: see [The project file](/details#the-project-file).
+Other settings go in `.dotsql.yaml`: see [The project file](/details#the-project-file).
 
 ### TypeScript
 
-Add motherload to `tsconfig.json`:
+Add dotsql to `tsconfig.json`:
 
 ```jsonc title="tsconfig.json"
 {
   "compilerOptions": { /* ... */ },
   "contentMappers": [ // [!code ++]
-    { "package": "motherload", "extensions": [".sql"] } // [!code ++]
+    { "package": "dotsql", "extensions": [".sql"] } // [!code ++]
   ] // [!code ++]
 }
 ```
@@ -196,18 +196,18 @@ Zed shows no errors inside a `.sql` file: see [Editors](/details#editors).
 A preload turns each `.sql` import into a module as it loads:
 
 ```sh
-node --import motherload/register main.ts
+node --import dotsql/register main.ts
 ```
 
 Bun and nub read the preload from their config files, so no flag is needed:
 
 ```toml title="bunfig.toml"
-preload = ["motherload/register"]
+preload = ["dotsql/register"]
 ```
 
 ```jsonc title="nub.jsonc"
 {
-  "preload": ["motherload/register"]
+  "preload": ["dotsql/register"]
 }
 ```
 
@@ -220,10 +220,10 @@ A bundler plugin turns each `.sql` import into a module at build time, so a bund
 
 ```ts title="vite.config.ts"
 import { defineConfig } from "vite";
-import motherload from "motherload/vite";
+import dotsql from "dotsql/vite";
 
 export default defineConfig({
-  plugins: [motherload()],
+  plugins: [dotsql()],
 });
 ```
 
@@ -239,11 +239,11 @@ const nextConfig: NextConfig = {
   typescript: { ignoreBuildErrors: true }, // the build script runs the type check first
   turbopack: {
     rules: {
-      "*.sql": { condition: { not: "browser" }, loaders: ["motherload/webpack-loader"], as: "*.js" },
+      "*.sql": { condition: { not: "browser" }, loaders: ["dotsql/webpack-loader"], as: "*.js" },
     },
   },
   webpack(config, { isServer }) {
-    if (isServer) config.module.rules.push({ test: /\.sql$/, use: "motherload/webpack-loader" });
+    if (isServer) config.module.rules.push({ test: /\.sql$/, use: "dotsql/webpack-loader" });
     return config;
   },
 };
@@ -268,13 +268,13 @@ The type check of `next build` cannot run content mappers, so the scripts run th
 
 ```js title="build.mjs"
 import * as esbuild from "esbuild";
-import motherload from "motherload/esbuild";
+import dotsql from "dotsql/esbuild";
 
 await esbuild.build({
   entryPoints: ["main.ts"],
   bundle: true,
   platform: "node",
-  plugins: [motherload()],
+  plugins: [dotsql()],
   outfile: "dist/main.js",
 });
 ```
@@ -285,12 +285,12 @@ await esbuild.build({
 Bun's bundler takes the esbuild plugin:
 
 ```ts title="build.ts"
-import motherload from "motherload/esbuild";
+import dotsql from "dotsql/esbuild";
 
 await Bun.build({
   entrypoints: ["main.ts"],
   target: "bun",
-  plugins: [motherload()],
+  plugins: [dotsql()],
   outdir: "dist",
 });
 ```
@@ -302,7 +302,7 @@ await Bun.build({
 export default {
   // ...
   module: {
-    rules: [{ test: /\.sql$/, use: "motherload/webpack-loader" }],
+    rules: [{ test: /\.sql$/, use: "dotsql/webpack-loader" }],
   },
 };
 ```
@@ -314,7 +314,7 @@ export default {
 export default {
   // ...
   module: {
-    rules: [{ test: /\.sql$/, use: "motherload/webpack-loader" }],
+    rules: [{ test: /\.sql$/, use: "dotsql/webpack-loader" }],
   },
 };
 ```
@@ -326,7 +326,7 @@ Jest loads test code through its own runtime, which a preload never reaches, so 
 
 ```js title="jest.config.js"
 export default {
-  transform: { "\\.sql$": "motherload/jest" },
+  transform: { "\\.sql$": "dotsql/jest" },
   extensionsToTreatAsEsm: [".sql"],
 };
 ```
@@ -379,7 +379,7 @@ getUser.cardinality;                 // "maybeOne"
 
 ## Type inference
 
-motherload puts no limits on the query: any syntax, any built-in function, *the full expressive power of your SQL dialect*. Each example shows a statement and the types motherload infers: the parameters, and what `run` resolves to.
+dotsql puts no limits on the query: any syntax, any built-in function, *the full expressive power of your SQL dialect*. Each example shows a statement and the types dotsql infers: the parameters, and what `run` resolves to.
 
 ### Parameters
 
@@ -492,7 +492,7 @@ type Result = {
 
 ## Supported drivers
 
-motherload imports no driver. Pass `run` the client of any of these:
+dotsql imports no driver. Pass `run` the client of any of these:
 
 - Postgres
   - `pg`
@@ -577,7 +577,7 @@ Each SQL type maps to a TypeScript type.
 </Tab>
 </Tabs>
 
-The tables show what most drivers return. motherload reads your driver from `package.json` and follows it where it differs:
+The tables show what most drivers return. dotsql reads your driver from `package.json` and follows it where it differs:
 
 - mariadb: `BIGINT` is a `bigint`
 - PlanetScale: dates and `BIGINT` are a `string`
@@ -585,9 +585,9 @@ The tables show what most drivers return. motherload reads your driver from `pac
 - libsql: `BLOB` is an `ArrayBuffer`
 - Cloudflare D1: `BLOB` is a `number[]`
 
-If you set your driver up to decode a type another way, say so in `.motherload.yaml`:
+If you set your driver up to decode a type another way, say so in `.dotsql.yaml`:
 
-```yaml title=".motherload.yaml"
+```yaml title=".dotsql.yaml"
 types:
   dates: string        # Date, string or temporal
   bigint: bigint       # string, number or bigint
@@ -604,7 +604,7 @@ Postgres is the reference dialect. MySQL and SQLite type less: see [Dialect limi
 
 ### Postgres
 
-motherload prepares the statement on the server and reads the description of its parameters and columns. It then reads the catalog for `NOT NULL`, keys and enum labels.
+dotsql prepares the statement on the server and reads the description of its parameters and columns. It then reads the catalog for `NOT NULL`, keys and enum labels.
 
 | What | Where it comes from |
 | --- | --- |
@@ -616,7 +616,7 @@ motherload prepares the statement on the server and reads the description of its
 
 ### MySQL
 
-motherload prepares the statement on the server, which reports the column types, `NOT NULL`, and a type for each parameter from its context. motherload adds the row count and the shape of JSON built in the statement.
+dotsql prepares the statement on the server, which reports the column types, `NOT NULL`, and a type for each parameter from its context. dotsql adds the row count and the shape of JSON built in the statement.
 
 | What | Where it comes from |
 | --- | --- |
@@ -628,12 +628,12 @@ motherload prepares the statement on the server, which reports the column types,
 
 ### SQLite
 
-motherload reads the schema from the database file and prepares the statement against its own copy of SQLite. SQLite then reports where every column and parameter comes from.
+dotsql reads the schema from the database file and prepares the statement against its own copy of SQLite. SQLite then reports where every column and parameter comes from.
 
 | What | Where it comes from |
 | --- | --- |
 | Parameter types | where SQLite places the parameter: a comparison with a column, an `insert` or `update` column, a `cast`, `limit` and `offset` |
 | Column types | the declared type's affinity |
-| Nullability | `NOT NULL` in the table, outer joins, motherload's table of SQLite's built-in functions |
+| Nullability | `NOT NULL` in the table, outer joins, dotsql's table of SQLite's built-in functions |
 | Row count | unique indexes and `integer primary key` |
 | Nested JSON | `string` |

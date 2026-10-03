@@ -55,7 +55,7 @@ test("mysql2: a refused connection is Unreachable", { skip: installed(lab("mysql
 });
 
 test("a project with no driver for its dialect is told which ones the type check reads", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "motherload-no-driver-"));
+  const dir = mkdtempSync(join(tmpdir(), "dotsql-no-driver-"));
   try {
     writeFileSync(join(dir, "package.json"), '{ "name": "no-driver", "private": true }\n');
     await assert.rejects(openPostgresDescriber(dir, "postgres://localhost:1/x"), /install "postgres" or "pg"/);

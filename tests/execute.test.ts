@@ -194,7 +194,7 @@ test("the driver's own error comes through unchanged", async () => {
   assert.throws(() => execute(db, { dialect: "sqlite", sql: "selec 1", params: [] }), /syntax error/);
 });
 
-test("an unsupported client rejects, naming what it has and what motherload takes", async () => {
+test("an unsupported client rejects, naming what it has and what dotsql takes", async () => {
   await assert.rejects(() => execute({ connect() {}, end() {} } as never, pg) as Promise<unknown>, (e: TypeError) => e instanceof TypeError && /postgres statement on an object with connect, end\. It takes a client with query\(text, values\)/.test(e.message));
   await assert.rejects(() => execute({ $client: {}, select() {} } as never, pg) as Promise<unknown>, /pass db\.\$client/);
   // node:sqlite's tag store has all() for templates; it is not sqlite3's database.

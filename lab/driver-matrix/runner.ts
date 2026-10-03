@@ -63,7 +63,7 @@ for (const [alias, v] of [["planetscale-2", "2.0.0"], ["planetscale-1", "1.20.2"
 for (const [alias, v] of [["bs3-13", "13.0.3"], ["bs3-12", "12.11.1"]]) add({ id: `better-sqlite3@${v}`, bin: NODE26, file: "drivers/sync-sqlite.ts", args: ["--lib", alias, "--version", v], sqlite: true, meta: { pkg: "better-sqlite3", version: v, target: "SQLite file", runtime: n26 } });
 // These lines have no prebuilt binary for Node 24 or 26, and their source does not compile against Node 26's V8
 // (11.10.0 calls Object::GetPrototype, Context::GetIsolate and PropertyCallbackInfo::This, which V8 removed), so
-// they run on Node 24, the other Node motherload supports, from a source build in native-old/ against Node 24's headers.
+// they run on Node 24, the other Node dotsql supports, from a source build in native-old/ against Node 24's headers.
 for (const [alias, v] of [["bs3-11", "11.10.0"], ["bs3-9", "9.6.0"], ["bs3-8", "8.7.0"]]) add({ id: `better-sqlite3@${v}`, bin: NODE24, file: "drivers/sync-sqlite.ts", args: ["--lib", alias, "--version", v, "--from", "native-old"], sqlite: true, meta: { pkg: "better-sqlite3", version: v, target: "SQLite file", runtime: "node 24.19.0" } });
 add({ id: "node:sqlite@26", bin: NODE26, file: "drivers/sync-sqlite.ts", args: ["--lib", "node:sqlite"], sqlite: true, meta: { pkg: "node:sqlite", version: "26.7.0", target: "SQLite file", runtime: n26 } });
 add({ id: "node:sqlite@24", bin: NODE24, file: "drivers/sync-sqlite.ts", args: ["--lib", "node:sqlite"], sqlite: true, meta: { pkg: "node:sqlite", version: "24.19.0", target: "SQLite file", runtime: "node 24.19.0" } });
@@ -209,7 +209,7 @@ const count = (rs: typeof results, s: string) => rs.filter((r) => r.status === s
 const md: string[] = [];
 md.push("# Driver matrix results", "");
 md.push(`Generated ${meta.generated} by \`./run.sh\` against the working tree at ${head} (uncommitted changes in src/: ${dirty}; src/execute.ts ${meta.src["execute.ts"]}, src/index.ts ${meta.src["index.ts"]}). The report and the diagnoses are in [README.md](README.md).`, "");
-md.push(`${real.length} rows: ${count(real, "pass")} pass, ${count(real, "fail")} fail, ${count(real, "unsupported")} unsupported (motherload refuses them with its own TypeError, as its contract says), ${count(real, "skip")} skip, ${count(real, "not run")} not run. Failing controls: ${count(controls, "fail")} of ${controls.length} control rows fail, as designed.`, "");
+md.push(`${real.length} rows: ${count(real, "pass")} pass, ${count(real, "fail")} fail, ${count(real, "unsupported")} unsupported (dotsql refuses them with its own TypeError, as its contract says), ${count(real, "skip")} skip, ${count(real, "not run")} not run. Failing controls: ${count(controls, "fail")} of ${controls.length} control rows fail, as designed.`, "");
 
 md.push("## Per job", "");
 md.push("| Package@version | Runtime | Target | Pass | Fail | Unsupported | Skip | Not run |", "| --- | --- | --- | --- | --- | --- | --- | --- |");
@@ -243,8 +243,8 @@ const list = (s: Set<string>) => [...s].join(", ");
 for (const g of merged.values()) md.push(`| ${cell(g.r.pkg)} | ${cell(list(g.versions))} | ${cell(list(g.runtimes))} | ${cell(list(g.targets))} | ${cell(g.r.shape)} | ${cell(g.scenarios)} | ${cell(g.r.status === "not run" ? `not run: ${g.r.error}` : g.r.error)} |`);
 md.push("");
 
-md.push("## Unsupported by design", "", "Rows where motherload refuses the client or the statement with its own TypeError, which is its contract for that shape: the row checks the refusal (its message, and for PlanetScale 2.0 that its cause is the driver's error).", "");
-md.push("| Package | Versions | Runtimes | Shape | Scenarios | motherload's refusal |", "| --- | --- | --- | --- | --- | --- |");
+md.push("## Unsupported by design", "", "Rows where dotsql refuses the client or the statement with its own TypeError, which is its contract for that shape: the row checks the refusal (its message, and for PlanetScale 2.0 that its cause is the driver's error).", "");
+md.push("| Package | Versions | Runtimes | Shape | Scenarios | dotsql's refusal |", "| --- | --- | --- | --- | --- | --- |");
 const unsup = new Map<string, { r: Result; scenarios: Set<string>; versions: Set<string>; runtimes: Set<string> }>();
 for (const r of real.filter((r) => r.status === "unsupported")) {
   const key = [r.pkg, r.shape].join("\u0000");

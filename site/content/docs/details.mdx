@@ -1,13 +1,13 @@
 ---
 title: Details
-description: The parts of motherload you need less often, from the project file to builds without a database and the limits of each dialect.
+description: The parts of dotsql you need less often, from the project file to builds without a database and the limits of each dialect.
 ---
 
 ## The project file
 
 Every key is optional. A project whose connection is `DATABASE_URL` needs no file.
 
-```yaml title=".motherload.yaml"
+```yaml title=".dotsql.yaml"
 url: ${DATABASE_URL}          # the default; the scheme names the dialect
 direct_url: ${DIRECT_URL}     # a connection past a pooler, which the type check prefers
 env: [.env.local, .env]       # the default; the process environment wins
@@ -15,7 +15,7 @@ strict: true                  # a parameter nothing types is an error, not unkno
 types:                        # what the driver returns
   dates: Date
   bigint: string
-cli:                          # which files motherload generate reads, relative to this file
+cli:                          # which files dotsql generate reads, relative to this file
   include: ["src/**/*.sql"]   # instead of every .sql file
   exclude: ["src/legacy/**"]  # in addition to node_modules, build output and what git ignores
 ```
@@ -29,22 +29,22 @@ The scheme of the URL names the dialect:
 | `file:`, `sqlite:` | SQLite (a relative path starts at the package directory) |
 
 - An unknown key, or a `${VAR}` that nothing sets, is an error on every `.sql` import, at its line and column.
-- The file sits next to `package.json`. The `MOTHERLOAD_CONFIG` variable names a file elsewhere.
-- motherload takes no options in `tsconfig.json`.
+- The file sits next to `package.json`. The `DOTSQL_CONFIG` variable names a file elsewhere.
+- dotsql takes no options in `tsconfig.json`.
 
 ## Builds without a database
 
-Every step that loads a `.sql` file (the type check, a plugin, the preload) analyzes it against the database and keeps the result in `.motherload/`. A later step reads the entry instead of asking again.
+Every step that loads a `.sql` file (the type check, a plugin, the preload) analyzes it against the database and keeps the result in `.dotsql/`. A later step reads the entry instead of asking again.
 
-- motherload writes a `.gitignore` into `.motherload/`; never commit it.
+- dotsql writes a `.gitignore` into `.dotsql/`; never commit it.
 - While the database answers, an entry from another schema is analyzed again.
 - While the database cannot be reached, the entries are used as they are.
-- A statement that `.motherload/` lacks, with no database, is an error.
+- A statement that `.dotsql/` lacks, with no database, is an error.
 
-To build where the database cannot be reached, such as a CI job or a container build, fill `.motherload/` first where it can be reached, and carry it to the build:
+To build where the database cannot be reached, such as a CI job or a container build, fill `.dotsql/` first where it can be reached, and carry it to the build:
 
 ```text
-$ motherload generate
+$ dotsql generate
 postgres at localhost:5432/postgres (DATABASE_URL in .env)
   src/admin/find_by_email.sql  ✗
   src/admin/set_email.sql      ✓
@@ -62,7 +62,7 @@ Skipped 2 files that are not one query (a migration?): migrations/0001_init.sql,
 ✗ 1 of 6 queries failed (0.2 s)
 ```
 
-The command reads every `.sql` file under the given paths (by default the current directory). It leaves out `node_modules`, build output, directories whose names start with a dot and, in a git repository, what git ignores. The `cli` section of the project file changes the set. With `--force`, it asks the database even for a statement `.motherload/` holds. It exits with 1 when a query fails.
+The command reads every `.sql` file under the given paths (by default the current directory). It leaves out `node_modules`, build output, directories whose names start with a dot and, in a git repository, what git ignores. The `cli` section of the project file changes the set. With `--force`, it asks the database even for a statement `.dotsql/` holds. It exits with 1 when a query fails.
 
 ## Parameters
 
@@ -114,11 +114,11 @@ At run time, a `one` query throws unless it gets exactly one row, and a `maybeOn
 
 ## One statement per file
 
-A `.sql` file holds one `select`, `insert`, `update` or `delete`, or `merge` on Postgres and `replace` on SQLite and MySQL. A file of DDL or of several statements, such as a migration, is an error when it is imported, and `motherload generate` skips it.
+A `.sql` file holds one `select`, `insert`, `update` or `delete`, or `merge` on Postgres and `replace` on SQLite and MySQL. A file of DDL or of several statements, such as a migration, is an error when it is imported, and `dotsql generate` skips it.
 
 ## Driver settings
 
-motherload types each value the way the driver in `package.json` returns it by default. A project that changes how its driver decodes a type says so in the `types` section of `.motherload.yaml`, one key per kind of value:
+dotsql types each value the way the driver in `package.json` returns it by default. A project that changes how its driver decodes a type says so in the `types` section of `.dotsql.yaml`, one key per kind of value:
 
 | Key | Values | Applies to |
 | --- | --- | --- |
@@ -137,9 +137,9 @@ The driver options that change a setting:
 - `decimal: number`: mysql2 with `decimalNumbers`, mariadb with `decimalAsNumber`
 - `json: string`: mysql2 and mariadb with `jsonStrings`
 
-On `pg`, pg-promise, Neon's Pool and Client, and PGlite, motherload sets how its own queries decode the types those drivers leave as text or as objects (enum and other arrays, `interval`, `numeric[]`), so the rows match the Data types tables; a parser you registered still wins, and your other queries are unchanged.
+On `pg`, pg-promise, Neon's Pool and Client, and PGlite, dotsql sets how its own queries decode the types those drivers leave as text or as objects (enum and other arrays, `interval`, `numeric[]`), so the rows match the Data types tables; a parser you registered still wins, and your other queries are unchanged.
 
-A driver that returns a `Buffer` is typed `Uint8Array`, which a `Buffer` is; `binary: Buffer` names it, in a project that has `@types/node`. With `dates: temporal`, the driver builds the `Temporal` values and motherload types them with TypeScript's `esnext.temporal` lib. Inside nested JSON the database wrote the value already, so the settings do not apply there.
+A driver that returns a `Buffer` is typed `Uint8Array`, which a `Buffer` is; `binary: Buffer` names it, in a project that has `@types/node`. With `dates: temporal`, the driver builds the `Temporal` values and dotsql types them with TypeScript's `esnext.temporal` lib. Inside nested JSON the database wrote the value already, so the settings do not apply there.
 
 ## Transactions and synchronous drivers
 
@@ -184,7 +184,7 @@ What each client takes:
 - MySQL has no `returning`: a write resolves to `void`, and the insert id is untyped.
 - Nullability is the server's flag: sound for `NOT NULL`, cautious for string and date functions.
 - A prepare error has no position, so the error covers the whole statement.
-- motherload is tested against MySQL 8.4, not MariaDB.
+- dotsql is tested against MySQL 8.4, not MariaDB.
 
 ### SQLite
 
@@ -204,7 +204,7 @@ To suggest the extension to everyone who opens the project:
 { "recommendations": ["TypeScriptTeam.native-preview"] }
 ```
 
-The editor's environment is not your shell's. Keep `DATABASE_URL` in `.env` or `.env.local`, where motherload finds it.
+The editor's environment is not your shell's. Keep `DATABASE_URL` in `.env` or `.env.local`, where dotsql finds it.
 
 ### Zed
 
@@ -219,15 +219,15 @@ The editor's environment is not your shell's. Keep `DATABASE_URL` in `.env` or `
 - **Vite**: import `.sql` files from server code only. The module carries the statement, and the plugin does not stop a browser bundle from importing it.
 - **esbuild**: `buildSync` runs no plugins, so use `build`.
 - **Bun**: without the preload, Bun imports a `.sql` file as its path and reports no error.
-- **Jest without ES modules**: motherload's runtime is an ES module, which a CommonJS run cannot `require`, so babel-jest compiles it too:
+- **Jest without ES modules**: dotsql's runtime is an ES module, which a CommonJS run cannot `require`, so babel-jest compiles it too:
 
 ```js title="jest.config.js"
 module.exports = {
   transform: {
-    "\\.sql$": "motherload/jest",
+    "\\.sql$": "dotsql/jest",
     "\\.[jt]s$": ["babel-jest", { plugins: ["@babel/plugin-transform-modules-commonjs"] }],
   },
-  transformIgnorePatterns: ["/node_modules/(?!motherload/)"],
+  transformIgnorePatterns: ["/node_modules/(?!dotsql/)"],
 };
 ```
 

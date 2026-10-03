@@ -1,5 +1,5 @@
 {
-  "name": "motherload-lab-bundlers",
+  "name": "dotsql-lab-bundlers",
   "private": true,
   "type": "module",
   "devDependencies": {

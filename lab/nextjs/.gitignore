@@ -1,5 +1,5 @@
 node_modules/
 .next/
-.motherload/
+.dotsql/
 next-env.d.ts
 *.tsbuildinfo

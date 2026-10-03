@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// `motherload generate`: analyzes every `.sql` file of the project into `.motherload/`, the cache that the type
+// `dotsql generate`: analyzes every `.sql` file of the project into `.dotsql/`, the cache that the type
 // check and the build steps share, and prints each file with a mark and every error in full. A
 // build that runs where the database cannot be reached (a CI job, a container build) runs on what
 // it wrote; where the database can be reached, it only saves the build the round trips.
@@ -10,20 +10,20 @@ import { styleText } from "node:util";
 import { glob } from "tinyglobby";
 import { Session } from "./analyze.ts";
 
-const USAGE = `Usage: motherload generate [paths...] [--force]
+const USAGE = `Usage: dotsql generate [paths...] [--force]
 
-Analyzes every .sql file under the paths (by default the current directory) into .motherload/: the
+Analyzes every .sql file under the paths (by default the current directory) into .dotsql/: the
 cache that the type check and the build steps read. A file that is not one query (a migration)
-is skipped. --force analyzes each file against the database even when .motherload/ holds it.
+is skipped. --force analyzes each file against the database even when .dotsql/ holds it.
 
-Which files are queries can be set in .motherload.yaml; the globs are relative to it:
+Which files are queries can be set in .dotsql.yaml; the globs are relative to it:
 
   cli:
     include: ["src/**/*.sql"]   # instead of every .sql file
     exclude: ["src/legacy/**"]  # in addition to dependencies, build output and what git ignores`;
 
 // Never the project's own queries: dependencies and build output. A directory whose name starts
-// with a dot (.git, .motherload, .next) is left out too, because a glob's `*` does not match a dot.
+// with a dot (.git, .dotsql, .next) is left out too, because a glob's `*` does not match a dot.
 const EXCLUDE = ["**/node_modules/**", "**/{dist,build,out,target,coverage}/**"];
 
 const shown = (path: string) => relative(process.cwd(), path) || ".";
@@ -65,7 +65,7 @@ async function generate(args: string[]): Promise<number> {
   const force = args.includes("--force");
   const unknown = args.filter((a) => a.startsWith("-") && a !== "--force");
   if (unknown.length) {
-    console.error(`motherload generate: unknown option ${unknown.join(", ")}\n\n${USAGE}`);
+    console.error(`dotsql generate: unknown option ${unknown.join(", ")}\n\n${USAGE}`);
     return 2;
   }
   const paths = args.filter((a) => !a.startsWith("-"));
@@ -77,7 +77,7 @@ async function generate(args: string[]): Promise<number> {
   for (const arg of paths.length ? paths : ["."]) {
     const full = resolve(arg);
     if (!existsSync(full)) {
-      console.error(`motherload generate: ${arg} does not exist.`);
+      console.error(`dotsql generate: ${arg} does not exist.`);
       return 2;
     }
     if (statSync(full).isDirectory()) {
@@ -86,12 +86,12 @@ async function generate(args: string[]): Promise<number> {
       for (const file of files) if (!ignored.has(file)) found.add(file);
     } else if (full.endsWith(".sql")) named.add(full);
     else {
-      console.error(`motherload generate: ${arg} is not a .sql file or a directory.`);
+      console.error(`dotsql generate: ${arg} is not a .sql file or a directory.`);
       return 2;
     }
   }
 
-  // One project per `.motherload.yaml` (or package): each has its database, its `.motherload/` and its `cli` globs.
+  // One project per `.dotsql.yaml` (or package): each has its database, its `.dotsql/` and its `cli` globs.
   const projects = new Map<Session, string[]>();
   for (const file of [...named, ...found].sort()) {
     const session = await Session.for(dirname(file));
@@ -114,14 +114,14 @@ async function generate(args: string[]): Promise<number> {
     const here = session.root === process.cwd() ? "" : `${shown(session.root)}: `;
     console.log(paint("dim", `${here}${project.dialect} at ${session.where()} (${project.urlSource})`));
     // A project that cannot be used at all is said once, above its files.
-    let unusable = project.error ?? (project.url ? undefined : `No database URL: set DATABASE_URL in the environment, .env.local or .env, or "url" in .motherload.yaml.`);
+    let unusable = project.error ?? (project.url ? undefined : `No database URL: set DATABASE_URL in the environment, .env.local or .env, or "url" in .dotsql.yaml.`);
     let offline = false;
     if (!unusable) {
       const schema = await session.schema();
       if (schema.fatal) unusable = schema.error;
       else if (schema.value === null) {
         offline = true;
-        console.log(paint("dim", `${session.cannotConnect(schema.error)}; the files are read from .motherload/ as they are.`));
+        console.log(paint("dim", `${session.cannotConnect(schema.error)}; the files are read from .dotsql/ as they are.`));
       }
     }
     if (unusable) errors.push([paint("red", unusable)]);
@@ -138,7 +138,7 @@ async function generate(args: string[]): Promise<number> {
       const sql = readFileSync(file, "utf8");
       const outcome = await session.analyze(sql, { force });
       if (!outcome.ok) {
-        fail(`${paint("bold", shown(file))}: ${offline ? (force ? "--force needs the database, which cannot be reached" : "not in .motherload/, and the database cannot be reached") : outcome.message}`);
+        fail(`${paint("bold", shown(file))}: ${offline ? (force ? "--force needs the database, which cannot be reached" : "not in .dotsql/, and the database cannot be reached") : outcome.message}`);
         continue;
       }
       const { diagnostics } = outcome.analysis;
@@ -183,6 +183,6 @@ const [command, ...rest] = process.argv.slice(2);
 if (command === "generate") process.exitCode = await generate(rest);
 else if (command === undefined || command === "help" || command === "--help" || command === "-h") console.log(USAGE);
 else {
-  console.error(`motherload: unknown command ${command}\n\n${USAGE}`);
+  console.error(`dotsql: unknown command ${command}\n\n${USAGE}`);
   process.exitCode = 2;
 }

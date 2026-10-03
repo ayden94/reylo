@@ -2,6 +2,6 @@
 module.exports = {
   watchman: false,
   testPathIgnorePatterns: ["/node_modules/", "/probe/"],
-  transform: { "\\.sql$": "motherload/jest" },
+  transform: { "\\.sql$": "dotsql/jest" },
   extensionsToTreatAsEsm: [".sql"],
 };

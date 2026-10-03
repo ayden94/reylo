@@ -10,7 +10,7 @@
     "allowImportingTsExtensions": true
   },
   "contentMappers": [
-    { "package": "motherload", "extensions": [".sql"] }
+    { "package": "dotsql", "extensions": [".sql"] }
   ],
   "include": ["."],
   "exclude": ["run.ts", "node_modules"]

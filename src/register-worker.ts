@@ -1,4 +1,4 @@
-// The worker behind `src/bridge.ts` (`motherload/register`, `motherload/jest`): it builds a `.sql` file's
+// The worker behind `src/bridge.ts` (`dotsql/register`, `dotsql/jest`): it builds a `.sql` file's
 // module, which can take a database round trip, while the loading thread blocks on `done`. It
 // imports the loader only when asked, so that a failure to load it is an answer and not a silent
 // worker.

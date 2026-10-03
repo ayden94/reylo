@@ -5,7 +5,7 @@ import { args, lazy, manualTx, notRun, requireFrom, runJob } from "../lib/harnes
 
 const a = args();
 const meta = { pkg: "mysql2", version: a.version!, target: a.target! };
-const config = { host: "127.0.0.1", port: Number(a.port), user: "root", password: "motherload", database: "driver_matrix" };
+const config = { host: "127.0.0.1", port: Number(a.port), user: "root", password: "dotsql", database: "driver_matrix" };
 
 let mysql: any;
 let mysqlPromise: any;

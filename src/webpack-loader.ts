@@ -1,7 +1,7 @@
 // A webpack-style loader, for webpack 5, Rspack and Next.js with Turbopack, which take loaders
 // (not plugins) for a file type:
-//   webpack / Rspack:  module.rules: [{ test: /\.sql$/, use: "motherload/webpack-loader" }]
-//   Turbopack:         turbopack: { rules: { "*.sql": { loaders: ["motherload/webpack-loader"], as: "*.js" } } }
+//   webpack / Rspack:  module.rules: [{ test: /\.sql$/, use: "dotsql/webpack-loader" }]
+//   Turbopack:         turbopack: { rules: { "*.sql": { loaders: ["dotsql/webpack-loader"], as: "*.js" } } }
 import { sqlModule } from "./loader.ts";
 
 type LoaderContext = {
