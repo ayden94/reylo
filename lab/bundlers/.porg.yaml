@@ -1,2 +1,0 @@
-# The local Postgres that main.ts queries; every build analyzes query.sql against it, or reads .porg/.
-url: postgres://localhost:5432/postgres

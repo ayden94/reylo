@@ -15,7 +15,7 @@ export function Header() {
     >
       <a href="/" className="inline-flex items-center gap-2 font-semibold tracking-tight text-fd-headings">
         <span aria-hidden className="size-2.5 rounded-full bg-(--porg-yellow)" />
-        Porg
+        motherload
       </a>
       <div className="flex-1" />
       <a href="/details" className="text-sm text-fd-muted-foreground transition-colors hover:text-fd-foreground">

@@ -20,7 +20,7 @@ await runJob(meta, async () => {
   const begin = (fn: (tx: any) => Promise<unknown>) => conn.transaction(fn);
   // 2.0 takes no query parameters at all, so the raw count inlines the tag as a literal.
   const literal = (s: string) => `'${s.replace(/'/g, "''")}'`;
-  // 2.0 binds no parameters by design; porg refuses a statement with parameters on it, with its own
+  // 2.0 binds no parameters by design; motherload refuses a statement with parameters on it, with its own
   // TypeError whose cause is PlanetScale's error, and runs a statement without them.
   const paramsRefused = a.version!.startsWith("2.") ? /binds no parameters/ : undefined;
   return {

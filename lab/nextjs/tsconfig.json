@@ -26,7 +26,7 @@
   },
   "contentMappers": [
     {
-      "package": "porg",
+      "package": "motherload",
       "extensions": [
         ".sql"
       ]

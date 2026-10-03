@@ -37,7 +37,7 @@ await runJob(meta, async () => {
     const c = await pool.connect();
     return { client: c, release: () => c.release() };
   };
-  const noTx = "neon()'s transaction() takes an array of queries built by the sql function, not a client, so a porg query cannot join it";
+  const noTx = "neon()'s transaction() takes an array of queries built by the sql function, not a client, so a motherload query cannot join it";
   return {
     ...meta,
     dialect: "postgres",

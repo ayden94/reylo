@@ -8,7 +8,7 @@ importers:
 
   .:
     dependencies:
-      porg:
+      motherload:
         specifier: link:../..
         version: link:../..
       postgres:

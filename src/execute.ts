@@ -1,5 +1,5 @@
 // Runtime execution over a caller-supplied client, typed structurally so that
-// porg has no dependency (not even a type-only one) on any driver package.
+// motherload has no dependency (not even a type-only one) on any driver package.
 // Each type is the smallest slice of the real driver that execution needs, and
 // the query's dialect selects which clients are accepted at compile time. A
 // transaction, savepoint, reserved or checked-out connection has the same shape
@@ -172,7 +172,7 @@ async function executeAsync(c: AnyClient | null | undefined, query: QueryModule,
     case "postgres":
       // query() before unsafe(): Neon's neon() has both, and its unsafe() builds a fragment
       // for a template instead of running anything. Where the driver takes a decoder per
-      // query, Porg passes its own (decode.ts).
+      // query, motherload passes its own (decode.ts).
       if (typeof c.query === "function") return await queryPostgres(c, text, values);
       if (typeof c.unsafe === "function") return await c.unsafe(text, values);
       if (typeof c === "function") {
@@ -202,7 +202,7 @@ async function executeAsync(c: AnyClient | null | undefined, query: QueryModule,
           result = await (values.length ? m.execute(text, values) : m.execute(text));
         } catch (error) {
           if (!/^Query parameters are not supported/.test((error as Error)?.message)) throw error;
-          throw new TypeError(`@planetscale/database 2.0 binds no parameters, so porg cannot pass this statement's values to it; use its 1.x line, or mysql2 on PlanetScale's MySQL endpoint.`, { cause: error });
+          throw new TypeError(`@planetscale/database 2.0 binds no parameters, so motherload cannot pass this statement's values to it; use its 1.x line, or mysql2 on PlanetScale's MySQL endpoint.`, { cause: error });
         }
         const rows = Array.isArray(result) ? result[0] : result.rows;
         return Array.isArray(rows) ? rows : [];
@@ -313,5 +313,5 @@ function unsupported(c: unknown, dialect: Dialect): TypeError {
   // node:sqlite's tag store keeps its database on db.
   const o = c as { $client?: unknown; db?: { prepare?: unknown } } | null;
   const hint = o && typeof o === "object" && "$client" in o ? " A Drizzle database is not a client: pass db.$client." : typeof o?.db?.prepare === "function" ? " A tag store is not a client: pass its database, store.db." : "";
-  return new TypeError(`porg cannot run a ${dialect} statement on ${seen}. It takes a client with ${accepted[dialect]}.${hint}`);
+  return new TypeError(`motherload cannot run a ${dialect} statement on ${seen}. It takes a client with ${accepted[dialect]}.${hint}`);
 }

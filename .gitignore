@@ -15,11 +15,11 @@ coverage/
 lab/**/dist/
 
 # Mapper cache written into lab projects
-lab/**/.porg/
+lab/**/.motherload/
 
 # SQLite lab database file
 lab/sqlite/lab.db*
 
 # Example projects: mapper cache and local env
-examples/**/.porg/
+examples/**/.motherload/
 

@@ -19,7 +19,7 @@ export type Json<T> = T extends Date | bigint | Uint8Array | { toJSON(): string 
       ? { [K in keyof T]: Json<T[K]> }
       : T;
 
-export type PorgTypes<Params, Row, C extends Cardinality, Values extends readonly unknown[] = readonly unknown[]> = {
+export type MotherloadTypes<Params, Row, C extends Cardinality, Values extends readonly unknown[] = readonly unknown[]> = {
   readonly element: Row;
   readonly cardinality: C;
   readonly json: Materialize<Json<Row>, C>;
@@ -31,13 +31,13 @@ export type PorgTypes<Params, Row, C extends Cardinality, Values extends readonl
 export interface Query<Params, Row, C extends Cardinality, D extends Dialect, Values extends readonly unknown[] = readonly unknown[]>
   extends StandardTypedV1<Params, Materialize<Row, C>>, StandardJSONSchemaV1<Params, Materialize<Row, C>> {
   readonly dialect: D;
-  /** The statement as written, with porg's placeholders left in place. */
+  /** The statement as written, with motherload's placeholders left in place. */
   readonly sql: string;
   /** Parameter names in binding order. */
   readonly params: readonly string[];
   readonly cardinality: C;
   readonly "~standard": StandardJSONSchemaV1.Props<Params, Materialize<Row, C>>;
-  readonly "~porg": PorgTypes<Params, Row, C, Values>;
+  readonly "~motherload": MotherloadTypes<Params, Row, C, Values>;
   /**
    * Runs the statement on the client, or on a transaction or connection taken from it. The
    * parameters are an object keyed by name, or an array in the order of `params`, and may be left
@@ -84,13 +84,13 @@ export function defineQuery<Params, Row, C extends Cardinality, D extends Dialec
     cardinality,
     "~standard": {
       version: 1,
-      vendor: "porg",
+      vendor: "motherload",
       jsonSchema: {
         input: () => def.jsonSchema?.input ?? missingSchema(),
         output: () => def.jsonSchema?.output ?? missingSchema(),
       },
     },
-    "~porg": undefined as unknown as PorgTypes<Params, Row, C, Values>,
+    "~motherload": undefined as unknown as MotherloadTypes<Params, Row, C, Values>,
     run: ((client: ClientFor<D>, params?: Params) => run(client, params ?? ({} as Params))) as Query<Params, Row, C, D, Values>["run"],
     runSync: ((client: SyncClientFor<D>, params?: Params) => materialize(executeSync(client, query, (params ?? {}) as Record<string, unknown>) as Row[])) as Query<Params, Row, C, D, Values>["runSync"],
     with: ((client: ClientFor<D>) => (params?: Params) => run(client, params ?? ({} as Params))) as Query<Params, Row, C, D, Values>["with"],

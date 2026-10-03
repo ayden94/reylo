@@ -20,7 +20,7 @@ export function sqlModuleSync(path: string): string {
   const waited = Atomics.wait(done, 0, 0, 120_000);
   const reply = receiveMessageOnPort(port1)?.message as { code: string } | { error: string } | undefined;
   port1.close();
-  if (!reply) throw new Error(`${path}: Porg's worker ${waited === "timed-out" ? "did not answer in 120 s" : "ended without an answer"}.`);
+  if (!reply) throw new Error(`${path}: motherload's worker ${waited === "timed-out" ? "did not answer in 120 s" : "ended without an answer"}.`);
   if ("error" in reply) throw new Error(reply.error);
   return reply.code;
 }

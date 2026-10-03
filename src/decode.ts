@@ -1,10 +1,10 @@
-// Porg decodes its own Postgres queries where the driver takes a decoder per query, so that a row
-// has the type Porg declares (decided 2026-10-03; the measurements are in the driver study of
+// motherload decodes its own Postgres queries where the driver takes a decoder per query, so that a row
+// has the type motherload declares (decided 2026-10-03; the measurements are in the driver study of
 // 2026-10-02). pg-types 2.x, which pg, pg-promise, Neon's Pool and Client and @vercel/postgres
 // all decode through, returns `interval` and `interval[]` as objects, `numeric[]` as lossy floats,
 // and every array it has no entry for (`name[]`, `"char"[]`, `xml[]`, range arrays, and every
 // array whose oid the database assigns: enums, domains, extension types) as its unparsed text.
-// Porg declares an interval as its text, `numeric[]` as `string[]`, an enum array as a union
+// motherload declares an interval as its text, `numeric[]` as `string[]`, an enum array as a union
 // array and a domain array as an array of its base type. So each such query carries a decoder
 // table for that query only (`{ text, values, types }` on pg, `{ parsers }` on PGlite) that
 // takes over exactly those oids while the driver still holds pg-types' default for them, which
@@ -149,7 +149,7 @@ class Pending {
 }
 
 /**
- * The decoder table for one query on a pg-family client: Porg's parser for the oids it takes over
+ * The decoder table for one query on a pg-family client: motherload's parser for the oids it takes over
  * while `fallback` still holds pg-types' default for them, `fallback`'s own parser for every other.
  */
 function pgTypes(catalog: Catalog, fallback: TypeTable, pending: Set<number>): TypeTable {
@@ -196,7 +196,7 @@ async function settle(rows: unknown, catalog: Catalog, fallback: TypeTable, pend
 const rowsOf = (result: any): unknown[] => (Array.isArray(result) ? result : result.rows);
 
 /**
- * Runs a Postgres statement on a client whose query() Porg calls: pg's Client, PoolClient and
+ * Runs a Postgres statement on a client whose query() motherload calls: pg's Client, PoolClient and
  * Pool, Neon's, pg-promise's database, tasks and transactions, PGlite, and Neon's neon(), the
  * last unchanged. Each client is told apart by what it has; anything else is called as before.
  */
@@ -290,7 +290,7 @@ async function pgPromise(db: AnyClient, text: string, values: unknown[]): Promis
 // PGlite merges a query's `parsers` over the instance's, and builds an array parser at start for
 // every array type then in the database, which applies the element's parser: a domain's elements
 // have none and stay text, a composite's become a string[], and a type created later stays text
-// until refreshArrayTypes(). Porg decodes those three, through the instance's parser for the
+// until refreshArrayTypes(). motherload decodes those three, through the instance's parser for the
 // base type, and leaves an array alone whose element has a parser of the user's.
 async function pglite(db: AnyClient, text: string, values: unknown[]): Promise<unknown[]> {
   const load: Load = async (sql) => (await db.query(sql)).rows;

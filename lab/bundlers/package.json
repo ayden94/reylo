@@ -1,5 +1,5 @@
 {
-  "name": "porg-lab-bundlers",
+  "name": "motherload-lab-bundlers",
   "private": true,
   "type": "module",
   "devDependencies": {

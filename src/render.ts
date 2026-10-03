@@ -1,5 +1,5 @@
 // The engine's type model as TypeScript text. On the wire the project's driver decodes a value
-// its own way, and `run` returns what it decoded: Porg declares that type. Drivers disagree on
+// its own way, and `run` returns what it decoded: motherload declares that type. Drivers disagree on
 // five kinds of value: timestamps (a Date or a string), 64-bit integers (a string, a number or a
 // BigInt), decimals (a string or a number), JSON (parsed or its text) and binary values (a
 // Uint8Array, a Buffer, an ArrayBuffer or an array of numbers). The `Repr` names what the
@@ -19,7 +19,7 @@ export type Repr = {
   binary: "Uint8Array" | "Buffer" | "ArrayBuffer" | "number[]";
 };
 
-/** Each dialect's defaults when the project names no driver Porg knows: what postgres.js, mysql2 and node:sqlite return. */
+/** Each dialect's defaults when the project names no driver motherload knows: what postgres.js, mysql2 and node:sqlite return. */
 export const defaultReprs: Record<"postgres" | "mysql" | "sqlite", Repr> = {
   postgres: { dates: "Date", bigint: "string", decimal: "string", json: "parsed", binary: "Uint8Array" },
   mysql: { dates: "Date", bigint: "number", decimal: "string", json: "parsed", binary: "Uint8Array" },

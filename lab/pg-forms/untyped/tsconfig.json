@@ -9,6 +9,6 @@
     "skipLibCheck": true,
     "allowImportingTsExtensions": true
   },
-  "contentMappers": [{ "package": "porg", "extensions": [".sql"] }],
+  "contentMappers": [{ "package": "motherload", "extensions": [".sql"] }],
   "include": ["."]
 }

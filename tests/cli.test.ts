@@ -8,15 +8,15 @@ import { join } from "node:path";
 
 const CLI = join(import.meta.dirname, "..", "src", "cli.ts");
 
-function porg(cwd: string, ...args: string[]) {
+function motherload(cwd: string, ...args: string[]) {
   const r = spawnSync(process.execPath, ["--no-warnings", CLI, ...args], { cwd, encoding: "utf8", env: { PATH: process.env.PATH, DATABASE_URL: "file:./app.db" } });
   // The time varies from run to run; everything else is the readout.
   return { status: r.status, out: r.stdout.replace(/\(\d+\.\d s\)/, "(_ s)"), err: r.stderr };
 }
 
-test("porg generate analyzes every .sql file of the project, and prints each file with a mark and every error in full", () => {
+test("motherload generate analyzes every .sql file of the project, and prints each file with a mark and every error in full", () => {
   // The CLI sees its working directory as the real path (/private/var on macOS).
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "porg-cli-")));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "motherload-cli-")));
   writeFileSync(join(root, "package.json"), "{}");
   const db = new DatabaseSync(join(root, "app.db"));
   db.exec("create table users (id integer primary key, name text not null)");
@@ -36,7 +36,7 @@ test("porg generate analyzes every .sql file of the project, and prints each fil
   writeFileSync(join(root, ".gitignore"), "generated/\n");
   assert.equal(spawnSync("git", ["init", "-q"], { cwd: root }).status, 0);
 
-  const first = porg(root, "generate");
+  const first = motherload(root, "generate");
   assert.equal(first.status, 1, first.err);
   assert.equal(first.out, [
     `sqlite at ${join(root, "app.db")} (DATABASE_URL in the environment)`,
@@ -59,24 +59,24 @@ test("porg generate analyzes every .sql file of the project, and prints each fil
     ``,
   ].join("\n"));
 
-  // .porg.yaml narrows the files; a file named on the command line is analyzed as named.
-  writeFileSync(join(root, ".porg.yaml"), `cli:\n  include: ["src/**/*.sql"]\n  exclude: ["**/bad.sql", "**/typo.sql"]\n`);
-  const configured = porg(root, "generate");
+  // .motherload.yaml narrows the files; a file named on the command line is analyzed as named.
+  writeFileSync(join(root, ".motherload.yaml"), `cli:\n  include: ["src/**/*.sql"]\n  exclude: ["**/bad.sql", "**/typo.sql"]\n`);
+  const configured = motherload(root, "generate");
   assert.equal(configured.status, 0, configured.err);
   assert.match(configured.out, /^  src\/queries\/count\.sql  ✓\n  src\/queries\/user\.sql   ✓\n\n✓ 2 queries typed \(_ s\)\n$/m);
-  assert.equal(porg(root, "generate", "src/queries/bad.sql").status, 1);
+  assert.equal(motherload(root, "generate", "src/queries/bad.sql").status, 1);
 
   // Without the database the cache still answers, and --force cannot.
   renameSync(join(root, "app.db"), join(root, "gone.db"));
-  const offline = porg(root, "generate", "src/queries/user.sql");
+  const offline = motherload(root, "generate", "src/queries/user.sql");
   assert.equal(offline.status, 0, offline.err);
-  assert.match(offline.out, /^Cannot open the database .*app\.db \(DATABASE_URL in the environment\): .*; the files are read from \.porg\/ as they are\.$/m);
+  assert.match(offline.out, /^Cannot open the database .*app\.db \(DATABASE_URL in the environment\): .*; the files are read from \.motherload\/ as they are\.$/m);
   assert.match(offline.out, /^  src\/queries\/user\.sql  ✓$/m);
-  const forced = porg(root, "generate", "--force", "src/queries/user.sql");
+  const forced = motherload(root, "generate", "--force", "src/queries/user.sql");
   assert.equal(forced.status, 1);
   assert.match(forced.out, /^src\/queries\/user\.sql: --force needs the database, which cannot be reached$/m);
 
-  assert.equal(porg(root, "generate", "--watch").status, 2);
-  assert.equal(porg(root, "generate", "package.json").status, 2);
-  assert.equal(porg(root, "frobnicate").status, 2);
+  assert.equal(motherload(root, "generate", "--watch").status, 2);
+  assert.equal(motherload(root, "generate", "package.json").status, 2);
+  assert.equal(motherload(root, "frobnicate").status, 2);
 });

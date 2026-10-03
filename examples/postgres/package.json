@@ -1,14 +1,14 @@
 {
-  "name": "porg-example-postgres",
+  "name": "motherload-example-postgres",
   "private": true,
   "type": "module",
   "scripts": {
     "setup": "psql \"$DATABASE_URL\" -f setup.sql",
     "typecheck": "tsc --noEmit --runExternalCode",
-    "start": "node --import porg/register src/main.ts"
+    "start": "node --import motherload/register src/main.ts"
   },
   "dependencies": {
-    "porg": "link:../..",
+    "motherload": "link:../..",
     "postgres": "^3.4.9"
   },
   "devDependencies": {

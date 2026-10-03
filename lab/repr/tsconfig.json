@@ -10,7 +10,7 @@
     "allowImportingTsExtensions": true
   },
   "contentMappers": [
-    { "package": "porg", "extensions": [".sql"] }
+    { "package": "motherload", "extensions": [".sql"] }
   ],
   "include": ["."],
   "exclude": ["run.ts", "node_modules"]

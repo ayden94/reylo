@@ -1,6 +1,6 @@
-# Porg example: Postgres
+# motherload example: Postgres
 
-A sample project that imports `.sql` files as typed queries, checked by TypeScript 7.1 through the `porg` content mapper and run through the `postgres` driver.
+A sample project that imports `.sql` files as typed queries, checked by TypeScript 7.1 through the `motherload` content mapper and run through the `postgres` driver.
 
 ## Run it
 
@@ -8,7 +8,7 @@ A sample project that imports `.sql` files as typed queries, checked by TypeScri
 psql postgres://localhost:5432/postgres -f setup.sql   # a local Postgres, or point .env at yours
 nub install                                             # or npm install
 nub run typecheck                                       # tsc --noEmit --runExternalCode
-nub run start                                           # node --import porg/register src/main.ts
+nub run start                                           # node --import motherload/register src/main.ts
 ```
 
 Edit `queries/get_user.sql` (rename a column, add a parameter) and run `nub run typecheck` again: the types in `src/main.ts` follow the database.

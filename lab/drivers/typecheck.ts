@@ -1,4 +1,4 @@
-// Does every real driver satisfy the structural interfaces without porg importing them?
+// Does every real driver satisfy the structural interfaces without motherload importing them?
 // Every client below is also a transaction, savepoint, reserved or checked-out connection
 // where the driver has one, because those are what a caller passes inside a transaction.
 import type { Pool, Client, PoolClient } from "pg";

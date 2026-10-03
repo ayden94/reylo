@@ -2,7 +2,7 @@
 //   --lib bs3-13 (any better-sqlite3 alias; --from native-old for the source-built lines)
 //   --lib node:sqlite   DatabaseSync, BEGIN/COMMIT by hand, and db.createTagStore()
 //   --lib bun:sqlite    under Bun
-// On these clients porg's run() returns the value itself and throws synchronously, so it works
+// On these clients motherload's run() returns the value itself and throws synchronously, so it works
 // inside better-sqlite3's and bun:sqlite's db.transaction(fn), whose function must not await.
 import { createRequire } from "node:module";
 import { args, here, manualTx, notRun, requireFrom, runJob, type Shape } from "../lib/harness.ts";
