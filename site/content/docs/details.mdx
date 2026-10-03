@@ -116,22 +116,28 @@ At run time, a `one` query throws unless it gets exactly one row, and a `maybeOn
 
 A `.sql` file holds one `select`, `insert`, `update` or `delete`, or `merge` on Postgres and `replace` on SQLite and MySQL. A file of DDL or of several statements, such as a migration, is an error when it is imported, and `porg generate` skips it.
 
-## Dates and 64-bit integers
+## Driver settings
 
-| Setting | Value | `timestamptz` | `timestamp`, MySQL `DATETIME` | `date` | `bigint`, SQLite `INTEGER` |
-| --- | --- | --- | --- | --- | --- |
-| `dates` | `Date` (default) | `Date` | `Date` | `Date` | |
-| `dates` | `string` | `string` | `string` | `string` | |
-| `dates` | `temporal` | `Temporal.Instant` | `Temporal.PlainDateTime` | `Temporal.PlainDate` | |
-| `bigint` | `string` (Postgres default), `number` (MySQL and SQLite default), `bigint` | | | | `string`, `number` or `bigint` |
+Porg types each value the way the driver in `package.json` returns it by default. A project that changes how its driver decodes a type says so in the `types` section of `.porg.yaml`, one key per kind of value:
 
-The setting has to match the driver, because Porg does not see the driver's options:
+| Key | Values | Applies to |
+| --- | --- | --- |
+| `dates` | `Date`, `string`, `temporal` | `timestamptz`, `timestamp`, `date`; MySQL `DATETIME`, `TIMESTAMP`, `DATE` |
+| `bigint` | `string`, `number`, `bigint` | `bigint`; MySQL `BIGINT`; SQLite `INTEGER` |
+| `decimal` | `string`, `number` | `numeric`; MySQL `DECIMAL` |
+| `json` | `parsed`, `string` | `json`, `jsonb` and JSON the statement builds; MySQL `JSON` |
+| `binary` | `Uint8Array`, `Buffer`, `ArrayBuffer`, `number[]` | `bytea`; MySQL `BINARY`, `BLOB`; SQLite `BLOB` |
 
-- `dates: string` for `pg` with a timestamp `types.setTypeParser`, `postgres` with its `types` option, or mysql2 and mariadb with `dateStrings: true`
-- `bigint: string` for mysql2 with `supportBigNumbers` and `bigNumberStrings`
-- `bigint: bigint` for mariadb, which returns a BigInt by default, and for better-sqlite3 and bun:sqlite with `safeIntegers`
+The driver options that change a setting:
 
-The `temporal` value types the values with TypeScript's `esnext.temporal` lib; the driver builds them. Inside nested JSON the database wrote the value already, so the settings do not apply there. SQLite has no date type, so `dates` changes no SQLite type.
+- `dates: string`: `pg` with a timestamp `types.setTypeParser`, `postgres` with its `types` option, mysql2 and mariadb with `dateStrings: true`
+- `bigint: bigint`: `pg` with a BigInt parser for `int8`, `postgres` with `postgres.BigInt`, Bun.sql with `bigint: true`, better-sqlite3 with `defaultSafeIntegers(true)`, node:sqlite with `readBigInts`, bun:sqlite with `safeIntegers`, libsql with `intMode: "bigint"`
+- `bigint: string`: mysql2 with `supportBigNumbers` and `bigNumberStrings`, libsql with `intMode: "string"`
+- `bigint: number`: mariadb with `bigIntAsNumber`
+- `decimal: number`: mysql2 with `decimalNumbers`, mariadb with `decimalAsNumber`
+- `json: string`: mysql2 and mariadb with `jsonStrings`
+
+A driver that returns a `Buffer` is typed `Uint8Array`, which a `Buffer` is; `binary: Buffer` names it, in a project that has `@types/node`. With `dates: temporal`, the driver builds the `Temporal` values and Porg types them with TypeScript's `esnext.temporal` lib. Inside nested JSON the database wrote the value already, so the settings do not apply there.
 
 ## Transactions and synchronous drivers
 

@@ -85,7 +85,7 @@ db.transaction(() => {
 })();
 ```
 
-Parameter types come from the server (`id: number`, `name: string`); `role` is an enum, `tags` a `text[]`, `email` nullable from the catalog, `next_id` non-null because `id` is and the built-in `+` never returns NULL for non-null operands; `| null` on the row because `id` is the primary key, so the `WHERE` matches at most one row. `created_at` is a `Date` and an `int8` a `string` because that is what `pg`, postgres.js, Bun.sql and Neon return by default, and `run` returns the driver's values (see [Dates and 64-bit integers](#dates-and-64-bit-integers)).
+Parameter types come from the server (`id: number`, `name: string`); `role` is an enum, `tags` a `text[]`, `email` nullable from the catalog, `next_id` non-null because `id` is and the built-in `+` never returns NULL for non-null operands; `| null` on the row because `id` is the primary key, so the `WHERE` matches at most one row. `created_at` is a `Date` and an `int8` a `string` because that is what `pg`, postgres.js, Bun.sql and Neon return by default, and `run` returns the driver's values (see [Driver settings](#driver-settings)).
 
 Nested JSON keeps its shape. The engine reads the constructors out of the parse tree, has the database type their arguments as ordinary columns, and folds the catalog's `NOT NULL` and the outer joins back in:
 
@@ -154,7 +154,7 @@ url: ${DATABASE_URL}          # the default; the secret stays in the environment
 direct_url: ${DIRECT_URL}     # optional: a connection past a pooler, which the type check prefers
 env: [.env.local, .env]       # the default; the process environment wins, then the first file that sets a variable
 strict: true                  # optional: a parameter nothing in the statement types is an error instead of unknown
-types:                        # what the project's driver returns (see below)
+types:                        # optional: where the project's driver is set up to decode a type its own way (see below)
   dates: Date
   bigint: string
 cli:                          # optional: which files porg generate analyzes, relative to this file
@@ -164,24 +164,26 @@ cli:                          # optional: which files porg generate analyzes, re
 
 The URL's scheme names the dialect: `postgres://` and `postgresql://`, `mysql://` and `mariadb://`, `file:` and `sqlite:`. A key Porg does not know, or a `${VAR}` nothing sets, is an error on every `.sql` import that names the line and column in `.porg.yaml`; the sections PorgREST and PorgAPI will read (`rest`, `api`) are accepted as they are. A relative SQLite path in the URL resolves against the package directory.
 
-## Dates and 64-bit integers
+## Driver settings
 
-`run` returns the rows the driver returns: Porg declares their types and converts no value. Drivers disagree on two kinds of value. Every Postgres and MySQL driver decodes a timestamp as a `Date` unless it is set up otherwise, and a 64-bit integer arrives as a string (`pg`, `postgres`, Bun.sql, Neon), a number (mysql2 and the SQLite drivers, lossy above 2^53) or a BigInt (mariadb); the measurements are in [docs/dates.md](./docs/dates.md). The `types` section of `.porg.yaml` says what the project's driver returns, and the rendered type follows it:
+`run` returns the rows the driver returns: Porg declares their types. Drivers disagree on five kinds of value, measured against every supported driver on 2026-10-02: timestamps (a `Date` or a string), 64-bit integers (a string from `pg`, postgres.js, Bun.sql and Neon; a number from mysql2 and the SQLite drivers, lossy above 2^53; a BigInt from mariadb; a number or a BigInt from PGlite; a string from PlanetScale), decimals (a string, or a number when set up so), JSON (parsed, or its text) and binary values (a `Buffer`, a `Uint8Array`, an `ArrayBuffer` from libsql, an array of numbers from D1). Porg reads the project's driver from `package.json` (the first of the dialect's drivers it knows, in any dependency list; `src/project.ts`) and declares what that driver returns at its defaults; a driver that returns a `Buffer` is declared `Uint8Array`, which a `Buffer` is, so the module needs no `@types/node`. The `types` section of `.porg.yaml` overrides one kind of value at a time, for a driver set up to decode it another way:
 
 ```yaml
 types:
-  dates: Date       # the default on Postgres and MySQL; string or temporal for a driver set up to return those
-  bigint: string    # the default on Postgres; number is the default on MySQL and SQLite; bigint for mariadb
+  dates: Date         # Date, string or temporal
+  bigint: string      # string, number or bigint; a SQLite INTEGER too
+  decimal: string     # string or number: numeric, MySQL DECIMAL
+  json: parsed        # parsed or string: json, jsonb, MySQL JSON and the JSON a statement builds
+  binary: Uint8Array  # Uint8Array, Buffer, ArrayBuffer or number[]: bytea, BINARY, BLOB
 ```
 
-| Setting | Value | `timestamptz` | `timestamp`, MySQL `datetime` / `timestamp` | `date` | `int8`, MySQL `bigint` |
-| --- | --- | --- | --- | --- | --- |
-| `dates` | `Date` (default) | `Date` | `Date` | `Date` | |
-| `dates` | `string` | `string` | `string` | `string` | |
-| `dates` | `temporal` | `Temporal.Instant` | `Temporal.PlainDateTime` | `Temporal.PlainDate` | |
-| `bigint` | `string` (Postgres default), `number` (MySQL and SQLite default), `bigint` | | | | `string`, `number` or `bigint` |
+| Setting | Value | `timestamptz` | `timestamp`, MySQL `datetime` / `timestamp` | `date` |
+| --- | --- | --- | --- | --- |
+| `dates` | `Date` (default) | `Date` | `Date` | `Date` |
+| `dates` | `string` | `string` | `string` | `string` |
+| `dates` | `temporal` | `Temporal.Instant` | `Temporal.PlainDateTime` | `Temporal.PlainDate` |
 
-- The setting has to match the driver, because Porg does not see the driver's options: `pg` with a `types.setTypeParser` for timestamps, `postgres` with its `types` option, or mysql2 and mariadb with `dateStrings: true` return text and need `dates: string`; mysql2 with `supportBigNumbers: true, bigNumberStrings: true` needs `bigint: string`; mariadb returns a BigInt by default and needs `bigint: bigint`.
+- The setting has to match the driver's options, which Porg does not see: `pg` with a `types.setTypeParser` for timestamps, `postgres` with its `types` option, or mysql2 and mariadb with `dateStrings: true` need `dates: string`; mysql2 with `supportBigNumbers: true, bigNumberStrings: true` needs `bigint: string`; mysql2's `decimalNumbers` and mariadb's `decimalAsNumber` need `decimal: number`; `jsonStrings` needs `json: string`.
 - `temporal` makes the generated module reference TypeScript's own `esnext.temporal` lib, which declares the global `Temporal` namespace, so the types resolve whatever `lib` the project sets; the driver builds the values ([lab/repr](./lab/repr) sets up `postgres` to).
 - `bigint` gives a `bigint`; `JSON.stringify` has no rule for one, so add a `BigInt.prototype.toJSON` or a replacer.
-- Inside a nested JSON shape the database serialized the value already, so the settings do not apply there. SQLite has no date type, so `dates` changes no SQLite type; a SQLite `INTEGER` follows `bigint` (better-sqlite3's and bun:sqlite's `safeIntegers` and node:sqlite's `readBigInts` return a BigInt, libsql's `intMode` a string or a BigInt).
+- Inside a nested JSON shape the database serialized the value already, so the settings do not apply there. SQLite has no date, decimal or JSON type, so those settings change no SQLite type; a SQLite `INTEGER` follows `bigint` (better-sqlite3's and bun:sqlite's `safeIntegers` and node:sqlite's `readBigInts` return a BigInt, libsql's `intMode` a string or a BigInt).

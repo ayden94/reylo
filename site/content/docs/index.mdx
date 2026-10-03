@@ -572,15 +572,26 @@ Each SQL type maps to a TypeScript type.
 </Tab>
 </Tabs>
 
-Drivers disagree on dates and 64-bit integers. The `types` section of `.porg.yaml` says what your driver returns:
+The tables show what most drivers return. Porg reads your driver from `package.json` and follows it where it differs:
+
+- mariadb: `BIGINT` is a `bigint`
+- PlanetScale: dates and `BIGINT` are a `string`
+- PGlite: `bigint` is a `number`, or a `bigint` above 2^53
+- libsql: `BLOB` is an `ArrayBuffer`
+- Cloudflare D1: `BLOB` is a `number[]`
+
+If you set your driver up to decode a type another way, say so in `.porg.yaml`:
 
 ```yaml title=".porg.yaml"
 types:
-  dates: Date     # Date (the default), string or temporal
-  bigint: string  # string (the Postgres default), number (the MySQL and SQLite default) or bigint
+  dates: string        # Date, string or temporal
+  bigint: bigint       # string, number or bigint
+  decimal: number      # string or number
+  json: string         # parsed or string
+  binary: Buffer       # Uint8Array, Buffer, ArrayBuffer or number[]
 ```
 
-Which driver option needs which setting: see [Dates and 64-bit integers](/details#dates-and-64-bit-integers).
+Which driver option needs which setting: see [Driver settings](/details#driver-settings).
 
 ## Dialects
 
