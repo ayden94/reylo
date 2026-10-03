@@ -1,6 +1,3 @@
-# Pre-rewrite ORM prototype and design docs, kept locally for reference only.
-internal/
-
 node_modules/
 dist/
 .env
@@ -14,9 +11,6 @@ coverage/
 .claude/
 .frizz/
 
-# Cargo workspace build output (engine/, porgapi/engine/ and pg-extension/)
-target/
-
 # Lab emit output
 lab/**/dist/
 
@@ -29,12 +23,3 @@ lab/sqlite/lab.db*
 # Example projects: mapper cache and local env
 examples/**/.porg/
 
-# The Postgres extension's build outputs: the shim, its objects, and pg_regress's own files.
-pg-extension/*.so
-pg-extension/*.dylib
-pg-extension/src/*.o
-pg-extension/src/*.bc
-pg-extension/test/results/
-pg-extension/test/regression.diffs
-pg-extension/test/regression.out
-pg-extension/test/log/
