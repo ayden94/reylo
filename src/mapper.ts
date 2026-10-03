@@ -53,9 +53,9 @@ serve({
       // A transform for a project this process never opened: answer, never throw, so the file
       // keeps its default export instead of becoming an empty module.
       diagnostics.push(diag(`The content mapper has no project for this file; restart the TypeScript server.`, 0, 1, 9));
-      return { extension: ".ts" as const, diagnostics, text: `import type { Query } from "porg";\nexport type Params = unknown;\nexport type Row = unknown;\ndeclare const query: Query<unknown, unknown, "many", "postgres">;\nexport default query;\n` };
+      return { extension: ".ts" as const, diagnostics, text: `import type { Query } from "porg";\nexport type Params = unknown;\nexport type Values = unknown[];\nexport type Row = unknown;\ndeclare const query: Query<unknown, unknown, "many", "postgres">;\nexport default query;\n` };
     }
-    const emit = (paramsType: string, rowType: string, cardinality: string, names: string[]) => ({
+    const emit = (paramsType: string, rowType: string, cardinality: string, names: string[], valuesType = "unknown[]") => ({
       extension: ".ts" as const,
       diagnostics,
       text: [
@@ -64,12 +64,14 @@ serve({
         ...(project.repr.dates === "temporal" ? [`/// <reference lib="esnext.temporal" />`] : []),
         `import type { Query } from "porg";`,
         `export type Params = ${paramsType};`,
+        // The same parameters as an array, in the order of `params`, for `run(client, [1, "ada"])`.
+        `export type Values = ${valuesType};`,
         `export type Row = ${rowType};`,
         `export declare const sql: ${JSON.stringify(sql)};`,
         `export declare const params: readonly [${names.map((n) => JSON.stringify(n)).join(", ")}];`,
         // The literal types go in the Query type directly rather than through the aliases, so a
         // hover shows the row's shape (`{ id: number; ... } | null`) and not `Row | null`.
-        `declare const query: Query<${paramsType}, ${rowType}, ${JSON.stringify(cardinality)}, ${JSON.stringify(project.dialect)}>;`,
+        `declare const query: Query<${paramsType}, ${rowType}, ${JSON.stringify(cardinality)}, ${JSON.stringify(project.dialect)}, ${valuesType}>;`,
         `export default query;`,
         ``,
       ].join("\n"),
@@ -106,14 +108,23 @@ serve({
     diagnostics.push(...analysis.diagnostics.map((d) => diag(d.message, d.start, d.length, d.code)));
     strict(analysis);
     const inferred = analysis.cardinality;
-    // MySQL binds by position, so a name used twice is two values; the declared names stay unique.
-    const order = dialect === "mysql" ? names : analysis.rewritten.order;
+    // The declared names are the lexer's, each once in order of first use: the module's `params`
+    // at run time, which an array of values follows. (A rewritten statement can bind one name at
+    // several positions, as MySQL's `?` and SQLite's do.)
+    const order = names;
     if (analysis.diagnostics.some((d) => d.code === 6) || (dialect === "postgres" && analysis.kind === "")) return emit("unknown", "unknown", inferred, order);
     const columns = analysis.columns.map((c) => `${ident(c.name)}: ${renderType(c.type, false, dialect, project.repr)}${c.nullable ? " | null" : ""}`);
     // A parameter is typed from its context (a column it is compared with or written to, a CAST);
     // one no context types is `unknown`.
-    const paramTypes = analysis.params.map((q) => `${ident(q.name)}: ${paramType(q, renderParamType(q.type, dialect, project.repr))}`);
-    return emit(paramTypes.length ? `{ ${paramTypes.join("; ")} }` : "Record<never, never>", columns.length ? `{ ${columns.join("; ")} }` : "never", inferred, order);
+    const typed = analysis.params.map((q) => [q.name, paramType(q, renderParamType(q.type, dialect, project.repr))] as const);
+    const paramTypes = typed.map(([name, type]) => `${ident(name)}: ${type}`);
+    // The array form names each element after its parameter (`$1` for a positional one), when
+    // every name can be a label.
+    const types = new Map(typed);
+    const labels = order.map((n) => (/^\d+$/.test(n) ? `$${n}` : n));
+    const labeled = labels.every((l) => /^[A-Za-z_$][\w$]*$/.test(l));
+    const valuesType = `[${order.map((n, i) => `${labeled ? `${labels[i]}: ` : ""}${types.get(n) ?? "unknown"}`).join(", ")}]`;
+    return emit(paramTypes.length ? `{ ${paramTypes.join("; ")} }` : "Record<never, never>", columns.length ? `{ ${columns.join("; ")} }` : "never", inferred, order, valuesType);
   },
   async closeProject(params) {
     const handle = (params as { projectHandle: string }).projectHandle;

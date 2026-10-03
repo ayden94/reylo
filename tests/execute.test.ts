@@ -205,9 +205,42 @@ test("an unsupported client rejects, naming what it has and what porg takes", as
   await assert.rejects(() => execute({ query: async () => ({ rows: [] }) } as never, lite) as Promise<unknown>, /sqlite statement on an object with query/);
 });
 
-test("parameters must be an object; an array would bind { 1: ... } off by one", async () => {
-  await assert.rejects(() => execute({ unsafe: async () => [] }, pg, [1, "ada"] as never) as Promise<unknown>, /must be an object.*got an array/);
-  assert.throws(() => execute(new DatabaseSync(":memory:"), lite, [1] as never), /must be an object/);
+test("parameters may be an array: element i binds params[i], for a named and a positional statement on every dialect", async () => {
+  const seen: [string, unknown[]][] = [];
+  const pgClient = { query: async (text: string, values: unknown[]) => (seen.push([text, values]), { rows: [] }) };
+  const mysqlPool = { execute: async (text: string, values: unknown[]) => (seen.push([text, values]), [[], []] as [unknown, unknown]) };
+  const d1 = { batch: async () => [], prepare: (text: string) => ({ first: async () => null, bind: (...values: unknown[]) => (seen.push([text, values]), { all: async () => ({ results: [] }) }) }) };
+  const positional: Record<string, QueryModule> = {
+    postgres: { dialect: "postgres", sql: "select $2::text as name, $1::int as id", params: ["1", "2"] },
+    mysql: { dialect: "mysql", sql: "select ? as id, ? as name", params: ["1", "2"] },
+    sqlite: { dialect: "sqlite", sql: "select ?1 as id, ?2 as name, ?1 as again", params: ["1", "2"] },
+  };
+  for (const [client, named, dialect] of [[pgClient, pg, "postgres"], [mysqlPool, my, "mysql"], [d1, lite, "sqlite"]] as const) {
+    seen.length = 0;
+    await execute(client as never, named, [1, "ada"]);
+    await execute(client as never, named, { id: 1, name: "ada" });
+    assert.deepEqual(seen[0], seen[1], `${dialect}: [1, "ada"] binds as { id: 1, name: "ada" }`);
+    seen.length = 0;
+    await execute(client as never, positional[dialect]!, [1, "ada"]);
+    await execute(client as never, positional[dialect]!, { 1: 1, 2: "ada" });
+    assert.deepEqual(seen[0], seen[1], `${dialect}: [1, "ada"] binds as { 1: 1, 2: "ada" }`);
+  }
+  assert.deepEqual(seen.at(-1), ["select ? as id, ? as name, ? as again", [1, "ada", 1]]);
+  // The mapper's rewritten statement binds by `order`, which names params.
+  const unsafe: unknown[][] = [];
+  await execute({ unsafe: async (_: string, values: unknown[]) => (unsafe.push(values), []) }, { ...pg, text: "select $1, $2, $1", order: ["name", "id", "name"] }, [1, "ada"]);
+  assert.deepEqual(unsafe, [["ada", 1, "ada"]]);
+  // runSync takes an array too.
+  assert.deepEqual((execute(new DatabaseSync(":memory:"), lite, [1, "ada"]) as unknown[]).map((r) => ({ ...(r as object) })), [row]);
+});
+
+test("an array shorter than params binds NULL for the rest; a longer one is a TypeError naming both lengths", async () => {
+  const seen: unknown[][] = [];
+  await execute({ unsafe: async (_: string, values: unknown[]) => (seen.push(values), []) }, pg, [1]);
+  assert.deepEqual(seen, [[1, null]]);
+  await assert.rejects(() => execute({ unsafe: async () => [] }, pg, [1, "ada", true]) as Promise<unknown>, (e: TypeError) => e instanceof TypeError && /takes 2 parameters \("id", "name"\); got an array of 3 values/.test(e.message));
+  assert.throws(() => execute(new DatabaseSync(":memory:"), { dialect: "sqlite", sql: "select 1", params: [] }, [1]), /takes 0 parameters \(none\); got an array of 1 value\./);
+  await assert.rejects(() => execute({ unsafe: async () => [] }, pg, "ada" as never) as Promise<unknown>, /must be an object .* or an array .*; got ada/);
 });
 
 test("runSync: on a synchronous client the value comes back at once and an error is thrown, so db.transaction(fn) rolls back", () => {

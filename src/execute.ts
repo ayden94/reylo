@@ -5,6 +5,7 @@
 // transaction, savepoint, reserved or checked-out connection has the same shape
 // as the client it came from, so it is accepted wherever that client is.
 
+import { queryPostgres } from "./decode.ts";
 import { lexPlaceholders } from "./lex.ts";
 
 export type Dialect = "postgres" | "mysql" | "sqlite";
@@ -107,6 +108,13 @@ export type QueryModule<D extends Dialect = Dialect> = {
 type AnyClient = Record<string, any> & ((...args: any[]) => any);
 
 /**
+ * The parameters: an object keyed by name, or an array whose element i binds the query's
+ * `params[i]` (for `$1` and `$2`, `params` is `["1", "2"]`), for callers that hold the values
+ * in order already.
+ */
+export type ParamsInput = Record<string, unknown> | readonly unknown[];
+
+/**
  * Runs the statement and returns its rows (an empty array for a statement that returns none).
  * On a synchronous SQLite client the rows come back at once and an error is thrown; on every
  * other client they come back as a promise, which rejects with the driver's own error.
@@ -114,7 +122,7 @@ type AnyClient = Record<string, any> & ((...args: any[]) => any);
 export function execute<D extends Dialect>(
   client: ClientFor<D>,
   query: QueryModule<D>,
-  params: Record<string, unknown> = {},
+  params: ParamsInput = {},
 ): unknown[] | Promise<unknown[]> {
   const c = client as AnyClient;
   if (query.dialect === "sqlite" && isSyncSqlite(c)) return executeSyncSqlite(c, query, params);
@@ -122,7 +130,7 @@ export function execute<D extends Dialect>(
 }
 
 /** The synchronous path alone, for `runSync`: any other client is refused before anything runs. */
-export function executeSync<D extends Dialect>(client: SyncClientFor<D>, query: QueryModule<D>, params: Record<string, unknown> = {}): unknown[] {
+export function executeSync<D extends Dialect>(client: SyncClientFor<D>, query: QueryModule<D>, params: ParamsInput = {}): unknown[] {
   const c = client as unknown as AnyClient;
   const refuse = (why: string) => new TypeError(`runSync takes a synchronous SQLite client (better-sqlite3, node:sqlite or bun:sqlite); ${why}. run takes every client.`);
   if (query.dialect !== "sqlite") throw refuse(`a ${query.dialect} statement has none`);
@@ -133,7 +141,7 @@ export function executeSync<D extends Dialect>(client: SyncClientFor<D>, query: 
   throw refuse("this client's statement answered with a promise");
 }
 
-function executeSyncSqlite(c: AnyClient, query: QueryModule, params: Record<string, unknown>): unknown[] | Promise<unknown[]> {
+function executeSyncSqlite(c: AnyClient, query: QueryModule, params: ParamsInput): unknown[] | Promise<unknown[]> {
   const { text, values } = statement(query, params);
   const prepared = c.prepare(text);
   // better-sqlite3 refuses all() on a statement that returns no rows.
@@ -157,19 +165,15 @@ function isSyncSqlite(c: AnyClient | null | undefined): boolean {
   );
 }
 
-async function executeAsync(c: AnyClient | null | undefined, query: QueryModule, params: Record<string, unknown>): Promise<unknown[]> {
+async function executeAsync(c: AnyClient | null | undefined, query: QueryModule, params: ParamsInput): Promise<unknown[]> {
   if (c == null || (typeof c !== "object" && typeof c !== "function")) throw unsupported(c, query.dialect);
   const { text, values } = statement(query, params);
   switch (query.dialect) {
     case "postgres":
       // query() before unsafe(): Neon's neon() has both, and its unsafe() builds a fragment
-      // for a template instead of running anything.
-      if (typeof c.query === "function") {
-        // pg-promise formats the values into the text itself (reading $1 inside a string
-        // literal too) unless it is handed a { text, values } object, which it binds.
-        const result = typeof c.manyOrNone === "function" ? await c.query({ text, values }) : await c.query(text, values);
-        return Array.isArray(result) ? result : result.rows;
-      }
+      // for a template instead of running anything. Where the driver takes a decoder per
+      // query, Porg passes its own (decode.ts).
+      if (typeof c.query === "function") return await queryPostgres(c, text, values);
       if (typeof c.unsafe === "function") return await c.unsafe(text, values);
       if (typeof c === "function") {
         const result = await c(text, values);
@@ -227,11 +231,17 @@ async function executeAsync(c: AnyClient | null | undefined, query: QueryModule,
 
 // The rows are bound positionally in every dialect. A value left out binds NULL, as pg,
 // PGlite, better-sqlite3 and Bun.sql already do; postgres.js, mysql2, node:sqlite and libSQL
-// would reject it instead.
-function statement(query: QueryModule, params: Record<string, unknown>) {
-  if (params === null || typeof params !== "object" || Array.isArray(params)) {
-    throw new TypeError(`The parameters must be an object keyed by parameter name (or by number, { 1: ... }, for positional placeholders); got ${Array.isArray(params) ? "an array" : String(params)}.`);
-  }
+// would reject it instead. An array shorter than `params` leaves the rest out.
+function statement(query: QueryModule, input: ParamsInput) {
+  let params: Record<string, unknown>;
+  if (Array.isArray(input)) {
+    if (input.length > query.params.length) {
+      throw new TypeError(`The statement takes ${query.params.length} parameter${query.params.length === 1 ? "" : "s"} (${query.params.map((name) => JSON.stringify(name)).join(", ") || "none"}); got an array of ${input.length} value${input.length === 1 ? "" : "s"}.`);
+    }
+    params = Object.fromEntries(query.params.map((name, i) => [name, input[i]]));
+  } else if (input === null || typeof input !== "object") {
+    throw new TypeError(`The parameters must be an object keyed by parameter name (or by number, { 1: ... }, for positional placeholders), or an array in the order of the query's params; got ${String(input)}.`);
+  } else params = input as Record<string, unknown>;
   // The mapper already rewrote the statement; only the values need ordering.
   if (query.text && query.order) return { text: query.text, values: query.order.map((name) => value(params, name)) };
   return query.dialect === "postgres" ? rewrite(query, params) : rewriteRepeating(query, params);

@@ -19,14 +19,16 @@ export type Json<T> = T extends Date | bigint | Uint8Array | { toJSON(): string 
       ? { [K in keyof T]: Json<T[K]> }
       : T;
 
-export type PorgTypes<Params, Row, C extends Cardinality> = {
+export type PorgTypes<Params, Row, C extends Cardinality, Values extends readonly unknown[] = readonly unknown[]> = {
   readonly element: Row;
   readonly cardinality: C;
   readonly json: Materialize<Json<Row>, C>;
   readonly input: Params;
+  /** The parameters as an array, in the order of `params`. */
+  readonly values: Values;
 };
 
-export interface Query<Params, Row, C extends Cardinality, D extends Dialect>
+export interface Query<Params, Row, C extends Cardinality, D extends Dialect, Values extends readonly unknown[] = readonly unknown[]>
   extends StandardTypedV1<Params, Materialize<Row, C>>, StandardJSONSchemaV1<Params, Materialize<Row, C>> {
   readonly dialect: D;
   /** The statement as written, with porg's placeholders left in place. */
@@ -35,25 +37,25 @@ export interface Query<Params, Row, C extends Cardinality, D extends Dialect>
   readonly params: readonly string[];
   readonly cardinality: C;
   readonly "~standard": StandardJSONSchemaV1.Props<Params, Materialize<Row, C>>;
-  readonly "~porg": PorgTypes<Params, Row, C>;
+  readonly "~porg": PorgTypes<Params, Row, C, Values>;
   /**
-   * Runs the statement on the client, or on a transaction or connection taken from it; the
-   * parameters may be left out when the statement takes none. Always a promise, which rejects
-   * with the driver's own error.
+   * Runs the statement on the client, or on a transaction or connection taken from it. The
+   * parameters are an object keyed by name, or an array in the order of `params`, and may be left
+   * out when the statement takes none. Always a promise, which rejects with the driver's own error.
    */
-  run(client: ClientFor<D>, ...params: ParamsArg<Params>): Promise<Materialize<Row, C>>;
+  run(client: ClientFor<D>, ...params: ParamsArg<Params, Values>): Promise<Materialize<Row, C>>;
   /**
    * Runs the statement on a synchronous SQLite client (better-sqlite3, node:sqlite, bun:sqlite)
    * and returns the result itself, throwing the driver's error, so it works inside their
    * `db.transaction(fn)`, whose function cannot await.
    */
-  runSync(client: SyncClientFor<D>, ...params: ParamsArg<Params>): Materialize<Row, C>;
+  runSync(client: SyncClientFor<D>, ...params: ParamsArg<Params, Values>): Materialize<Row, C>;
   /** The statement bound to a client, such as a transaction: `const get = q.with(tx); await get({ id: 1 })`. */
-  with(client: ClientFor<D>): (...params: ParamsArg<Params>) => Promise<Materialize<Row, C>>;
+  with(client: ClientFor<D>): (...params: ParamsArg<Params, Values>) => Promise<Materialize<Row, C>>;
 }
 
-/** The parameters argument: required when the statement takes any, optional when it takes none. */
-export type ParamsArg<Params> = {} extends Params ? [params?: Params] : [params: Params];
+/** The parameters argument, an object or an array: required when the statement takes any, optional when it takes none. */
+export type ParamsArg<Params, Values extends readonly unknown[] = readonly unknown[]> = {} extends Params ? [params?: Params | Readonly<Values>] : [params: Params | Readonly<Values>];
 
 export type QueryDefinition = {
   dialect: Dialect;
@@ -66,14 +68,14 @@ export type QueryDefinition = {
   jsonSchema?: { input: Record<string, unknown>; output: Record<string, unknown> };
 };
 
-export function defineQuery<Params, Row, C extends Cardinality, D extends Dialect>(
+export function defineQuery<Params, Row, C extends Cardinality, D extends Dialect, Values extends readonly unknown[] = readonly unknown[]>(
   def: QueryDefinition & { dialect: D; cardinality?: C },
-): Query<Params, Row, C, D> {
+): Query<Params, Row, C, D, Values> {
   const cardinality = (def.cardinality ?? "many") as C;
   const missingSchema = () => {
     throw new Error(`No JSON Schema is available for this query yet; run tsc --runExternalCode so the mapper can compute it.`);
   };
-  const query: Query<Params, Row, C, D> & { text?: string | undefined; order?: readonly string[] | undefined } = {
+  const query: Query<Params, Row, C, D, Values> & { text?: string | undefined; order?: readonly string[] | undefined } = {
     dialect: def.dialect,
     sql: def.sql,
     params: def.params,
@@ -88,10 +90,10 @@ export function defineQuery<Params, Row, C extends Cardinality, D extends Dialec
         output: () => def.jsonSchema?.output ?? missingSchema(),
       },
     },
-    "~porg": undefined as unknown as PorgTypes<Params, Row, C>,
-    run: ((client: ClientFor<D>, params?: Params) => run(client, params ?? ({} as Params))) as Query<Params, Row, C, D>["run"],
-    runSync: ((client: SyncClientFor<D>, params?: Params) => materialize(executeSync(client, query, (params ?? {}) as Record<string, unknown>) as Row[])) as Query<Params, Row, C, D>["runSync"],
-    with: ((client: ClientFor<D>) => (params?: Params) => run(client, params ?? ({} as Params))) as Query<Params, Row, C, D>["with"],
+    "~porg": undefined as unknown as PorgTypes<Params, Row, C, Values>,
+    run: ((client: ClientFor<D>, params?: Params) => run(client, params ?? ({} as Params))) as Query<Params, Row, C, D, Values>["run"],
+    runSync: ((client: SyncClientFor<D>, params?: Params) => materialize(executeSync(client, query, (params ?? {}) as Record<string, unknown>) as Row[])) as Query<Params, Row, C, D, Values>["runSync"],
+    with: ((client: ClientFor<D>) => (params?: Params) => run(client, params ?? ({} as Params))) as Query<Params, Row, C, D, Values>["with"],
   };
   // A synchronous client answers before run returns, but its rows and its error still come
   // back through the promise, so run means the same on every client.

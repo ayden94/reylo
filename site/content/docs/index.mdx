@@ -14,10 +14,11 @@ select id, name, email from users where id = :id
 // @filename: get_user.d.sql.ts
 import type { Query } from "porg";
 export type Params = { id: number };
+export type Values = [id: number];
 export type Row = { id: number; name: string; email: string | null };
 export declare const sql: "select id, name, email from users where id = :id\n";
 export declare const params: readonly ["id"];
-declare const query: Query<{ id: number }, { id: number; name: string; email: string | null }, "maybeOne", "postgres">;
+declare const query: Query<{ id: number }, { id: number; name: string; email: string | null }, "maybeOne", "postgres", [id: number]>;
 export default query;
 // @filename: guard.ts
 import getUser from "./get_user.sql";
@@ -361,6 +362,8 @@ The query has a few more members:
 
 ```ts
 import type { Params, Row } from "./get_user.sql"; // its parameter and row types
+
+await getUser.run(sql, [1]);         // the parameters as an array, in the order of getUser.params
 
 const get = getUser.with(tx);        // bind a client once, such as a transaction
 await get({ id: 1 });
