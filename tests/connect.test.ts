@@ -8,10 +8,8 @@ import { fileURLToPath } from "node:url";
 import { reason, Unreachable } from "../src/engine.ts";
 import { forPostgresJs, openPostgresDescriber } from "../src/describe.ts";
 import { openMysqlDescriber } from "../src/mysql-describe.ts";
-import { format, tlsMode } from "../src/mysql-wire.ts";
 
-// A project's own drivers are the labs' dependencies; a project with none is described through
-// the driver porg itself depends on.
+// The drivers are the labs' dependencies, never the package's own.
 const lab = (name: string) => fileURLToPath(new URL(`../lab/${name}`, import.meta.url));
 const installed = (dir: string, pkg: string) => existsSync(`${dir}/node_modules/${pkg}`) || `${dir} has no ${pkg} installed`;
 const unreachable = (r: PromiseSettledResult<unknown>, pattern: RegExp) => {
@@ -51,15 +49,17 @@ test("postgres.js: calls queued behind a server that never answers fail together
   }
 });
 
-test("a project with no Postgres driver is described through porg's own postgres.js", async () => {
+test("mysql2: a refused connection is Unreachable", { skip: installed(lab("mysql"), "mysql2") !== true && "lab/mysql is not installed" }, async () => {
+  const [r] = await Promise.allSettled([openMysqlDescriber(lab("mysql"), "mysql://root@localhost:1/x")]);
+  unreachable(r!, /ECONNREFUSED/);
+});
+
+test("a project with no driver for its dialect is told which ones the type check reads", async () => {
   const dir = mkdtempSync(join(tmpdir(), "porg-no-driver-"));
   try {
     writeFileSync(join(dir, "package.json"), '{ "name": "no-driver", "private": true }\n');
-    const d = await openPostgresDescriber(dir, "postgres://localhost:1/x");
-    assert.equal(d.driver, "postgres");
-    const [r] = await Promise.allSettled([d.values("select 1")]);
-    unreachable(r!, /ECONNREFUSED/);
-    await d.close();
+    await assert.rejects(openPostgresDescriber(dir, "postgres://localhost:1/x"), /install "postgres" or "pg"/);
+    await assert.rejects(openMysqlDescriber(dir, "mysql://root@localhost:1/x"), /install "mysql2"/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -71,44 +71,4 @@ test("postgres.js gets no channel_binding parameter, and one that requires bindi
   assert.deepEqual(forPostgresJs("postgres://localhost/db?channel_binding=disable&application_name=x"), { url: "postgres://localhost/db?application_name=x" });
   assert.deepEqual(forPostgresJs("postgres://localhost/db?sslmode=disable"), { url: "postgres://localhost/db?sslmode=disable" });
   assert.deepEqual(forPostgresJs("postgres://localhost/db"), { url: "postgres://localhost/db" });
-});
-
-test("mysql2: a refused connection is Unreachable", { skip: installed(lab("mysql"), "mysql2") !== true && "lab/mysql is not installed" }, async () => {
-  const [r] = await Promise.allSettled([openMysqlDescriber(lab("mysql"), "mysql://root@localhost:1/x")]);
-  unreachable(r!, /ECONNREFUSED/);
-});
-
-test("a project with no mysql2 is described through porg's own connection, and a refused one is Unreachable", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "porg-no-driver-"));
-  try {
-    writeFileSync(join(dir, "package.json"), '{ "name": "no-driver", "private": true }\n');
-    const [r] = await Promise.allSettled([openMysqlDescriber(dir, "mysql://root@localhost:1/x")]);
-    unreachable(r!, /ECONNREFUSED/);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("porg's MySQL connection reads TLS in the spellings MySQL URLs use", () => {
-  const mode = (query: string) => tlsMode(new URLSearchParams(query));
-  assert.equal(mode(""), "preferred");
-  assert.equal(mode("ssl-mode=DISABLED"), "disabled");
-  assert.equal(mode("ssl-mode=REQUIRED"), "required");
-  assert.equal(mode("ssl-mode=VERIFY_CA"), "verify-ca");
-  assert.equal(mode("ssl-mode=VERIFY_IDENTITY"), "verify-full");
-  assert.equal(mode("sslmode=require"), "required");
-  assert.equal(mode("sslaccept=strict"), "verify-full");
-  assert.equal(mode("sslaccept=accept_invalid_certs"), "required");
-  assert.equal(mode("ssl=true"), "required");
-  assert.equal(mode("ssl=false"), "disabled");
-  assert.equal(mode('ssl={"rejectUnauthorized":true}'), "verify-full");
-  assert.equal(mode('ssl={"rejectUnauthorized":false}'), "required");
-});
-
-test("porg's MySQL connection binds values as mysql2's query does, and leaves quoted question marks alone", () => {
-  assert.equal(format("select ?, ?, ?, ?, ?", ["it's", 'a\\b "c"\n', null, 42, true]), `select 'it\\'s', 'a\\\\b \\"c\\"\\n', NULL, 42, true`);
-  assert.equal(format("select '?', `?`, \"?\", 'it\\'s ?', ? as x", [1]), "select '?', `?`, \"?\", 'it\\'s ?', 1 as x");
-  assert.equal(format("select 1", []), "select 1");
-  assert.throws(() => format("select ?, ?", [1]), /more placeholders/);
-  assert.throws(() => format("select ?", [1, 2]), /1 placeholders for 2 values/);
 });

@@ -78,7 +78,7 @@ To type a query, Porg sends it to your running database, which prepares it witho
 - nullability, from `NOT NULL` and outer joins
 - the row count, from primary and unique keys
 
-Porg connects through your project's `postgres`, `pg` or `mysql2` if it has one, and otherwise through a client of its own, and keeps each answer in `.porg/` until the schema changes.
+Porg connects through your project's `postgres`, `pg` or `mysql2`, and keeps each answer in `.porg/` until the schema changes.
 
 ## Setup
 
@@ -90,6 +90,8 @@ Install Porg and point it at your database, then add it to each tool that loads 
 npm install porg
 npm install -D typescript@next   # content mappers are in the TypeScript 7.1 dev builds
 ```
+
+Porg also needs one of these drivers in your project, as a peer dependency, whichever driver your application runs on: `postgres` or `pg` for Postgres, `mysql2` for MySQL. SQLite needs none.
 
 Porg needs Node 24 or later. It reads `DATABASE_URL` from the environment, or from `.env.local` or `.env` next to `package.json`:
 

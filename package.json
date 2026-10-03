@@ -41,7 +41,16 @@
     "typescript": "^7.1.0-dev.20260918.1"
   },
   "dependencies": {
-    "postgres": "^3.4.9",
     "tinyglobby": "^0.2.17"
+  },
+  "peerDependencies": {
+    "mysql2": ">=3",
+    "pg": ">=8",
+    "postgres": ">=3"
+  },
+  "peerDependenciesMeta": {
+    "mysql2": { "optional": true },
+    "pg": { "optional": true },
+    "postgres": { "optional": true }
   }
 }
