@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { EngineType } from "../src/engine.ts";
-import { renderParamType, renderType, type Repr } from "../src/render.ts";
+import { defaultRepr, renderParamType, renderType, type Repr } from "../src/render.ts";
 
 const scalar = (name: string): EngineType => ({ kind: "scalar", name });
 const field = (name: string, type: EngineType, nullable: boolean) => ({ name, type, nullable });
@@ -28,7 +28,7 @@ const doc: EngineType = {
 };
 
 const reprs: Repr[] = [];
-for (const dates of ["string", "Date", "temporal"] as const) for (const bigint of ["string", "number", "bigint"] as const) reprs.push({ dates, bigint });
+for (const dates of ["string", "Date", "temporal"] as const) for (const bigint of ["string", "number", "bigint"] as const) reprs.push({ ...defaultRepr, dates, bigint });
 
 const inJson = `{ id: number; seen: string | null; tags: string[] | null; mood: "ok" | "sad" }`;
 
@@ -54,9 +54,9 @@ test("inside a JSON document a composite is an object of its JSON-encoded fields
 
 test("the representation options still apply beside a composite on the wire", () => {
   const row = (repr: Repr) => [scalar("int8"), scalar("timestamptz"), users].map((t) => renderType(t, false, "postgres", repr));
-  assert.deepEqual(row({ dates: "string", bigint: "string" }), ["string", "string", "string"]);
-  assert.deepEqual(row({ dates: "Date", bigint: "number" }), ["number", "Date", "string"]);
-  assert.deepEqual(row({ dates: "temporal", bigint: "bigint" }), ["bigint", "Temporal.Instant", "string"]);
+  assert.deepEqual(row({ ...defaultRepr, dates: "string", bigint: "string" }), ["string", "string", "string"]);
+  assert.deepEqual(row({ ...defaultRepr, dates: "Date", bigint: "number" }), ["number", "Date", "string"]);
+  assert.deepEqual(row({ ...defaultRepr, dates: "temporal", bigint: "bigint" }), ["bigint", "Temporal.Instant", "string"]);
 });
 
 test("a composite with no columns inside a document is an empty object", () => {
@@ -65,7 +65,7 @@ test("a composite with no columns inside a document is an empty object", () => {
 });
 
 test("a SQLite INTEGER follows the bigint setting, as an int8 does elsewhere; dates changes no SQLite type", () => {
-  const sqlite = (bigint: Repr["bigint"]): Repr => ({ dates: "string", bigint });
+  const sqlite = (bigint: Repr["bigint"]): Repr => ({ ...defaultRepr, dates: "string", bigint });
   assert.equal(renderType(scalar("integer"), false, "sqlite", sqlite("number")), "number");
   assert.equal(renderType(scalar("integer"), false, "sqlite", sqlite("bigint")), "bigint");
   assert.equal(renderType(scalar("integer"), false, "sqlite", sqlite("string")), "string");
@@ -73,8 +73,28 @@ test("a SQLite INTEGER follows the bigint setting, as an int8 does elsewhere; da
   assert.equal(renderType(scalar("numeric"), false, "sqlite", sqlite("number")), "number | string");
   assert.equal(renderType(scalar("numeric"), false, "sqlite", sqlite("bigint")), "bigint | number | string");
   assert.equal(renderType(scalar("real"), false, "sqlite", sqlite("bigint")), "number");
-  assert.equal(renderType(scalar("text"), false, "sqlite", { dates: "Date", bigint: "number" }), "string");
+  assert.equal(renderType(scalar("text"), false, "sqlite", { ...defaultRepr, dates: "Date", bigint: "number" }), "string");
   // The driver binds a number or a BigInt whatever it returns.
   assert.equal(renderParamType(scalar("integer"), "sqlite", sqlite("number")), "number");
   assert.equal(renderParamType(scalar("integer"), "sqlite", sqlite("bigint")), "number | bigint");
+});
+
+test("decimal, json and binary follow the driver's representation; parameters take what every driver binds", () => {
+  const repr = (r: Partial<Repr>): Repr => ({ ...defaultRepr, ...r });
+  assert.equal(renderType(scalar("numeric"), false, "postgres", repr({})), "string");
+  assert.equal(renderType(scalar("numeric"), false, "mysql", repr({ decimal: "number" })), "number");
+  assert.equal(renderParamType(scalar("numeric"), "postgres", repr({ decimal: "number" })), "number | string");
+  assert.equal(renderType(scalar("bytea"), false, "postgres", repr({ binary: "Buffer" })), "Buffer");
+  assert.equal(renderType(scalar("blob"), false, "sqlite", repr({ binary: "ArrayBuffer" })), "ArrayBuffer");
+  assert.equal(renderType({ kind: "array", of: scalar("bytea") }, false, "postgres", repr({ binary: "number[]" })), "number[][]");
+  assert.equal(renderParamType(scalar("blob"), "sqlite", repr({ binary: "number[]" })), "Uint8Array");
+  // A JSON value, built by the statement or read from a column, is the text when the driver returns it so.
+  const built: EngineType = { kind: "object", fields: [{ name: "id", type: scalar("int4"), nullable: false }] };
+  assert.equal(renderType(built, false, "mysql", repr({})), "{ id: number }");
+  assert.equal(renderType(built, false, "mysql", repr({ json: "string" })), "string");
+  assert.equal(renderType({ kind: "json" }, false, "postgres", repr({ json: "string" })), "string");
+  assert.equal(renderParamType({ kind: "json" }, "postgres", repr({ json: "string" })), "unknown");
+  // Inside a JSON value the database wrote the bytes and the number already.
+  const inner: EngineType = { kind: "object", fields: [{ name: "b", type: scalar("bytea"), nullable: false }, { name: "n", type: scalar("numeric"), nullable: false }] };
+  assert.equal(renderType(inner, false, "postgres", repr({ binary: "Buffer", decimal: "string" })), "{ b: string; n: number }");
 });

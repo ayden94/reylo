@@ -18,7 +18,7 @@ export type ProjectFile = {
   direct_url?: string;
   env?: string[];
   strict?: boolean;
-  types: { dates?: Repr["dates"]; bigint?: Repr["bigint"] };
+  types: { dates?: Repr["dates"]; bigint?: Exclude<Repr["bigint"], "number | bigint">; decimal?: Repr["decimal"]; json?: Repr["json"]; binary?: Repr["binary"] };
   cli?: Cli;
 };
 
@@ -31,6 +31,8 @@ export type ResolvedProject = {
   /** The directory a relative path in the project resolves against: the package's. */
   root: string;
   dialect: Dialect;
+  /** The driver package found in `package.json`, whose defaults `repr` starts from. */
+  driver: string | undefined;
   repr: Repr;
   /** Whether a parameter the statement does not type is an error rather than `unknown`. */
   strict: boolean;
@@ -90,6 +92,40 @@ function place(text: string, offset: number): string {
   return `${lines.length}:${lines.at(-1)!.length + 1}`;
 }
 
+/**
+ * The drivers Porg knows, per dialect, in the order one is taken when `package.json` names
+ * several, each with what it returns at its own defaults where that differs from the dialect's
+ * (measured 2026-10-02 against each driver). Porg decodes its own queries on the pg family and
+ * PGlite (src/decode.ts), so their arrays and intervals are the defaults. A driver that returns a
+ * Buffer keeps `Uint8Array`: a Buffer is one, and naming `Buffer` would need @types/node in every
+ * project (a project that has it writes `binary: Buffer`). Bun.sql, node:sqlite and bun:sqlite
+ * ship with their runtime, which no package names, and return the defaults.
+ */
+const DRIVERS: Record<Dialect, [string, Partial<Repr>][]> = {
+  postgres: [["pg", {}], ["pg-promise", {}], ["@neondatabase/serverless", {}], ["@vercel/postgres", {}], ["postgres", {}], ["@electric-sql/pglite", { bigint: "number | bigint" }]],
+  mysql: [["mysql2", {}], ["mariadb", { bigint: "bigint" }], ["@planetscale/database", { dates: "string", bigint: "string" }]],
+  sqlite: [
+    ["better-sqlite3", {}],
+    ["@libsql/client", { binary: "ArrayBuffer" }],
+    ["sqlite3", {}],
+    ["sqlite", {}],
+    // Cloudflare D1, whose Worker projects build with wrangler.
+    ["wrangler", { binary: "number[]" }],
+  ],
+};
+
+/** The first driver of the dialect that the package's `package.json` names, in any dependency list. */
+export function detectDriver(root: string, dialect: Dialect): [string, Partial<Repr>] | undefined {
+  let pkg: Record<string, unknown>;
+  try {
+    pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  } catch {
+    return undefined;
+  }
+  const named = new Set(["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"].flatMap((k) => Object.keys((pkg[k] as object | undefined) ?? {})));
+  return DRIVERS[dialect].find(([name]) => named.has(name));
+}
+
 export function resolveProject(engine: Engine, projectDir: string, env: Record<string, string | undefined> = process.env): ResolvedProject {
   const file = findProjectFile(projectDir, env);
   const root = file ? dirname(file) : packageDir(projectDir);
@@ -145,7 +181,10 @@ export function resolveProject(engine: Engine, projectDir: string, env: Record<s
   }
   const dialect = url ? dialectOf(url) : "postgres";
   if (url && !dialect) error ??= `Cannot tell the database from the URL (${urlSource}): Porg reads postgres://, postgresql://, mysql://, mariadb://, file: and sqlite: URLs.`;
-  const defaults = defaultReprs[dialect ?? "postgres"];
-  const repr: Repr = { dates: config.types.dates ?? defaults.dates, bigint: config.types.bigint ?? defaults.bigint };
-  return { file, root, dialect: dialect ?? "postgres", repr, strict: config.strict ?? false, cli: config.cli ?? {}, url, urlSource, watched: [...(file ? [file] : [join(root, PROJECT_FILE)]), ...envFiles], error };
+  // The dialect's defaults, then the detected driver's, then the project file's own keys.
+  const detected = detectDriver(root, dialect ?? "postgres");
+  const repr: Repr = { ...defaultReprs[dialect ?? "postgres"], ...detected?.[1] };
+  for (const [k, v] of Object.entries(config.types)) if (v !== undefined) (repr as Record<string, string>)[k] = v;
+  const watched = [...(file ? [file] : [join(root, PROJECT_FILE)]), ...envFiles, join(root, "package.json")];
+  return { file, root, dialect: dialect ?? "postgres", driver: detected?.[0], repr, strict: config.strict ?? false, cli: config.cli ?? {}, url, urlSource, watched, error };
 }

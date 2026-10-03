@@ -44,8 +44,9 @@ test("the project file sits beside package.json, and its url, env files, strict 
   assert.equal(r.urlSource, '"direct_url" in ../../.porg.yaml, DB_PASSWORD in ../../secrets.env');
   assert.equal(r.dialect, "mysql");
   assert.equal(r.strict, true);
-  // `dates` is the file's; `bigint` is MySQL's default, mysql2's number.
-  assert.deepEqual(r.repr, { dates: "temporal", bigint: "number" });
+  // `dates` is the file's; the rest are MySQL's defaults, mysql2's, since package.json names no driver.
+  assert.equal(r.driver, undefined);
+  assert.deepEqual(r.repr, { dates: "temporal", bigint: "number", decimal: "string", json: "parsed", binary: "Uint8Array" });
   assert.equal(r.error, undefined);
   assert.ok(r.watched.includes(join(root, "secrets.env")));
   // A package of its own below does not see the file above it.
@@ -56,10 +57,34 @@ test("the project file sits beside package.json, and its url, env files, strict 
   assert.equal(resolveProject(e, join(root, "src/db"), { PORG_CONFIG: join(other, "elsewhere.yaml") }).dialect, "sqlite");
 });
 
+test("the types start from the driver package.json names, and the project file's keys override them", async () => {
+  const e = await engine();
+  const project = (deps: object, yaml = "") => {
+    const root = tree({ "package.json": JSON.stringify(deps), ".porg.yaml": `url: mysql://root@127.0.0.1:3306/app\n${yaml}` });
+    return resolveProject(e, root, {});
+  };
+  // mariadb returns a BigInt; the file's `bigint` wins over the driver's.
+  assert.deepEqual([project({ dependencies: { mariadb: "^3" } }).driver, project({ dependencies: { mariadb: "^3" } }).repr.bigint], ["mariadb", "bigint"]);
+  // A Buffer is a Uint8Array, which needs no @types/node; a project that has them asks for Buffer.
+  assert.equal(project({ dependencies: { mariadb: "^3" } }).repr.binary, "Uint8Array");
+  assert.equal(project({ dependencies: { mariadb: "^3" } }, "types:\n  binary: Buffer\n").repr.binary, "Buffer");
+  assert.equal(project({ dependencies: { mariadb: "^3" } }, "types:\n  bigint: string\n").repr.bigint, "string");
+  assert.deepEqual(project({ dependencies: { mariadb: "^3" } }, "types:\n  decimal: number\n  json: string\n").repr, { dates: "Date", bigint: "bigint", decimal: "number", json: "string", binary: "Uint8Array" });
+  // PlanetScale's HTTP driver returns dates and 64-bit integers as text; a dev dependency counts.
+  assert.deepEqual(project({ devDependencies: { "@planetscale/database": "^1" } }).repr, { dates: "string", bigint: "string", decimal: "string", json: "parsed", binary: "Uint8Array" });
+  // With several, the first Porg lists is taken: mysql2 before mariadb.
+  assert.equal(project({ dependencies: { mariadb: "^3", mysql2: "^3" } }).driver, "mysql2");
+  // A driver of another dialect is not this project's.
+  assert.equal(project({ dependencies: { pg: "^8" } }).driver, undefined);
+  const sqlite = tree({ "package.json": JSON.stringify({ dependencies: { "@libsql/client": "^0.15" } }), ".porg.yaml": "url: file:./app.db\n" });
+  assert.equal(resolveProject(e, sqlite, {}).repr.binary, "ArrayBuffer");
+  assert.ok(resolveProject(e, sqlite, {}).watched.includes(join(sqlite, "package.json")));
+});
+
 test("a key the library does not know, and a variable nothing sets, are errors that say where", async () => {
   const e = await engine();
   const typo = tree({ "package.json": "{}", ".porg.yaml": "url: postgres://x/db\n\ntypes:\n  datez: Date\n" });
-  assert.match(resolveProject(e, typo, {}).error!, /^\.porg\.yaml:4:3: types: unknown field `datez`, expected `dates` or `bigint`/);
+  assert.match(resolveProject(e, typo, {}).error!, /^\.porg\.yaml:4:3: types: unknown field `datez`, expected one of `dates`, `bigint`, `decimal`, `json`, `binary`/);
   const unset = tree({ "package.json": "{}", ".porg.yaml": "url: ${NOPE}\n" });
   const r = resolveProject(e, unset, {});
   assert.equal(r.url, undefined);
