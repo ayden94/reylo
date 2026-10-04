@@ -33,8 +33,9 @@ const i3: { name: string; email: string | null } = null! as Exclude<Parameters<t
 const i4: Exclude<Parameters<typeof insert.run>[1], readonly unknown[]> = null! as { name: string; email: string | null };
 const b1: { id: number; name: string } | null = null! as Awaited<ReturnType<typeof byEmail.run>>;
 const b2: Awaited<ReturnType<typeof byEmail.run>> = null! as { id: number; name: string } | null;
-const s1: { id: number; name: string; title: string | null; min_score: number | null }[] = null! as Awaited<ReturnType<typeof search.run>>;
-const s2: Awaited<ReturnType<typeof search.run>> = null! as { id: number; name: string; title: string | null; min_score: number | null }[];
+// `cast(:min as integer)` reads a parameter the caller cannot pass as null, so it is never NULL.
+const s1: { id: number; name: string; title: string | null; min_score: number }[] = null! as Awaited<ReturnType<typeof search.run>>;
+const s2: Awaited<ReturnType<typeof search.run>> = null! as { id: number; name: string; title: string | null; min_score: number }[];
 const s3: { min: number; q: string; n: number; o: number } = null! as Exclude<Parameters<typeof search.run>[1], readonly unknown[]>;
 const s4: Exclude<Parameters<typeof search.run>[1], readonly unknown[]> = null! as { min: number; q: string; n: number; o: number };
 // The array form names each parameter once, in order of first use, though :min appears twice.

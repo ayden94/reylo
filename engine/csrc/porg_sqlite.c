@@ -135,6 +135,18 @@ static int outerCursor(Select *pSel, int iCursor){
   return 0;
 }
 
+/* The name a statement reads a rowid table's rowid by: "rowid", "_rowid_" or "oid", the first no
+** declared column has, since a declared column of that name hides the rowid. 0 when all three do. */
+static const char *rowidName(Table *pTab){
+  static const char *azNames[] = { "rowid", "_rowid_", "oid" };
+  int i, j;
+  for(i=0; i<3; i++){
+    for(j=0; j<pTab->nCol && sqlite3StrICmp(pTab->aCol[j].zCnName, azNames[i])!=0; j++){}
+    if( j==pTab->nCol ) return azNames[i];
+  }
+  return 0;
+}
+
 /* The provenance members of a column reference (the object is already open). */
 static void columnRef(sqlite3_str *s, Expr *p, Select *pSel){
   Table *pTab = ExprUseYTab(p) ? p->y.pTab : 0;
@@ -146,7 +158,7 @@ static void columnRef(sqlite3_str *s, Expr *p, Select *pSel){
   kv_str(s, "table", pTab->zName);
   if( iCol<0 ) iCol = pTab->iPKey;
   if( iCol<0 ){
-    kv_str(s, "column", "rowid");
+    kv_str(s, "column", rowidName(pTab) ? rowidName(pTab) : "rowid");
     kv_str(s, "affinity", "integer");
     kv_bool(s, "notNull", 1);
     kv_bool(s, "rowid", 1);
@@ -155,6 +167,8 @@ static void columnRef(sqlite3_str *s, Expr *p, Select *pSel){
     kv_str(s, "column", pCol->zCnName);
     kv_str(s, "declared", sqlite3ColumnType(pCol, ""));
     kv_str(s, "affinity", affName(pCol->affinity));
+    /* The collation a comparison with the column uses, where the column decides it. */
+    kv_str(s, "coll", sqlite3ColumnColl(pCol) ? sqlite3ColumnColl(pCol) : sqlite3StrBINARY);
     kv_bool(s, "notNull", pCol->notNull!=0);
     kv_bool(s, "rowid", p->iColumn<0 || iCol==pTab->iPKey);
     if( pCol->colFlags & COLFLAG_GENERATED ) kv_bool(s, "generated", 1);
@@ -173,6 +187,9 @@ static void expr(sqlite3_str *s, Expr *p, Select *pSel){
   kv_str(s, "op", opName(op));
   kv_str(s, "aff", affName(sqlite3ExprAffinity(p)));
   kv_bool(s, "canBeNull", sqlite3ExprCanBeNull(p));
+  /* SQLite moves every ON term into the WHERE; one from an outer join's ON says so, and names the
+  ** cursor of the join's right side, which the term restricts without removing a row. */
+  if( ExprHasProperty(p, EP_OuterON) ){ kv_bool(s, "outerOn", 1); kv_int(s, "join", p->w.iJoin); }
   switch( op ){
     case TK_COLUMN: case TK_AGG_COLUMN: case TK_TRIGGER:
       columnRef(s, p, pSel);
@@ -263,6 +280,7 @@ static void selectJson(sqlite3_str *s, Select *p){
     kv_str(s, "alias", pItem->zAlias);
     kv_bool(s, "outer", (pItem->fg.jointype & (JT_LEFT|JT_LTORJ))!=0);
     kv_bool(s, "cross", (pItem->fg.jointype & JT_CROSS)!=0);
+    kv_bool(s, "right", (pItem->fg.jointype & JT_RIGHT)!=0);
     kv_bool(s, "tabFunc", pItem->fg.isTabFunc);
     kv_bool(s, "cte", pItem->fg.isCte);
     if( pItem->pSTab ){
@@ -452,10 +470,19 @@ static void tables(sqlite3_str *s){
     /* A unique key: every unique, non-partial index over plain columns, the INTEGER PRIMARY KEY, and the rowid itself. */
     key(s, "uniqueKeys"); sqlite3_str_appendchar(s, 1, '[');
     if( pTab->iPKey>=0 ){ sqlite3_str_appendchar(s, 1, '['); js(s, pTab->aCol[pTab->iPKey].zCnName); sqlite3_str_appendall(s, "],"); }
-    else if( !(pTab->tabFlags & TF_WithoutRowid) ){ sqlite3_str_appendall(s, "[\"rowid\"],"); }
+    else if( !(pTab->tabFlags & TF_WithoutRowid) && rowidName(pTab) ){ sqlite3_str_appendchar(s, 1, '['); js(s, rowidName(pTab)); sqlite3_str_appendall(s, "],"); }
     for(pIdx=pTab->pIndex; pIdx; pIdx=pIdx->pNext){
       int ok = pIdx->onError!=OE_None && pIdx->pPartIdxWhere==0 && !pIdx->bHasExpr;
       for(k=0; ok && k<pIdx->nKeyCol; k++) if( pIdx->aiColumn[k]<0 ) ok = 0;
+      /* A comparison of the column uses the column's collation: an index under another one bounds
+      ** it only when the column's is BINARY, which tells every value apart (NOCASE does not). */
+      for(k=0; ok && k<pIdx->nKeyCol; k++){
+        const char *zColl = sqlite3ColumnColl(&pTab->aCol[pIdx->aiColumn[k]]);
+        const char *zIdxColl = pIdx->azColl[k];
+        if( zColl==0 ) zColl = sqlite3StrBINARY;
+        if( zIdxColl==0 ) zIdxColl = sqlite3StrBINARY;
+        if( sqlite3StrICmp(zColl, zIdxColl)!=0 && sqlite3StrICmp(zColl, sqlite3StrBINARY)!=0 ) ok = 0;
+      }
       if( !ok ) continue;
       sqlite3_str_appendchar(s, 1, '[');
       for(k=0; k<pIdx->nKeyCol; k++){ js(s, pTab->aCol[pIdx->aiColumn[k]].zCnName); sqlite3_str_appendchar(s, 1, ','); }

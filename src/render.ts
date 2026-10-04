@@ -86,7 +86,9 @@ export function renderType(t: EngineType, inJson = false, dialect: "postgres" | 
     case "enum": return t.labels.length ? t.labels.map((l) => JSON.stringify(l)).join(" | ") : "string";
     case "array": {
       if (((t.of.kind === "scalar" && t.of.name === "record") || t.of.kind === "composite") && !inJson) return "string";
-      const inner = renderType(t.of, inJson, dialect, repr);
+      // An element is nullable only where the statement builds the array from a value that may
+      // be NULL (`array_agg` over a LEFT JOIN); any other array is `T[]`, as decided on 2026-10-03.
+      const inner = renderType(t.of, inJson, dialect, repr) + (t.nullable_items ? " | null" : "");
       return /[|&]/.test(inner) ? `(${inner})[]` : `${inner}[]`;
     }
     // A JSON value whose shape the statement builds; a driver set up to return JSON as text

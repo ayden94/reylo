@@ -98,3 +98,16 @@ test("decimal, json and binary follow the driver's representation; parameters ta
   const inner: EngineType = { kind: "object", fields: [{ name: "b", type: scalar("bytea"), nullable: false }, { name: "n", type: scalar("numeric"), nullable: false }] };
   assert.equal(renderType(inner, false, "postgres", repr({ binary: "Buffer", decimal: "string" })), "{ b: string; n: number }");
 });
+
+test("an array's elements are nullable only where the statement builds it from a value that may be NULL", () => {
+  // `array_agg(u.email)` over a LEFT JOIN is `{NULL}` for a team with no users; a table's array
+  // column, which the statement does not build, is `T[]` as the maintainer decided on 2026-10-03.
+  const texts = (nullable_items?: boolean): EngineType => (nullable_items === undefined ? { kind: "array", of: scalar("text") } : { kind: "array", of: scalar("text"), nullable_items });
+  assert.equal(renderType(texts()), "string[]");
+  assert.equal(renderType(texts(false)), "string[]");
+  assert.equal(renderType(texts(true)), "(string | null)[]");
+  assert.equal(renderType(texts(true), true), "(string | null)[]");
+  assert.equal(renderType({ kind: "array", of: { kind: "enum", name: "mood", labels: ["ok", "sad"] }, nullable_items: true }), `("ok" | "sad" | null)[]`);
+  // A parameter's elements are the caller's to pass.
+  assert.equal(renderParamType(texts()), "string[]");
+});

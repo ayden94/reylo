@@ -57,6 +57,13 @@ pub struct Analysis {
     /// Tables on the nullable side of an outer join (the right side of a LEFT JOIN, the left
     /// of a RIGHT JOIN, both of a FULL JOIN): their columns may be null on the result.
     pub nullable_tables: Vec<String>,
+    /// The tables a strict top-level WHERE, or a strict ON conjunct of an inner join above the
+    /// outer join that nulls them, took off `nullable_tables`, each with every witness that did:
+    /// the names of the operators, functions and casts its strictness rests on (none for `IS NOT
+    /// NULL`; see `infer::Strict`). A test proves the joined row exists only when those are the
+    /// built-in ones, which the parse alone cannot know: a host with the catalog's word puts back
+    /// a table no witness holds for.
+    pub reductions: Vec<(String, Vec<Vec<String>>)>,
     pub has_repeated_table: bool,
     pub has_set_op: bool,
     /// `GROUP BY ROLLUP`, `CUBE`, or `GROUPING SETS` anywhere: a grouping column is NULL in the
@@ -133,6 +140,8 @@ pub fn analyze(sql: &str) -> Result<Analysis, AnalyzeError> {
     let mut has_grouping_sets = false;
     let mut nullable_tables: Vec<String> = Vec::new();
     let mut relnames: Vec<String> = Vec::new();
+    // How many times the statement reads each relation name, anywhere in it.
+    let mut occurrences: HashMap<String, usize> = HashMap::new();
     let mut functions: Vec<String> = Vec::new();
     let mut params: HashMap<i32, ParamUse> = HashMap::new();
     let mut filled: Vec<(i32, String, Filled)> = Vec::new();
@@ -225,6 +234,7 @@ pub fn analyze(sql: &str) -> Result<Analysis, AnalyzeError> {
         }
         "RangeVar" => {
             if let Some(rel) = node.get("relname").and_then(|r| r.as_str()) {
+                *occurrences.entry(rel.to_string()).or_default() += 1;
                 if relnames.iter().any(|r| r == rel) {
                     has_repeated_table = true;
                 } else {
@@ -275,14 +285,50 @@ pub fn analyze(sql: &str) -> Result<Analysis, AnalyzeError> {
     // A strict predicate in the top-level WHERE on a column of an outer-joined table matches
     // only rows where that table's row exists, so its columns keep the catalog's nullability:
     // `LEFT JOIN posts p … WHERE p.id IS NOT NULL` (or `p.views > 0`) is an inner join in effect.
-    // This is the planner's own outer-join reduction, read off the text.
+    // This is the planner's own outer-join reduction, read off the text. The nullable tables are
+    // names, so a relation reduces only where the statement reads it once, and the test's
+    // qualifier is that one occurrence's name in the top-level FROM: a test of `a.id` in a
+    // self-join, or of a subquery that goes by the table's name, says nothing of the occurrence
+    // the join nulls.
+    let mut reductions: Vec<(String, Vec<Vec<String>>)> = Vec::new();
+    let once = |rel: &str| occurrences.get(rel) == Some(&1);
     if let NodeEnum::SelectStmt(s) = top {
         if let Some(w) = s.where_clause.as_deref() {
             let aliases = alias_map(&s.from_clause);
-            let mut strict = Vec::new();
-            strict_qualifiers(w, &mut strict);
-            nullable_tables.retain(|rel| !strict.iter().any(|q| q == rel || aliases.get(q).is_some_and(|r| r == rel)));
+            let strict = crate::infer::strict_in(w);
+            nullable_tables.retain(|rel| {
+                if !once(rel) {
+                    return true;
+                }
+                let witnesses: Vec<Vec<String>> = strict
+                    .iter()
+                    .filter(|st| matches!(st.column.as_slice(), [q, _] if aliases.get(q).is_some_and(|r| r == rel)))
+                    .map(|st| st.names.clone())
+                    .collect();
+                if witnesses.is_empty() {
+                    return true;
+                }
+                reductions.push((rel.clone(), witnesses));
+                false
+            });
         }
+        // A strict ON conjunct of an inner join above the outer join that nulls a relation
+        // rejects its null extension too: `posts p LEFT JOIN users u ON … JOIN teams t ON t.id =
+        // u.team_id` reads only rows where `u` exists (the planner's `reduce_outer_joins`). The
+        // relation must appear once in the statement, in the top-level FROM, so its name is its
+        // alone and no outer join above that inner join nulls it again.
+        nullable_tables.retain(|rel| {
+            if !once(rel) {
+                return true;
+            }
+            match s.from_clause.iter().find_map(|item| reduced_by_joins(item, rel)) {
+                Some(witnesses) => {
+                    reductions.push((rel.clone(), witnesses));
+                    false
+                }
+                None => true,
+            }
+        });
     }
 
     let read_set = parsed.select_tables();
@@ -300,6 +346,7 @@ pub fn analyze(sql: &str) -> Result<Analysis, AnalyzeError> {
         has_returning,
         has_outer_join,
         nullable_tables,
+        reductions,
         has_repeated_table,
         has_set_op,
         has_grouping_sets,
@@ -376,44 +423,58 @@ fn alias_map(from: &[protobuf::Node]) -> HashMap<String, String> {
     out
 }
 
-/// The qualifiers of the columns a WHERE tests strictly at its top level: under AND, an
-/// `IS NOT NULL`, or a comparison operator, which is never true of NULL.
-fn strict_qualifiers(node: &protobuf::Node, out: &mut Vec<String>) {
-    const COMPARISONS: &[&str] = &["=", "<>", "!=", "<", ">", "<=", ">="];
-    match node.node.as_ref() {
-        Some(NodeEnum::BoolExpr(b)) if b.boolop == protobuf::BoolExprType::AndExpr as i32 => b.args.iter().for_each(|a| strict_qualifiers(a, out)),
-        Some(NodeEnum::NullTest(t)) if t.nulltesttype == protobuf::NullTestType::IsNotNull as i32 => {
-            if let Some(q) = t.arg.as_deref().and_then(qualifier) {
-                out.push(q);
-            }
-        }
-        Some(NodeEnum::AExpr(e)) if e.kind == protobuf::AExprKind::AexprOp as i32 => {
-            let op = e.name.last().and_then(|n| match n.node.as_ref() {
-                Some(NodeEnum::String(s)) => Some(s.sval.as_str()),
-                _ => None,
-            });
-            if op.is_some_and(|o| COMPARISONS.contains(&o)) {
-                for side in [e.lexpr.as_deref(), e.rexpr.as_deref()].into_iter().flatten() {
-                    if let Some(q) = qualifier(side) {
-                        out.push(q);
+/// Whether the joins above relation `rel`'s place in a FROM item leave its row existing in every
+/// row they return, though an outer join among them nulls it: the witnesses of the inner join's
+/// ON conjuncts strict in it that reject its null extension last (`None` when no outer join
+/// below nulls it, or when one nulls it again above).
+fn reduced_by_joins(item: &protobuf::Node, rel: &str) -> Option<Vec<Vec<String>>> {
+    /// The joins from `node` down to the relation, each with whether the relation is on its
+    /// right side, and the relation's alias.
+    fn path<'a>(node: &'a protobuf::Node, rel: &str, out: &mut Vec<(&'a protobuf::JoinExpr, bool)>) -> Option<String> {
+        match node.node.as_ref() {
+            Some(NodeEnum::RangeVar(rv)) if rv.relname == rel => Some(rv.alias.as_ref().map_or_else(|| rv.relname.clone(), |a| a.aliasname.clone())),
+            Some(NodeEnum::JoinExpr(j)) => {
+                for (side, right) in [(j.larg.as_deref(), false), (j.rarg.as_deref(), true)] {
+                    out.push((j, right));
+                    if let Some(alias) = side.and_then(|s| path(s, rel, out)) {
+                        return Some(alias);
                     }
+                    out.pop();
                 }
+                None
+            }
+            _ => None,
+        }
+    }
+    use protobuf::JoinType;
+    let mut joins = Vec::new();
+    let alias = path(item, rel, &mut joins)?;
+    let mut nulled = false;
+    let mut witnesses: Vec<Vec<String>> = Vec::new();
+    for (join, right) in joins.iter().rev() {
+        let kind = join.jointype;
+        if (kind == JoinType::JoinLeft as i32 && *right) || (kind == JoinType::JoinRight as i32 && !*right) || kind == JoinType::JoinFull as i32 {
+            nulled = true;
+            witnesses.clear();
+            continue;
+        }
+        if nulled && kind == JoinType::JoinInner as i32 && join.using_clause.is_empty() && !join.is_natural {
+            let strict: Vec<Vec<String>> = join
+                .quals
+                .as_deref()
+                .map(crate::infer::strict_in)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|st| matches!(st.column.as_slice(), [q, _] if *q == alias))
+                .map(|st| st.names)
+                .collect();
+            if !strict.is_empty() {
+                nulled = false;
+                witnesses = strict;
             }
         }
-        _ => {}
     }
-}
-
-/// `alias` of a qualified column reference `alias.column`.
-fn qualifier(node: &protobuf::Node) -> Option<String> {
-    let Some(NodeEnum::ColumnRef(c)) = node.node.as_ref() else { return None };
-    if c.fields.len() < 2 {
-        return None;
-    }
-    match c.fields[0].node.as_ref() {
-        Some(NodeEnum::String(s)) => Some(s.sval.clone()),
-        _ => None,
-    }
+    (!nulled && !witnesses.is_empty()).then_some(witnesses)
 }
 
 fn relnames_in(v: &Value) -> Vec<String> {
@@ -596,6 +657,51 @@ mod tests {
         assert_eq!(c.nullable_tables, vec!["b", "a"]);
         let d = analyze("SELECT * FROM a JOIN b ON true").unwrap();
         assert!(d.nullable_tables.is_empty());
+    }
+
+    #[test]
+    fn a_strict_test_in_the_where_or_a_later_inner_join_reduces_an_outer_join() {
+        let reduced = |sql: &str| {
+            let a = analyze(sql).unwrap();
+            (a.nullable_tables, a.reductions.into_iter().map(|(rel, witnesses)| (rel, witnesses.len())).collect::<Vec<_>>())
+        };
+        // The shapes beyond a bare comparison: a strict function, an OR of strict arms, IN, LIKE.
+        for sql in [
+            "SELECT p.id FROM posts p LEFT JOIN users u ON u.id = p.author_id WHERE lower(u.name) = 'x'",
+            "SELECT p.id FROM posts p LEFT JOIN users u ON u.id = p.author_id WHERE u.name LIKE 'a%' OR u.name LIKE 'b%'",
+            "SELECT p.id FROM posts p LEFT JOIN users u ON u.id = p.author_id WHERE u.name IN ('a', 'b')",
+            "SELECT p.id FROM posts p LEFT JOIN users u ON u.id = p.author_id WHERE u.age BETWEEN 1 AND 9",
+            "SELECT p.id FROM posts p LEFT JOIN users u ON u.id = p.author_id WHERE NOT (u.name IS NULL)",
+            // A later inner join's ON reads `u`'s column, so the null-extended rows fail it.
+            "SELECT p.id FROM posts p LEFT JOIN users u ON u.id = p.author_id JOIN teams t ON t.id = u.team_id",
+        ] {
+            let (nullable, reductions) = reduced(sql);
+            assert!(nullable.is_empty(), "{sql}: {nullable:?}");
+            assert_eq!(reductions.len(), 1, "{sql}");
+        }
+        for sql in [
+            // One arm is not strict in `u`, an `IS NULL` keeps the null extension, and the
+            // later join is itself a LEFT JOIN.
+            "SELECT p.id FROM posts p LEFT JOIN users u ON u.id = p.author_id WHERE u.name = 'a' OR p.id = 1",
+            "SELECT p.id FROM posts p LEFT JOIN users u ON u.id = p.author_id WHERE u.name IS NULL",
+            "SELECT p.id FROM posts p LEFT JOIN users u ON u.id = p.author_id LEFT JOIN teams t ON t.id = u.team_id",
+            // `coalesce` answers for a NULL, and so does `||` over arrays.
+            "SELECT p.id FROM posts p LEFT JOIN users u ON u.id = p.author_id WHERE coalesce(u.name, 'x') = 'x'",
+            // An outer join above the inner join nulls `u` again.
+            "SELECT a.id FROM a LEFT JOIN (posts p LEFT JOIN users u ON u.id = p.author_id JOIN teams t ON t.id = u.team_id) ON p.id = a.post_id",
+            // The test reads another occurrence of the table than the one the join nulls, or a
+            // subquery that goes by the table's name.
+            "SELECT b.name FROM users a LEFT JOIN users b ON b.id = a.boss WHERE a.id = $1",
+            "SELECT x.name FROM (SELECT b.name FROM users a LEFT JOIN users b ON b.id = a.boss) x, users u WHERE u.id = $1",
+            "SELECT u.name FROM posts p LEFT JOIN users u ON u.id = p.author_id CROSS JOIN (SELECT 1 AS id) AS users WHERE users.id = 1",
+            "SELECT u.name FROM posts p LEFT JOIN users u ON u.id = p.author_id JOIN teams t ON t.id = u.team_id, users v WHERE v.id = 1",
+        ] {
+            let (nullable, _) = reduced(sql);
+            assert!(nullable.contains(&"users".to_string()), "{sql}: {nullable:?}");
+        }
+        // A table the statement reads by its own name.
+        let (nullable, _) = reduced("SELECT posts.id FROM posts LEFT JOIN users ON users.id = posts.author_id WHERE users.name = 'x'");
+        assert!(nullable.is_empty(), "{nullable:?}");
     }
 
     #[test]

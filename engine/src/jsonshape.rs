@@ -109,7 +109,12 @@ pub fn plan(sql: &str) -> Plan {
         return Plan::default();
     };
     let Some((targets, from, with)) = top_context(top) else { return Plan::default() };
-    let mut builder = Builder { stack: vec![(0, from)], next_ctx: 0, drafts: Vec::new(), overflowed: false };
+    // Every row the select list reads passed the WHERE, so the top context's probe filters by it.
+    let filter = match top {
+        NodeEnum::SelectStmt(s) => s.where_clause.as_deref().cloned(),
+        _ => None,
+    };
+    let mut builder = Builder { stack: vec![(0, from, filter)], next_ctx: 0, drafts: Vec::new(), overflowed: false };
     let mut columns: Vec<(String, Shape)> = Vec::new();
     for target in &targets {
         let Some(NodeEnum::ResTarget(rt)) = target.node.as_ref() else { continue };
@@ -135,8 +140,8 @@ pub fn plan(sql: &str) -> Plan {
         .drafts
         .iter()
         .map(|d| Probe {
-            sql: select_text(version, &d.items, &d.from, with.as_ref()).unwrap_or_default(),
-            wider: d.wider.as_ref().and_then(|f| select_text(version, &d.items, f, with.as_ref())),
+            sql: select_text(version, &d.items, &d.from, d.filter.as_ref(), with.as_ref()).unwrap_or_default(),
+            wider: d.wider.as_ref().and_then(|f| select_text(version, &d.items, f, d.filter.as_ref(), with.as_ref())),
         })
         .collect();
     Plan { columns, probes }
@@ -183,7 +188,7 @@ struct Builder {
     /// The `FROM` clauses in scope, outermost first; the innermost is the last. Each carries an
     /// id of its own, because two sibling subqueries sit at the same depth and select from
     /// different relations — keying a probe on the depth alone would pool their columns.
-    stack: Vec<(usize, Vec<Node>)>,
+    stack: Vec<(usize, Vec<Node>, Option<Node>)>,
     next_ctx: usize,
     drafts: Vec<Draft>,
     /// Set once the probe budget is spent, which abandons the statement's inference.
@@ -195,6 +200,9 @@ struct Draft {
     /// A `to_jsonb(alias)` probe, whose every column is one field.
     row: bool,
     from: Vec<Node>,
+    /// The condition every row the context reads passed: the statement's WHERE, and an
+    /// aggregate's FILTER for what it aggregates.
+    filter: Option<Node>,
     /// The same `FROM` with every enclosing one appended, for a correlated constructor.
     wider: Option<Vec<Node>>,
     items: Vec<Node>,
@@ -223,7 +231,22 @@ impl Builder {
                         return Shape::Unknown;
                     }
                     let non_null = TOTAL_AGG_FNS.contains(&name.as_str());
-                    Shape::Array { items: Box::new(self.walk(&f.args[0])), non_null }
+                    // Only rows its FILTER passes reach an aggregate: its argument is read in a
+                    // context of its own whose probe filters by it too, so `FILTER (WHERE p.id IS
+                    // NOT NULL)` over a LEFT JOIN reads `p` as a row that exists.
+                    let Some(filter) = f.agg_filter.as_deref() else {
+                        return Shape::Array { items: Box::new(self.walk(&f.args[0])), non_null };
+                    };
+                    let (_, from, outer) = self.stack[self.stack.len() - 1].clone();
+                    let both = match outer {
+                        Some(outer) => and(outer, filter.clone()),
+                        None => filter.clone(),
+                    };
+                    self.next_ctx += 1;
+                    self.stack.push((self.next_ctx, from, Some(both)));
+                    let items = self.walk(&f.args[0]);
+                    self.stack.pop();
+                    Shape::Array { items: Box::new(items), non_null }
                 } else if ROW_FNS.contains(&name.as_str()) {
                     match f.args.first().and_then(bare_alias) {
                         Some(alias) if f.args.len() == 1 => self.row(&alias),
@@ -253,7 +276,7 @@ impl Builder {
                 let Some(select) = s.subselect.as_deref().and_then(as_select) else { return Shape::Unknown };
                 let Some(inner) = single_target(select).and_then(|rt| rt.val.clone()) else { return Shape::Unknown };
                 self.next_ctx += 1;
-                self.stack.push((self.next_ctx, select.from_clause.clone()));
+                self.stack.push((self.next_ctx, select.from_clause.clone(), None));
                 let shape = self.walk(&inner);
                 self.stack.pop();
                 // A scalar subquery is one row only when it is an ungrouped aggregate; anything
@@ -309,7 +332,7 @@ impl Builder {
             return None;
         }
         let depth = self.stack.len() - 1;
-        let (ctx, from) = self.stack[depth].clone();
+        let (ctx, from, filter) = self.stack[depth].clone();
         let mut wider = from.clone();
         for d in (0..depth).rev() {
             wider.extend(self.stack[d].1.iter().cloned());
@@ -317,7 +340,7 @@ impl Builder {
         // A subquery with no `FROM` of its own only ever resolves against the enclosing one.
         let (from, wider) = if from.is_empty() && !wider.is_empty() { (wider, None) } else { (from, Some(wider)) };
         let wider = wider.filter(|w| w.len() != from.len());
-        self.drafts.push(Draft { ctx, row, from, wider, items: Vec::new() });
+        self.drafts.push(Draft { ctx, row, from, filter, wider, items: Vec::new() });
         Some(self.drafts.len() - 1)
     }
 }
@@ -403,7 +426,7 @@ fn force_nullable(shape: Shape) -> Shape {
 
 /// `SELECT <items> FROM <from>`, deparsed by the same library that parsed the original. The
 /// statement is only ever prepared, never executed, so it needs no `WHERE` to stay cheap.
-pub(crate) fn select_text(version: i32, items: &[Node], from: &[Node], with: Option<&protobuf::WithClause>) -> Option<String> {
+pub(crate) fn select_text(version: i32, items: &[Node], from: &[Node], filter: Option<&Node>, with: Option<&protobuf::WithClause>) -> Option<String> {
     if items.is_empty() {
         return None;
     }
@@ -426,6 +449,7 @@ pub(crate) fn select_text(version: i32, items: &[Node], from: &[Node], with: Opt
     let select = SelectStmt {
         target_list,
         from_clause: from.to_vec(),
+        where_clause: filter.map(|f| Box::new(f.clone())),
         with_clause: with.cloned(),
         op: protobuf::SetOperation::SetopNone as i32,
         limit_option: protobuf::LimitOption::Default as i32,
@@ -439,7 +463,30 @@ pub(crate) fn select_text(version: i32, items: &[Node], from: &[Node], with: Opt
             stmt_len: 0,
         }],
     };
-    pg_query::deparse(&result).ok()
+    let text = pg_query::deparse(&result).ok()?;
+    // A probe binds nothing, so a placeholder in its condition is NULL there: a test that is
+    // strict in a column stays strict (`u.id = NULL`), which is all the probe reads of it, and a
+    // condition the server cannot type proves nothing, the probe failing to describe.
+    Some(without_placeholders(&text))
+}
+
+/// `sql` with every `$n` outside strings, quoted identifiers and comments written as `NULL`.
+fn without_placeholders(sql: &str) -> String {
+    let Ok(lexed) = crate::lex::lex(sql, crate::dialect::Dialect::Postgres) else { return sql.to_string() };
+    let mut out = String::with_capacity(sql.len());
+    let mut at = 0;
+    for p in &lexed.placeholders {
+        out.push_str(&sql[at..p.start]);
+        out.push_str("NULL");
+        at = p.end;
+    }
+    out.push_str(&sql[at..]);
+    out
+}
+
+/// `a AND b`, as the parser writes it.
+fn and(a: Node, b: Node) -> Node {
+    Node { node: Some(NodeEnum::BoolExpr(Box::new(protobuf::BoolExpr { xpr: None, boolop: protobuf::BoolExprType::AndExpr as i32, args: vec![a, b], location: -1 }))) }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -794,11 +841,20 @@ mod tests {
     }
 
     #[test]
+    fn an_aggregates_filter_filters_the_probe_of_what_it_aggregates() {
+        let p = shapes("SELECT u.id, json_agg(json_build_object('id', p.id, 'title', p.title)) FILTER (WHERE p.id IS NOT NULL) AS posts FROM users u LEFT JOIN posts p ON p.author_id = u.id WHERE u.org = $1 GROUP BY u.id");
+        assert_eq!(p.probes[0].sql, "SELECT p.id AS a0, p.title AS a1 FROM users u LEFT JOIN posts p ON p.author_id = u.id WHERE u.org = NULL AND p.id IS NOT NULL");
+        // Without a FILTER the aggregate reads the statement's own context.
+        let q = shapes("SELECT json_agg(p.title) AS t FROM posts p WHERE p.score > 0");
+        assert_eq!(q.probes[0].sql, "SELECT p.title AS a0 FROM posts p WHERE p.score > 0");
+    }
+
+    #[test]
     fn a_cte_travels_with_the_probe_unless_it_binds() {
         let p = shapes("WITH recent AS (SELECT id, body FROM comments) SELECT jsonb_build_object('b', r.body) AS x FROM recent r");
         assert_eq!(p.probes[0].sql, "WITH recent AS (SELECT id, body FROM comments) SELECT r.body AS a0 FROM recent r");
         let q = shapes("WITH input AS (SELECT $1::uuid AS id) SELECT jsonb_build_object('b', c.body) AS x FROM comments c, input i WHERE c.id = i.id");
-        assert_eq!(q.probes[0].sql, "SELECT c.body AS a0 FROM comments c, input i");
+        assert_eq!(q.probes[0].sql, "SELECT c.body AS a0 FROM comments c, input i WHERE c.id = i.id");
     }
 
     #[test]
@@ -853,7 +909,7 @@ mod tests {
     const BYTEA: u32 = 17;
 
     fn column(name: &str, type_oid: u32, type_name: &str, nullable: bool) -> DescribedColumn {
-        DescribedColumn { name: name.into(), type_oid, type_name: type_name.into(), nullable }
+        DescribedColumn { name: name.into(), type_oid, type_name: type_name.into(), nullable, nullable_items: None, values: None }
     }
 
     fn scalar(name: &str) -> Type {

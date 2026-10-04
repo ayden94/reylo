@@ -272,20 +272,26 @@ function writeEntry(root: string, file: string, entry: Entry): void {
 
 /**
  * One query per dialect whose rows change when anything an analysis reads changes: relations and
- * their columns, constraints and indexes (nullability and the row count read them), enum labels,
- * domains, functions and view definitions, and the server settings that change a statement's
- * types. SQLite's whole schema is its `sqlite_schema` table.
+ * their columns, inheritance, constraints, indexes, row triggers and rules (nullability and the row
+ * count read them), enum labels, domains, functions, user operators (the trust check reads them) and view
+ * definitions, and the server settings that change a statement's types. SQLite's whole schema is
+ * its `sqlite_schema` table. A `"char"` column is cast to text: `text || "char"` is ambiguous, and
+ * a query the server refuses leaves every entry unverified.
  */
 const NS = `not in ('pg_catalog', 'information_schema') and n.nspname !~ '^pg_(toast|temp)'`;
 const FINGERPRINT: Record<ResolvedProject["dialect"], string> = {
   postgres: `select md5(coalesce(string_agg(x, E'\\n' order by x), '')) from (
     select 'v ' || current_setting('server_version_num') || ' ' || current_setting('search_path') as x
-    union all select 'r ' || c.oid || ' ' || n.nspname || '.' || c.relname || ' ' || c.relkind from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname ${NS}
-    union all select 'a ' || a.attrelid || ' ' || a.attnum || ' ' || a.attname || ' ' || a.atttypid || ' ' || a.attnotnull from pg_attribute a join pg_class c on c.oid = a.attrelid join pg_namespace n on n.oid = c.relnamespace where a.attnum > 0 and not a.attisdropped and n.nspname ${NS}
-    union all select 'c ' || o.conrelid || ' ' || o.conname || ' ' || pg_get_constraintdef(o.oid) from pg_constraint o join pg_namespace n on n.oid = o.connamespace where n.nspname ${NS}
-    union all select 'i ' || i.indexrelid || ' ' || pg_get_indexdef(i.indexrelid) from pg_index i join pg_class c on c.oid = i.indrelid join pg_namespace n on n.oid = c.relnamespace where n.nspname ${NS}
+    union all select 'r ' || c.oid || ' ' || n.nspname || '.' || c.relname || ' ' || c.relkind::text from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname ${NS}
+    union all select 'a ' || a.attrelid || ' ' || a.attnum || ' ' || a.attname || ' ' || a.atttypid || ' ' || a.attnotnull || ' ' || a.attcollation from pg_attribute a join pg_class c on c.oid = a.attrelid join pg_namespace n on n.oid = c.relnamespace where a.attnum > 0 and not a.attisdropped and n.nspname ${NS}
+    union all select 'h ' || h.inhrelid || ' ' || h.inhparent || ' ' || h.inhseqno from pg_inherits h join pg_class c on c.oid = h.inhrelid join pg_namespace n on n.oid = c.relnamespace where n.nspname ${NS}
+    union all select 'c ' || o.conrelid || ' ' || o.contypid || ' ' || o.conname || ' ' || pg_get_constraintdef(o.oid) from pg_constraint o join pg_namespace n on n.oid = o.connamespace where n.nspname ${NS}
+    union all select 'i ' || i.indexrelid || ' ' || i.indisvalid || ' ' || pg_get_indexdef(i.indexrelid) from pg_index i join pg_class c on c.oid = i.indrelid join pg_namespace n on n.oid = c.relnamespace where n.nspname ${NS}
+    union all select 'g ' || g.tgrelid || ' ' || g.tgname || ' ' || g.tgtype || ' ' || g.tgenabled::text from pg_trigger g join pg_class c on c.oid = g.tgrelid join pg_namespace n on n.oid = c.relnamespace where not g.tgisinternal and n.nspname ${NS}
+    union all select 'u ' || w.ev_class || ' ' || w.rulename || ' ' || w.ev_type::text || ' ' || w.ev_enabled::text || ' ' || md5(pg_get_ruledef(w.oid)) from pg_rewrite w join pg_class c on c.oid = w.ev_class join pg_namespace n on n.oid = c.relnamespace where w.rulename <> '_RETURN' and n.nspname ${NS}
+    union all select 'o ' || o.oid || ' ' || o.oprname || ' ' || o.oprleft || ' ' || o.oprright || ' ' || o.oprcode::oid from pg_operator o where o.oid >= 16384
     union all select 'e ' || e.enumtypid || ' ' || e.enumsortorder || ' ' || e.enumlabel from pg_enum e
-    union all select 't ' || t.oid || ' ' || t.typname || ' ' || t.typtype || ' ' || t.typbasetype || ' ' || t.typnotnull from pg_type t join pg_namespace n on n.oid = t.typnamespace where n.nspname ${NS}
+    union all select 't ' || t.oid || ' ' || t.typname || ' ' || t.typtype::text || ' ' || t.typbasetype || ' ' || t.typnotnull from pg_type t join pg_namespace n on n.oid = t.typnamespace where n.nspname ${NS}
     union all select 'f ' || p.oid || ' ' || p.proname || ' ' || p.prorettype || ' ' || p.proretset || ' ' || p.proargtypes::text || ' ' || md5(coalesce(p.prosrc, '')) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname ${NS}
     union all select 'w ' || c.oid || ' ' || md5(pg_get_viewdef(c.oid)) from pg_class c join pg_namespace n on n.oid = c.relnamespace where c.relkind in ('v', 'm') and n.nspname ${NS}
   ) t`,

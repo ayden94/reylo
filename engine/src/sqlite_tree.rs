@@ -120,6 +120,8 @@ pub struct From {
     /// On the nullable side of an outer join.
     pub outer: bool,
     pub cross: bool,
+    /// Joined by a RIGHT or FULL JOIN, which keeps the rows of the side before it that match nothing.
+    pub right: bool,
     pub tab_func: bool,
     pub cte: bool,
     pub view: bool,
@@ -171,6 +173,10 @@ pub struct Node {
     /// `sqlite3ExprAffinity`: integer, real, text, blob, numeric or none.
     pub aff: String,
     pub can_be_null: bool,
+    /// A WHERE term that came from an outer join's ON clause, which SQLite moves into the WHERE:
+    /// it restricts the join's right side (the cursor `join`) and removes no row.
+    pub outer_on: bool,
+    pub join: i64,
     // column
     pub cursor: i64,
     pub index: i64,
@@ -183,6 +189,8 @@ pub struct Node {
     pub outer: bool,
     /// The column's table is STRICT.
     pub strict: bool,
+    /// The column's collation, which a comparison with it uses where the column decides.
+    pub coll: Option<String>,
     pub resolved: Option<bool>,
     // variable, function
     pub name: Option<String>,

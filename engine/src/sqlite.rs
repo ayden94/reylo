@@ -22,7 +22,7 @@ use std::collections::{HashMap, HashSet};
 /// The schema, as SQLite stores it: its `sql` column is the DDL the engine replays into its
 /// in-memory copy. The replayed entry asks the host for it; a host with a connection of its own
 /// runs it there and hands the rows to [`analyze_ddl`].
-pub const DDL_QUERY: &str = "select sql from sqlite_schema where sql is not null and type in ('table', 'view', 'index') order by rowid";
+pub const DDL_QUERY: &str = "select sql from sqlite_schema where sql is not null and type in ('table', 'view', 'index', 'trigger') order by rowid";
 
 /// A scalar function the host registers on its own connection, which the engine's replay cannot
 /// see: the replay registers a stub under the same name and argument count, so a statement calling
@@ -124,7 +124,11 @@ fn run(sql: &str, lexed: &Lexed, ddl: &[String], extras: &Extras) -> SqliteAnaly
     // is how `params` matches them back, and an error offset maps back through the rewrite.
     let numbered = lex::rewrite(sql, lexed, Target::Numbered);
     let functions: Vec<(&str, i32)> = extras.total.iter().map(|f| (f.name.as_str(), f.arity)).collect();
-    let t = match tree::analyze(ddl, &numbered.sql, &functions) {
+    // Triggers are not replayed (a body may call a function only the application registers);
+    // their headers say which statements a trigger can skip a row of.
+    let (triggers, replay): (Vec<String>, Vec<String>) = ddl.iter().cloned().partition(|s| trigger_header(s).is_some());
+    let skipping = skipping_triggers(&triggers);
+    let t = match tree::analyze(&replay, &numbered.sql, &functions) {
         Ok(t) => t,
         Err(message) => return failed(crate::postgres::bare(sql, lexed, Dialect::Sqlite, vec![diag(message, 0, sql.trim_end().len(), 6)])),
     };
@@ -142,7 +146,7 @@ fn run(sql: &str, lexed: &Lexed, ddl: &[String], extras: &Extras) -> SqliteAnaly
         }
         return failed(crate::postgres::bare(sql, lexed, Dialect::Sqlite, diagnostics));
     }
-    let a = Analyzer { tree: &t, extras };
+    let a = Analyzer { tree: &t, extras, skipping: &skipping, nullable_params: guarded_params(&t), level: std::cell::RefCell::new(Level::default()) };
     let (columns, kind) = a.columns();
     let booleans = a.booleans();
     let params = a.params(lexed);
@@ -236,6 +240,203 @@ type ScopeStack<'a> = Vec<&'a [From]>;
 struct Analyzer<'a> {
     tree: &'a Tree,
     extras: &'a Extras,
+    /// Per table (lowercase), the events (`TRIGGER_ROW_INSERT`, `_UPDATE`, `_DELETE`) a BEFORE or
+    /// INSTEAD OF trigger fires on: its `SELECT RAISE(IGNORE)` skips the row.
+    skipping: &'a HashMap<String, i32>,
+    /// The parameters (`?n`) the caller may pass NULL for, because the statement tests them for
+    /// NULL or coalesces them ([`guarded_params`]); every other one is a non-null value, as on
+    /// Postgres.
+    nullable_params: HashSet<String>,
+    /// What the WHERE and the grouping of the SELECT arm whose columns are being typed prove.
+    level: std::cell::RefCell<Level>,
+}
+
+/// What one SELECT arm's WHERE and grouping prove of the expressions in its select list.
+#[derive(Debug, Clone, Default)]
+struct Level {
+    /// Columns (cursor, name) a strict WHERE test rejects NULL in: not NULL in a returned row.
+    narrowed: HashSet<(i64, String)>,
+    /// Cursors of outer-joined items a strict WHERE test reads: a returned row has their row.
+    reduced: HashSet<i64>,
+    /// A plain GROUP BY: no group is empty.
+    grouped: bool,
+}
+
+/// The parameters the statement tests for NULL (`?1 IS NULL`, `?1 IS NOT NULL`) or passes first to
+/// `coalesce` or `ifnull`: the caller means to pass NULL for them.
+fn guarded_params(t: &Tree) -> HashSet<String> {
+    fn walk(n: &Node, out: &mut HashSet<String>) {
+        let variable = |x: Option<&Node>| x.filter(|x| x.op == "variable").and_then(|x| x.name.clone());
+        match n.op.as_str() {
+            "isnull" | "notnull" | "is" | "is not" => {
+                out.extend(variable(n.left.as_deref()));
+                out.extend(variable(n.right.as_deref()));
+            }
+            "function" if matches!(n.name.as_deref(), Some("coalesce" | "ifnull")) => out.extend(variable(n.args.first())),
+            _ => {}
+        }
+        for child in n.left.iter().chain(n.right.iter()).map(|b| b.as_ref()).chain(n.list.iter()).chain(n.args.iter()) {
+            walk(child, out);
+        }
+        if let Some(sel) = &n.select {
+            walk_select(sel, out);
+        }
+    }
+    fn walk_select(sel: &Sel, out: &mut HashSet<String>) {
+        for c in &sel.columns {
+            walk(&c.expr, out);
+        }
+        for n in sel.where_.iter().chain(sel.having.iter()).chain(sel.group_by.iter()).chain(sel.order_by.iter()).chain(sel.limit.iter()).chain(sel.offset.iter()) {
+            walk(n, out);
+        }
+        for f in &sel.from {
+            if let Some(sub) = &f.subquery {
+                walk_select(sub, out);
+            }
+        }
+        if let Some(prior) = &sel.prior {
+            walk_select(prior, out);
+        }
+    }
+    let mut out = HashSet::new();
+    if let Some(sel) = &t.statement {
+        walk_select(sel, &mut out);
+    }
+    if let Some(dml) = &t.dml {
+        for n in dml.values.iter().flatten().chain(dml.set.iter().map(|s| &s.expr)).chain(dml.where_.iter()) {
+            walk(n, &mut out);
+        }
+        if let Some(u) = &dml.upsert {
+            for n in u.set.iter().map(|s| &s.expr).chain(u.where_.iter()) {
+                walk(n, &mut out);
+            }
+        }
+    }
+    for c in t.returning.iter().flatten() {
+        walk(&c.expr, &mut out);
+    }
+    out
+}
+
+/// What a SELECT arm's WHERE proves of its own FROM items, by the strict tests at its top level
+/// (not the ON terms of outer joins SQLite moved there), and whether it groups plainly.
+fn level_of(sel: &Sel, extras: &Extras) -> Level {
+    let own: HashSet<i64> = sel.from.iter().map(|f| f.cursor).collect();
+    let outer: HashSet<i64> = sel.from.iter().filter(|f| f.outer).map(|f| f.cursor).collect();
+    let mut narrowed = HashSet::new();
+    for term in conjuncts(sel.where_.as_ref()).into_iter().filter(|t| !t.outer_on) {
+        narrowed.extend(strict_in(term, extras).into_iter().filter(|(cursor, _)| own.contains(cursor)));
+    }
+    let reduced = narrowed.iter().map(|(cursor, _)| *cursor).filter(|c| outer.contains(c)).collect();
+    Level { narrowed, reduced, grouped: !sel.group_by.is_empty() }
+}
+
+/// The columns a WHERE test at the top level rejects NULL in: under OR the ones every arm does; a
+/// comparison, `IN`, `BETWEEN`, `IS NOT NULL`, `LIKE` or `GLOB`, in the columns its operands
+/// answer NULL for. `IS` and `IS NOT` compare NULL like a value, and reject nothing. A function the
+/// host registers over a built-in's name is the one a call resolves to, and proves nothing.
+fn strict_in(n: &Node, extras: &Extras) -> HashSet<(i64, String)> {
+    let nulls = |x: &Node| nulls_with(x, extras);
+    match n.op.as_str() {
+        "and" => n.left.iter().chain(n.right.iter()).flat_map(|x| strict_in(x, extras)).collect(),
+        "or" => {
+            let (Some(l), Some(r)) = (n.left.as_deref(), n.right.as_deref()) else { return HashSet::new() };
+            let right = strict_in(r, extras);
+            strict_in(l, extras).into_iter().filter(|c| right.contains(c)).collect()
+        }
+        "notnull" | "in" | "between" => n.left.as_deref().map(nulls).unwrap_or_default(),
+        "=" | "!=" | "<" | "<=" | ">" | ">=" => n.left.iter().chain(n.right.iter()).flat_map(|x| nulls(x)).collect(),
+        "not" => match n.left.as_deref() {
+            Some(inner) if inner.op == "isnull" => inner.left.as_deref().map(nulls).unwrap_or_default(),
+            Some(inner) => strict_in(inner, extras).into_iter().filter(|_| matches!(inner.op.as_str(), "=" | "!=" | "<" | "<=" | ">" | ">=" | "in" | "between")).collect(),
+            None => HashSet::new(),
+        },
+        "function" if !n.agg && !n.window && matches!(n.name.as_deref(), Some("like" | "glob")) && extras.function(n.name.as_deref().unwrap_or(""), n.args.len()).is_none() => {
+            n.args.iter().flat_map(nulls).collect()
+        }
+        "column" => nulls(n),
+        _ => HashSet::new(),
+    }
+}
+
+/// The columns an expression answers NULL for: the column itself, and through arithmetic,
+/// concatenation, a cast, a COLLATE or a built-in that is NULL for a NULL argument (not one the
+/// host registers over it), every column an operand answers NULL for.
+fn nulls_with(n: &Node, extras: &Extras) -> HashSet<(i64, String)> {
+    const STRICT: &[&str] = &["upper", "lower", "length", "abs", "trim", "ltrim", "rtrim", "substr", "substring", "replace", "round", "instr", "unicode", "sign", "octet_length"];
+    match n.op.as_str() {
+        "column" => n.column.clone().map(|c| HashSet::from([(n.cursor, c)])).unwrap_or_default(),
+        "+" | "-" | "*" | "/" | "%" | "||" => n.left.iter().chain(n.right.iter()).flat_map(|x| nulls_with(x, extras)).collect(),
+        "neg" | "pos" | "cast" | "collate" => n.left.as_deref().map(|x| nulls_with(x, extras)).unwrap_or_default(),
+        "function" if !n.agg && !n.window && n.name.as_deref().is_some_and(|f| STRICT.contains(&f) && extras.function(f, n.args.len()).is_none()) => n.args.iter().flat_map(|x| nulls_with(x, extras)).collect(),
+        _ => HashSet::new(),
+    }
+}
+
+/// A `CREATE TRIGGER` statement's timing (`before`, `after`, `instead`), event (`insert`,
+/// `update`, `delete`) and table, lowercase and unquoted; `None` for any other statement.
+fn trigger_header(sql: &str) -> Option<(String, String, String)> {
+    let words: Vec<String> = sql
+        .split(|c: char| c.is_whitespace() || c == '(')
+        .filter(|w| !w.is_empty())
+        .map(|w| w.trim_matches(|c| matches!(c, '"' | '`' | '[' | ']' | '\'')).to_ascii_lowercase())
+        .collect();
+    // Steps over the next word when it is one of `want`.
+    fn take(words: &[String], i: &mut usize, want: &[&str]) -> bool {
+        let hit = words.get(*i).is_some_and(|w| want.contains(&w.as_str()));
+        if hit {
+            *i += 1;
+        }
+        hit
+    }
+    let mut i = 0;
+    if !take(&words, &mut i, &["create"]) {
+        return None;
+    }
+    take(&words, &mut i, &["temp", "temporary"]);
+    if !take(&words, &mut i, &["trigger"]) {
+        return None;
+    }
+    if take(&words, &mut i, &["if"]) {
+        take(&words, &mut i, &["not"]);
+        take(&words, &mut i, &["exists"]);
+    }
+    i += 1; // the trigger's name
+    let timing = if take(&words, &mut i, &["before"]) {
+        "before"
+    } else if take(&words, &mut i, &["after"]) {
+        "after"
+    } else if take(&words, &mut i, &["instead"]) {
+        take(&words, &mut i, &["of"]);
+        "instead"
+    } else {
+        // "If no timing is specified, BEFORE is the default."
+        "before"
+    };
+    let event = words.get(i)?.clone();
+    let on = words.iter().skip(i).position(|w| w == "on")? + i;
+    let table = words.get(on + 1)?.rsplit('.').next()?.to_string();
+    Some((timing.to_string(), event, table))
+}
+
+/// The events per table that some BEFORE or INSTEAD OF trigger fires on.
+fn skipping_triggers(triggers: &[String]) -> HashMap<String, i32> {
+    use crate::cardinality::{TRIGGER_ROW_DELETE, TRIGGER_ROW_INSERT, TRIGGER_ROW_UPDATE};
+    let mut out: HashMap<String, i32> = HashMap::new();
+    for sql in triggers {
+        let Some((timing, event, table)) = trigger_header(sql) else { continue };
+        if timing == "after" {
+            continue;
+        }
+        let bit = match event.as_str() {
+            "insert" => TRIGGER_ROW_INSERT,
+            "update" => TRIGGER_ROW_UPDATE,
+            "delete" => TRIGGER_ROW_DELETE,
+            _ => TRIGGER_ROW_INSERT | TRIGGER_ROW_UPDATE | TRIGGER_ROW_DELETE,
+        };
+        *out.entry(table).or_default() |= bit;
+    }
+    out
 }
 
 /// When a function's result can be NULL.
@@ -368,7 +569,10 @@ impl Analyzer<'_> {
             .map(|arm| {
                 let mut inner = scope.clone();
                 inner.push(&arm.from);
-                arm.columns.get(i).map(|c| self.type_of(&c.expr, &inner)).unwrap_or_else(Fact::unknown)
+                let outer = self.level.replace(level_of(arm, self.extras));
+                let fact = arm.columns.get(i).map(|c| self.type_of(&c.expr, &inner)).unwrap_or_else(Fact::unknown);
+                self.level.replace(outer);
+                fact
             })
             .collect();
         let Some(first) = facts.first() else { return Fact::unknown() };
@@ -378,11 +582,17 @@ impl Analyzer<'_> {
 
     /// A column reference: through the cursor to a subquery's column, or the table column itself.
     fn column_ref(&self, n: &Node, scope: &ScopeStack) -> Fact {
+        // A strict WHERE test on the column, or on any column of its outer-joined item, keeps
+        // its NULL (or the item's null extension) out of every returned row.
+        let (narrowed, reduced) = {
+            let level = self.level.borrow();
+            (n.column.as_ref().is_some_and(|c| level.narrowed.contains(&(n.cursor, c.clone()))), level.reduced.contains(&n.cursor))
+        };
         for froms in scope.iter().rev() {
             if let Some(f) = froms.iter().find(|f| f.cursor == n.cursor) {
                 if let Some(sub) = &f.subquery {
                     let inner = self.select_column(sub, n.index.max(0) as usize, scope);
-                    return Fact { ty: inner.ty, non_null: inner.non_null && !f.outer && !n.outer };
+                    return Fact { ty: inner.ty, non_null: narrowed || (inner.non_null && ((!f.outer && !n.outer) || reduced)) };
                 }
                 break;
             }
@@ -392,7 +602,7 @@ impl Analyzer<'_> {
             Some(declared) if !n.rowid => column_type(declared, aff, n.strict),
             _ => affinity_type(aff),
         };
-        Fact { ty, non_null: (n.not_null || n.rowid) && !n.outer }
+        Fact { ty, non_null: narrowed || ((n.not_null || n.rowid) && (!n.outer || reduced)) }
     }
 
     // ---- expressions -------------------------------------------------------------------------
@@ -406,7 +616,8 @@ impl Analyzer<'_> {
             "string" => Fact::new("text", true),
             "blob" => Fact::new("blob", true),
             "null" => Fact::unknown(),
-            "variable" => Fact::unknown(),
+            // A parameter is a non-null value unless the statement means to take NULL for it.
+            "variable" => Fact { ty: Type::Unknown, non_null: n.name.as_ref().is_some_and(|name| !self.nullable_params.contains(name)) },
             "function" => {
                 let args: Vec<Fact> = n.args.iter().map(|a| self.type_of(a, scope)).collect();
                 self.function(n, &args)
@@ -436,10 +647,13 @@ impl Analyzer<'_> {
                 let l = arg(&n.left);
                 Fact::new("integer", l.non_null)
             }
-            "neg" | "pos" => {
+            "neg" => {
                 let l = arg(&n.left);
                 Fact { ty: if is_numeric(&l.ty) { l.ty } else { Type::Scalar { name: "real".into() } }, non_null: l.non_null }
             }
+            // Unary plus does nothing to any storage class: `+name` is the text 'bob'. SQLite's
+            // parser also writes a one-element `x IN (e)` as `x = +e`.
+            "pos" => arg(&n.left),
             "cast" => {
                 let l = arg(&n.left);
                 Fact::new(n.affinity.as_deref().unwrap_or("none"), l.non_null)
@@ -500,13 +714,18 @@ impl Analyzer<'_> {
             };
         }
         if n.agg {
+            // Under a plain GROUP BY every group has a row, so an aggregate that is NULL only
+            // over no rows or only NULLs follows its argument. (A FILTER makes the call a window
+            // call in SQLite's tree, and is read above.) `sum` stays nullable: a sum of `1e999`
+            // and `-1e999` is NaN, which SQLite stores as NULL.
+            let grouped = self.level.borrow().grouped;
             return match name {
                 "count" => done("integer", Nulls::Never),
                 "total" => done("real", Nulls::Never),
                 "sum" => typed(if is_numeric(&first.ty) { first.ty.clone() } else { Type::Scalar { name: "real".into() } }, Nulls::Always),
                 "avg" => done("real", Nulls::Always),
-                "min" | "max" => typed(first.ty.clone(), Nulls::Always),
-                "group_concat" | "string_agg" => done("text", Nulls::Always),
+                "min" | "max" => typed(first.ty.clone(), if grouped { Nulls::IfArgs } else { Nulls::Always }),
+                "group_concat" | "string_agg" => done("text", if grouped { Nulls::IfArgs } else { Nulls::Always }),
                 "json_group_array" | "jsonb_group_array" | "json_group_object" | "jsonb_group_object" => done("text", Nulls::Never),
                 _ => Fact::unknown(),
             };
@@ -525,7 +744,11 @@ impl Analyzer<'_> {
             "like" | "glob" | "regexp" | "match" | "likely" | "unlikely" | "likelihood" => {
                 if matches!(name, "likely" | "unlikely" | "likelihood") { first.clone() } else { done("integer", Nulls::IfArgs) }
             }
-            "upper" | "lower" | "trim" | "ltrim" | "rtrim" | "substr" | "substring" | "replace" | "char" | "printf" | "format" | "concat" | "concat_ws"
+            // `concat` skips NULL arguments (all NULL is ''), and `concat_ws` too, NULL only for a
+            // NULL separator.
+            "concat" => done("text", Nulls::Never),
+            "concat_ws" => Fact::new("text", first.non_null),
+            "upper" | "lower" | "trim" | "ltrim" | "rtrim" | "substr" | "substring" | "replace" | "char" | "printf" | "format"
             | "date" | "time" | "datetime" | "strftime" | "timediff" | "json" | "jsonb" | "json_array" | "json_object" | "json_insert" | "json_replace" | "json_set"
             | "json_remove" | "json_patch" | "json_quote" | "json_pretty" | "json_type" => done("text", Nulls::IfArgs),
             "hex" | "quote" | "typeof" => done("text", Nulls::Never),
@@ -604,7 +827,8 @@ impl Analyzer<'_> {
                     .cloned()
                     .unwrap_or_else(Fact::unknown);
                 let type_name = scalar_name(&fact.ty).unwrap_or("").to_string();
-                Param { name: name.clone(), ty: fact.ty, type_name, nullable: fills.get(&numbered).copied().unwrap_or(false) }
+                let nullable = fills.get(&numbered).copied().unwrap_or(false) || self.nullable_params.contains(&numbered);
+                Param { name: name.clone(), ty: fact.ty, type_name, nullable }
             })
             .collect()
     }
@@ -616,6 +840,20 @@ impl Analyzer<'_> {
     }
 
     fn walk_select(&self, sel: &Sel, scope: &ScopeStack, targets: &[Option<Fact>], found: &mut Vec<(String, Fact)>) {
+        // In a compound every arm's column i is one result column: a parameter in one arm takes
+        // the type the other arms give it (`SELECT name FROM users UNION ALL SELECT :x`).
+        let compound: Vec<Option<Fact>>;
+        let targets = if targets.is_empty() && sel.prior.is_some() {
+            compound = (0..sel.columns.len())
+                .map(|i| {
+                    let ty = self.select_column(sel, i, scope).ty;
+                    (!matches!(ty, Type::Unknown)).then_some(Fact { ty, non_null: true })
+                })
+                .collect();
+            compound.as_slice()
+        } else {
+            targets
+        };
         let mut inner = scope.clone();
         inner.push(&sel.from);
         for (i, c) in sel.columns.iter().enumerate() {
@@ -690,11 +928,14 @@ impl Analyzer<'_> {
                     }))
                 }
                 "||" => Ctx::Typed(Some(Fact::new("text", true))),
-                "neg" | "pos" | "~" | "&" | "|" | "<<" | ">>" => Ctx::Typed(Some(Fact::new("real", true))),
+                "neg" | "~" | "&" | "|" | "<<" | ">>" => Ctx::Typed(Some(Fact::new("real", true))),
+                // Unary plus hands its operand the context it stands in: `x IN (?)` is `x = +?`.
+                "pos" => ctx.clone(),
                 "and" | "or" | "not" => Ctx::Bool,
                 "case" => match slot {
                     // A WHEN compares with the base when there is one, else it is a condition; a
-                    // THEN or ELSE shares the other results' type.
+                    // THEN or ELSE shares the other results' type, or failing that the type the
+                    // CASE stands in (`name = CASE WHEN … THEN :a ELSE :b END`).
                     Slot::List(i) if i % 2 == 0 && i + 1 < n.list.len() => match &n.left {
                         Some(base) => Ctx::Typed(Some(self.type_of(base, scope))),
                         None => Ctx::Bool,
@@ -703,13 +944,28 @@ impl Analyzer<'_> {
                         let others: Vec<Fact> = n.list.iter().enumerate().filter(|(j, _)| j % 2 == 1 || (*j == n.list.len() - 1 && n.list.len() % 2 == 1)).map(|(_, x)| self.type_of(x, scope)).collect();
                         let refs: Vec<&Fact> = others.iter().collect();
                         let ty = shared(&refs);
-                        Ctx::Typed(if matches!(ty, Type::Unknown) { None } else { Some(Fact { ty, non_null: true }) })
+                        match ty {
+                            Type::Unknown => outer_type(&ctx),
+                            ty => Ctx::Typed(Some(Fact { ty, non_null: true })),
+                        }
                     }
-                    Slot::Left => Ctx::None,
+                    // A base compares with each WHEN value (`CASE :kind WHEN 'a' THEN …`).
+                    Slot::Left => {
+                        let values: Vec<Fact> = n.list.iter().enumerate().filter(|(j, _)| j % 2 == 0 && j + 1 < n.list.len()).map(|(_, x)| self.type_of(x, scope)).collect();
+                        let refs: Vec<&Fact> = values.iter().collect();
+                        match shared(&refs) {
+                            Type::Unknown => Ctx::None,
+                            ty => Ctx::Typed(Some(Fact { ty, non_null: true })),
+                        }
+                    }
                     _ => Ctx::None,
                 },
-                "function" => match slot {
-                    Slot::Arg(i) => self.argument(n, i, scope),
+                // A function whose result is one of its arguments gives an argument its siblings'
+                // type, or failing that the type the call stands in (`name = coalesce(:a, :b)`).
+                "function" => match (slot, self.argument(n, i_of(slot), scope)) {
+                    (Slot::Arg(_), Ctx::Typed(None) | Ctx::None) if matches!(n.name.as_deref(), Some("coalesce" | "ifnull" | "nullif" | "min" | "max")) && !n.agg => outer_type(&ctx),
+                    (Slot::Arg(i), Ctx::Typed(None) | Ctx::None) if i > 0 && matches!(n.name.as_deref(), Some("iif" | "if")) => outer_type(&ctx),
+                    (Slot::Arg(_), c) => c,
                     _ => Ctx::None,
                 },
                 _ => Ctx::None,
@@ -778,8 +1034,12 @@ impl Analyzer<'_> {
             return match dml.kind.as_str() {
                 "insert" => {
                     if dml.rows == 1 {
-                        let can_skip = dml.on_error == "ignore" || dml.upsert.as_ref().is_some_and(|u| !u.do_update);
-                        if can_skip { ("maybeOne".into(), Some("ON CONFLICT DO NOTHING (or OR IGNORE) can insert no row".into())) } else { ("one".into(), None) }
+                        use crate::cardinality::{TRIGGER_ROW_INSERT, TRIGGER_ROW_UPDATE};
+                        let triggered = |events: i32| self.skipping.get(&dml.table.to_ascii_lowercase()).is_some_and(|mask| mask & events != 0);
+                        let can_skip = dml.on_error == "ignore"
+                            || dml.upsert.as_ref().is_some_and(|u| !u.do_update || u.where_.is_some() || triggered(TRIGGER_ROW_UPDATE))
+                            || triggered(TRIGGER_ROW_INSERT);
+                        if can_skip { ("maybeOne".into(), Some("ON CONFLICT DO NOTHING, OR IGNORE, a DO UPDATE with a WHERE, or a BEFORE trigger's RAISE(IGNORE) can insert no row".into())) } else { ("one".into(), None) }
                     } else if dml.rows > 1 {
                         ("many".into(), Some(format!("a VALUES list of {} rows returns {} rows", dml.rows, dml.rows)))
                     } else {
@@ -837,54 +1097,161 @@ impl Analyzer<'_> {
             }
             return Err("a LIMIT of more than one row, or one the build cannot read, bounds nothing".into());
         }
-        if sel.prior.is_some() {
-            return Err("a set operation (UNION, INTERSECT, EXCEPT) returns any number of rows".into());
+        // An INTERSECT returns only rows both sides return, and an EXCEPT only rows of its left
+        // side (`prior`, the arms before this one): at most one row when a side it draws every
+        // row from is.
+        if let Some(prior) = &sel.prior {
+            let drawn = match sel.op.as_deref() {
+                Some("intersect") => self.at_most_one(prior).is_ok() || self.arm_at_most_one(sel).is_ok(),
+                Some("except") => self.at_most_one(prior).is_ok(),
+                _ => false,
+            };
+            return if drawn { Ok(()) } else { Err("a set operation (UNION, INTERSECT, EXCEPT) returns any number of rows".into()) };
         }
+        self.arm_at_most_one(sel)
+    }
+
+    /// The proof for one SELECT arm, its set operation aside: the closure of [`Self::determined`],
+    /// as `cardinality` proves it over libpg_query's tree. Every FROM item determined is one row
+    /// at most; one group at most when every GROUP BY expression is pinned; one row at most from
+    /// a DISTINCT over pinned values.
+    fn arm_at_most_one(&self, sel: &Sel) -> Result<(), String> {
         if sel.values {
             return Err("a VALUES list returns a row per row it lists".into());
         }
-        let equated = self.equated(sel.where_.as_ref());
         if !sel.group_by.is_empty() {
-            // One group at most: the WHERE pins a unique key of a relation to values, and every
-            // GROUP BY column belongs to that relation, whatever else is joined.
-            for f in &sel.from {
-                let Some(table) = f.table.as_deref().filter(|_| f.subquery.is_none() && !f.tab_func) else { continue };
-                if !self.key_pinned(table, f.cursor, &equated) {
-                    continue;
-                }
-                if sel.group_by.iter().all(|g| g.op == "column" && g.cursor == f.cursor) {
-                    return Ok(());
-                }
+            if sel.from.iter().all(|f| !f.right) && self.determined(sel, false).iter().all(|d| *d) {
+                return Ok(());
             }
-            return Err("GROUP BY returns one row per group; the engine proves one group only when the WHERE pins a unique key of a relation to values and every GROUP BY column belongs to that relation".into());
+            let constant = self.determined(sel, true);
+            if sel.group_by.iter().all(|g| self.pinned(sel, g, &constant)) {
+                return Ok(());
+            }
+            return Err("GROUP BY returns one row per group; the engine proves one group only when every GROUP BY expression is pinned to one value: a column of a relation whose unique key the WHERE pins, or a column the WHERE equates to a value".into());
         }
         if sel.having.is_some() {
             return Err("HAVING leaves a row per group".into());
         }
-        let [only] = sel.from.as_slice() else {
-            return Err(match sel.from.len() {
-                0 => "a SELECT with no FROM and a WHERE can return no row or one, and the engine proves that only through a LIMIT".into(),
-                _ => "a join returns a row per pair it matches, and the engine proves a single row only for one relation".into(),
-            });
-        };
-        let Some(table) = only.table.as_deref().filter(|_| only.subquery.is_none() && !only.tab_func) else {
-            return Err("only a plain table in the FROM is matched against a unique key".into());
-        };
-        if self.key_pinned(table, only.cursor, &equated) {
+        if sel.from.is_empty() {
+            return Err("a SELECT with no FROM and a WHERE can return no row or one, and the engine proves that only through a LIMIT".into());
+        }
+        // A RIGHT or FULL JOIN keeps the rows of each side that match nothing: two rows where
+        // each side has one.
+        if sel.from.iter().any(|f| f.right) {
+            return Err("a RIGHT or FULL JOIN returns a row for each side that matches nothing".into());
+        }
+        let determined = self.determined(sel, false);
+        if determined.iter().all(|d| *d) {
             return Ok(());
         }
+        if sel.distinct {
+            let constant = self.determined(sel, true);
+            if !sel.columns.is_empty() && sel.columns.iter().all(|c| self.pinned(sel, &c.expr, &constant)) {
+                return Ok(());
+            }
+        }
+        let i = determined.iter().position(|d| !d).unwrap_or(0);
+        let f = &sel.from[i];
+        let Some(table) = f.table.as_deref().filter(|_| f.subquery.is_none() && !f.tab_func) else {
+            return Err(format!("`{}` in the FROM is a subquery or a table-valued function that returns any number of rows", f.alias.as_deref().or(f.table.as_deref()).unwrap_or("?")));
+        };
         let keys = self.tree.tables.get(table).map(|t| t.unique_keys.clone()).unwrap_or_default();
         if keys.is_empty() {
             return Err(format!("`{table}` has no unique index the engine can read, so nothing bounds the rows a WHERE matches"));
         }
         let shown: Vec<String> = keys.iter().map(|k| format!("({})", k.join(", "))).collect();
-        Err(format!("the WHERE does not equate every column of a unique key of `{table}` — it has {}", shown.join(", ")))
+        if sel.from.len() == 1 {
+            Err(format!("the WHERE does not equate every column of a unique key of `{table}` — it has {}", shown.join(", ")))
+        } else {
+            let name = f.alias.as_deref().unwrap_or(table);
+            Err(format!("a join returns a row per pair it matches, and the WHERE and ON clauses do not equate every column of a unique key of `{name}` to values or to columns of relations pinned to one row — it has {}", shown.join(", ")))
+        }
     }
 
-    /// Whether some unique key of `table` (read through `cursor`) has every column equated to a value.
-    fn key_pinned(&self, table: &str, cursor: i64, equated: &HashSet<(i64, String)>) -> bool {
+    /// Which FROM items are determined: every row carries the same row of each, or its null
+    /// extension (see `cardinality`'s `From`). A table is, when a unique key's every column is
+    /// equated to a value or to a column of a determined item; a subquery or a WITH query, when the
+    /// proof bounds it. SQLite moves every ON term into the WHERE: a term from an outer join's ON
+    /// pins only that join's right side, and with `constant`, which asks that every row carry the
+    /// same row of an item, never: some rows may meet the null extension instead.
+    fn determined(&self, sel: &Sel, constant: bool) -> Vec<bool> {
+        let n = sel.from.len();
+        let index: HashMap<i64, usize> = sel.from.iter().enumerate().map(|(i, f)| (f.cursor, i)).collect();
+        let terms = conjuncts(sel.where_.as_ref());
+        let mut done = vec![false; n];
+        loop {
+            let mut changed = false;
+            for i in 0..n {
+                if done[i] {
+                    continue;
+                }
+                let f = &sel.from[i];
+                let pinned = if let Some(sub) = &f.subquery {
+                    !(constant && f.outer) && self.at_most_one(sub).is_ok()
+                } else if let (Some(table), false, false) = (f.table.as_deref(), f.tab_func, f.virtual_) {
+                    // A WHERE term's `=` rejects the null extension, so it pins even an outer
+                    // join's right side for every row.
+                    let usable: Vec<&Node> = terms.iter().copied().filter(|t| !t.outer_on || (!constant && t.join == f.cursor)).collect();
+                    self.key_pinned(table, f.cursor, &usable, &done, &index)
+                } else {
+                    false
+                };
+                if pinned {
+                    done[i] = true;
+                    changed = true;
+                }
+            }
+            if !changed {
+                return done;
+            }
+        }
+    }
+
+    /// Whether some unique key of `table` (read through `cursor`) has every column equated by
+    /// one of `terms` to a value: one that reads no column of this FROM's undetermined items (a
+    /// column of a determined item is one value, and so is an enclosing query's), calls nothing
+    /// that changes from row to row, and carries no COLLATE.
+    fn key_pinned(&self, table: &str, cursor: i64, terms: &[&Node], done: &[bool], index: &HashMap<i64, usize>) -> bool {
         let Some(info) = self.tree.tables.get(table) else { return false };
-        info.unique_keys.iter().any(|key| !key.is_empty() && key.iter().all(|c| equated.iter().any(|(cur, name)| *cur == cursor && name.eq_ignore_ascii_case(c))))
+        let pins: Vec<&str> = terms.iter().filter_map(|t| self.pins(t, cursor, done, index)).collect();
+        info.unique_keys.iter().any(|key| !key.is_empty() && key.iter().all(|c| pins.iter().any(|p| p.eq_ignore_ascii_case(c))))
+    }
+
+    /// The column of `cursor` a term equates to a value, if it does, under a comparison that
+    /// leaves the column as it is ([`keeps_column`]) and a collation its unique index holds to:
+    /// the left operand's column's, else the right's (`sqlite3BinaryCompareCollSeq`), which must
+    /// be BINARY or the key's own.
+    fn pins<'n>(&self, t: &'n Node, cursor: i64, done: &[bool], index: &HashMap<i64, usize>) -> Option<&'n str> {
+        if t.op != "=" {
+            return None;
+        }
+        let (l, r) = (t.left.as_deref()?, t.right.as_deref()?);
+        let collation = column_of(l).or_else(|| column_of(r)).and_then(|c| c.coll.as_deref()).unwrap_or("BINARY");
+        [(l, r), (r, l)].into_iter().find_map(|(col, other)| {
+            let value = col.op == "column"
+                && col.cursor == cursor
+                && !has_op(other, "collate")
+                && keeps_column(col, other)
+                && (collation.eq_ignore_ascii_case("BINARY") || col.coll.as_deref().is_some_and(|c| c.eq_ignore_ascii_case(collation)))
+                && !self.calls_volatile(other)
+                && other.select.is_none()
+                && cursors(other).is_some_and(|read| read.iter().all(|c| *c != cursor && index.get(c).is_none_or(|i| done[*i])));
+            value.then_some(col.column.as_deref()).flatten()
+        })
+    }
+
+    /// Whether every row carries the same value of `e`: a column of a constant item, a column the
+    /// WHERE (not an outer join's ON) equates to a value, or a value itself.
+    fn pinned(&self, sel: &Sel, e: &Node, constant: &[bool]) -> bool {
+        let index: HashMap<i64, usize> = sel.from.iter().enumerate().map(|(i, f)| (f.cursor, i)).collect();
+        if e.op == "column" {
+            if index.get(&e.cursor).is_some_and(|i| constant[*i]) {
+                return true;
+            }
+            let terms = conjuncts(sel.where_.as_ref());
+            return terms.iter().filter(|t| !t.outer_on).filter_map(|t| self.pins(t, e.cursor, constant, &index)).any(|c| e.column.as_deref().is_some_and(|name| name.eq_ignore_ascii_case(c)));
+        }
+        e.select.is_none() && !self.calls_volatile(e) && cursors(e).is_some_and(|read| read.iter().all(|c| !index.contains_key(c)))
     }
 
     /// The DML form: the target table's columns have no stable cursor, so they match by name.
@@ -902,32 +1269,103 @@ impl Analyzer<'_> {
         Err(format!("the WHERE does not equate every column of a unique key of `{table}` — it has {}", shown.join(", ")))
     }
 
-    /// The columns the WHERE equates to a value: `col = <no column anywhere>` under ANDs.
+    /// The columns the WHERE equates to a value: `col = <no column anywhere>` under ANDs, where
+    /// the value calls nothing that changes from row to row.
     fn equated(&self, where_: Option<&Node>) -> HashSet<(i64, String)> {
         let mut out = HashSet::new();
-        let mut stack: Vec<&Node> = where_.into_iter().collect();
-        while let Some(n) = stack.pop() {
-            match n.op.as_str() {
-                "and" => {
-                    stack.extend(n.left.as_deref());
-                    stack.extend(n.right.as_deref());
-                }
-                "=" => {
-                    if let (Some(l), Some(r)) = (n.left.as_deref(), n.right.as_deref()) {
-                        for (col, other) in [(l, r), (r, l)] {
-                            if col.op == "column" && !reads_column(other) {
-                                if let Some(name) = &col.column {
-                                    out.insert((col.cursor, name.clone()));
-                                }
-                            }
+        for n in conjuncts(where_) {
+            if n.op != "=" || n.outer_on {
+                continue;
+            }
+            if let (Some(l), Some(r)) = (n.left.as_deref(), n.right.as_deref()) {
+                for (col, other) in [(l, r), (r, l)] {
+                    // An explicit COLLATE (NOCASE) may compare more loosely than the
+                    // unique index distinguishes.
+                    if col.op == "column" && !reads_column(other) && !has_op(other, "collate") && keeps_column(col, other) && !self.calls_volatile(other) {
+                        if let Some(name) = &col.column {
+                            out.insert((col.cursor, name.clone()));
                         }
                     }
                 }
-                _ => {}
             }
         }
         out
     }
+
+    /// Whether `n` calls a function that may give each row another value: `random()`,
+    /// `changes()`, a date or time function (`'now'` moves), or one the host registers or the
+    /// engine does not know, whose determinism it cannot tell.
+    fn calls_volatile(&self, n: &Node) -> bool {
+        const VOLATILE: &[&str] = &["random", "randomblob", "changes", "total_changes", "last_insert_rowid", "date", "time", "datetime", "julianday", "unixepoch", "strftime", "timediff"];
+        if n.op == "function" {
+            let name = n.name.as_deref().unwrap_or("").to_ascii_lowercase();
+            if VOLATILE.contains(&name.as_str()) || self.extras.function(&name, n.args.len()).is_some() || !KNOWN_FUNCTIONS.contains(&name.as_str()) {
+                return true;
+            }
+        }
+        n.left.as_deref().is_some_and(|x| self.calls_volatile(x)) || n.right.as_deref().is_some_and(|x| self.calls_volatile(x)) || n.list.iter().any(|x| self.calls_volatile(x)) || n.args.iter().any(|x| self.calls_volatile(x))
+    }
+}
+
+/// Whether comparing key column `col` with `other` leaves the column's values as they are. SQLite
+/// applies NUMERIC affinity to both sides where either side's affinity is INTEGER, REAL or NUMERIC,
+/// and one side's affinity to both where the other has none, so a TEXT key compared with a number
+/// reads '01' and '1' as 1, and a key of no affinity compared with a TEXT side reads 7 as '7'. A
+/// numeric key converts nothing it holds: what stays text there is no number.
+fn keeps_column(col: &Node, other: &Node) -> bool {
+    let numeric = |a: &str| matches!(a, "integer" | "real" | "numeric");
+    let none = |a: &str| matches!(a, "blob" | "none");
+    numeric(&col.aff) || none(&other.aff) || (col.aff == "text" && other.aff == "text")
+}
+
+/// The column an operand reads through casts and unary plus, as SQLite looks for the collation.
+fn column_of(n: &Node) -> Option<&Node> {
+    match n.op.as_str() {
+        "column" => Some(n),
+        "cast" | "pos" => n.left.as_deref().and_then(column_of),
+        _ => None,
+    }
+}
+
+/// SQLite's built-in scalar functions the engine's table reads, by name.
+const KNOWN_FUNCTIONS: &[&str] = &[
+    "coalesce", "ifnull", "nullif", "iif", "if", "min", "max", "abs", "round", "length", "instr", "unicode", "json_array_length", "json_valid", "octet_length", "sign",
+    "like", "glob", "regexp", "match", "likely", "unlikely", "likelihood", "upper", "lower", "trim", "ltrim", "rtrim", "substr", "substring", "replace", "char",
+    "printf", "format", "concat", "concat_ws", "json", "jsonb", "json_array", "json_object", "json_insert", "json_replace", "json_set", "json_remove", "json_patch",
+    "json_quote", "json_pretty", "json_type", "hex", "quote", "typeof", "zeroblob", "json_extract", "jsonb_extract", "->", "->>", "acos", "acosh", "asin", "asinh",
+    "atan", "atan2", "atanh", "ceil", "ceiling", "cos", "cosh", "degrees", "exp", "floor", "ln", "log", "log10", "log2", "mod", "pow", "power", "radians", "sin",
+    "sinh", "sqrt", "tan", "tanh", "trunc", "pi",
+];
+
+/// The terms of a condition's top-level `AND`.
+fn conjuncts(n: Option<&Node>) -> Vec<&Node> {
+    let mut out = Vec::new();
+    let mut stack: Vec<&Node> = n.into_iter().collect();
+    while let Some(n) = stack.pop() {
+        if n.op == "and" {
+            stack.extend(n.left.as_deref());
+            stack.extend(n.right.as_deref());
+        } else {
+            out.push(n);
+        }
+    }
+    out
+}
+
+/// The cursors an expression reads, or `None` when it holds a subquery, whose reads the walk
+/// does not place.
+fn cursors(n: &Node) -> Option<Vec<i64>> {
+    if n.select.is_some() {
+        return None;
+    }
+    let mut out = Vec::new();
+    if n.op == "column" {
+        out.push(n.cursor);
+    }
+    for child in n.left.iter().chain(n.right.iter()).map(|b| b.as_ref()).chain(n.list.iter()).chain(n.args.iter()) {
+        out.extend(cursors(child)?);
+    }
+    Some(out)
 }
 
 /// The type of `a op b` for `+`, `-`, `*`, `/`, `%`: integer stays integer, anything else is real.
@@ -936,6 +1374,11 @@ fn arithmetic(l: &Type, r: &Type) -> Type {
         (Some("integer"), Some("integer")) => Type::Scalar { name: "integer".into() },
         _ => Type::Scalar { name: "real".into() },
     }
+}
+
+/// Whether a node of this operator sits anywhere in `n`.
+fn has_op(n: &Node, op: &str) -> bool {
+    n.op == op || n.left.as_deref().is_some_and(|x| has_op(x, op)) || n.right.as_deref().is_some_and(|x| has_op(x, op)) || n.list.iter().any(|x| has_op(x, op)) || n.args.iter().any(|x| has_op(x, op))
 }
 
 fn has_aggregate(n: &Node) -> bool {
@@ -951,6 +1394,22 @@ fn reads_column(n: &Node) -> bool {
         return true;
     }
     n.left.as_deref().is_some_and(reads_column) || n.right.as_deref().is_some_and(reads_column) || n.list.iter().any(reads_column) || n.args.iter().any(reads_column) || n.select.is_some()
+}
+
+/// The type the context an expression stands in gives its operand, when it gives one.
+fn outer_type(ctx: &Ctx) -> Ctx {
+    match ctx {
+        Ctx::Typed(Some(f)) => Ctx::Typed(Some(f.clone())),
+        _ => Ctx::None,
+    }
+}
+
+/// The argument position of a slot (0 for any other slot).
+fn i_of(slot: Slot) -> usize {
+    match slot {
+        Slot::Arg(i) => i,
+        _ => 0,
+    }
 }
 
 /// SQLite's five affinity rules over a declared type.
@@ -970,12 +1429,14 @@ pub fn affinity(declared: &str) -> &'static str {
 }
 
 /// A parameter's context while walking.
+#[derive(Clone)]
 enum Ctx {
     Typed(Option<Fact>),
     Bool,
     None,
 }
 
+#[derive(Clone, Copy)]
 enum Slot {
     Left,
     Right,
@@ -1006,6 +1467,163 @@ mod tests {
     fn param(a: &Analysis, name: &str) -> String {
         let p = a.params.iter().find(|p| p.name == name).unwrap_or_else(|| panic!("no param {name}"));
         scalar_name(&p.ty).unwrap_or("unknown").to_string()
+    }
+
+    #[test]
+    fn the_postgres_nullability_rules_hold_on_sqlite() {
+        let nullable_param = |sql: &str, name: &str| analysis(sql).params.iter().find(|p| p.name == name).is_some_and(|p| p.nullable);
+        // A parameter the statement tests for NULL or coalesces takes NULL; any other is a value.
+        assert!(nullable_param("select id from users where (:p is null or score > :p)", "p"));
+        assert!(nullable_param("select coalesce(:s, 0) as x", "s"));
+        assert!(!nullable_param("select id from users where score > :p", "p"));
+        assert_eq!(col(&analysis("select upper(:s) as u"), "u"), ("text".into(), false));
+        // A strict WHERE narrows the column it tests, and reduces the outer join of its item.
+        assert_eq!(col(&analysis("select email from users where email is not null"), "email"), ("text".into(), false));
+        assert_eq!(col(&analysis("select email from users where lower(email) = :e or email like 'a%'"), "email").1, false);
+        assert_eq!(col(&analysis("select email from users where email like 'a%' or id = 1"), "email").1, true);
+        assert_eq!(col(&analysis("select email from users where lower(email) = :e and email like 'a%'"), "email").1, false);
+        let reduced = analysis("select p.title, u.name from posts p left join users u on u.id = p.user_id where u.email = :e");
+        assert_eq!(col(&reduced, "name"), ("text".into(), false));
+        assert_eq!(col(&analysis("select p.title, u.name from posts p left join users u on u.id = p.user_id"), "name"), ("text".into(), true));
+        // An ON term is not a WHERE test: the posts that meet no user still have NULL there.
+        assert_eq!(col(&analysis("select p.title, u.name from posts p left join users u on u.id = p.user_id and u.email = :e"), "name"), ("text".into(), true));
+        // Under a plain GROUP BY no group is empty.
+        let grouped = analysis("select user_id, max(title) as t, min(id) as m, group_concat(title) as g from posts group by user_id");
+        assert_eq!((col(&grouped, "t").1, col(&grouped, "m").1, col(&grouped, "g").1), (false, false, false));
+        assert!(col(&analysis("select max(title) as t from posts"), "t").1);
+        // `concat` skips NULLs; `concat_ws` is NULL only for a NULL separator.
+        let concat = analysis("select concat(email, 'x') as c, concat_ws(',', email) as w, concat_ws(email, 'a') as n from users");
+        assert_eq!((col(&concat, "c").1, col(&concat, "w").1, col(&concat, "n").1), (false, false, true));
+    }
+
+    #[test]
+    fn a_parameter_takes_the_type_its_call_case_or_compound_stands_in() {
+        assert_eq!(param(&analysis("select id from users where name = coalesce(:a, :b)"), "a"), "text");
+        assert_eq!(param(&analysis("select id from users where name = coalesce(:a, :b)"), "b"), "text");
+        assert_eq!(param(&analysis("select id from users where name = case when id > 1 then :a else :b end"), "a"), "text");
+        assert_eq!(param(&analysis("select id from users where name = iif(id > 1, :a, 'x')"), "a"), "text");
+        assert_eq!(param(&analysis("select case :kind when 'a' then 1 else 2 end as k from users"), "kind"), "text");
+        assert_eq!(param(&analysis("select name from users union all select :x"), "x"), "text");
+        assert_eq!(param(&analysis("select :x union all select name from users"), "x"), "text");
+        // A call whose result is not an argument's gives none of its own context.
+        assert_eq!(param(&analysis("select id from users where name = printf(:f, 1)"), "f"), "text");
+        assert_eq!(param(&analysis("select :x as v"), "x"), "unknown");
+    }
+
+    #[test]
+    fn joins_grouping_distinct_and_set_operations_prove_rows_as_on_postgres() {
+        let rows = |sql: &str| analysis(sql).cardinality;
+        for sql in [
+            "select p.title, u.name from posts p join users u on u.id = p.user_id where p.id = :id",
+            "select p.title, u.name from posts p left join users u on u.id = p.user_id where p.id = :id",
+            "select p.title, u.name from posts p, users u where u.id = p.user_id and p.id = :id",
+            "select a.name from users a join users b on b.id = a.id where a.id = :id",
+            "select s.name from (select * from users where id = :id) s",
+            "select user_id, count(*) as n from posts where user_id = :u group by user_id",
+            "select distinct user_id from posts where user_id = :u",
+            "select id from users where id = :id intersect select user_id from posts",
+            "select id from users where id = :id except select user_id from posts",
+        ] {
+            assert_eq!(rows(sql), "maybeOne", "{sql}");
+        }
+        for sql in [
+            // Many posts per user.
+            "select p.title from posts p join users u on u.id = p.user_id where u.id = :id",
+            "select title, count(*) as n from posts where user_id = :u group by title",
+            "select user_id from posts except select id from users where id = :id",
+            // A FULL JOIN keeps each side's unmatched rows.
+            "select p.title, u.name from posts p full join users u on u.id = p.user_id where p.id = :id",
+            // A volatile value is evaluated for each row.
+            "select name from users where id = abs(random()) % 3",
+            "delete from users where id = abs(random()) % 3 returning id",
+        ] {
+            assert_eq!(rows(sql), "many", "{sql}");
+        }
+    }
+
+    #[test]
+    fn an_outer_joins_on_term_pins_its_right_side_but_groups_nothing() {
+        // SQLite moves the ON terms into the WHERE: `u.id = :id` restricts which user a post
+        // meets, and the posts that meet none have NULL there, a second group.
+        assert_eq!(analysis("select u.name, count(*) as n from posts p left join users u on u.id = :id and u.id = p.user_id group by u.name").cardinality, "many");
+        assert_eq!(analysis("select u.name, count(*) as n from posts p left join users u on u.id = p.user_id where u.id = :id group by u.name").cardinality, "maybeOne");
+        // The ON term still pins the right side against a pinned left one.
+        assert_eq!(analysis("select p.title, u.name from posts p left join users u on u.id = :u where p.id = :id").cardinality, "maybeOne");
+    }
+
+    #[test]
+    fn an_insert_returns_no_row_where_something_can_skip_it() {
+        let count = |sql: &str, extra: &[&str]| {
+            let mut schema = ddl();
+            schema.extend(extra.iter().map(|s| s.to_string()));
+            analyze_ddl(sql, &schema, &Extras::default()).analysis.cardinality
+        };
+        let insert = "insert into users (name) values (:n) returning id";
+        assert_eq!(count(insert, &[]), "one");
+        // A BEFORE trigger's RAISE(IGNORE) skips the row; an AFTER trigger cannot.
+        assert_eq!(count(insert, &["create trigger skip before insert on users begin select raise(ignore) where new.name = 'x'; end"]), "maybeOne");
+        assert_eq!(count(insert, &["create trigger untimed insert on users begin select 1; end"]), "maybeOne", "BEFORE is the default");
+        assert_eq!(count(insert, &["create trigger later after insert on users begin select 1; end"]), "one");
+        // `DO UPDATE … WHERE` leaves a conflicting row alone and returns nothing for it.
+        assert_eq!(count("insert into users (id, name) values (:id, :n) on conflict (id) do update set name = excluded.name where users.score > 1 returning id", &[]), "maybeOne");
+        assert_eq!(count("insert into users (id, name) values (:id, :n) on conflict (id) do update set name = excluded.name returning id", &[]), "one");
+    }
+
+    #[test]
+    fn a_unique_key_bounds_only_a_comparison_under_its_own_collation() {
+        let count = |sql: &str| {
+            let mut schema = ddl();
+            schema.push("create table c (id integer primary key, e text collate nocase, b text unique)".into());
+            schema.push("create unique index c_e on c (e collate binary)".into());
+            analyze_ddl(sql, &schema, &Extras::default()).analysis.cardinality
+        };
+        // `e` compares under NOCASE, and its unique index tells 'A' from 'a'.
+        assert_eq!(count("select id from c where e = :e"), "many");
+        assert_eq!(count("select id from c where b = :b"), "maybeOne");
+        assert_eq!(count("select id from c where b = :b collate nocase"), "many");
+        assert_eq!(count("select e from c where id = :id"), "maybeOne");
+    }
+
+    #[test]
+    fn a_key_holds_only_where_the_comparison_leaves_the_column_as_it_is() {
+        let count = |sql: &str| {
+            let mut schema = ddl();
+            schema.push("create table t (id integer primary key, code text unique)".into());
+            schema.push("create table b (id integer primary key, n integer, nc text collate nocase)".into());
+            schema.push("create table a (id integer primary key, k unique, kt text unique)".into());
+            schema.push("create table rt (rowid integer, v text)".into());
+            analyze_ddl(sql, &schema, &Extras::default()).analysis.cardinality
+        };
+        // A side of INTEGER affinity applies NUMERIC affinity to a TEXT or untyped key: '01' and
+        // '1' compare equal to 1, and so do 7 and '7'.
+        assert_eq!(count("select id from t where code = cast(:c as integer)"), "many");
+        assert_eq!(count("select a.id from b join a on a.k = b.n where b.id = 1"), "many");
+        assert_eq!(count("update t set id = id where code = cast(:c as integer) returning id"), "many");
+        assert_eq!(count("select id from t where code = :c"), "maybeOne");
+        assert_eq!(count("select a.id from b join a on a.kt = b.nc where b.id = 1"), "maybeOne");
+        // A column on the left decides the collation: NOCASE meets 'x' and 'X'.
+        assert_eq!(count("select a.id from b join a on b.nc = a.kt where b.id = 1"), "many");
+        // A declared column named rowid hides the rowid; `_rowid_` still reads it.
+        assert_eq!(count("select v from rt where rowid = :r"), "many");
+        assert_eq!(count("select v from rt where _rowid_ = :r"), "maybeOne");
+    }
+
+    #[test]
+    fn a_function_the_host_registers_over_a_built_in_proves_nothing_strict() {
+        let lower = Extras { total: vec![TotalFunction { name: "lower".into(), arity: 1, returns: oid::TEXT }] };
+        let nullable = |extras: &Extras| col(&analyze_ddl("select email from users where lower(email) = :e", &ddl(), extras).analysis, "email").1;
+        assert!(!nullable(&Extras::default()));
+        assert!(nullable(&lower));
+    }
+
+    #[test]
+    fn unary_plus_is_its_operand() {
+        // `+name` returns the text itself, and SQLite writes a one-element `x IN (e)` as `x = +e`.
+        let a = analysis("select +name as p, -score as m from users where name in (:n) and id in (:i)");
+        assert_eq!(col(&a, "p"), ("text".into(), false));
+        assert_eq!(col(&a, "m"), ("real".into(), true));
+        assert_eq!(param(&a, "n"), "text");
+        assert_eq!(param(&a, "i"), "integer");
     }
 
     #[test]
@@ -1104,9 +1722,10 @@ mod tests {
         let r = analyze_ddl("SELECT t.a, t.b, s.x, s.y FROM t, s WHERE t.a = :a AND s.x = :x", &ddl, &Extras::default());
         let a = &r.analysis;
         assert!(a.diagnostics.is_empty(), "{:?}", a.diagnostics);
-        assert_eq!(col(a, "a"), ("unknown".into(), true));
+        // `t.a = :a` and `s.x = :x` keep NULL out of the rows they return.
+        assert_eq!(col(a, "a"), ("unknown".into(), false));
         assert_eq!(col(a, "b"), ("text".into(), true));
-        assert_eq!(col(a, "x"), ("unknown".into(), true));
+        assert_eq!(col(a, "x"), ("unknown".into(), false));
         assert_eq!(col(a, "y"), ("integer".into(), true));
         assert_eq!((param(a, "a"), param(a, "x")), ("unknown".into(), "unknown".into()));
         // In a table that is not STRICT, `ANY` is a declared type with NUMERIC affinity, not a wildcard.
@@ -1186,7 +1805,8 @@ mod tests {
         assert!(a.diagnostics.is_empty(), "{:?}", a.diagnostics);
         assert_eq!(col(a, "h"), ("text".into(), false));
         assert_eq!(col(a, "e"), ("text".into(), true));
-        assert_eq!(col(a, "q"), ("text".into(), true));
+        // The parameter is a non-null value, so the call over it is too.
+        assert_eq!(col(a, "q"), ("text".into(), false));
         assert_eq!(r.declared, [None, None, None]);
         // The same call without the registration, and with the wrong argument count: SQLite's own
         // message, at the call.

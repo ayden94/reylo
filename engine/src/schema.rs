@@ -57,7 +57,10 @@ impl Type {
         match self {
             Type::Scalar { name } => scalar(name, opts),
             Type::Enum { labels, .. } => json!({"type": "string", "enum": labels}),
-            Type::Array { of } => json!({"type": "array", "items": of.json_schema(opts)}),
+            Type::Array { of, nullable_items } => {
+                let items = of.json_schema(opts);
+                json!({"type": "array", "items": if *nullable_items == Some(true) { nullable(items) } else { items }})
+            }
             // A composite's columns stand where the row does, and a column the catalog does not
             // mark `NOT NULL` is always spelled as an `anyOf` with null.
             Type::Composite { fields, .. } => object(fields, |f| {
@@ -191,10 +194,13 @@ mod tests {
     fn enums_arrays_json_and_unknown() {
         let mood = Type::Enum { name: "mood".into(), labels: vec!["ok".into(), "sad".into()] };
         assert_eq!(mood.json_schema(WIRE), json!({"type": "string", "enum": ["ok", "sad"]}));
-        assert_eq!(Type::Array { of: Box::new(s("int4")) }.json_schema(WIRE), json!({"type": "array", "items": {"type": "integer", "format": "int32"}}));
+        assert_eq!(Type::Array { of: Box::new(s("int4")), nullable_items: None }.json_schema(WIRE), json!({"type": "array", "items": {"type": "integer", "format": "int32"}}));
         // An array's element stands where the array does.
-        assert_eq!(Type::Array { of: Box::new(s("int8")) }.json_schema(IN_JSON)["items"], json!({"type": "integer", "format": "int64"}));
-        assert_eq!(Type::Array { of: Box::new(s("int8")) }.json_schema(WIRE)["items"], json!({"type": "string", "format": "int64"}));
+        assert_eq!(Type::Array { of: Box::new(s("int8")), nullable_items: None }.json_schema(IN_JSON)["items"], json!({"type": "integer", "format": "int64"}));
+        assert_eq!(Type::Array { of: Box::new(s("int8")), nullable_items: None }.json_schema(WIRE)["items"], json!({"type": "string", "format": "int64"}));
+        // Elements are nullable only where the statement builds the array from a value that may be NULL.
+        assert_eq!(Type::Array { of: Box::new(s("text")), nullable_items: Some(true) }.json_schema(WIRE), json!({"type": "array", "items": {"type": ["string", "null"]}}));
+        assert_eq!(Type::Array { of: Box::new(s("text")), nullable_items: Some(false) }.json_schema(WIRE), json!({"type": "array", "items": {"type": "string"}}));
         assert_eq!(Type::Json.json_schema(WIRE), json!({}));
         assert_eq!(Type::Unknown.json_schema(IN_JSON), json!({}));
     }
@@ -216,7 +222,7 @@ mod tests {
         );
         assert_eq!(users.json_schema(IN_JSON)["properties"]["id"], json!({"type": "integer", "format": "int64"}));
         assert_eq!(users.json_schema(INT8N)["properties"]["id"], json!({"type": "integer", "format": "int64"}));
-        let many = Type::Array { of: Box::new(users.clone()) };
+        let many = Type::Array { of: Box::new(users.clone()), nullable_items: None };
         assert_eq!(many.json_schema(WIRE), json!({"type": "array", "items": users.json_schema(WIRE)}));
     }
 

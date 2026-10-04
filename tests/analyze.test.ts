@@ -1,11 +1,20 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Session } from "../src/analyze.ts";
 import { sqlModule } from "../src/loader.ts";
+
+// A throwaway Postgres server for the tests that need one, never a database anyone uses: each such
+// test makes a database of its own there and drops it after. The driver is the labs', never the
+// package's own.
+const PG = process.env.DOTSQL_TEST_PG;
+const DRIVERS = fileURLToPath(new URL("../lab/drivers/node_modules", import.meta.url));
+const live = !PG ? "DOTSQL_TEST_PG names no server" : !existsSync(join(DRIVERS, "postgres")) ? "lab/drivers is not installed" : false;
 
 // A SQLite project: a package, its database, and DATABASE_URL naming it.
 function project(): { root: string; env: Record<string, string> } {
@@ -97,5 +106,59 @@ test("the module a build step emits carries the analysis and reads nothing at ru
     await assert.rejects(sqlModule(file, "select name from users"), /user\.sql: Cannot open the database .*run dotsql generate/);
   } finally {
     for (const session of Session.opened()) await session.close();
+  }
+});
+
+test("the Postgres fingerprint runs on the server, holds while nothing changes, and moves with each catalog the analysis reads", { skip: live }, async () => {
+  const postgres = createRequire(join(DRIVERS, "postgres", "package.json"))("postgres");
+  const admin = postgres(PG, { max: 1, onnotice: () => {} });
+  const name = `dotsql_fingerprint_${process.pid}`;
+  await admin.unsafe(`drop database if exists ${name}`);
+  await admin.unsafe(`create database ${name}`);
+  const url = new URL(PG!);
+  url.pathname = `/${name}`;
+  const db = postgres(url.href, { max: 1, onnotice: () => {} });
+  const root = mkdtempSync(join(tmpdir(), "dotsql-fingerprint-"));
+  writeFileSync(join(root, "package.json"), "{}");
+  mkdirSync(join(root, "node_modules"));
+  symlinkSync(join(DRIVERS, "postgres"), join(root, "node_modules", "postgres"));
+  // A session per call, as a process of its own, so that none answers from a fingerprint it took.
+  const fingerprint = async () => {
+    const session = await Session.open(root, { DATABASE_URL: url.href });
+    try {
+      return (await session.schema()).value;
+    } finally {
+      await session.close();
+    }
+  };
+  try {
+    await db.unsafe(`create table a (x int, s text); create table b (x int, s text);
+      create function skip() returns trigger language plpgsql as 'begin return null; end'`);
+    // A query the server refuses gives "unverified <pid> <time>", a value no entry ever matches.
+    const first = await fingerprint();
+    assert.match(first ?? "", /^[0-9a-f]{16}$/);
+    assert.equal(await fingerprint(), first);
+    // Each change touches only a catalog the row count or the trust check reads: rows of b are read
+    // by a scan of a, a BEFORE ROW trigger can skip an INSERT's row and a rule can replace it, a
+    // key holds only under the index's collation, and a user's operator is not the built-in one.
+    let last = first;
+    for (const change of [
+      "alter table b inherit a",
+      "create trigger skip before insert on a for each row execute function skip()",
+      "alter table a disable trigger skip",
+      "create rule nothing as on insert to b do instead nothing",
+      `alter table a alter column s type text collate "C"`,
+      "create operator === (leftarg = int, rightarg = int, function = int4eq)",
+    ]) {
+      await db.unsafe(change);
+      const next = await fingerprint();
+      assert.notEqual(next, last, change);
+      assert.equal(await fingerprint(), next, change);
+      last = next;
+    }
+  } finally {
+    await db.end();
+    await admin.unsafe(`drop database if exists ${name}`);
+    await admin.end();
   }
 });

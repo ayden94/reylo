@@ -9,6 +9,15 @@ pub struct DescribedColumn {
     pub type_oid: u32,
     pub type_name: String,
     pub nullable: bool,
+    /// For an array column the statement builds (`ARRAY[a, b]`, `array_agg(x)`, an array
+    /// literal), whether an element may be NULL; `None` for every other column, a table's array
+    /// column and a function's array result among them ([`Type::Array`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nullable_items: Option<bool>,
+    /// For a bare read of a string column a CHECK keeps to a list (`status IN ('active',
+    /// 'banned')`), those strings: its values are a union of literals, as an enum's labels are.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub values: Option<Vec<String>>,
 }
 
 /// One described statement.
@@ -29,8 +38,17 @@ pub enum Type {
     Scalar { name: String },
     /// An enum: a union of its labels.
     Enum { name: String, labels: Vec<String> },
-    /// A Postgres array of the element type.
-    Array { of: Box<Type> },
+    /// A Postgres array of the element type. Any array may hold NULL elements, whatever a
+    /// column's `NOT NULL`, yet an array is typed `T[]` all the same, as the maintainer decided on
+    /// 2026-10-03 (`docs/driver-decoding.md`). Only an array the statement builds says more
+    /// ([`DescribedColumn::nullable_items`]): `Some(true)` when an element may be NULL, as
+    /// `array_agg(u.email)` over a LEFT JOIN gives `{NULL}` for a team with no users, which
+    /// renders `(T | null)[]`; `Some(false)` when every element is proven non-null.
+    Array {
+        of: Box<Type>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        nullable_items: Option<bool>,
+    },
     /// `json[b]_build_object(…)`: the keys in the order the SQL writes them.
     Object { fields: Vec<Field> },
     /// A named composite (a table's row type, a `CREATE TYPE … AS (…)`) whose columns the

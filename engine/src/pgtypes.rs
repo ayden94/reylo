@@ -8,6 +8,8 @@ use std::collections::HashMap;
 
 pub mod oid {
     pub const BOOL: u32 = 16;
+    pub const BYTEA: u32 = 17;
+    pub const NAME: u32 = 19;
     pub const INT8: u32 = 20;
     pub const INT2: u32 = 21;
     pub const INT4: u32 = 23;
@@ -16,7 +18,14 @@ pub mod oid {
     pub const UUID: u32 = 2950;
     pub const FLOAT4: u32 = 700;
     pub const FLOAT8: u32 = 701;
+    pub const BPCHAR: u32 = 1042;
     pub const VARCHAR: u32 = 1043;
+    pub const DATE: u32 = 1082;
+    pub const TIME: u32 = 1083;
+    pub const TIMESTAMP: u32 = 1114;
+    pub const TIMESTAMPTZ: u32 = 1184;
+    pub const INTERVAL: u32 = 1186;
+    pub const NUMERIC: u32 = 1700;
     pub const UNKNOWN: u32 = 705;
     pub const JSONB: u32 = 3802;
 }
@@ -61,18 +70,40 @@ pub struct TypeRegistry {
     pub types: HashMap<u32, PgType>,
 }
 
+/// Whether every row a scan of relation `$rel` reads has a value in the column named `$col`, as
+/// the planner reads it: the column's `NOT NULL` is valid, and so is the same column's in every
+/// inheritance descendant. `pg_attribute.attnotnull` alone says neither. PostgreSQL 18 sets it for
+/// a constraint added `NOT VALID`, which leaves the rows already there unchecked ("a (possibly
+/// invalid) not-null constraint"), and a parent's flag says nothing of a child that allows NULL
+/// (`ALTER TABLE ONLY parent ALTER COLUMN x SET NOT NULL`), whose rows a scan of the parent reads
+/// and RowDescription reports as the parent's. Before 18 no not-null row is in `pg_constraint`, so
+/// the validity test passes there by itself. A partitioned table's partitions hold its `NOT NULL`,
+/// except a foreign one: the server enforces no constraint on a foreign table's rows, so neither
+/// a foreign table nor a relation a scan of which reads one holds it.
+macro_rules! not_null_rows {
+    ($rel:literal, $col:literal) => {
+        concat!(
+            "NOT EXISTS (WITH RECURSIVE tree(rel) AS (SELECT ", $rel, " UNION SELECT i.inhrelid FROM tree t JOIN pg_inherits i ON i.inhparent = t.rel) \
+    SELECT 1 FROM tree t JOIN pg_attribute d ON d.attrelid = t.rel AND d.attname = ", $col, " AND NOT d.attisdropped \
+    WHERE NOT d.attnotnull OR EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conrelid = d.attrelid AND k.contype = 'n' AND k.conkey[1] = d.attnum AND NOT k.convalidated) \
+      OR EXISTS (SELECT 1 FROM pg_class f WHERE f.oid = t.rel AND f.relkind = 'f'))"
+        )
+    };
+}
+pub(crate) use not_null_rows;
+
 /// The columns of one `pg_type` row `t` as [`TypeRegistry::insert_rows`] reads them: the oid, the
 /// name, `typtype`, the element and base types, an enum's labels, the name a cast spells, and a
 /// composite's columns from `pg_attribute` as three arrays in attribute order (names, type oids,
 /// `NOT NULL`), so a whole-row value has its fields in the same round as its type.
 macro_rules! type_columns {
     () => {
-        "t.oid::int8, t.typname::text, t.typtype::text, t.typelem::int8, t.typbasetype::int8, \
+        concat!("t.oid::int8, t.typname::text, t.typtype::text, t.typelem::int8, t.typbasetype::int8, \
     CASE WHEN t.typtype = 'e' THEN (SELECT array_agg(e.enumlabel::text ORDER BY e.enumsortorder) FROM pg_enum e WHERE e.enumtypid = t.oid) END, \
     pg_catalog.format_type(t.oid, NULL), \
     CASE WHEN t.typtype = 'c' THEN (SELECT array_agg(a.attname::text ORDER BY a.attnum) FROM pg_attribute a WHERE a.attrelid = t.typrelid AND a.attnum > 0 AND NOT a.attisdropped) END, \
     CASE WHEN t.typtype = 'c' THEN (SELECT array_agg(a.atttypid::int8 ORDER BY a.attnum) FROM pg_attribute a WHERE a.attrelid = t.typrelid AND a.attnum > 0 AND NOT a.attisdropped) END, \
-    CASE WHEN t.typtype = 'c' THEN (SELECT array_agg(a.attnotnull ORDER BY a.attnum) FROM pg_attribute a WHERE a.attrelid = t.typrelid AND a.attnum > 0 AND NOT a.attisdropped) END"
+    CASE WHEN t.typtype = 'c' THEN (SELECT array_agg(a.attnotnull AND ", not_null_rows!("t.typrelid", "a.attname"), " ORDER BY a.attnum) FROM pg_attribute a WHERE a.attrelid = t.typrelid AND a.attnum > 0 AND NOT a.attisdropped) END")
     };
 }
 
@@ -312,7 +343,7 @@ impl TypeRegistry {
         for _ in 0..8 {
             let Some(t) = self.get(cur) else { return Type::Unknown };
             match (t.kind, t.elem, t.base) {
-                (TypeKind::Array, Some(e), _) => return Type::Array { of: Box::new(self.render_at(e, depth + 1)) },
+                (TypeKind::Array, Some(e), _) => return Type::Array { of: Box::new(self.render_at(e, depth + 1)), nullable_items: None },
                 (TypeKind::Domain, _, Some(b)) => cur = b,
                 (TypeKind::Enum, _, _) => return Type::Enum { name: t.name.clone(), labels: t.labels.clone() },
                 (TypeKind::Composite, _, _) if !t.fields.is_empty() => {
@@ -360,7 +391,7 @@ mod tests {
                 fields: vec![
                     Field { name: "id".into(), ty: Type::Scalar { name: "int8".into() }, nullable: false },
                     Field { name: "name".into(), ty: Type::Scalar { name: "text".into() }, nullable: true },
-                    Field { name: "tags".into(), ty: Type::Array { of: Box::new(Type::Scalar { name: "text".into() }) }, nullable: true },
+                    Field { name: "tags".into(), ty: Type::Array { of: Box::new(Type::Scalar { name: "text".into() }), nullable_items: None }, nullable: true },
                 ],
             };
             assert_eq!(registry.render(90001), users);
@@ -400,7 +431,7 @@ mod tests {
         assert!(out.is_empty());
         let Type::Composite { fields, .. } = registry.render(90001) else { panic!("a composite") };
         assert_eq!(fields[0].ty, Type::Scalar { name: "int8".into() });
-        assert_eq!(fields[1].ty, Type::Array { of: Box::new(Type::Enum { name: "mood".into(), labels: vec!["ok".into(), "sad".into()] }) });
+        assert_eq!(fields[1].ty, Type::Array { of: Box::new(Type::Enum { name: "mood".into(), labels: vec!["ok".into(), "sad".into()] }), nullable_items: None });
     }
 
     #[test]

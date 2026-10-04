@@ -11,15 +11,18 @@ use crate::dialect::Dialect;
 use crate::host::{as_str, Host, Lazy};
 use crate::lex::{self, Lexed, Target};
 use crate::types::{Field, Type};
-use serde_json::json;
+use serde_json::{json, Value};
 use sqlparser::ast::{self, Expr, GroupByExpr, LimitClause, Query, Select, SelectItem, SetExpr, Statement, TableFactor};
 use sqlparser::dialect::MySqlDialect;
 use sqlparser::parser::Parser;
 use std::collections::{HashMap, HashSet};
 
-/// One row per column of every unique index of the named tables, in key order. `?` is the
-/// comma-joined table names, because MySQL binds no arrays.
-const UNIQUE_KEYS_QUERY: &str = "select table_name, index_name, column_name from information_schema.statistics where table_schema = database() and non_unique = 0 and find_in_set(table_name, ?) order by table_name, index_name, seq_in_index";
+/// One row per column of every unique index of the named tables, in key order, with the column's
+/// type. `?` is the comma-joined table names, because MySQL binds no arrays. A key part over an
+/// expression (MySQL 8.0.13's functional indexes) has no column name.
+const UNIQUE_KEYS_QUERY: &str = "select s.table_name, s.index_name, s.column_name, c.data_type from information_schema.statistics s \
+    left join information_schema.columns c on c.table_schema = s.table_schema and c.table_name = s.table_name and c.column_name = s.column_name \
+    where s.table_schema = database() and s.non_unique = 0 and find_in_set(s.table_name, ?) order by s.table_name, s.index_name, s.seq_in_index";
 
 /// The statements the MySQL analysis types. A server prepares DDL too, so a migration would
 /// otherwise come back typed as a statement that returns no rows.
@@ -133,7 +136,7 @@ pub fn analyze(sql: &str, lexed: &Lexed, host: &Host) -> Lazy<Analysis> {
     let (cardinality, reason) = match &parsed {
         Some(Statement::Query(q)) => {
             let tables = tables_of(q);
-            let keys = if tables.is_empty() { HashMap::new() } else { unique_keys(host, &tables)? };
+            let keys = if tables.is_empty() { Keys::default() } else { unique_keys(host, &tables)? };
             cardinality(q, &keys)
         }
         Some(Statement::Insert(_)) | Some(Statement::Update(_)) | Some(Statement::Delete(_)) => ("none".to_string(), None),
@@ -218,25 +221,64 @@ fn resolve(shape: &Shape, outcomes: &[Option<MysqlDescribe>], booleans: &[(usize
 
 // ---- the row count ------------------------------------------------------------------------------
 
-type Keys = HashMap<String, Vec<Vec<String>>>;
+/// The unique keys of the tables a statement reads.
+#[derive(Debug, Default)]
+struct Keys {
+    /// Per table, the column lists of its unique keys.
+    of: HashMap<String, Vec<Vec<String>>>,
+    /// Per table, what each key column's type compares as.
+    class: HashMap<String, HashMap<String, Class>>,
+}
+
+/// What a value compares as. MySQL compares a string with a number as two doubles, so `'01'`,
+/// `'1'` and `'1x'` all equal `1`, and a key holds only where both sides are of one class.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Class {
+    Text,
+    Number,
+    /// A date or time, which a constant is converted to, or anything else.
+    Other,
+}
 
 fn unique_keys(host: &Host, tables: &[String]) -> Lazy<Keys> {
     let rows = host.query(UNIQUE_KEYS_QUERY, vec![json!(tables.join(","))], Scope::Statement)?;
-    let mut keys: Keys = HashMap::new();
-    if let Ok(rows) = rows {
-        let mut by_index: Vec<(String, String, Vec<String>)> = Vec::new();
-        for row in rows {
-            let (Some(table), Some(index), Some(column)) = (row.first().and_then(as_str), row.get(1).and_then(as_str), row.get(2).and_then(as_str)) else { continue };
-            match by_index.last_mut() {
-                Some((t, i, cols)) if t.eq_ignore_ascii_case(table) && i.eq_ignore_ascii_case(index) => cols.push(column.to_ascii_lowercase()),
-                _ => by_index.push((table.to_string(), index.to_string(), vec![column.to_ascii_lowercase()])),
-            }
+    Some(keys_of(rows.unwrap_or_default()))
+}
+
+/// The keys in [`UNIQUE_KEYS_QUERY`]'s rows. An index with a key part over an expression is no
+/// key of its columns alone, and is left out whole.
+fn keys_of(rows: Vec<Vec<Value>>) -> Keys {
+    let mut keys = Keys::default();
+    let mut by_index: Vec<(String, String, Option<Vec<String>>)> = Vec::new();
+    for row in rows {
+        let (Some(table), Some(index)) = (row.first().and_then(as_str), row.get(1).and_then(as_str)) else { continue };
+        let column = row.get(2).and_then(as_str).map(str::to_ascii_lowercase);
+        if let (Some(column), Some(ty)) = (&column, row.get(3).and_then(as_str)) {
+            keys.class.entry(table.to_ascii_lowercase()).or_default().insert(column.clone(), class_of(ty));
         }
-        for (table, _, cols) in by_index {
-            keys.entry(table.to_ascii_lowercase()).or_default().push(cols);
+        match by_index.last_mut() {
+            Some((t, i, cols)) if t.eq_ignore_ascii_case(table) && i.eq_ignore_ascii_case(index) => match (cols.as_mut(), column) {
+                (Some(cols), Some(column)) => cols.push(column),
+                _ => *cols = None,
+            },
+            _ => by_index.push((table.to_string(), index.to_string(), column.map(|c| vec![c]))),
         }
     }
-    Some(keys)
+    for (table, _, cols) in by_index {
+        if let Some(cols) = cols {
+            keys.of.entry(table.to_ascii_lowercase()).or_default().push(cols);
+        }
+    }
+    keys
+}
+
+/// What a column of this `information_schema` data type compares as.
+fn class_of(data_type: &str) -> Class {
+    match data_type.to_ascii_lowercase().as_str() {
+        "char" | "varchar" | "tinytext" | "text" | "mediumtext" | "longtext" | "enum" | "set" | "binary" | "varbinary" | "tinyblob" | "blob" | "mediumblob" | "longblob" => Class::Text,
+        "tinyint" | "smallint" | "mediumint" | "int" | "integer" | "bigint" | "decimal" | "numeric" | "float" | "double" | "real" | "bit" | "year" => Class::Number,
+        _ => Class::Other,
+    }
 }
 
 /// A relation the top-level FROM reads: its table name and the name the statement uses for it.
@@ -344,8 +386,15 @@ fn at_most_one(q: &Query, keys: &Keys) -> Result<(), String> {
     let single = relations.len() == 1;
     let equated = equated_columns(s.selection.as_ref());
     let pinned = |r: &Relation| -> bool {
-        let Some(table_keys) = keys.get(&r.table) else { return false };
-        table_keys.iter().any(|key| !key.is_empty() && key.iter().all(|c| equated.iter().any(|(alias, col)| owns(alias.as_deref(), col, r, single, table_keys) && col == c)))
+        let Some(table_keys) = keys.of.get(&r.table) else { return false };
+        let classes = keys.class.get(&r.table);
+        table_keys.iter().any(|key| {
+            !key.is_empty()
+                && key.iter().all(|c| {
+                    let class = classes.and_then(|k| k.get(c)).copied();
+                    equated.iter().any(|(alias, col, value)| owns(alias.as_deref(), col, r, single, table_keys) && col == c && compares_as_is(class, *value))
+                })
+        })
     };
     let grouped: Option<&[Expr]> = match &s.group_by {
         GroupByExpr::Expressions(e, _) if !e.is_empty() => Some(e),
@@ -357,7 +406,7 @@ fn at_most_one(q: &Query, keys: &Keys) -> Result<(), String> {
             if !pinned(r) {
                 continue;
             }
-            let table_keys = keys.get(&r.table).cloned().unwrap_or_default();
+            let table_keys = keys.of.get(&r.table).cloned().unwrap_or_default();
             let own = group.iter().all(|g| match column_ref(g) {
                 Some((alias, col)) => owns(alias.as_deref(), &col, r, single, &table_keys) && (alias.is_some() || single || table_keys.iter().flatten().any(|k| *k == col)),
                 None => false,
@@ -380,7 +429,7 @@ fn at_most_one(q: &Query, keys: &Keys) -> Result<(), String> {
     if pinned(only) {
         return Ok(());
     }
-    match keys.get(&only.table) {
+    match keys.of.get(&only.table) {
         None => Err(format!("`{}` has no unique index the engine can read, so nothing bounds the rows a WHERE matches", only.table)),
         Some(table_keys) => {
             let shown: Vec<String> = table_keys.iter().map(|k| format!("({})", k.join(", "))).collect();
@@ -408,8 +457,10 @@ fn column_ref(e: &Expr) -> Option<(Option<String>, String)> {
     }
 }
 
-/// The columns the WHERE equates to a value (no column read on the other side) under ANDs.
-fn equated_columns(selection: Option<&Expr>) -> HashSet<(Option<String>, String)> {
+/// The columns the WHERE equates to a value (no column read on the other side, and nothing that
+/// changes from row to row: `RAND()` and `SYSDATE()` are evaluated for each row) under ANDs, each
+/// with what the value compares as ([`value_class`]).
+fn equated_columns(selection: Option<&Expr>) -> HashSet<(Option<String>, String, Option<Class>)> {
     let mut out = HashSet::new();
     let mut stack: Vec<&Expr> = selection.into_iter().collect();
     while let Some(e) = stack.pop() {
@@ -421,9 +472,9 @@ fn equated_columns(selection: Option<&Expr>) -> HashSet<(Option<String>, String)
             }
             Expr::BinaryOp { left, op: ast::BinaryOperator::Eq, right } => {
                 for (col, other) in [(left, right), (right, left)] {
-                    if let Some(c) = column_ref(col) {
-                        if !reads_column(other) {
-                            out.insert(c);
+                    if let Some((alias, column)) = column_ref(col) {
+                        if !reads_column(other) && deterministic(other) {
+                            out.insert((alias, column, value_class(other)));
                         }
                     }
                 }
@@ -432,6 +483,88 @@ fn equated_columns(selection: Option<&Expr>) -> HashSet<(Option<String>, String)
         }
     }
     out
+}
+
+/// Whether a key column of this class compared with a value of this one compares the column as
+/// it is: a placeholder the caller binds with the column's own type, or a value of the column's
+/// class. A date or time column converts a constant to its own type.
+fn compares_as_is(key: Option<Class>, value: Option<Class>) -> bool {
+    match (key, value) {
+        (_, None) | (None | Some(Class::Other), _) => true,
+        (Some(k), Some(v)) => k == v,
+    }
+}
+
+/// What a compared value compares as, where the build can tell; `None` for a placeholder.
+fn value_class(e: &Expr) -> Option<Class> {
+    const TEXT: &[&str] = &[
+        "lower", "upper", "lcase", "ucase", "trim", "ltrim", "rtrim", "concat", "concat_ws", "substring", "substr", "replace", "left", "right", "lpad", "rpad", "md5",
+        "sha1", "sha2", "hex", "to_base64", "from_base64", "date_format", "bin_to_uuid",
+    ];
+    const NUMBER: &[&str] = &["abs", "round", "floor", "ceil", "ceiling", "length", "char_length", "character_length"];
+    Some(match e {
+        Expr::Value(v) => match &v.value {
+            ast::Value::Placeholder(_) => return None,
+            ast::Value::Number(..) | ast::Value::Boolean(_) => Class::Number,
+            ast::Value::SingleQuotedString(_) | ast::Value::DoubleQuotedString(_) | ast::Value::NationalStringLiteral(_) | ast::Value::HexStringLiteral(_) => Class::Text,
+            _ => Class::Other,
+        },
+        Expr::Nested(inner) => return value_class(inner),
+        // `-x`, `+x`, `NOT x` and `~x` are numbers.
+        Expr::UnaryOp { .. } => Class::Number,
+        Expr::BinaryOp { op: ast::BinaryOperator::Plus | ast::BinaryOperator::Minus | ast::BinaryOperator::Multiply | ast::BinaryOperator::Divide | ast::BinaryOperator::Modulo | ast::BinaryOperator::MyIntegerDivide, .. } => Class::Number,
+        Expr::Function(f) => {
+            let name = f.name.0.last().map(|p| p.to_string().to_ascii_lowercase()).unwrap_or_default();
+            if TEXT.contains(&name.as_str()) {
+                Class::Text
+            } else if NUMBER.contains(&name.as_str()) {
+                Class::Number
+            } else {
+                Class::Other
+            }
+        }
+        Expr::Cast { data_type, .. } => {
+            let target = data_type.to_string().to_ascii_lowercase();
+            let starts = |prefixes: &[&str]| prefixes.iter().any(|p| target.starts_with(p));
+            if starts(&["char", "nchar", "varchar", "binary", "text"]) {
+                Class::Text
+            } else if starts(&["signed", "unsigned", "int", "bigint", "decimal", "double", "float", "real", "numeric"]) {
+                Class::Number
+            } else {
+                Class::Other
+            }
+        }
+        _ => Class::Other,
+    })
+}
+
+/// Whether an expression gives every row the same value: a literal, or built-ins known to answer
+/// the same for the same arguments. A stored function may be NOT DETERMINISTIC, and so may any
+/// name not listed, which counts as changing.
+fn deterministic(e: &Expr) -> bool {
+    const KNOWN: &[&str] = &[
+        "lower", "upper", "lcase", "ucase", "trim", "ltrim", "rtrim", "concat", "concat_ws", "abs", "round", "floor", "ceil", "ceiling", "length",
+        "char_length", "character_length", "substring", "substr", "replace", "left", "right", "lpad", "rpad", "coalesce", "ifnull", "nullif", "if", "md5",
+        "sha1", "sha2", "hex", "unhex", "to_base64", "from_base64", "date_format", "str_to_date", "from_unixtime", "uuid_to_bin", "bin_to_uuid",
+    ];
+    match e {
+        Expr::Value(_) | Expr::TypedString { .. } => true,
+        Expr::Nested(inner) | Expr::UnaryOp { expr: inner, .. } | Expr::Cast { expr: inner, .. } => deterministic(inner),
+        Expr::BinaryOp { left, right, .. } => deterministic(left) && deterministic(right),
+        Expr::Function(f) => {
+            let name = f.name.0.last().map(|p| p.to_string().to_ascii_lowercase()).unwrap_or_default();
+            KNOWN.contains(&name.as_str())
+                && match &f.args {
+                    ast::FunctionArguments::None => true,
+                    ast::FunctionArguments::List(list) => list.args.iter().all(|a| match a {
+                        ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(x)) | ast::FunctionArg::Named { arg: ast::FunctionArgExpr::Expr(x), .. } | ast::FunctionArg::ExprNamed { arg: ast::FunctionArgExpr::Expr(x), .. } => deterministic(x),
+                        _ => false,
+                    }),
+                    ast::FunctionArguments::Subquery(_) => false,
+                }
+        }
+        _ => false,
+    }
 }
 
 /// Whether an expression reads a column anywhere; anything the walk does not know counts as reading one.
@@ -482,7 +615,12 @@ mod tests {
     use super::*;
 
     fn keys() -> Keys {
-        HashMap::from([("users".to_string(), vec![vec!["id".to_string()], vec!["email".to_string()]]), ("posts".to_string(), vec![vec!["id".to_string()]])])
+        keys_of(
+            [("users", "PRIMARY", "id", "int"), ("users", "email", "email", "varchar"), ("posts", "PRIMARY", "id", "bigint"), ("events", "at", "at", "datetime")]
+                .into_iter()
+                .map(|(t, i, c, ty)| vec![json!(t), json!(i), json!(c), json!(ty)])
+                .collect(),
+        )
     }
 
     fn card(sql: &str) -> String {
@@ -503,5 +641,28 @@ mod tests {
         assert_eq!(card("select id from users union all select user_id from posts"), "many");
         assert_eq!(card("select id from users where id = ? + 1"), "maybeOne");
         assert_eq!(card("select id from users u join posts p on p.user_id = u.id where u.id = p.user_id"), "many");
+        // `RAND()` and `UUID()` are evaluated for each row, and a stored function may be too.
+        assert_eq!(card("select id from users where id = floor(rand() * 3)"), "many");
+        assert_eq!(card("select id from users where email = uuid()"), "many");
+        assert_eq!(card("select id from users where email = my_function(?)"), "many");
+        // A date or time key converts a constant to its own type, so only the determinism check
+        // stops `SYSDATE()`, another value in each row.
+        assert_eq!(card("select id from events where at = '2026-10-04 00:00:00'"), "maybeOne");
+        assert_eq!(card("select id from events where at = sysdate()"), "many");
+        assert_eq!(card("select id from users where email = lower(?)"), "maybeOne");
+    }
+
+    #[test]
+    fn a_key_compared_across_string_and_number_bounds_nothing() {
+        // MySQL compares a string with a number as two doubles: '01', '1' and '1x' all equal 1.
+        assert_eq!(card("select id from users where email = 1"), "many");
+        assert_eq!(card("select id from users where id = '1'"), "many");
+        assert_eq!(card("select id from users where email = abs(?)"), "many");
+        assert_eq!(card("select id from users where email = '1'"), "maybeOne");
+        assert_eq!(card("select id from users where id = 1"), "maybeOne");
+        assert_eq!(card("select id from users where id = cast(? as signed)"), "maybeOne");
+        // A key part over an expression has no column: the index is no key of its columns.
+        let functional = keys_of(vec![vec![json!("users"), json!("u"), json!("email"), json!("varchar")], vec![json!("users"), json!("u"), Value::Null, Value::Null]]);
+        assert!(functional.of.is_empty());
     }
 }
