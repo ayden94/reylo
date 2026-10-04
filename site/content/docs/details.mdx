@@ -86,7 +86,7 @@ select * from users order by :column                   -- sorts by a constant
 select * from users order by case when :sort = 'name' then name end
 ```
 
-A parameter that nothing in the statement types is `unknown` (on SQLite, one that only a function receives, or a bare `select :x`). A cast types it, and `strict: true` in the project file makes it an error:
+A parameter that nothing in the statement types is `unknown`: a bare `select :x`, or on SQLite one that only a table-valued function or a function the application registers receives. A cast types it, and `strict: true` in the project file makes it an error:
 
 ```sql
 select length(cast(:text as text)) as n
@@ -105,7 +105,7 @@ A parameter left out binds `NULL`.
 
 | The statement | Row count | `run` resolves to |
 | --- | --- | --- |
-| A primary-key or unique-key match, or `limit 1` | `maybeOne` | `Row \| null` |
+| A primary-key or unique-key match, also of a joined table on its key, of a unique index on an expression or with a `where`, a `distinct` or `group by` over values the `where` pins, or `limit 1` | `maybeOne` | `Row \| null` |
 | An aggregate without `group by`, a one-row `insert … returning` | `one` | `Row` |
 | An `insert`, `update` or `delete` without `returning` | `none` | `void` |
 | Anything else | `many` | `Row[]` |
@@ -191,7 +191,6 @@ What each client takes:
 - A declared type is an affinity, not a constraint: a column in a table without `strict` can hold a value of another type.
 - SQLite has no date, time or boolean type. A date in a `text` column is a `string`; a column declared `boolean`, `date` or `datetime` is `number | string`.
 - The result of a function the application registers, or of `json_extract`, `->` and `->>`, is `unknown`.
-- A parameter may be `null` only where it is written whole to a nullable column.
 - JSON built in the statement is a `string`: the driver returns the text.
 
 ## Editors
