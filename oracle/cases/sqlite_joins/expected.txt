@@ -1,0 +1,8 @@
+distinct_pinned.sql: maybeOne (u: integer) -> { user_id: integer }
+group_pinned.sql: maybeOne (u: integer) -> { user_id: integer, n: integer }
+inner_join.sql: maybeOne (id: integer) -> { title: text, name: text }
+intersect.sql: maybeOne (id: integer) -> { id: integer }
+left_join.sql: maybeOne (id: integer) -> { title: text, name: text? }
+many_posts.sql: many (id: integer) -> { title: text }
+outer_on_group.sql: many (id: integer) -> { name: text?, n: integer }
+volatile.sql: many () -> { name: text }

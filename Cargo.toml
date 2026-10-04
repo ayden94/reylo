@@ -9,7 +9,7 @@
 # resolve the workspace while the patched copy is missing.
 [workspace]
 resolver = "2"
-members = ["engine", "porgapi/engine", "pg-extension"]
+members = ["engine", "porgapi/engine", "pg-extension", "oracle"]
 
 [patch.crates-io]
 pg_query = { path = "engine/.patched/pg_query" }

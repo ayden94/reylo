@@ -2616,6 +2616,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "porg-oracle"
+version = "0.0.0"
+dependencies = [
+ "porg-engine",
+ "rusqlite",
+ "serde_json",
+ "tokio",
+ "tokio-postgres",
+]
+
+[[package]]
 name = "porg-pg"
 version = "0.1.0"
 dependencies = [
