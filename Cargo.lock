@@ -2398,6 +2398,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "pgreylo"
+version = "0.1.0"
+dependencies = [
+ "reylo-engine",
+ "serde_json",
+]
+
+[[package]]
 name = "phf"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2447,94 +2455,6 @@ name = "pkg-config"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
-
-[[package]]
-name = "porg-engine"
-version = "0.0.0"
-dependencies = [
- "cc",
- "indexmap",
- "pg_query",
- "serde",
- "serde_json",
- "serde_yaml",
- "sqlparser",
-]
-
-[[package]]
-name = "porg-oracle"
-version = "0.0.0"
-dependencies = [
- "porg-engine",
- "rusqlite",
- "serde_json",
- "tokio",
- "tokio-postgres",
-]
-
-[[package]]
-name = "porg-pg"
-version = "0.1.0"
-dependencies = [
- "porg-engine",
- "serde_json",
-]
-
-[[package]]
-name = "porgapi"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "argon2",
- "axum",
- "axum-reverse-proxy",
- "base64",
- "bcrypt",
- "bytes",
- "chrono",
- "clap",
- "futures",
- "hmac 0.12.1",
- "http",
- "http-body-util",
- "hyper",
- "hyper-util",
- "indexmap",
- "jsonschema",
- "jsonwebtoken",
- "libc",
- "mimalloc",
- "notify",
- "opentelemetry",
- "opentelemetry-otlp",
- "opentelemetry_sdk",
- "percent-encoding",
- "pg_query",
- "porg-engine",
- "rand 0.9.5",
- "reqwest",
- "rusqlite",
- "rustls",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2 0.10.9",
- "tempfile",
- "thiserror 2.0.20",
- "tokio",
- "tokio-postgres",
- "tokio-postgres-rustls",
- "tokio-tungstenite 0.28.0",
- "tower",
- "tower-http",
- "tracing",
- "tracing-opentelemetry",
- "tracing-subscriber",
- "wasmtime",
- "wasmtime-wasi",
- "wasmtime-wasi-http",
- "webpki-roots 0.26.11",
-]
 
 [[package]]
 name = "postcard"
@@ -3001,6 +2921,86 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "webpki-roots 1.0.9",
+]
+
+[[package]]
+name = "reylo-engine"
+version = "0.0.0"
+dependencies = [
+ "cc",
+ "indexmap",
+ "pg_query",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sqlparser",
+]
+
+[[package]]
+name = "reylo-framework"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "argon2",
+ "axum",
+ "axum-reverse-proxy",
+ "base64",
+ "bcrypt",
+ "bytes",
+ "chrono",
+ "clap",
+ "futures",
+ "hmac 0.12.1",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "indexmap",
+ "jsonschema",
+ "jsonwebtoken",
+ "libc",
+ "mimalloc",
+ "notify",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "percent-encoding",
+ "pg_query",
+ "rand 0.9.5",
+ "reqwest",
+ "reylo-engine",
+ "rusqlite",
+ "rustls",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-postgres",
+ "tokio-postgres-rustls",
+ "tokio-tungstenite 0.28.0",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
+ "wasmtime",
+ "wasmtime-wasi",
+ "wasmtime-wasi-http",
+ "webpki-roots 0.26.11",
+]
+
+[[package]]
+name = "reylo-oracle"
+version = "0.0.0"
+dependencies = [
+ "reylo-engine",
+ "rusqlite",
+ "serde_json",
+ "tokio",
+ "tokio-postgres",
 ]
 
 [[package]]

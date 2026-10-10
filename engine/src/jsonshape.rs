@@ -902,7 +902,7 @@ mod tests {
         assert!(p.columns.is_empty(), "a statement that overflows the budget claims nothing");
     }
 
-    // Resolution. The shape's types come back as porg's `Type`; the JSON Schema spelling of each
+    // Resolution. The shape's types come back as reylo's `Type`; the JSON Schema spelling of each
     // (a nullable field, an `int8` inside a JSON document) is the renderer's, not the resolver's.
 
     const NUMERIC: u32 = 1700;

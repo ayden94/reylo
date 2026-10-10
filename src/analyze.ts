@@ -1,9 +1,9 @@
 // One analysis path for every consumer of a `.sql` file — the type check, the bundler plugins,
-// the runtime hook and `dotsql generate` — and one cache they share: `.dotsql/` beside the project
+// the runtime hook and `reylo generate` — and one cache they share: `.reylo/` beside the project
 // file, one entry per statement. The cache is only for speed. An entry records the schema it was
 // analyzed against; while the database answers, an entry for another schema is analyzed again,
 // and while it does not, the entries are used as they are, so a build that cannot reach the
-// database runs on what `dotsql generate` or an earlier type check wrote.
+// database runs on what `reylo generate` or an earlier type check wrote.
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
@@ -13,7 +13,7 @@ import { openPostgresDescriber } from "./describe.ts";
 import { openMysqlDescriber } from "./mysql-describe.ts";
 import { openSqliteDescriber, sqlitePath } from "./sqlite-describe.ts";
 
-/** What `.dotsql/` holds for one statement. */
+/** What `.reylo/` holds for one statement. */
 export type Entry = { version: 1; dialect: ResolvedProject["dialect"]; schema: string; analysis: Analysis };
 
 export type Outcome =
@@ -38,7 +38,7 @@ const sessions = new Map<string, Session>();
 
 export class Session {
   readonly project: ResolvedProject;
-  /** The project's directory, which holds `.dotsql/`. */
+  /** The project's directory, which holds `.reylo/`. */
   readonly root: string;
   readonly #engine: Engine;
   readonly #engineFingerprint: string;
@@ -75,7 +75,7 @@ export class Session {
     return new Session(e, resolveProject(e, from, env), idle);
   }
 
-  /** Every build-step session this process opened, for a caller that ends them (`dotsql generate`). */
+  /** Every build-step session this process opened, for a caller that ends them (`reylo generate`). */
   static opened(): Session[] {
     return [...sessions.values()];
   }
@@ -88,10 +88,10 @@ export class Session {
   entryFile(sql: string): string {
     const server = this.#server();
     const key = createHash("sha256").update(JSON.stringify([ENTRY_VERSION, this.#engineFingerprint, this.project.dialect, server, sql])).digest("hex");
-    return join(this.root, ".dotsql", "queries", `${key.slice(0, 32)}.json`);
+    return join(this.root, ".reylo", "queries", `${key.slice(0, 32)}.json`);
   }
 
-  /** The statement's analysis: from `.dotsql/` when the entry matches the schema, else from the database. */
+  /** The statement's analysis: from `.reylo/` when the entry matches the schema, else from the database. */
   async analyze(sql: string, options: { force?: boolean } = {}): Promise<Outcome> {
     clearTimeout(this.#timer);
     this.#busy++;
@@ -104,14 +104,14 @@ export class Session {
 
   async #analyze(sql: string, options: { force?: boolean }): Promise<Outcome> {
     if (this.project.error) return { ok: false, message: this.project.error, code: 11 };
-    if (!this.project.url) return { ok: false, message: `No database URL: set DATABASE_URL in the environment, .env.local or .env, or "url" in .dotsql.yaml.`, code: 4 };
+    if (!this.project.url) return { ok: false, message: `No database URL: set DATABASE_URL in the environment, .env.local or .env, or "url" in .reylo.yaml.`, code: 4 };
     const file = this.entryFile(sql);
     const entry = options.force ? undefined : readEntry(file);
     const schema = await this.schema();
     if (schema.fatal) return { ok: false, message: schema.error!, code: 5 };
     if (entry && (schema.value === null || entry.schema === schema.value)) return { ok: true, analysis: entry.analysis, source: "cache", entry: file };
     if (schema.value === null) {
-      return { ok: false, message: `${this.cannotConnect(schema.error)}; .dotsql has no analysis of this statement, so run dotsql generate where the database can be reached.`, code: 5 };
+      return { ok: false, message: `${this.cannotConnect(schema.error)}; .reylo has no analysis of this statement, so run reylo generate where the database can be reached.`, code: 5 };
     }
     let analysis: Analysis;
     try {
@@ -220,7 +220,7 @@ export class Session {
       }
       if (dialect === "sqlite") {
         // A file that cannot be opened is a database that cannot be reached: a build without it
-        // runs on `.dotsql/`.
+        // runs on `.reylo/`.
         const s = await openSqliteDescriber(url!, root).catch((e) => Promise.reject(new Unreachable(e)));
         // The engine prepares SQLite statements inside its own SQLite; it never asks to describe.
         return { describe: () => Promise.reject(new Error("SQLite is described inside the engine")), query: (text, params) => s.values(text, params), close: () => s.close() };
@@ -251,18 +251,18 @@ function readEntry(file: string): Entry | undefined {
   }
 }
 
-// Several processes write `.dotsql/` at once (an editor's type check, a dev server, a build), so an
+// Several processes write `.reylo/` at once (an editor's type check, a dev server, a build), so an
 // entry is written to a file of its own and renamed into place: a reader sees a whole entry or
-// none. `.dotsql/.gitignore` keeps the directory out of git, as pytest's and ruff's caches do. The
+// none. `.reylo/.gitignore` keeps the directory out of git, as pytest's and ruff's caches do. The
 // cache is only for speed, so a directory that cannot be written (a read-only checkout) is not an
 // error.
 function writeEntry(root: string, file: string, entry: Entry): void {
-  const dir = join(root, ".dotsql");
+  const dir = join(root, ".reylo");
   const tmp = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
   try {
     mkdirSync(join(dir, "queries"), { recursive: true });
     const ignore = join(dir, ".gitignore");
-    if (!existsSync(ignore)) writeFileSync(ignore, "# dotsql's cache: written by the type check, the build steps and dotsql generate; never committed.\n*\n");
+    if (!existsSync(ignore)) writeFileSync(ignore, "# reylo's cache: written by the type check, the build steps and reylo generate; never committed.\n*\n");
     writeFileSync(tmp, JSON.stringify(entry) + "\n");
     renameSync(tmp, file);
   } catch {

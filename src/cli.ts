@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// `dotsql generate`: analyzes every `.sql` file of the project into `.dotsql/`, the cache that the type
+// `reylo generate`: analyzes every `.sql` file of the project into `.reylo/`, the cache that the type
 // check and the build steps share, and prints each file with a mark and every error in full. A
 // build that runs where the database cannot be reached (a CI job, a container build) runs on what
 // it wrote; where the database can be reached, it only saves the build the round trips.
@@ -10,20 +10,20 @@ import { styleText } from "node:util";
 import { glob } from "tinyglobby";
 import { Session } from "./analyze.ts";
 
-const USAGE = `Usage: dotsql generate [paths...] [--force]
+const USAGE = `Usage: reylo generate [paths...] [--force]
 
-Analyzes every .sql file under the paths (by default the current directory) into .dotsql/: the
+Analyzes every .sql file under the paths (by default the current directory) into .reylo/: the
 cache that the type check and the build steps read. A file that is not one query (a migration)
-is skipped. --force analyzes each file against the database even when .dotsql/ holds it.
+is skipped. --force analyzes each file against the database even when .reylo/ holds it.
 
-Which files are queries can be set in .dotsql.yaml; the globs are relative to it:
+Which files are queries can be set in .reylo.yaml; the globs are relative to it:
 
   cli:
     include: ["src/**/*.sql"]   # instead of every .sql file
     exclude: ["src/legacy/**"]  # in addition to dependencies, build output and what git ignores`;
 
 // Never the project's own queries: dependencies and build output. A directory whose name starts
-// with a dot (.git, .dotsql, .next) is left out too, because a glob's `*` does not match a dot.
+// with a dot (.git, .reylo, .next) is left out too, because a glob's `*` does not match a dot.
 const EXCLUDE = ["**/node_modules/**", "**/{dist,build,out,target,coverage}/**"];
 
 const shown = (path: string) => relative(process.cwd(), path) || ".";
@@ -65,7 +65,7 @@ async function generate(args: string[]): Promise<number> {
   const force = args.includes("--force");
   const unknown = args.filter((a) => a.startsWith("-") && a !== "--force");
   if (unknown.length) {
-    console.error(`dotsql generate: unknown option ${unknown.join(", ")}\n\n${USAGE}`);
+    console.error(`reylo generate: unknown option ${unknown.join(", ")}\n\n${USAGE}`);
     return 2;
   }
   const paths = args.filter((a) => !a.startsWith("-"));
@@ -77,7 +77,7 @@ async function generate(args: string[]): Promise<number> {
   for (const arg of paths.length ? paths : ["."]) {
     const full = resolve(arg);
     if (!existsSync(full)) {
-      console.error(`dotsql generate: ${arg} does not exist.`);
+      console.error(`reylo generate: ${arg} does not exist.`);
       return 2;
     }
     if (statSync(full).isDirectory()) {
@@ -86,12 +86,12 @@ async function generate(args: string[]): Promise<number> {
       for (const file of files) if (!ignored.has(file)) found.add(file);
     } else if (full.endsWith(".sql")) named.add(full);
     else {
-      console.error(`dotsql generate: ${arg} is not a .sql file or a directory.`);
+      console.error(`reylo generate: ${arg} is not a .sql file or a directory.`);
       return 2;
     }
   }
 
-  // One project per `.dotsql.yaml` (or package): each has its database, its `.dotsql/` and its `cli` globs.
+  // One project per `.reylo.yaml` (or package): each has its database, its `.reylo/` and its `cli` globs.
   const projects = new Map<Session, string[]>();
   for (const file of [...named, ...found].sort()) {
     const session = await Session.for(dirname(file));
@@ -114,14 +114,14 @@ async function generate(args: string[]): Promise<number> {
     const here = session.root === process.cwd() ? "" : `${shown(session.root)}: `;
     console.log(paint("dim", `${here}${project.dialect} at ${session.where()} (${project.urlSource})`));
     // A project that cannot be used at all is said once, above its files.
-    let unusable = project.error ?? (project.url ? undefined : `No database URL: set DATABASE_URL in the environment, .env.local or .env, or "url" in .dotsql.yaml.`);
+    let unusable = project.error ?? (project.url ? undefined : `No database URL: set DATABASE_URL in the environment, .env.local or .env, or "url" in .reylo.yaml.`);
     let offline = false;
     if (!unusable) {
       const schema = await session.schema();
       if (schema.fatal) unusable = schema.error;
       else if (schema.value === null) {
         offline = true;
-        console.log(paint("dim", `${session.cannotConnect(schema.error)}; the files are read from .dotsql/ as they are.`));
+        console.log(paint("dim", `${session.cannotConnect(schema.error)}; the files are read from .reylo/ as they are.`));
       }
     }
     if (unusable) errors.push([paint("red", unusable)]);
@@ -138,7 +138,7 @@ async function generate(args: string[]): Promise<number> {
       const sql = readFileSync(file, "utf8");
       const outcome = await session.analyze(sql, { force });
       if (!outcome.ok) {
-        fail(`${paint("bold", shown(file))}: ${offline ? (force ? "--force needs the database, which cannot be reached" : "not in .dotsql/, and the database cannot be reached") : outcome.message}`);
+        fail(`${paint("bold", shown(file))}: ${offline ? (force ? "--force needs the database, which cannot be reached" : "not in .reylo/, and the database cannot be reached") : outcome.message}`);
         continue;
       }
       const { diagnostics } = outcome.analysis;
@@ -183,6 +183,6 @@ const [command, ...rest] = process.argv.slice(2);
 if (command === "generate") process.exitCode = await generate(rest);
 else if (command === undefined || command === "help" || command === "--help" || command === "-h") console.log(USAGE);
 else {
-  console.error(`dotsql: unknown command ${command}\n\n${USAGE}`);
+  console.error(`reylo: unknown command ${command}\n\n${USAGE}`);
   process.exitCode = 2;
 }

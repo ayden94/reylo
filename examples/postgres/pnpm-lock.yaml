@@ -8,7 +8,7 @@ importers:
 
   .:
     dependencies:
-      dotsql:
+      reylo:
         specifier: link:../..
         version: link:../..
       postgres:

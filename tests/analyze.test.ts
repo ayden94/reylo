@@ -12,13 +12,13 @@ import { sqlModule } from "../src/loader.ts";
 // A throwaway Postgres server for the tests that need one, never a database anyone uses: each such
 // test makes a database of its own there and drops it after. The driver is the labs', never the
 // package's own.
-const PG = process.env.DOTSQL_TEST_PG;
+const PG = process.env.REYLO_TEST_PG;
 const DRIVERS = fileURLToPath(new URL("../lab/drivers/node_modules", import.meta.url));
-const live = !PG ? "DOTSQL_TEST_PG names no server" : !existsSync(join(DRIVERS, "postgres")) ? "lab/drivers is not installed" : false;
+const live = !PG ? "REYLO_TEST_PG names no server" : !existsSync(join(DRIVERS, "postgres")) ? "lab/drivers is not installed" : false;
 
 // A SQLite project: a package, its database, and DATABASE_URL naming it.
 function project(): { root: string; env: Record<string, string> } {
-  const root = mkdtempSync(join(tmpdir(), "dotsql-analyze-"));
+  const root = mkdtempSync(join(tmpdir(), "reylo-analyze-"));
   writeFileSync(join(root, "package.json"), "{}");
   const db = new DatabaseSync(join(root, "app.db"));
   db.exec("create table users (id integer primary key, name text not null)");
@@ -26,7 +26,7 @@ function project(): { root: string; env: Record<string, string> } {
   return { root, env: { DATABASE_URL: "file:./app.db" } };
 }
 
-// Each session stands for a process of its own: the type check, a build, dotsql generate.
+// Each session stands for a process of its own: the type check, a build, reylo generate.
 async function analyze(root: string, env: Record<string, string>, sql: string, options: { force?: boolean } = {}) {
   const session = await Session.open(root, env);
   try {
@@ -38,16 +38,16 @@ async function analyze(root: string, env: Record<string, string>, sql: string, o
 
 const SELECT = "select id, name from users where id = :id";
 
-test("a statement is analyzed against the database once, and read from .dotsql/ by every process after", async () => {
+test("a statement is analyzed against the database once, and read from .reylo/ by every process after", async () => {
   const { root, env } = project();
   const first = await analyze(root, env, SELECT);
   assert.ok(first.ok);
   assert.equal(first.source, "database");
   assert.equal(first.analysis.cardinality, "maybeOne");
-  assert.ok(first.entry.startsWith(join(root, ".dotsql", "queries")));
+  assert.ok(first.entry.startsWith(join(root, ".reylo", "queries")));
   assert.ok(existsSync(first.entry));
   // The directory keeps itself out of git.
-  assert.match(readFileSync(join(root, ".dotsql", ".gitignore"), "utf8"), /^\*$/m);
+  assert.match(readFileSync(join(root, ".reylo", ".gitignore"), "utf8"), /^\*$/m);
   const second = await analyze(root, env, SELECT);
   assert.ok(second.ok);
   assert.deepEqual([second.source, second.entry, second.analysis], ["cache", first.entry, first.analysis]);
@@ -68,7 +68,7 @@ test("a change to the schema makes the entry stale, and the statement is analyze
   assert.equal(after.entry, before.entry);
 });
 
-test("without the database, .dotsql/ answers as it is, and a statement it lacks is an error that names dotsql generate", async () => {
+test("without the database, .reylo/ answers as it is, and a statement it lacks is an error that names reylo generate", async () => {
   const { root, env } = project();
   assert.ok((await analyze(root, env, SELECT)).ok);
   renameSync(join(root, "app.db"), join(root, "gone.db"));
@@ -78,8 +78,8 @@ test("without the database, .dotsql/ answers as it is, and a statement it lacks 
   const missing = await analyze(root, env, "select name from users");
   assert.ok(!missing.ok);
   assert.equal(missing.code, 5);
-  assert.match(missing.message, /^Cannot open the database .*app\.db .*\.dotsql has no analysis of this statement, so run dotsql generate where the database can be reached\.$/);
-  // --force asks the database even for a statement .dotsql/ holds.
+  assert.match(missing.message, /^Cannot open the database .*app\.db .*\.reylo has no analysis of this statement, so run reylo generate where the database can be reached\.$/);
+  // --force asks the database even for a statement .reylo/ holds.
   const forced = await analyze(root, env, SELECT, { force: true });
   assert.ok(!forced.ok);
 });
@@ -94,7 +94,7 @@ test("the module a build step emits carries the analysis and reads nothing at ru
     const { code, entry } = await sqlModule(file, SELECT);
     assert.ok(existsSync(entry));
     assert.equal(code, [
-      `import { defineQuery } from "dotsql";`,
+      `import { defineQuery } from "reylo";`,
       `export const sql = ${JSON.stringify(SELECT)};`,
       `export const params = ["id"];`,
       `export default defineQuery({ dialect: "sqlite", sql, params, cardinality: "maybeOne", text: "select id, name from users where id = ?", order: ["id"] });`,
@@ -103,7 +103,7 @@ test("the module a build step emits carries the analysis and reads nothing at ru
     // A build (a process of its own) that has neither the database nor the entry fails instead of guessing.
     for (const session of Session.opened()) await session.close();
     renameSync(join(root, "app.db"), join(root, "gone.db"));
-    await assert.rejects(sqlModule(file, "select name from users"), /user\.sql: Cannot open the database .*run dotsql generate/);
+    await assert.rejects(sqlModule(file, "select name from users"), /user\.sql: Cannot open the database .*run reylo generate/);
   } finally {
     for (const session of Session.opened()) await session.close();
   }
@@ -112,13 +112,13 @@ test("the module a build step emits carries the analysis and reads nothing at ru
 test("the Postgres fingerprint runs on the server, holds while nothing changes, and moves with each catalog the analysis reads", { skip: live }, async () => {
   const postgres = createRequire(join(DRIVERS, "postgres", "package.json"))("postgres");
   const admin = postgres(PG, { max: 1, onnotice: () => {} });
-  const name = `dotsql_fingerprint_${process.pid}`;
+  const name = `reylo_fingerprint_${process.pid}`;
   await admin.unsafe(`drop database if exists ${name}`);
   await admin.unsafe(`create database ${name}`);
   const url = new URL(PG!);
   url.pathname = `/${name}`;
   const db = postgres(url.href, { max: 1, onnotice: () => {} });
-  const root = mkdtempSync(join(tmpdir(), "dotsql-fingerprint-"));
+  const root = mkdtempSync(join(tmpdir(), "reylo-fingerprint-"));
   writeFileSync(join(root, "package.json"), "{}");
   mkdirSync(join(root, "node_modules"));
   symlinkSync(join(DRIVERS, "postgres"), join(root, "node_modules", "postgres"));

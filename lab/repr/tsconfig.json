@@ -10,7 +10,7 @@
     "allowImportingTsExtensions": true
   },
   "contentMappers": [
-    { "package": "dotsql", "extensions": [".sql"] }
+    { "package": "reylo", "extensions": [".sql"] }
   ],
   "include": ["."],
   "exclude": ["run.ts", "node_modules"]

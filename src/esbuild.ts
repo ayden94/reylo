@@ -1,7 +1,7 @@
 // The esbuild plugin, which is also a Bun plugin: `Bun.build({ plugins })` and `Bun.plugin` take
 // the same `setup(build)` object, with the same `onLoad` filter and the same `{ contents, loader }`
 // result. Bun's runtime plugin answers `import` through it; `require()` needs a synchronous
-// answer, which `dotsql/register` gives.
+// answer, which `reylo/register` gives.
 import { readFileSync } from "node:fs";
 import { releaseConnections } from "./analyze.ts";
 import { sqlModule } from "./loader.ts";
@@ -12,9 +12,9 @@ type Build = {
   onEnd?(callback: () => Promise<void>): void;
 };
 
-export default function dotsql() {
+export default function reylo() {
   return {
-    name: "dotsql",
+    name: "reylo",
     setup(build: Build) {
       build.onLoad({ filter: /\.sql$/ }, async (args) => {
         const { code, entry } = await sqlModule(args.path, readFileSync(args.path, "utf8"));

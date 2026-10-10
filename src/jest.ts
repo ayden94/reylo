@@ -1,6 +1,6 @@
-// The Jest transformer: `transform: { "\\.sql$": "dotsql/jest" }`. Jest loads test code through its
+// The Jest transformer: `transform: { "\\.sql$": "reylo/jest" }`. Jest loads test code through its
 // own runtime (jest-runtime reads the file and compiles it in a vm context), never through Node's
-// loader, so the hooks `dotsql/register` installs never see a `.sql` file there, and Jest's sandbox
+// loader, so the hooks `reylo/register` installs never see a `.sql` file there, and Jest's sandbox
 // makes `module.registerHooks` throw. A transform is the one place Jest takes a file's source.
 // Jest calls `process` synchronously, also for ES modules when it is defined, so it asks
 // `src/bridge.ts`, which blocks on a worker while the analysis waits on the database. The module
@@ -33,10 +33,10 @@ function transform(_source: string, path: string, options: Options): { code: str
 // one line, since the values are JSON.
 function commonJs(path: string, code: string): string {
   const out = code
-    .replace(/^import \{ defineQuery \} from "dotsql";$/m, `const { defineQuery } = require("dotsql");`)
+    .replace(/^import \{ defineQuery \} from "reylo";$/m, `const { defineQuery } = require("reylo");`)
     .replace(/^export const (\w+) = /gm, "const $1 = exports.$1 = ")
     .replace(/^export default /m, "exports.default = ");
-  if (/^(import|export) /m.test(out)) throw new Error(`${path}: dotsql's module has a shape dotsql/jest cannot make CommonJS.`);
+  if (/^(import|export) /m.test(out)) throw new Error(`${path}: reylo's module has a shape reylo/jest cannot make CommonJS.`);
   return `Object.defineProperty(exports, "__esModule", { value: true });\n${out}`;
 }
 

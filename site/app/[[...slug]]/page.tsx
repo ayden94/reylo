@@ -45,5 +45,5 @@ export function generateStaticParams() {
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const page = source.getPage((await params).slug ?? []);
   if (!page) notFound();
-  return { title: page.slugs.length ? `${page.data.title} · dotsql` : page.data.title, description: page.data.description };
+  return { title: page.slugs.length ? `${page.data.title} · reylo` : page.data.title, description: page.data.description };
 }

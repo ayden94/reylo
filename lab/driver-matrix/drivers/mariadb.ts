@@ -6,7 +6,7 @@ import { args, lazy, manualTx, notRun, requireFrom, runJob } from "../lib/harnes
 const a = args();
 const meta = { pkg: "mariadb", version: a.version!, target: a.target! };
 // MySQL 8.4's caching_sha2_password needs the server's RSA key when the connection has no TLS.
-const config = { host: "127.0.0.1", port: Number(a.port), user: "root", password: "dotsql", database: "driver_matrix", allowPublicKeyRetrieval: true };
+const config = { host: "127.0.0.1", port: Number(a.port), user: "root", password: "porg", database: "driver_matrix", allowPublicKeyRetrieval: true };
 
 let mariadb: any;
 let callbackApi: any;

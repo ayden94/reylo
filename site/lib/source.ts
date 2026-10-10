@@ -10,11 +10,11 @@ const docs = defineDocs({
     mdxOptions: async (environment) => {
       const { applyMdxPreset } = await import('fumadocs-mdx/config');
       const { rehypeCodeDefaultOptions } = await import('fumadocs-core/mdx-plugins');
-      const { porgTwoslash } = await import('./twoslash');
+      const { reyloTwoslash } = await import('./twoslash');
       return applyMdxPreset({
         rehypeCodeOptions: {
           ...rehypeCodeDefaultOptions,
-          transformers: [...(rehypeCodeDefaultOptions.transformers ?? []), porgTwoslash()],
+          transformers: [...(rehypeCodeDefaultOptions.transformers ?? []), reyloTwoslash()],
           // Shiki cannot load a language lazily inside a Twoslash popup.
           langs: ['js', 'jsx', 'ts', 'tsx'],
         },

@@ -18,7 +18,7 @@ const mono = JetBrains_Mono({
 });
 
 export const metadata = {
-  title: 'dotsql',
+  title: 'reylo',
   description: 'Import a .sql file and get a fully typed query, checked against the real database.',
 };
 

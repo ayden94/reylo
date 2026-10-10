@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the engine to one wasm32-wasip1 artifact, `porg_engine.wasm`, next to this script.
+# Builds the engine to one wasm32-wasip1 artifact, `reylo_engine.wasm`, next to this script.
 #
 # Inputs: a Rust toolchain with the `wasm32-wasip1` target, and wasi-sdk 34 (set WASI_SDK_PATH,
 # or unpack it under `.wasi-sdk/`). The `pg_query` crate is the crates.io 6.2.0 source with the
@@ -55,5 +55,5 @@ export CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="-C link-arg=-L$SYSROOT/lib/wasm32-w
 # The crate is a member of the workspace in `..`, so the artifact lands in the workspace's `target/`.
 TARGET_DIR="${CARGO_TARGET_DIR:-$(cd .. && pwd)/target}"
 cargo build --release --target wasm32-wasip1 --lib
-cp "$TARGET_DIR/wasm32-wasip1/release/porg_engine.wasm" porg_engine.wasm
-ls -l porg_engine.wasm
+cp "$TARGET_DIR/wasm32-wasip1/release/reylo_engine.wasm" reylo_engine.wasm
+ls -l reylo_engine.wasm

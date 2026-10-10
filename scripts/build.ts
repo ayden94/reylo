@@ -5,7 +5,7 @@
 // run time. The repository's own package.json keeps pointing at the sources, so the tests and
 // the labs run them without a build; `npm publish dist` publishes the build, and the root is
 // private so that it cannot be published by mistake. dist/ keeps the repository's layout
-// (src/, engine/), so `src/engine.ts` finds `../engine/porg_engine.wasm` in both.
+// (src/, engine/), so `src/engine.ts` finds `../engine/reylo_engine.wasm` in both.
 import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -17,7 +17,7 @@ const js = (path: string) => path.replace(/\.ts$/, ".js");
 rmSync(dist, { recursive: true, force: true });
 execFileSync(join(root, "node_modules/.bin/tsc"), ["-p", join(root, "tsconfig.build.json")], { stdio: "inherit" });
 mkdirSync(join(dist, "engine"));
-copyFileSync(join(root, "engine/porg_engine.wasm"), join(dist, "engine/porg_engine.wasm"));
+copyFileSync(join(root, "engine/reylo_engine.wasm"), join(dist, "engine/reylo_engine.wasm"));
 copyFileSync(join(root, "README.md"), join(dist, "README.md"));
 
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));

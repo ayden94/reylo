@@ -1,7 +1,7 @@
 import mysql from "mysql2/promise";
 import mariadb from "mariadb";
 import { execute } from "../../src/execute.ts";
-const cfg = { host: "127.0.0.1", port: 33306, user: "root", password: "dotsql", database: "dotsql" };
+const cfg = { host: "127.0.0.1", port: 33306, user: "root", password: "porg", database: "porg" };
 const conn = await mysql.createConnection({ ...cfg, namedPlaceholders: true });
 await conn.query(`drop table if exists t`);
 await conn.query(`create table t (id int primary key auto_increment, name varchar(50) not null, big bigint not null default 9007199254740993, n decimal(10,2) not null default 1.50, at datetime not null default current_timestamp, j json, flag tinyint(1) not null default 1)`);

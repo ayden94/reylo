@@ -1,15 +1,15 @@
-# One Cargo workspace over both Rust crates: `engine/` (porg-engine, the pure SQL analysis engine
-# built to WebAssembly for the mapper and usable as an rlib), `porgapi/engine/` (the PorgAPI
-# binary, which consumes porg-engine for its analysis) and `pg-extension/`. One lockfile,
+# One Cargo workspace over both Rust crates: `engine/` (reylo-engine, the pure SQL analysis engine
+# built to WebAssembly for the mapper and usable as an rlib), `framework/engine/` (the Reylo Framework
+# binary, which consumes reylo-engine for its analysis) and `pg-extension/`. One lockfile,
 # one `target/`.
 #
-# The `[patch]` is porg-engine's: the crates.io `pg_query` 6.2.0 source with the WebAssembly patch
+# The `[patch]` is reylo-engine's: the crates.io `pg_query` 6.2.0 source with the WebAssembly patch
 # from `engine/vendor/` applied by `engine/build.sh --prepare`, which also fetches the SQLite
 # amalgamation `engine/build.rs` compiles. Run it once before any cargo command here; cargo refuses to
 # resolve the workspace while the patched copy is missing.
 [workspace]
 resolver = "2"
-members = ["engine", "porgapi/engine", "pg-extension", "oracle"]
+members = ["engine", "framework/engine", "pg-extension", "oracle"]
 
 [patch.crates-io]
 pg_query = { path = "engine/.patched/pg_query" }
@@ -20,7 +20,7 @@ lto = true
 codegen-units = 1
 panic = "abort"
 
-# `pg-extension/` hosts the engine inside a Postgres backend (`cargo build -p porg-pg --profile pg`).
+# `pg-extension/` hosts the engine inside a Postgres backend (`cargo build -p pgreylo --profile pg`).
 # There a panic has to unwind to the FFI boundary and come back as an SQL error; an abort would
 # take the server down with it. Speed over size: the library is loaded once per backend.
 [profile.pg]

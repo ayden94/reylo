@@ -1,8 +1,8 @@
 {
-  "name": "dotsql-driver-matrix",
+  "name": "reylo-driver-matrix",
   "private": true,
   "type": "module",
-  "description": "Live test matrix for the database-client dispatch of dotsql's run(): every driver version and client shape",
+  "description": "Live test matrix for the database-client dispatch of reylo's run(): every driver version and client shape",
   "scripts": {
     "matrix": "./run.sh",
     "setup": "./setup.sh"

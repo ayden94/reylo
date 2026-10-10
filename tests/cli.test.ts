@@ -8,15 +8,15 @@ import { join } from "node:path";
 
 const CLI = join(import.meta.dirname, "..", "src", "cli.ts");
 
-function dotsql(cwd: string, ...args: string[]) {
+function reylo(cwd: string, ...args: string[]) {
   const r = spawnSync(process.execPath, ["--no-warnings", CLI, ...args], { cwd, encoding: "utf8", env: { PATH: process.env.PATH, DATABASE_URL: "file:./app.db" } });
   // The time varies from run to run; everything else is the readout.
   return { status: r.status, out: r.stdout.replace(/\(\d+\.\d s\)/, "(_ s)"), err: r.stderr };
 }
 
-test("dotsql generate analyzes every .sql file of the project, and prints each file with a mark and every error in full", () => {
+test("reylo generate analyzes every .sql file of the project, and prints each file with a mark and every error in full", () => {
   // The CLI sees its working directory as the real path (/private/var on macOS).
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "dotsql-cli-")));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "reylo-cli-")));
   writeFileSync(join(root, "package.json"), "{}");
   const db = new DatabaseSync(join(root, "app.db"));
   db.exec("create table users (id integer primary key, name text not null)");
@@ -36,7 +36,7 @@ test("dotsql generate analyzes every .sql file of the project, and prints each f
   writeFileSync(join(root, ".gitignore"), "generated/\n");
   assert.equal(spawnSync("git", ["init", "-q"], { cwd: root }).status, 0);
 
-  const first = dotsql(root, "generate");
+  const first = reylo(root, "generate");
   assert.equal(first.status, 1, first.err);
   assert.equal(first.out, [
     `sqlite at ${join(root, "app.db")} (DATABASE_URL in the environment)`,
@@ -59,24 +59,24 @@ test("dotsql generate analyzes every .sql file of the project, and prints each f
     ``,
   ].join("\n"));
 
-  // .dotsql.yaml narrows the files; a file named on the command line is analyzed as named.
-  writeFileSync(join(root, ".dotsql.yaml"), `cli:\n  include: ["src/**/*.sql"]\n  exclude: ["**/bad.sql", "**/typo.sql"]\n`);
-  const configured = dotsql(root, "generate");
+  // .reylo.yaml narrows the files; a file named on the command line is analyzed as named.
+  writeFileSync(join(root, ".reylo.yaml"), `cli:\n  include: ["src/**/*.sql"]\n  exclude: ["**/bad.sql", "**/typo.sql"]\n`);
+  const configured = reylo(root, "generate");
   assert.equal(configured.status, 0, configured.err);
   assert.match(configured.out, /^  src\/queries\/count\.sql  ✓\n  src\/queries\/user\.sql   ✓\n\n✓ 2 queries typed \(_ s\)\n$/m);
-  assert.equal(dotsql(root, "generate", "src/queries/bad.sql").status, 1);
+  assert.equal(reylo(root, "generate", "src/queries/bad.sql").status, 1);
 
   // Without the database the cache still answers, and --force cannot.
   renameSync(join(root, "app.db"), join(root, "gone.db"));
-  const offline = dotsql(root, "generate", "src/queries/user.sql");
+  const offline = reylo(root, "generate", "src/queries/user.sql");
   assert.equal(offline.status, 0, offline.err);
-  assert.match(offline.out, /^Cannot open the database .*app\.db \(DATABASE_URL in the environment\): .*; the files are read from \.dotsql\/ as they are\.$/m);
+  assert.match(offline.out, /^Cannot open the database .*app\.db \(DATABASE_URL in the environment\): .*; the files are read from \.reylo\/ as they are\.$/m);
   assert.match(offline.out, /^  src\/queries\/user\.sql  ✓$/m);
-  const forced = dotsql(root, "generate", "--force", "src/queries/user.sql");
+  const forced = reylo(root, "generate", "--force", "src/queries/user.sql");
   assert.equal(forced.status, 1);
   assert.match(forced.out, /^src\/queries\/user\.sql: --force needs the database, which cannot be reached$/m);
 
-  assert.equal(dotsql(root, "generate", "--watch").status, 2);
-  assert.equal(dotsql(root, "generate", "package.json").status, 2);
-  assert.equal(dotsql(root, "frobnicate").status, 2);
+  assert.equal(reylo(root, "generate", "--watch").status, 2);
+  assert.equal(reylo(root, "generate", "package.json").status, 2);
+  assert.equal(reylo(root, "frobnicate").status, 2);
 });

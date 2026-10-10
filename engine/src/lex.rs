@@ -359,7 +359,7 @@ pub fn lex(sql: &str, dialect: Dialect) -> Result<Lexed, LexError> {
     Ok(Lexed { params, placeholders, style, opaque })
 }
 
-/// The error for a `$name`, `$1` or `@name` the dialect would misread: Porg's named placeholder is
+/// The error for a `$name`, `$1` or `@name` the dialect would misread: Reylo's named placeholder is
 /// `:name`, and SQLite's numbered one `?1`.
 fn foreign(sql: &str, i: usize, dialect: Dialect) -> LexError {
     let b = sql.as_bytes();
@@ -368,8 +368,8 @@ fn foreign(sql: &str, i: usize, dialect: Dialect) -> LexError {
     let written = &sql[i..end];
     let fix = if digits { format!("?{}", &sql[i + 1..end]) } else { format!(":{}", &sql[i + 1..end]) };
     let message = match dialect {
-        Dialect::Sqlite => format!("SQLite reads {written} as a parameter that Porg does not bind; write {fix}"),
-        _ => format!("{written} is not a placeholder here; Porg's named placeholder is {fix}"),
+        Dialect::Sqlite => format!("SQLite reads {written} as a parameter that Reylo does not bind; write {fix}"),
+        _ => format!("{written} is not a placeholder here; Reylo's named placeholder is {fix}"),
     };
     LexError { message, offset: i }
 }
@@ -503,9 +503,9 @@ mod tests {
     fn one_named_form_and_the_native_positional_one() {
         // A form the dialect would misread is an error that says what to write.
         let err = |sql: &str, d: Dialect| lex(sql, d).unwrap_err();
-        assert_eq!(err("select $name", Dialect::Postgres).message, "$name is not a placeholder here; Porg's named placeholder is :name");
-        assert_eq!(err("select @a.b from t", Dialect::Sqlite).message, "SQLite reads @a.b as a parameter that Porg does not bind; write :a.b");
-        assert_eq!(err("select 1 where x = $2", Dialect::Sqlite).message, "SQLite reads $2 as a parameter that Porg does not bind; write ?2");
+        assert_eq!(err("select $name", Dialect::Postgres).message, "$name is not a placeholder here; Reylo's named placeholder is :name");
+        assert_eq!(err("select @a.b from t", Dialect::Sqlite).message, "SQLite reads @a.b as a parameter that Reylo does not bind; write :a.b");
+        assert_eq!(err("select 1 where x = $2", Dialect::Sqlite).message, "SQLite reads $2 as a parameter that Reylo does not bind; write ?2");
         assert_eq!(err("select ?2", Dialect::Mysql).message, "MySQL has no numbered placeholder ?2; write ? for each value, or :name");
         assert_eq!(err("select $name", Dialect::Postgres).offset, 7);
         // Where the dialect reads the form as something else, it is that: MySQL's user variable and

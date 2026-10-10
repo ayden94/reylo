@@ -1,7 +1,7 @@
 // A webpack-style loader, for webpack 5, Rspack and Next.js with Turbopack, which take loaders
 // (not plugins) for a file type:
-//   webpack / Rspack:  module.rules: [{ test: /\.sql$/, use: "dotsql/webpack-loader" }]
-//   Turbopack:         turbopack: { rules: { "*.sql": { loaders: ["dotsql/webpack-loader"], as: "*.js" } } }
+//   webpack / Rspack:  module.rules: [{ test: /\.sql$/, use: "reylo/webpack-loader" }]
+//   Turbopack:         turbopack: { rules: { "*.sql": { loaders: ["reylo/webpack-loader"], as: "*.js" } } }
 import { sqlModule } from "./loader.ts";
 
 type LoaderContext = {
@@ -10,7 +10,7 @@ type LoaderContext = {
   async(): (error: Error | null, code?: string) => void;
 };
 
-export default function porgSqlLoader(this: LoaderContext, source: string): void {
+export default function reyloSqlLoader(this: LoaderContext, source: string): void {
   const done = this.async();
   sqlModule(this.resourcePath, source).then(
     ({ code, entry }) => {

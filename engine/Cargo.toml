@@ -1,12 +1,12 @@
 [package]
-name = "porg-engine"
+name = "reylo-engine"
 version = "0.0.0"
 edition = "2021"
 publish = false
-description = "Porg's SQL analysis engine: parse (pg_query for Postgres, SQLite's own resolved tree for SQLite), placeholder lexing, cardinality, expression nullability and nested JSON shapes, built to one WebAssembly artifact."
+description = "Reylo's SQL analysis engine: parse (pg_query for Postgres, SQLite's own resolved tree for SQLite), placeholder lexing, cardinality, expression nullability and nested JSON shapes, built to one WebAssembly artifact."
 
 [lib]
-name = "porg_engine"
+name = "reylo_engine"
 crate-type = ["cdylib", "rlib"]
 
 [build-dependencies]

@@ -14,8 +14,8 @@ export function Header() {
       className="sticky top-0 z-40 flex h-(--fd-banner-height) items-center gap-4 border-b bg-fd-background/85 px-4 backdrop-blur-sm md:px-6 xl:px-8"
     >
       <a href="/" className="inline-flex items-center gap-2 font-semibold tracking-tight text-fd-headings">
-        <span aria-hidden className="size-2.5 rounded-full bg-(--porg-yellow)" />
-        dotsql
+        <span aria-hidden className="size-2.5 rounded-full bg-(--reylo-yellow)" />
+        reylo
       </a>
       <div className="flex-1" />
       <a href="/details" className="text-sm text-fd-muted-foreground transition-colors hover:text-fd-foreground">

@@ -18,16 +18,16 @@
 #include <stdlib.h>
 
 struct Parse; struct Select; struct SelectDest; struct Table; struct IdList; struct ExprList; struct Expr; struct Upsert; struct SrcList;
-typedef void (*porg_select_fn)(struct Parse*, struct Select*, struct SelectDest*);
-typedef void (*porg_insert_fn)(struct Parse*, struct Table*, struct IdList*, struct ExprList*, struct Select*, int, struct Upsert*);
-typedef void (*porg_update_fn)(struct Parse*, struct Table*, struct ExprList*, struct Expr*, int*, struct SrcList*, int, struct Upsert*);
-typedef void (*porg_delete_fn)(struct Parse*, struct Table*, struct Expr*);
-typedef void (*porg_returning_fn)(struct Parse*, struct Table*, struct ExprList*);
-static porg_select_fn porg_select_hook;
-static porg_insert_fn porg_insert_hook;
-static porg_update_fn porg_update_hook;
-static porg_delete_fn porg_delete_hook;
-static porg_returning_fn porg_returning_hook;
+typedef void (*reylo_select_fn)(struct Parse*, struct Select*, struct SelectDest*);
+typedef void (*reylo_insert_fn)(struct Parse*, struct Table*, struct IdList*, struct ExprList*, struct Select*, int, struct Upsert*);
+typedef void (*reylo_update_fn)(struct Parse*, struct Table*, struct ExprList*, struct Expr*, int*, struct SrcList*, int, struct Upsert*);
+typedef void (*reylo_delete_fn)(struct Parse*, struct Table*, struct Expr*);
+typedef void (*reylo_returning_fn)(struct Parse*, struct Table*, struct ExprList*);
+static reylo_select_fn reylo_select_hook;
+static reylo_insert_fn reylo_insert_hook;
+static reylo_update_fn reylo_update_hook;
+static reylo_delete_fn reylo_delete_hook;
+static reylo_returning_fn reylo_returning_hook;
 
 #include "sqlite3-patched.c"
 
@@ -497,11 +497,11 @@ static void tables(sqlite3_str *s){
 /* ---- the schema replay and the entry point ------------------------------------------------- */
 
 static void installHooks(int on){
-  porg_select_hook = on ? selectHook : 0;
-  porg_insert_hook = on ? insertHook : 0;
-  porg_update_hook = on ? updateHook : 0;
-  porg_delete_hook = on ? deleteHook : 0;
-  porg_returning_hook = on ? returningHook : 0;
+  reylo_select_hook = on ? selectHook : 0;
+  reylo_insert_hook = on ? insertHook : 0;
+  reylo_update_hook = on ? updateHook : 0;
+  reylo_delete_hook = on ? deleteHook : 0;
+  reylo_returning_hook = on ? returningHook : 0;
 }
 
 /* A host function's stand-in: the replay only prepares, so it is never called. */
@@ -552,10 +552,10 @@ static int openSchema(const char *const *azDdl, int nDdl, const char *const *azF
 /*
 ** Analyzes one statement against the schema DDL, with the host's scalar functions (azFn[i] taking
 ** aFnArg[i] arguments, -1 for any number) registered on the replay. Returns a JSON document (free
-** with porg_sqlite_free): { statement, dml, returning, tables, columns, params, readonly, error,
+** with reylo_sqlite_free): { statement, dml, returning, tables, columns, params, readonly, error,
 ** schemaErrors }.
 */
-char *porg_sqlite_analyze(const char *const *azDdl, int nDdl, const char *zSql, const char *const *azFn, const int *aFnArg, int nFn){
+char *reylo_sqlite_analyze(const char *const *azDdl, int nDdl, const char *zSql, const char *const *azFn, const int *aFnArg, int nFn){
   sqlite3_str *out = sqlite3_str_new(0);
   sqlite3_str *schemaErrors = sqlite3_str_new(0);
   sqlite3_stmt *pStmt = 0;
@@ -622,14 +622,14 @@ char *porg_sqlite_analyze(const char *const *azDdl, int nDdl, const char *zSql, 
   return sqlite3_str_finish(out);
 }
 
-void porg_sqlite_free(char *p){ sqlite3_free(p); }
+void reylo_sqlite_free(char *p){ sqlite3_free(p); }
 
-#ifdef PORG_SQLITE_MAIN
-/* porg_sqlite_check <database file> <statements file>: the DDL of the file, one JSON line per statement. */
+#ifdef REYLO_SQLITE_MAIN
+/* reylo_sqlite_check <database file> <statements file>: the DDL of the file, one JSON line per statement. */
 int main(int argc, char **argv){
   sqlite3 *db; sqlite3_stmt *st; FILE *f; char line[8192];
   const char *azDdl[1024]; int nDdl = 0;
-  if( argc<3 ){ fprintf(stderr, "usage: porg_sqlite_check <db> <statements>\n"); return 2; }
+  if( argc<3 ){ fprintf(stderr, "usage: reylo_sqlite_check <db> <statements>\n"); return 2; }
   if( sqlite3_open_v2(argv[1], &db, SQLITE_OPEN_READONLY, 0)!=SQLITE_OK ){ fprintf(stderr, "open: %s\n", sqlite3_errmsg(db)); return 1; }
   sqlite3_prepare_v2(db, "select sql from sqlite_schema where sql is not null order by rowid", -1, &st, 0);
   while( sqlite3_step(st)==SQLITE_ROW && nDdl<1024 ) azDdl[nDdl++] = strdup((const char*)sqlite3_column_text(st, 0));
@@ -639,9 +639,9 @@ int main(int argc, char **argv){
   while( fgets(line, sizeof line, f) ){
     char *nl = strchr(line, '\n'); if( nl ) *nl = 0;
     if( line[0]==0 || line[0]=='#' ) continue;
-    char *json = porg_sqlite_analyze(azDdl, nDdl, line, 0, 0, 0);
+    char *json = reylo_sqlite_analyze(azDdl, nDdl, line, 0, 0, 0);
     printf("%s\n", json);
-    porg_sqlite_free(json);
+    reylo_sqlite_free(json);
   }
   return 0;
 }

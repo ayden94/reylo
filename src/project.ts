@@ -1,6 +1,6 @@
-// The project file, `.dotsql.yaml`, and the connection it names. The file sits beside the project's
-// `package.json` (the nearest one at or above the tsconfig's directory; `DOTSQL_CONFIG` names
-// another file), is parsed by the engine so that every dotsql tool reads the same YAML, and is
+// The project file, `.reylo.yaml`, and the connection it names. The file sits beside the project's
+// `package.json` (the nearest one at or above the tsconfig's directory; `REYLO_CONFIG` names
+// another file), is parsed by the engine so that every reylo tool reads the same YAML, and is
 // resolved here against the environment: the process environment first, then the `.env` files the
 // project file names under `env` (by default `.env.local`, then `.env`, beside it), and a `${VAR}`
 // in a URL is replaced from that. The URL's scheme names the dialect. A project without the file
@@ -12,7 +12,7 @@ import { defaultReprs, type Repr } from "./render.ts";
 
 export type Dialect = "postgres" | "sqlite" | "mysql";
 
-/** What the engine reads out of `.dotsql.yaml`: the keys the library uses. */
+/** What the engine reads out of `.reylo.yaml`: the keys the library uses. */
 export type ProjectFile = {
   url?: string;
   direct_url?: string;
@@ -22,7 +22,7 @@ export type ProjectFile = {
   cli?: Cli;
 };
 
-/** The files `dotsql generate` analyzes, as globs relative to the project file's directory. */
+/** The files `reylo generate` analyzes, as globs relative to the project file's directory. */
 export type Cli = { include?: string[]; exclude?: string[] };
 
 export type ResolvedProject = {
@@ -36,7 +36,7 @@ export type ResolvedProject = {
   repr: Repr;
   /** Whether a parameter the statement does not type is an error rather than `unknown`. */
   strict: boolean;
-  /** Which files `dotsql generate` analyzes: `include` replaces every `.sql` file, `exclude` adds to what is left out. */
+  /** Which files `reylo generate` analyzes: `include` replaces every `.sql` file, `exclude` adds to what is left out. */
   cli: Cli;
   /** The connection the type check uses: `direct_url` when the file names one, else `url`. */
   url: string | undefined;
@@ -44,11 +44,11 @@ export type ResolvedProject = {
   urlSource: string;
   /** The files a change to which changes the project: the project file and the `.env` files. */
   watched: string[];
-  /** Why the project cannot be used, already placed (`.dotsql.yaml:3:1: ...`); every transform reports it. */
+  /** Why the project cannot be used, already placed (`.reylo.yaml:3:1: ...`); every transform reports it. */
   error: string | undefined;
 };
 
-export const PROJECT_FILE = ".dotsql.yaml";
+export const PROJECT_FILE = ".reylo.yaml";
 const DEFAULT_ENV_FILES = [".env.local", ".env"];
 
 /** The package directory: the nearest one at or above `from` that holds a `package.json`, else `from`. */
@@ -59,14 +59,14 @@ export function packageDir(from: string): string {
   }
 }
 
-/** The project file for a project directory: `DOTSQL_CONFIG`, or `.dotsql.yaml` beside the package's `package.json`. */
+/** The project file for a project directory: `REYLO_CONFIG`, or `.reylo.yaml` beside the package's `package.json`. */
 export function findProjectFile(from: string, env: Record<string, string | undefined> = process.env): string | undefined {
-  if (env.DOTSQL_CONFIG) return resolve(env.DOTSQL_CONFIG);
+  if (env.REYLO_CONFIG) return resolve(env.REYLO_CONFIG);
   const candidate = join(packageDir(from), PROJECT_FILE);
   return existsSync(candidate) ? candidate : undefined;
 }
 
-/** The dialect a URL's scheme names, or undefined for a scheme dotsql does not read. */
+/** The dialect a URL's scheme names, or undefined for a scheme reylo does not read. */
 export function dialectOf(url: string): Dialect | undefined {
   const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(url)?.[1]?.toLowerCase();
   if (scheme === "postgres" || scheme === "postgresql") return "postgres";
@@ -93,9 +93,9 @@ function place(text: string, offset: number): string {
 }
 
 /**
- * The drivers dotsql knows, per dialect, in the order one is taken when `package.json` names
+ * The drivers reylo knows, per dialect, in the order one is taken when `package.json` names
  * several, each with what it returns at its own defaults where that differs from the dialect's
- * (measured 2026-10-02 against each driver). dotsql decodes its own queries on the pg family and
+ * (measured 2026-10-02 against each driver). reylo decodes its own queries on the pg family and
  * PGlite (src/decode.ts), so their arrays and intervals are the defaults. A driver that returns a
  * Buffer keeps `Uint8Array`: a Buffer is one, and naming `Buffer` would need @types/node in every
  * project (a project that has it writes `binary: Buffer`). Bun.sql, node:sqlite and bun:sqlite
@@ -180,7 +180,7 @@ export function resolveProject(engine: Engine, projectDir: string, env: Record<s
     if (hit) urlSource = hit.source;
   }
   const dialect = url ? dialectOf(url) : "postgres";
-  if (url && !dialect) error ??= `Cannot tell the database from the URL (${urlSource}): dotsql reads postgres://, postgresql://, mysql://, mariadb://, file: and sqlite: URLs.`;
+  if (url && !dialect) error ??= `Cannot tell the database from the URL (${urlSource}): reylo reads postgres://, postgresql://, mysql://, mariadb://, file: and sqlite: URLs.`;
   // The dialect's defaults, then the detected driver's, then the project file's own keys.
   const detected = detectDriver(root, dialect ?? "postgres");
   const repr: Repr = { ...defaultReprs[dialect ?? "postgres"], ...detected?.[1] };

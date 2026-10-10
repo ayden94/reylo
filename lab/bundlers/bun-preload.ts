@@ -1,2 +1,2 @@
-import dotsql from "dotsql/esbuild";
-Bun.plugin(dotsql());
+import reylo from "reylo/esbuild";
+Bun.plugin(reylo());

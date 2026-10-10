@@ -1,5 +1,5 @@
 {
-  "name": "dotsql-lab-bundlers",
+  "name": "reylo-lab-bundlers",
   "private": true,
   "type": "module",
   "devDependencies": {

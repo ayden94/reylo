@@ -7,16 +7,16 @@ const nextConfig: NextConfig = {
   // every .sql import is TS2307; the type check is the separate `tsc --runExternalCode` step.
   typescript: { ignoreBuildErrors: true },
   turbopack: {
-    // The lab's node_modules/dotsql is a symlink to the repository root, outside this directory;
+    // The lab's node_modules/reylo is a symlink to the repository root, outside this directory;
     // Turbopack resolves nothing outside its root, so the root is the repository here. An app that
-    // installs dotsql from the registry keeps the default root.
+    // installs reylo from the registry keeps the default root.
     root: join(import.meta.dirname, "../.."),
     rules: {
-      "*.sql": { condition: { not: "browser" }, loaders: ["dotsql/webpack-loader"], as: "*.js" },
+      "*.sql": { condition: { not: "browser" }, loaders: ["reylo/webpack-loader"], as: "*.js" },
     },
   },
   webpack(config, { isServer }) {
-    if (isServer) config.module.rules.push({ test: /\.sql$/, use: "dotsql/webpack-loader" });
+    if (isServer) config.module.rules.push({ test: /\.sql$/, use: "reylo/webpack-loader" });
     return config;
   },
 };

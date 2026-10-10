@@ -5,9 +5,9 @@ import { readFileSync } from "node:fs";
 import { releaseConnections } from "./analyze.ts";
 import { sqlModule } from "./loader.ts";
 
-export default function dotsql() {
+export default function reylo() {
   return {
-    name: "dotsql",
+    name: "reylo",
     enforce: "pre" as const,
     async load(this: { addWatchFile(id: string): void }, id: string) {
       if (!id.endsWith(".sql")) return null;

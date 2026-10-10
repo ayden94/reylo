@@ -11,7 +11,7 @@ const pgQ = defineQuery<any, any, "one", "postgres">({ dialect: "postgres", sql:
 const myQ = defineQuery<any, any, "one", "mysql">({ dialect: "mysql", sql: "select id, name from driver_matrix.people where id = :id", params: ["id"], cardinality: "one" });
 const sqQ = defineQuery<any, any, "one", "sqlite">({ dialect: "sqlite", sql: "select id, name from people where id = :id", params: ["id"], cardinality: "one" });
 
-const pool = mariadb.createPool({ host: "127.0.0.1", port: 33411, user: "root", password: "dotsql", database: "driver_matrix" });
+const pool = mariadb.createPool({ host: "127.0.0.1", port: 33411, user: "root", password: "porg", database: "driver_matrix" });
 const sql = postgres("postgres://localhost:5432/postgres", { max: 1 });
 for (const [label, p] of [
   ["mariadb Pool on a postgres query", () => pgQ.run(pool, { id: 1 })],

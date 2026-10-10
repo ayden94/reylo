@@ -1,7 +1,7 @@
 // The scenario runner every driver job shares. A job describes one driver version against one
 // server: the client shapes it offers (pool, connection, checked-out connection, transaction,
 // savepoint, reserved connection, ...) and a raw row count that reads through the driver
-// itself, never through dotsql. Each scenario runs a statement through dotsql's
+// itself, never through reylo. Each scenario runs a statement through reylo's
 // defineQuery(...).run(client, params) and asserts the result; a record per scenario is appended
 // to the JSON Lines file named by DM_OUT.
 //
@@ -44,9 +44,9 @@ export type Shape = {
   live?: boolean;
   /** The scope runs inside an open transaction, so a write is not visible to the raw count until it ends. */
   inTransaction?: boolean;
-  /** dotsql does not support this client: run() must reject with its own TypeError matching this. Only S9 runs. */
+  /** reylo does not support this client: run() must reject with its own TypeError matching this. Only S9 runs. */
   refused?: RegExp;
-  /** dotsql refuses any statement with parameters on this client, with a TypeError matching this whose cause is the driver's error. */
+  /** reylo refuses any statement with parameters on this client, with a TypeError matching this whose cause is the driver's error. */
   paramsRefused?: RegExp;
 };
 
@@ -56,14 +56,14 @@ export type Job = {
   target: string;
   dialect: Dialect;
   shapes: Shape[];
-  /** Rows in the scratch table with this tag, read through the driver without dotsql. */
+  /** Rows in the scratch table with this tag, read through the driver without reylo. */
   count(tag: string): Promise<number>;
   close?(): Promise<unknown>;
   /** Scenarios that do not apply to the whole job, with the reason. */
   skip?: Partial<Record<string, string>>;
 };
 
-/** "unsupported": dotsql refused the client or the statement with its own TypeError, as its contract says for this shape. */
+/** "unsupported": reylo refused the client or the statement with its own TypeError, as its contract says for this shape. */
 export type Status = "pass" | "fail" | "skip" | "not run" | "unsupported";
 export type Result = {
   pkg: string;
@@ -116,7 +116,7 @@ export function emit(result: Result): void {
 // ---------------------------------------------------------------------------------------------
 // Assertions and error description
 
-/** A breach of dotsql's contract seen by the harness (for example run() throwing synchronously on an asynchronous client). */
+/** A breach of reylo's contract seen by the harness (for example run() throwing synchronously on an asynchronous client). */
 export class Violation extends Error {}
 
 class Mismatch extends Error {}
@@ -195,11 +195,11 @@ const expected: Record<Dialect, { syntax: ErrorExpectation; dup: ErrorExpectatio
   },
 };
 
-/** The rejection must be the driver's own error with its code, not dotsql's TypeError or a harness violation. */
+/** The rejection must be the driver's own error with its code, not reylo's TypeError or a harness violation. */
 function expectDriverError(e: unknown, dialect: Dialect, which: "syntax" | "dup"): string {
   if (e instanceof Violation) throw e;
   if (e instanceof Mismatch) throw e;
-  if (e instanceof TypeError && /dotsql/.test(e.message)) throw new Mismatch(`dotsql's TypeError instead of the driver's error: ${describe(e)}`);
+  if (e instanceof TypeError && /reylo/.test(e.message)) throw new Mismatch(`reylo's TypeError instead of the driver's error: ${describe(e)}`);
   if (!(e instanceof Error)) throw new Mismatch(`rejected with a non-Error: ${describe(e)}`);
   const want = expected[dialect][which];
   const fields = codeFields(e);
@@ -211,7 +211,7 @@ function expectDriverError(e: unknown, dialect: Dialect, which: "syntax" | "dup"
 }
 
 // ---------------------------------------------------------------------------------------------
-// Calling dotsql, with its return discipline checked on every call
+// Calling reylo, with its return discipline checked on every call
 
 type Ctx = { job: Job; shape: Shape; kind: Kind; refusals: unknown[] };
 
@@ -309,7 +309,7 @@ function literalInsert(d: Dialect, tag: string, n: number) {
   return defineQuery<any, any, any, any>({ dialect: d, sql: `insert into ${table} (tag, n) values ('${tag.replace(/'/g, "''")}', ${n})`, params: [], cardinality: "none" });
 }
 
-const S9 = "S9 unsupported client: run() rejects with dotsql's TypeError";
+const S9 = "S9 unsupported client: run() rejects with reylo's TypeError";
 
 export const SCENARIOS: Scenario[] = [
   {
@@ -348,7 +348,7 @@ export const SCENARIOS: Scenario[] = [
           syncThrew = true;
         }
         if (!syncThrew) throw new Violation("runSync did not throw on a failing statement");
-        return `dotsql called ${dispatched}; run returned a promise and rejected on a failing statement; runSync returned the value and threw`;
+        return `reylo called ${dispatched}; run returned a promise and rejected on a failing statement; runSync returned the value and threw`;
       }
       const sent = spy(client);
       let refused: unknown = null;
@@ -358,9 +358,9 @@ export const SCENARIOS: Scenario[] = [
         refused = e;
       }
       const calledByRunSync = sent.stop();
-      if (!(refused instanceof TypeError) || !/^runSync takes a synchronous SQLite client/.test(refused.message)) throw new Violation(`runSync on an asynchronous client did not throw dotsql's TypeError: ${describe(refused)}`);
+      if (!(refused instanceof TypeError) || !/^runSync takes a synchronous SQLite client/.test(refused.message)) throw new Violation(`runSync on an asynchronous client did not throw reylo's TypeError: ${describe(refused)}`);
       if (!calledByRunSync.startsWith("no method") && !calledByRunSync.startsWith("the client as a function")) throw new Violation(`runSync called ${calledByRunSync} before refusing the client`);
-      return `dotsql called ${dispatched}; run returned a promise and rejected on a failing statement; runSync refused the client before calling it`;
+      return `reylo called ${dispatched}; run returned a promise and rejected on a failing statement; runSync refused the client before calling it`;
     },
   },
   {
@@ -368,7 +368,7 @@ export const SCENARIOS: Scenario[] = [
     on: "client",
     async run(ctx, client, q) {
       const d = ctx.job.dialect;
-      // SQLite has no boolean type (dotsql types the column as a number, and better-sqlite3 and node:sqlite refuse a JS boolean).
+      // SQLite has no boolean type (reylo types the column as a number, and better-sqlite3 and node:sqlite refuse a JS boolean).
       const row = await call(ctx, q.params, client, { i: 1, t: "ada", b: d === "sqlite" ? 1 : true, nul: null });
       eq(row, { id: 1, name: "ada", active: true, score: 10 }, "row");
     },
@@ -405,12 +405,12 @@ export const SCENARIOS: Scenario[] = [
     },
   },
   {
-    id: "S2d maybeOne: two rows throw dotsql's error",
+    id: "S2d maybeOne: two rows throw reylo's error",
     on: "client",
     async run(ctx, client, q) {
       try {
         const r = await call(ctx, q.maybeOneOfTwo, client, { id: 2 });
-        throw new Mismatch(`expected dotsql's "at most one row" error, got ${oneLine(safeJson(r))}`);
+        throw new Mismatch(`expected reylo's "at most one row" error, got ${oneLine(safeJson(r))}`);
       } catch (e) {
         if (e instanceof Mismatch || e instanceof Violation) throw e;
         if (!(e instanceof Error) || !/Expected at most one row, got 2/.test(e.message)) throw new Mismatch(`wrong error: ${describe(e)}`);
@@ -432,7 +432,7 @@ export const SCENARIOS: Scenario[] = [
       const r = await call(ctx, q.insert, client, { tag, n: 3 });
       if (r !== undefined) throw new Mismatch(`expected undefined for cardinality none, got ${oneLine(safeJson(r))}`);
       // Inside a transaction scope the row is not committed yet, so read it through the same client.
-      eq(await call(ctx, q.byTag, client, { tag }), { n: 3 }, "read back through dotsql");
+      eq(await call(ctx, q.byTag, client, { tag }), { n: 3 }, "read back through reylo");
       if (!ctx.shape.inTransaction) eq(await ctx.job.count(tag), 1, "raw count");
     },
   },
@@ -672,7 +672,7 @@ export const SCENARIOS: Scenario[] = [
   },
 ];
 
-/** Records which of the client's methods dotsql calls, by shadowing them with own properties until stop(). */
+/** Records which of the client's methods reylo calls, by shadowing them with own properties until stop(). */
 function spy(client: Client): { stop(): string } {
   const names = ["query", "unsafe", "execute", "all", "prepare", "batch", "promise", "manyOrNone"];
   const calls: string[] = [];
@@ -778,12 +778,12 @@ export async function runJob(meta: JobMeta, setup: () => Promise<Job>): Promise<
     finish(1);
     return;
   }
-  // The raw count, without dotsql, first: a driver that cannot query the server at all (pg 7 on
-  // Node 26, say) is reported once, not as a failure of every dotsql scenario.
+  // The raw count, without reylo, first: a driver that cannot query the server at all (pg 7 on
+  // Node 26, say) is reported once, not as a failure of every reylo scenario.
   try {
     await timeout(job.count("dm-preflight"), 20000, "the raw count");
   } catch (e) {
-    emit({ pkg: job.pkg, version: job.version, runtime, target: job.target, shape: "(job)", scenario: "preflight", status: "not run", live: meta.live ?? true, error: `the driver cannot run a query without dotsql: ${e instanceof TimedOut ? e.message : describe(e)}` });
+    emit({ pkg: job.pkg, version: job.version, runtime, target: job.target, shape: "(job)", scenario: "preflight", status: "not run", live: meta.live ?? true, error: `the driver cannot run a query without reylo: ${e instanceof TimedOut ? e.message : describe(e)}` });
     try {
       await timeout(Promise.resolve(job.close?.()), 5000, "close");
     } catch {}
@@ -827,7 +827,7 @@ export async function runJob(meta: JobMeta, setup: () => Promise<Job>): Promise<
               }).catch((e) => {
                 if (!done) throw e;
                 // A statement that failed inside an open transaction aborts it (Postgres), so the
-                // shape's own commit then fails: the driver's semantics, not dotsql's.
+                // shape's own commit then fails: the driver's semantics, not reylo's.
                 if (shape.inTransaction) {
                   detail = [detail, `then the enclosing transaction failed, as the database aborts it after an error: ${describe(e)}`].filter(Boolean).join("; ");
                   return;
@@ -849,7 +849,7 @@ export async function runJob(meta: JobMeta, setup: () => Promise<Job>): Promise<
           continue;
         }
         if (e instanceof TimedOut) timeouts++;
-        const msg = e instanceof Mismatch || e instanceof TimedOut ? e.message : e instanceof Violation ? `dotsql contract: ${e.message}` : describe(e);
+        const msg = e instanceof Mismatch || e instanceof TimedOut ? e.message : e instanceof Violation ? `reylo contract: ${e.message}` : describe(e);
         emit({ ...base, scenario: s.id, status: "fail", error: msg, ...(warnings.length ? { detail: warnings.map((w) => `warning: ${w}`).join("; ") } : {}) });
       }
     }
@@ -862,15 +862,15 @@ export async function runJob(meta: JobMeta, setup: () => Promise<Job>): Promise<
   finish(0);
 }
 
-/** A statement with parameters on a client that binds none: dotsql must refuse it with its TypeError, carrying the driver's error as cause. */
+/** A statement with parameters on a client that binds none: reylo must refuse it with its TypeError, carrying the driver's error as cause. */
 function refusalResult(ctx: Ctx, e: unknown): { status: Status; error?: string; detail?: string } {
   const refusal = ctx.refusals[0] as (TypeError & { cause?: unknown }) | undefined;
   if (refusal) {
-    if (!(refusal.cause instanceof Error)) return { status: "fail", error: `dotsql refused the statement, but its TypeError carries no driver error as cause: ${describe(refusal)}` };
-    return { status: "unsupported", detail: `dotsql refused it: ${oneLine(refusal.message, 160)} (cause: ${describe(refusal.cause)})` };
+    if (!(refusal.cause instanceof Error)) return { status: "fail", error: `reylo refused the statement, but its TypeError carries no driver error as cause: ${describe(refusal)}` };
+    return { status: "unsupported", detail: `reylo refused it: ${oneLine(refusal.message, 160)} (cause: ${describe(refusal.cause)})` };
   }
-  if (e === null) return { status: "fail", error: "expected dotsql to refuse a statement with parameters on this client, but the scenario ran" };
-  return { status: "fail", error: `expected dotsql's refusal of a statement with parameters, got: ${e instanceof Mismatch || e instanceof TimedOut ? e.message : describe(e)}` };
+  if (e === null) return { status: "fail", error: "expected reylo to refuse a statement with parameters on this client, but the scenario ran" };
+  return { status: "fail", error: `expected reylo's refusal of a statement with parameters, got: ${e instanceof Mismatch || e instanceof TimedOut ? e.message : describe(e)}` };
 }
 
 async function checkRefused(shape: Shape, q: ReturnType<typeof queries>): Promise<{ status: Status; error?: string; detail?: string }> {
@@ -883,10 +883,10 @@ async function checkRefused(shape: Shape, q: ReturnType<typeof queries>): Promis
   if (!isThenable(r)) return { status: "fail", error: `run returned ${typeof r}, not a rejected promise` };
   try {
     const rows = await timeout(Promise.resolve(r), SCENARIO_TIMEOUT, "run");
-    return { status: "fail", error: `dotsql ran the statement on an unsupported client and resolved ${oneLine(safeJson(rows))}` };
+    return { status: "fail", error: `reylo ran the statement on an unsupported client and resolved ${oneLine(safeJson(rows))}` };
   } catch (e) {
-    if (e instanceof TypeError && shape.refused!.test(e.message)) return { status: "unsupported", detail: `dotsql refused it: ${oneLine(e.message, 1000)}` };
-    return { status: "fail", error: `not dotsql's refusal: ${describe(e)}` };
+    if (e instanceof TypeError && shape.refused!.test(e.message)) return { status: "unsupported", detail: `reylo refused it: ${oneLine(e.message, 1000)}` };
+    return { status: "fail", error: `not reylo's refusal: ${describe(e)}` };
   }
 }
 

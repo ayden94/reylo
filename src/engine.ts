@@ -1,4 +1,4 @@
-// The analysis engine: `engine/porg_engine.wasm`, a WASI reactor, loaded once per process.
+// The analysis engine: `engine/reylo_engine.wasm`, a WASI reactor, loaded once per process.
 // The engine is pure. `analyze` replays it: every round it either answers or names what it
 // still needs — statements to describe, catalog queries to run — and this module fulfils
 // those through the project's own driver and calls again.
@@ -72,9 +72,9 @@ type Response =
   | { status: "configError"; error: { message: string; start: number; end: number } }
   | { status: "error"; message: string };
 
-const WASM_PATH = new URL("../engine/porg_engine.wasm", import.meta.url);
+const WASM_PATH = new URL("../engine/reylo_engine.wasm", import.meta.url);
 
-// The WebAssembly namespace is a global in every runtime dotsql supports; it is typed here
+// The WebAssembly namespace is a global in every runtime reylo supports; it is typed here
 // rather than through the DOM lib.
 type Memory = { buffer: ArrayBuffer };
 type Instance = { exports: Record<string, unknown> };
@@ -89,14 +89,14 @@ export class Engine {
   private constructor(instance: Instance) {
     const e = instance.exports as Record<string, any>;
     this.#memory = e.memory;
-    this.#alloc = e.porg_alloc;
-    this.#free = e.porg_free;
-    this.#call = e.porg_call;
+    this.#alloc = e.reylo_alloc;
+    this.#free = e.reylo_free;
+    this.#call = e.reylo_call;
   }
 
   static async load(path: URL | string = WASM_PATH): Promise<Engine> {
     const module = await WA.compile(readFileSync(path));
-    const wasi = new WASI({ version: "preview1", args: ["porg-engine"], env: {} });
+    const wasi = new WASI({ version: "preview1", args: ["reylo-engine"], env: {} });
     // Bun's node:wasi has neither getImportObject nor initialize: it takes the imports from
     // wasiImport, and its start(instance) only sets the memory of a reactor, which has no _start.
     // Its random_get returns the length instead of 0 before Bun 1.4 (oven-sh/bun#35438), which

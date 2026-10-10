@@ -22,8 +22,8 @@ export function Heading({ as: As, id, children, className, ...props }: Props) {
     });
   };
   return (
-    <As id={id} className={['dotsql-heading', className].filter(Boolean).join(' ')} {...props}>
-      <button type="button" className="dotsql-anchor not-prose" aria-label="Copy a link to this section" onClick={copy}>
+    <As id={id} className={['reylo-heading', className].filter(Boolean).join(' ')} {...props}>
+      <button type="button" className="reylo-anchor not-prose" aria-label="Copy a link to this section" onClick={copy}>
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
           {copied ? (
             <path d="M20 6 9 17l-5-5" />

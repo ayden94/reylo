@@ -1,12 +1,12 @@
-//! The project file, `.porg.yaml`: the settings the content mapper reads now and PorgREST and
-//! PorgAPI read later, parsed once here so every host reads the same YAML the same way.
+//! The project file, `.reylo.yaml`: the settings the content mapper reads now and PorgREST and
+//! Reylo Framework read later, parsed once here so every host reads the same YAML the same way.
 //!
 //! A host finds the file (beside the project's `package.json`), reads it and hands the text over;
 //! what the file names outside itself (the environment, `.env` files, the database) is the host's
 //! to resolve, and a `${VAR}` in a URL stays as written. There is no dialect key: the URL's scheme
 //! names the dialect. A key the library does not know is an error, so a typo does not pass for a
 //! default; the sections of the two servers (`rest`, `api`) are accepted as they are and read by
-//! those servers. `cli` says which files `porg generate` analyzes.
+//! those servers. `cli` says which files `reylo generate` analyzes.
 
 use serde::{Deserialize, Serialize};
 
@@ -37,7 +37,7 @@ pub struct Project {
     pub api: Option<serde_yaml::Value>,
 }
 
-/// What the project's driver returns for the values drivers disagree on. Porg declares these
+/// What the project's driver returns for the values drivers disagree on. Reylo declares these
 /// types; the driver's own settings decide the values. Each key overrides the defaults of the
 /// driver the host found in the project's `package.json`, and means the same on every dialect.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
@@ -81,7 +81,7 @@ pub enum Binary {
     NumberArray,
 }
 
-/// The files `porg generate` analyzes, as globs relative to the project file: `include` replaces
+/// The files `reylo generate` analyzes, as globs relative to the project file: `include` replaces
 /// the default (every `.sql` file), and `exclude` adds to what is always left out (dependencies,
 /// build output, directories whose name starts with a dot, and what git ignores).
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]

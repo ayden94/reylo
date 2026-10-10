@@ -1,5 +1,5 @@
 //! JSON Schema as a rendering of the type model: what a value of a [`Type`] looks like once it is
-//! JSON. The spellings are the framework's encoding table (`porgapi/docs`, the endpoints
+//! JSON. The spellings are the framework's encoding table (`framework/docs`, the endpoints
 //! page), whose formats tell a client which decoder a value needs, so each one is stated even
 //! where JSON has a native type.
 //!

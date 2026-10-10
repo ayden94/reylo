@@ -1,6 +1,6 @@
-// One preload for every runtime: `node --import dotsql/register`, `nub --import dotsql/register`,
-// `bun --preload dotsql/register` (or bunfig.toml). It is the build step for code that runs
-// unbundled: each `.sql` file becomes its module (`src/loader.ts`) as it loads, from `.dotsql/` or
+// One preload for every runtime: `node --import reylo/register`, `nub --import reylo/register`,
+// `bun --preload reylo/register` (or bunfig.toml). It is the build step for code that runs
+// unbundled: each `.sql` file becomes its module (`src/loader.ts`) as it loads, from `.reylo/` or
 // the database. Node's load hook (module.registerHooks) and Bun's plugin under `require()` must
 // answer synchronously, while the analysis waits on the database, so they ask `src/bridge.ts`,
 // which blocks on a worker thread.
@@ -10,10 +10,10 @@ import { sqlModuleSync } from "./bridge.ts";
 declare const Bun: undefined | { plugin(p: { name: string; setup(build: { onLoad(o: { filter: RegExp }, cb: (args: { path: string }) => { loader: string; contents: string }): void }): void }): void };
 
 // The worker inherits the preload; it loads no `.sql` file itself.
-if (!(workerData as { porgWorker?: boolean } | null)?.porgWorker) {
+if (!(workerData as { reyloWorker?: boolean } | null)?.reyloWorker) {
   if (typeof Bun !== "undefined") {
     Bun.plugin({
-      name: "dotsql-sql",
+      name: "reylo-sql",
       setup(build) {
         build.onLoad({ filter: /\.sql$/ }, (args) => ({ loader: "js", contents: sqlModuleSync(args.path) }));
       },

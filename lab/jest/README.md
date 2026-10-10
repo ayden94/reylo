@@ -1,14 +1,14 @@
 # Lab: Jest and Vitest
 
-This lab answers whether `node --import dotsql/register` makes a `.sql` import work under Jest. It does not, in a CommonJS run or an ESM run. The lab holds the experiment, the `dotsql/jest` transformer runs that do work, and one Vitest run through `dotsql/vite`. Jest is 30.5.2 on Node 26.10.
+This lab answers whether `node --import reylo/register` makes a `.sql` import work under Jest. It does not, in a CommonJS run or an ESM run. The lab holds the experiment, the `reylo/jest` transformer runs that do work, and one Vitest run through `reylo/vite`. Jest is 30.5.2 on Node 26.10.
 
 ```sh
 cd lab/jest
-nub install && ln -sfn ../../.. node_modules/dotsql   # nub install removes the symlink; link it again after every install
-node setup.mjs                                      # lab.db; .dotsql.yaml points at it with file:./lab.db
-nub run test:cjs                                    # dotsql/jest, CommonJS run: query.test.cjs
-nub run test:esm                                    # dotsql/jest, --experimental-vm-modules: query.test.cjs and query.test.mjs
-nub run test:vitest                                 # dotsql/vite: query.test.mjs
+nub install && ln -sfn ../../.. node_modules/reylo   # nub install removes the symlink; link it again after every install
+node setup.mjs                                      # lab.db; .reylo.yaml points at it with file:./lab.db
+nub run test:cjs                                    # reylo/jest, CommonJS run: query.test.cjs
+nub run test:esm                                    # reylo/jest, --experimental-vm-modules: query.test.cjs and query.test.mjs
+nub run test:vitest                                 # reylo/vite: query.test.mjs
 ```
 
 Watchman is broken on the machine the lab was written on, and Jest then exits 0 without running a test. Every config sets `watchman: false`, and a run without a config needs `--no-watchman`.
@@ -18,8 +18,8 @@ Watchman is broken on the machine the lab was written on, and Jest then exits 0 
 The preload reaches every Jest process, and Jest never asks Node's loader for a test's modules. The tests in `probe/` load `query.sql` twice: once through Jest's `require`, and once through Node's own loader (`require("node:module")._load`, which Jest's wrapper copies from Node). Each run appends one line per test file to `probe.jsonl`.
 
 ```sh
-NODE_OPTIONS="--import dotsql/register" node node_modules/jest/bin/jest.js --no-watchman probe   # two workers
-node --import dotsql/register node_modules/jest/bin/jest.js --no-watchman --runInBand probe     # the Jest process itself
+NODE_OPTIONS="--import reylo/register" node node_modules/jest/bin/jest.js --no-watchman probe   # two workers
+node --import reylo/register node_modules/jest/bin/jest.js --no-watchman --runInBand probe     # the Jest process itself
 node node_modules/jest/bin/jest.js --no-watchman probe                                        # control: no preload
 ```
 
@@ -36,27 +36,27 @@ The same SyntaxError ends `query.test.cjs` and `query.test.mjs` under every prel
 - An ES module is built as `new vm.SourceTextModule(code, { context })` from the same transform output (`EsmLoader`). Node's ESM loader is never called either.
 - Inside the sandbox, Jest replaces `module.register` and `module.registerHooks` with a function that throws. Its message says the hooks would attach to the loader running Jest itself, and points to `transform` instead. Jest also replaces `process.getBuiltinModule`.
 
-## `dotsql/jest`
+## `reylo/jest`
 
-The transformer (`src/jest.ts`) answers Jest's synchronous `process` through the worker bridge that `dotsql/register` uses (`src/bridge.ts`). It returns ESM when Jest loads the file as an ES module and CommonJS otherwise. Its cache key is the module itself, so Jest's transform cache follows a migration.
+The transformer (`src/jest.ts`) answers Jest's synchronous `process` through the worker bridge that `reylo/register` uses (`src/bridge.ts`). It returns ESM when Jest loads the file as an ES module and CommonJS otherwise. Its cache key is the module itself, so Jest's transform cache follows a migration.
 
-dotsql's runtime (`import { defineQuery } from "dotsql"`) is an ES module. A run without `--experimental-vm-modules` cannot `require` an ES module, so that run also needs dotsql compiled to CommonJS.
+Reylo's runtime (`import { defineQuery } from "reylo"`) is an ES module. A run without `--experimental-vm-modules` cannot `require` an ES module, so that run also needs Reylo compiled to CommonJS.
 
 | Config | Run | Result |
 | --- | --- | --- |
 | `jest.esm.config.cjs` | `--experimental-vm-modules`, workers and `--runInBand` | both tests pass |
-| the same, without `dotsql/jest` | `--experimental-vm-modules`, with and without `--import dotsql/register` | `SyntaxError` in both tests |
-| `dotsql/jest` without `extensionsToTreatAsEsm` | `--experimental-vm-modules` | `query.test.cjs` passes; `query.test.mjs` gets `module.exports` as its default import, so `query.cardinality` is `undefined` |
-| `jest.cjs.config.cjs` (babel-jest compiles dotsql) | no flag | `query.test.cjs` passes |
-| the same, without `dotsql/jest` | no flag, with and without `--import dotsql/register` | `SyntaxError: Unexpected identifier 'id'` |
-| `dotsql/jest` alone | no flag | `Must use import to load ES Module: .../src/index.ts` |
-| `dotsql/jest` with ESM output forced | no flag | `Must use import to load ES Module: .../query.sql` |
-| `dotsql/jest` without its cache key | two runs, one cache directory, a unique index added between them | the second run keeps `many`; with the key it reads `maybeOne` |
+| the same, without `reylo/jest` | `--experimental-vm-modules`, with and without `--import reylo/register` | `SyntaxError` in both tests |
+| `reylo/jest` without `extensionsToTreatAsEsm` | `--experimental-vm-modules` | `query.test.cjs` passes; `query.test.mjs` gets `module.exports` as its default import, so `query.cardinality` is `undefined` |
+| `jest.cjs.config.cjs` (babel-jest compiles Reylo) | no flag | `query.test.cjs` passes |
+| the same, without `reylo/jest` | no flag, with and without `--import reylo/register` | `SyntaxError: Unexpected identifier 'id'` |
+| `reylo/jest` alone | no flag | `Must use import to load ES Module: .../src/index.ts` |
+| `reylo/jest` with ESM output forced | no flag | `Must use import to load ES Module: .../query.sql` |
+| `reylo/jest` without its cache key | two runs, one cache directory, a unique index added between them | the second run keeps `many`; with the key it reads `maybeOne` |
 
-A test that expects a wrong email fails in each passing config. The built package (`nub run build`, `dist/` copied into a project's `node_modules/dotsql`) gives the same results. The ESM config passes both tests. The CommonJS config passes with `transformIgnorePatterns: ["/node_modules/(?!dotsql/)"]` and fails with `Must use import to load ES Module: .../node_modules/dotsql/src/index.js` without it.
+A test that expects a wrong email fails in each passing config. The built package (`nub run build`, `dist/` copied into a project's `node_modules/reylo`) gives the same results. The ESM config passes both tests. The CommonJS config passes with `transformIgnorePatterns: ["/node_modules/(?!reylo/)"]` and fails with `Must use import to load ES Module: .../node_modules/reylo/src/index.js` without it.
 
 ## Vitest
 
-Vitest needs only `dotsql/vite` (`vitest.config.mjs`). Without the plugin, Vite fails to parse `query.sql`, and a wrong expectation fails the run.
+Vitest needs only `reylo/vite` (`vitest.config.mjs`). Without the plugin, Vite fails to parse `query.sql`, and a wrong expectation fails the run.
 
 `tests/jest.test.ts` at the root runs the preload control, both Jest configs and Vitest, and skips when the lab is not installed.

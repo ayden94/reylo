@@ -108,7 +108,7 @@ function pgClient(db: Db) {
 const probe: QueryModule<"postgres"> = { dialect: "postgres", sql: "select * from probe where id = :id", params: ["id"] };
 const lateProbe: QueryModule<"postgres"> = { dialect: "postgres", sql: "select *, late from probe where id = :id", params: ["id"] };
 
-// What dotsql declares for each column.
+// What reylo declares for each column.
 const declared = {
   roles: ["admin", "member", null],
   names: ["a", "b"],
@@ -133,7 +133,7 @@ test("parseArray: quoting, escapes, NULL, nesting, bounds and box's delimiter", 
   assert.deepEqual(parseArray("{(1,1),(0,0);(2,2),(1,1)}", String, ";"), ["(1,1),(0,0)", "(2,2),(1,1)"]);
 });
 
-test("pg Client: dotsql's per-query types decode what pg-types leaves as text or objects; the client's next query is unchanged", async () => {
+test("pg Client: reylo's per-query types decode what pg-types leaves as text or objects; the client's next query is unchanged", async () => {
   const db = database();
   const client = pgClient(db);
   const control = (await client.query("select * from probe")).rows[0]!;
@@ -150,7 +150,7 @@ test("pg Client: dotsql's per-query types decode what pg-types leaves as text or
   assert.deepEqual([sent.text, sent.values], ["select * from probe where id = $1", [1]]);
 });
 
-test("pg Client: a parser the user registered still wins, for the oids dotsql takes over and for the others", async () => {
+test("pg Client: a parser the user registered still wins, for the oids reylo takes over and for the others", async () => {
   const db = database();
   const client = pgClient(db);
   client.setTypeParser(1184, (x) => `text:${x}`);

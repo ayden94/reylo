@@ -32,7 +32,7 @@ const e3: Row | null = await query.run(pool, [1, "ada"]);
 // @ts-expect-error each element keeps its parameter's type
 await query.run(pool, ["1", "ada"]);
 const g: ExpectedRow | null = query["~standard"].types!.output;
-const h: { created_at: string; big: string | null } | null = query["~dotsql"].json;
+const h: { created_at: string; big: string | null } | null = query["~reylo"].json;
 // @ts-expect-error wrong parameter type
 await query.run(pool, { id: "1", name: "ada" });
 // @ts-expect-error a sqlite client cannot run a postgres query

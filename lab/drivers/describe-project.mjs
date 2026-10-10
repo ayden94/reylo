@@ -7,7 +7,7 @@ const URL = "postgres://localhost:5432/postgres";
 const drivers = new URL("./node_modules", import.meta.url).pathname;
 const q = `select u.oid, u.relname, (select coalesce(jsonb_agg(jsonb_build_object('a', 1)), '[]'::jsonb)) as j from pg_catalog.pg_class u where u.oid = $1 and u.relname = $2`;
 for (const only of ["postgres", "pg"]) {
-  const dir = mkdtempSync(`/tmp/dotsql-proj-${only}-`);
+  const dir = mkdtempSync(`/tmp/reylo-proj-${only}-`);
   writeFileSync(join(dir, "package.json"), "{}"); mkdirSync(join(dir, "node_modules"));
   symlinkSync(join(drivers, only), join(dir, "node_modules", only));
   if (only === "pg") for (const dep of ["pg-pool","pg-protocol","pg-types","pg-connection-string","pgpass","pg-cloudflare","postgres-array","postgres-bytea","postgres-date","postgres-interval","split2","xtend","pg-int8","pg-numeric","postgres-range","obuf","buffer-writer","packet-reader"]) { try { symlinkSync(join(drivers, dep), join(dir, "node_modules", dep)); } catch {} }

@@ -26,7 +26,7 @@
   },
   "contentMappers": [
     {
-      "package": "dotsql",
+      "package": "reylo",
       "extensions": [
         ".sql"
       ]

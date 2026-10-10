@@ -1,4 +1,4 @@
-// Control for the PlanetScale S8 failures: without dotsql, concurrent execute() calls on one
+// Control for the PlanetScale S8 failures: without reylo, concurrent execute() calls on one
 // Connection that already holds a session are refused by ps-http-sim ("session already in use",
 // HTTP 403). Run with ./setup.sh done: node probes/planetscale-session.mjs
 import { connect } from "planetscale-1";

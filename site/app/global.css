@@ -8,16 +8,16 @@
   --font-mono: var(--font-code), ui-monospace, 'SF Mono', Menlo, monospace;
 }
 
-/* ── dotsql: steel grays and one yellow ────────────────────────────────────────
+/* ── reylo: steel grays and one yellow ────────────────────────────────────────
    The layout and type follow zod.dev (Inter, ruled h1 and h2, borderless inline
-   code tinted with the accent, mono tab labels). The colours are dotsql's own: a
+   code tinted with the accent, mono tab labels). The colours are reylo's own: a
    blue-tinted steel scale for every surface and rule, and a yellow that marks
    links, the active table-of-contents entry and inline code. In light mode the
    yellow darkens to ochre wherever it carries text, so it keeps its contrast on
    a pale background. ─────────────────────────────────────────────────────── */
 
 :root {
-  --porg-yellow: hsl(46, 97%, 52%);
+  --reylo-yellow: hsl(46, 97%, 52%);
 
   --color-fd-background: hsl(210, 20%, 99%);
   --color-fd-foreground: hsl(215, 25%, 20%);
@@ -44,7 +44,7 @@
 }
 
 .dark {
-  --porg-yellow: hsl(48, 96%, 58%);
+  --reylo-yellow: hsl(48, 96%, 58%);
 
   --color-fd-background: hsl(215, 22%, 9%);
   --color-fd-foreground: hsl(212, 16%, 80%);
@@ -112,12 +112,12 @@ html .prose {
   }
 
   /* The link icon sits in the margin to the left of the heading, always visible. */
-  .dotsql-heading {
+  .reylo-heading {
     position: relative;
     scroll-margin-top: 7rem;
   }
 
-  .porg-anchor {
+  .reylo-anchor {
     position: absolute;
     left: -1.75rem;
     top: 50%;
@@ -130,11 +130,11 @@ html .prose {
     transition: color 120ms;
   }
 
-  .porg-anchor:hover {
+  .reylo-anchor:hover {
     color: var(--color-fd-muted-foreground);
   }
 
-  h2 > .porg-anchor {
+  h2 > .reylo-anchor {
     /* The rule's padding sits below the text; center on the text line, not the box. */
     top: calc(50% - 0.0625rem);
   }
@@ -143,7 +143,7 @@ html .prose {
   a:not(.not-prose a) {
     font-weight: 500;
     text-decoration-line: underline;
-    text-decoration-color: var(--porg-yellow);
+    text-decoration-color: var(--reylo-yellow);
     text-decoration-thickness: 2px;
     text-underline-offset: 3px;
   }
@@ -156,7 +156,7 @@ html .prose {
   :where(code):not(:where(pre code, [class~='not-prose'], [class~='not-prose'] *)) {
     border: none;
     @apply px-1.5;
-    background-color: color-mix(in oklab, var(--porg-yellow) 16%, transparent);
+    background-color: color-mix(in oklab, var(--reylo-yellow) 16%, transparent);
     font-size: 0.86em;
   }
 
@@ -188,7 +188,7 @@ html .prose {
 }
 
 ::selection {
-  background: color-mix(in oklab, var(--porg-yellow) 35%, transparent);
+  background: color-mix(in oklab, var(--reylo-yellow) 35%, transparent);
 }
 
 /* ── Twoslash hovers ─────────────────────────────────────────────────────────
@@ -197,7 +197,7 @@ html .prose {
    the type as its text, not a code card (border, copy button) inside a card. */
 
 .twoslash .twoslash-hover[data-popup-open] {
-  border-bottom: 2px solid var(--porg-yellow);
+  border-bottom: 2px solid var(--reylo-yellow);
 }
 
 .fd-twoslash-popover {

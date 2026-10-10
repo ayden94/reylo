@@ -8,10 +8,10 @@
 //! `dialect` file says `sqlite` runs in a fresh SQLite file instead. A case with a `min_version`
 //! file (a `server_version_num`, such as `180000`) is skipped on an older server.
 //!
-//!   cargo run -p porg-oracle -- --url postgres://postgres@localhost:55432/postgres oracle/cases
-//!   cargo run -p porg-oracle -- --url … --bless oracle/cases/not_null   # rewrite expected.txt
-//!   cargo run -p porg-oracle -- --url … --analyses old.json oracle/cases  # check other answers
-//!   cargo run -p porg-oracle -- --url … --dump new.json oracle/cases      # write the answers
+//!   cargo run -p reylo-oracle -- --url postgres://postgres@localhost:55432/postgres oracle/cases
+//!   cargo run -p reylo-oracle -- --url … --bless oracle/cases/not_null   # rewrite expected.txt
+//!   cargo run -p reylo-oracle -- --url … --analyses old.json oracle/cases  # check other answers
+//!   cargo run -p reylo-oracle -- --url … --dump new.json oracle/cases      # write the answers
 //!
 //! `--analyses` names a JSON object of analyses keyed `<case>/<file>`, which the seeding checks
 //! in place of the engine's own: how a check that passes shows it can fail, run on the answers of
@@ -203,7 +203,7 @@ async fn connect_admin(url: &str) -> Result<(Client, Config, i32), String> {
 
 async fn run_postgres(case: &Path, admin: &Client, admin_config: &Config, keep: bool, given: &Map<String, Value>, dumped: &mut Map<String, Value>) -> Result<Vec<String>, String> {
     let name: String = case.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-    let db = format!("porg_oracle_{}", name.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' }).collect::<String>());
+    let db = format!("reylo_oracle_{}", name.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' }).collect::<String>());
     // Two messages: in one, CREATE DATABASE would run inside the batch's implicit transaction.
     admin.batch_execute(&format!("DROP DATABASE IF EXISTS {db} WITH (FORCE)")).await.map_err(|e| format!("drop {db}: {}", pg_message(&e)))?;
     admin.batch_execute(&format!("CREATE DATABASE {db}")).await.map_err(|e| format!("create {db}: {}", pg_message(&e)))?;
@@ -246,7 +246,7 @@ async fn analyze_postgres(client: &Client, sql: &str) -> Result<Value, String> {
     let mut answers = Map::new();
     for _ in 0..64 {
         let request = json!({ "op": "analyze", "sql": sql, "dialect": "postgres", "answers": Value::Object(answers.clone()) });
-        let response: Value = serde_json::from_str(&porg_engine::call(&request.to_string())).map_err(|e| e.to_string())?;
+        let response: Value = serde_json::from_str(&reylo_engine::call(&request.to_string())).map_err(|e| e.to_string())?;
         match response["status"].as_str() {
             Some("analysis") => return Ok(response["analysis"].clone()),
             Some("need") => {
@@ -357,7 +357,7 @@ fn pg_error(e: &tokio_postgres::Error) -> Value {
 
 fn run_sqlite(case: &Path) -> Result<Vec<String>, String> {
     let name: String = case.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-    let file = std::env::temp_dir().join(format!("porg-oracle-{name}.db"));
+    let file = std::env::temp_dir().join(format!("reylo-oracle-{name}.db"));
     let _ = fs::remove_file(&file);
     let db = rusqlite::Connection::open(&file).map_err(|e| e.to_string())?;
     let setup = fs::read_to_string(case.join("setup.sql")).map_err(|e| e.to_string())?;
@@ -386,7 +386,7 @@ fn analyze_sqlite(db: &rusqlite::Connection, sql: &str) -> Result<Value, String>
     let mut answers = Map::new();
     for _ in 0..16 {
         let request = json!({ "op": "analyze", "sql": sql, "dialect": "sqlite", "answers": Value::Object(answers.clone()) });
-        let response: Value = serde_json::from_str(&porg_engine::call(&request.to_string())).map_err(|e| e.to_string())?;
+        let response: Value = serde_json::from_str(&reylo_engine::call(&request.to_string())).map_err(|e| e.to_string())?;
         match response["status"].as_str() {
             Some("analysis") => return Ok(response["analysis"].clone()),
             Some("need") => {
@@ -436,7 +436,7 @@ fn line(analysis: &Value) -> String {
     let columns: Vec<String> = analysis["columns"].as_array().map(|a| a.iter().map(field).collect()).unwrap_or_default();
     let mut out = format!("{} ({}) -> {{ {} }}", analysis["cardinality"].as_str().unwrap_or("?"), params.join(", "), columns.join(", "));
     for d in analysis["diagnostics"].as_array().into_iter().flatten() {
-        out.push_str(&format!(" !! porg{}: {}", d["code"], d["message"].as_str().unwrap_or("")));
+        out.push_str(&format!(" !! reylo{}: {}", d["code"], d["message"].as_str().unwrap_or("")));
     }
     out
 }

@@ -1,6 +1,6 @@
-// dotsql's per-query decoding (src/decode.ts) against real drivers: pg's Client, Pool and a
+// reylo's per-query decoding (src/decode.ts) against real drivers: pg's Client, Pool and a
 // PoolClient in a transaction, pg-promise, Neon's Pool and Client through a local stand-in for
-// its WebSocket proxy, and PGlite. Each driver runs the same statement through dotsql's `run` and
+// its WebSocket proxy, and PGlite. Each driver runs the same statement through reylo's `run` and
 // directly (the control, which shows the driver's own shapes), then checks that a parser the
 // user registered still applies and that the user's own queries are unchanged.
 // Needs the local Postgres (DECODE_URL, default postgres://localhost:5432/porg_decode, created
@@ -29,7 +29,7 @@ const sql = `select array['admin', 'member', null]::role[] as roles, array['a', 
 const q = defineQuery({ dialect: "postgres", sql, params: ["id"], cardinality: "one" });
 const direct = sql.replace(":id", "$1");
 
-// What dotsql declares for each column (an enum array is a union array, interval its text, ...).
+// What reylo declares for each column (an enum array is a union array, interval its text, ...).
 const declared = {
   roles: ["admin", "member", null],
   names: ["a", "b"],
@@ -58,7 +58,7 @@ function control(label, row, { pglite = false } = {}) {
   const pgShapes = pglite
     ? typeof row.roles === "string" || (Array.isArray(row.posints) && row.posints[0] === "1") || Array.isArray(row.pairs)
     : typeof row.roles === "string" && typeof row.names === "string" && typeof row.posints === "string" && typeof row.span === "object" && typeof row.amounts[0] === "number";
-  check(`${label} control (no dotsql)`, pgShapes, `roles=${show(row.roles)} names=${show(row.names)} posints=${show(row.posints)} span=${show(row.span)} amounts=${show(row.amounts)}`);
+  check(`${label} control (no reylo)`, pgShapes, `roles=${show(row.roles)} names=${show(row.names)} posints=${show(row.posints)} span=${show(row.span)} amounts=${show(row.amounts)}`);
 }
 
 const admin = new pg.Client(`${server}/postgres`);
@@ -78,18 +78,18 @@ try {
     control("pg Client", (await client.query(direct, [1])).rows[0]);
     same("pg Client through run", await q.run(client, { id: 1 }), declared);
     same("pg Client through run, parameters as an array", await q.run(client, [1]), declared);
-    control("pg Client, the user's own query after dotsql's", (await client.query(direct, [1])).rows[0]);
+    control("pg Client, the user's own query after reylo's", (await client.query(direct, [1])).rows[0]);
     client.setTypeParser(1184, (x) => `client:${x}`);
     client.setTypeParser(1186, function userInterval(x) {
       return `user:${x}`;
     });
     pg.types.setTypeParser(20, BigInt);
     const row = await q.run(client, { id: 1 });
-    check("pg Client: a client timestamptz parser applies to dotsql's query", row.at === "client:2024-01-15 02:30:00.123-08" || String(row.at).startsWith("client:"), show(row.at));
-    check("pg Client: a global int8 parser (BigInt) applies to dotsql's query", row.big === 9007199254740993n, show(row.big));
-    check("pg Client: the user's interval parser wins over dotsql's text, for interval and interval[]", row.span === "user:1 year 2 mons 3 days 04:05:06.789" && row.spans[0] === "user:1 day", `${show(row.span)} ${show(row.spans)}`);
+    check("pg Client: a client timestamptz parser applies to reylo's query", row.at === "client:2024-01-15 02:30:00.123-08" || String(row.at).startsWith("client:"), show(row.at));
+    check("pg Client: a global int8 parser (BigInt) applies to reylo's query", row.big === 9007199254740993n, show(row.big));
+    check("pg Client: the user's interval parser wins over reylo's text, for interval and interval[]", row.span === "user:1 year 2 mons 3 days 04:05:06.789" && row.spans[0] === "user:1 day", `${show(row.span)} ${show(row.spans)}`);
     pg.types.setTypeParser(20, pg.types.getTypeParser(25));
-    // A type created after dotsql read the catalog: decoded after one lookup of its oid.
+    // A type created after reylo read the catalog: decoded after one lookup of its oid.
     await client.query("create type late as enum ('x', 'y')");
     const late = defineQuery({ dialect: "postgres", sql: "select array['x', 'y']::late[] as lates, 'x'::late as one", params: [], cardinality: "one" });
     same("pg Client: an enum created after the catalog was read", await late.run(client), { lates: ["x", "y"], one: "x" });
@@ -102,12 +102,12 @@ try {
     const pool = new pg.Pool({ connectionString: URL, max: 2 });
     control("pg Pool", (await pool.query(direct, [1])).rows[0]);
     same("pg Pool through run", await q.run(pool, { id: 1 }), declared);
-    control("pg Pool, the user's own query after dotsql's", (await pool.query(direct, [1])).rows[0]);
+    control("pg Pool, the user's own query after reylo's", (await pool.query(direct, [1])).rows[0]);
     const listened = new pg.Pool({ connectionString: URL, max: 2 });
     listened.on("connect", (c) => c.setTypeParser(1184, (x) => `connect:${x}`));
     const row = await q.run(listened, { id: 1 });
     same("pg Pool with a connect listener through run", row, { ...declared, at: row.at });
-    check("pg Pool with a connect listener: the listener's parser applies to dotsql's query", String(row.at).startsWith("connect:"), show(row.at));
+    check("pg Pool with a connect listener: the listener's parser applies to reylo's query", String(row.at).startsWith("connect:"), show(row.at));
     check("pg Pool with a connect listener: the checked-out client went back", listened.idleCount === listened.totalCount, `idle ${listened.idleCount} of ${listened.totalCount}`);
     // As pool.query does, a failing statement releases the client with its error, which ends it.
     const failing = defineQuery({ dialect: "postgres", sql: "select 1 / 0 as x", params: [], cardinality: "one" });
@@ -120,7 +120,7 @@ try {
     const inTx = defineQuery({ dialect: "postgres", sql: "select array['p']::in_tx[] as v", params: [], cardinality: "one" });
     same("pg PoolClient: an enum created inside the transaction", await inTx.run(tx), { v: ["p"] });
     await tx.query("rollback");
-    control("pg PoolClient, the user's own query after dotsql's", (await tx.query(direct, [1])).rows[0]);
+    control("pg PoolClient, the user's own query after reylo's", (await tx.query(direct, [1])).rows[0]);
     tx.release();
     await pool.end();
     await listened.end();
@@ -135,9 +135,9 @@ try {
     pgp.pg.types.setTypeParser(1184, (x) => `pgp-global:${x}`);
     const row = await db.tx((t) => q.run(t, { id: 1 }));
     same("pg-promise transaction through run", row, { ...declared, at: row.at });
-    check("pg-promise: a global parser (pgp.pg.types) applies to dotsql's query", String(row.at).startsWith("pgp-global:"), show(row.at));
+    check("pg-promise: a global parser (pgp.pg.types) applies to reylo's query", String(row.at).startsWith("pgp-global:"), show(row.at));
     pgp.pg.types.setTypeParser(1184, pg.types.getTypeParser(1082));
-    control("pg-promise, the user's own query after dotsql's", await db.one({ text: direct, values: [1] }));
+    control("pg-promise, the user's own query after reylo's", await db.one({ text: direct, values: [1] }));
     pgp.end();
   }
 
@@ -164,9 +164,9 @@ try {
     same("Neon Pool through run", await q.run(pool, { id: 1 }), declared);
     neon.types.setTypeParser(1184, (x) => `neon-global:${x}`);
     const row = await q.run(pool, { id: 1 });
-    check("Neon Pool: Neon's global parser (its own pg-types copy) applies to dotsql's query", String(row.at).startsWith("neon-global:"), show(row.at));
+    check("Neon Pool: Neon's global parser (its own pg-types copy) applies to reylo's query", String(row.at).startsWith("neon-global:"), show(row.at));
     neon.types.setTypeParser(1184, pg.types.getTypeParser(1082));
-    control("Neon Pool, the user's own query after dotsql's", (await pool.query(direct, [1])).rows[0]);
+    control("Neon Pool, the user's own query after reylo's", (await pool.query(direct, [1])).rows[0]);
     const client = new neon.Client({ connectionString: neonUrl });
     await client.connect();
     same("Neon Client through run", await q.run(client, { id: 1 }), declared);
@@ -181,19 +181,19 @@ try {
     await lite.exec(schema);
     control("PGlite", (await lite.query(direct, [1])).rows[0], { pglite: true });
     const row = await q.run(lite, { id: 1 });
-    // PGlite's int8 is a number within 2^53 and a BigInt above (dotsql declares `number | bigint` for it).
+    // PGlite's int8 is a number within 2^53 and a BigInt above (reylo declares `number | bigint` for it).
     same("PGlite through run", row, { ...declared, big: 9007199254740993n });
-    control("PGlite, the user's own query after dotsql's", (await lite.query(direct, [1])).rows[0], { pglite: true });
+    control("PGlite, the user's own query after reylo's", (await lite.query(direct, [1])).rows[0], { pglite: true });
     // After refreshArrayTypes() PGlite parses the arrays itself, a domain's elements and a composite's as strings.
     await lite.refreshArrayTypes();
     const refreshed = (await lite.query(direct, [1])).rows[0];
-    check("PGlite refreshed control (no dotsql)", isDeepStrictEqual(refreshed.posints, ["1", "2"]) && Array.isArray(refreshed.pairs), `posints=${show(refreshed.posints)} pairs=${show(refreshed.pairs)}`);
+    check("PGlite refreshed control (no reylo)", isDeepStrictEqual(refreshed.posints, ["1", "2"]) && Array.isArray(refreshed.pairs), `posints=${show(refreshed.posints)} pairs=${show(refreshed.pairs)}`);
     same("PGlite refreshed through run", await q.run(lite, { id: 1 }), { ...declared, big: 9007199254740993n });
     await lite.close();
     const withParsers = await PGlite.create({ parsers: { 1184: (x) => `lite:${x}` } });
     await withParsers.exec(schema);
     const own = await q.run(withParsers, { id: 1 });
-    check("PGlite: an instance parser applies to dotsql's query", String(own.at).startsWith("lite:"), show(own.at));
+    check("PGlite: an instance parser applies to reylo's query", String(own.at).startsWith("lite:"), show(own.at));
     same("PGlite with instance parsers through run", own, { ...declared, big: 9007199254740993n, at: own.at });
     await withParsers.close();
   }

@@ -10,7 +10,7 @@ let worker: Worker | undefined;
 export function sqlModuleSync(path: string): string {
   // The worker is this file's sibling, compiled (`.js`) or not (`.ts`).
   const extension = import.meta.url.slice(import.meta.url.lastIndexOf("."));
-  worker ??= new Worker(new URL(`./register-worker${extension}`, import.meta.url), { workerData: { porgWorker: true } });
+  worker ??= new Worker(new URL(`./register-worker${extension}`, import.meta.url), { workerData: { reyloWorker: true } });
   worker.unref();
   const done = new Int32Array(new SharedArrayBuffer(4));
   const { port1, port2 } = new MessageChannel();
@@ -20,7 +20,7 @@ export function sqlModuleSync(path: string): string {
   const waited = Atomics.wait(done, 0, 0, 120_000);
   const reply = receiveMessageOnPort(port1)?.message as { code: string } | { error: string } | undefined;
   port1.close();
-  if (!reply) throw new Error(`${path}: dotsql's worker ${waited === "timed-out" ? "did not answer in 120 s" : "ended without an answer"}.`);
+  if (!reply) throw new Error(`${path}: reylo's worker ${waited === "timed-out" ? "did not answer in 120 s" : "ended without an answer"}.`);
   if ("error" in reply) throw new Error(reply.error);
   return reply.code;
 }

@@ -9,7 +9,7 @@ case "${1:-}" in
   start)
     BIN="${2:?the bin directory of a Postgres install}"
     PORT="${3:?a free port}"
-    DIR="/tmp/porg-oracle-$PORT"
+    DIR="/tmp/reylo-oracle-$PORT"
     if [ ! -d "$DIR" ]; then
       "$BIN/initdb" -D "$DIR" -U postgres --auth=trust > "$DIR.initdb.log" 2>&1
       echo "$BIN" > "$DIR/oracle-bin"
@@ -19,7 +19,7 @@ case "${1:-}" in
     ;;
   stop)
     PORT="${2:?the port the cluster runs on}"
-    DIR="/tmp/porg-oracle-$PORT"
+    DIR="/tmp/reylo-oracle-$PORT"
     [ -d "$DIR" ] || { echo "no cluster at $DIR"; exit 0; }
     "$(cat "$DIR/oracle-bin")/pg_ctl" -D "$DIR" -m fast stop > /dev/null || true
     rm -rf "$DIR" "$DIR.log" "$DIR.initdb.log"
