@@ -1,5 +1,6 @@
-// Placeholder lexing for the runtime loader: finds `:name`, and the dialect's own positional form
-// (`$1` on Postgres, `?` on MySQL, `?` and `?NNN` on SQLite), outside strings and comments, and
+// Placeholder lexing for the runtime loader: finds `:name` (and SQLite's `@name` and `$name`), and
+// the dialect's own positional form (`$1` on Postgres, `?` on MySQL, `?` and `?NNN` on SQLite),
+// outside strings and comments, and
 // returns the binding order. A name may be dotted
 // (`:auth.user_id`); each segment starts like a name, so `arr[1:2]` is a slice. This is the
 // provisional JavaScript version of the engine's lexer; the Rust engine owns the
@@ -30,8 +31,9 @@ export function lexPlaceholders(sql: string, dialect: "postgres" | "mysql" | "sq
     if (ch === "-" && next === "-") { i = sql.indexOf("\n", i); if (i === -1) break; continue; }
     if (ch === "/" && next === "*") { const end = sql.indexOf("*/", i + 2); i = end === -1 ? sql.length : end + 2; continue; }
     if (ch === ":" && next === ":") { i += 2; continue; }
-    // `arr[lo:hi]` is a slice: a name character before the colon means it opens nothing.
-    if (ch === ":" && next !== undefined && /[A-Za-z_]/.test(next) && !(i > 0 && /[A-Za-z0-9_]/.test(sql[i - 1]!))) {
+    // `arr[lo:hi]` is a slice: a name character before the colon means it opens nothing. SQLite's
+    // own `@name` and `$name` are named placeholders there too.
+    if ((ch === ":" || (dialect === "sqlite" && (ch === "@" || ch === "$"))) && next !== undefined && /[A-Za-z_]/.test(next) && !(i > 0 && /[A-Za-z0-9_]/.test(sql[i - 1]!))) {
       const m = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*/.exec(sql.slice(i + 1))!;
       push(m[0], i, i + 1 + m[0].length); i += 1 + m[0].length; continue;
     }

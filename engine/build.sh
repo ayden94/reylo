@@ -54,6 +54,8 @@ export CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="-C link-arg=-L$SYSROOT/lib/wasm32-w
 
 # The crate is a member of the workspace in `..`, so the artifact lands in the workspace's `target/`.
 TARGET_DIR="${CARGO_TARGET_DIR:-$(cd .. && pwd)/target}"
-cargo build --release --target wasm32-wasip1 --lib
+# The workspace's release profile is `opt-level = 3` for Reylo Framework's server; the wasm the loader ships
+# is built for size.
+CARGO_PROFILE_RELEASE_OPT_LEVEL=s cargo build --release --target wasm32-wasip1 --lib
 cp "$TARGET_DIR/wasm32-wasip1/release/reylo_engine.wasm" reylo_engine.wasm
 ls -l reylo_engine.wasm

@@ -5,11 +5,14 @@ import { defineQuery } from "../src/index.ts";
 
 const names = (sql: string, dialect: "postgres" | "mysql" | "sqlite" = "postgres") => lexPlaceholders(sql, dialect).params;
 
-test("one named form, the dialect's own positional form, and a position is its number", () => {
+test("the named forms, the dialect's own positional form, and a position is its number", () => {
   assert.deepEqual(names("select :a, @b, $c, :a, arr[lo:hi]"), ["a"]);
   assert.deepEqual(names("select $1, $2, $1, j ? 'k'"), ["1", "2"]);
   assert.deepEqual(names("select ?, ?", "mysql"), ["1", "2"]);
   assert.deepEqual(names("select @x, $1 from t", "mysql"), []);
+  // SQLite's own `@name` and `$name` name parameters there, and the name drops the prefix.
+  assert.deepEqual(names("select @a.b, a@c, @d, @a.b", "sqlite"), ["a.b", "d"]);
+  assert.deepEqual(names("select $a, a$b", "sqlite"), ["a"]);
   // A bare `?` is one past the largest number before it, as SQLite numbers it.
   assert.deepEqual(names("select ?5, ?, ?2", "sqlite"), ["2", "5", "6"]);
   // Positional parameters bind by number, whatever order the statement names them in.
