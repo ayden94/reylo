@@ -61,3 +61,12 @@ const pos1: { name: string } | null = null! as Awaited<ReturnType<typeof positio
 const pos2: Awaited<ReturnType<typeof positional.run>> = null! as { name: string } | null;
 const pos3: { 1: number; 2: string } = null! as Exclude<Parameters<typeof positional.run>[1], readonly unknown[]>;
 const pos4: Exclude<Parameters<typeof positional.run>[1], readonly unknown[]> = null! as { 1: number; 2: string };
+// SQLite's own `@name` and `$name` are named placeholders too, and the key drops the prefix.
+import atName from "./at_name.sql";
+import dollarName from "./dollar_name.sql";
+const at1: { id: number; name: string } | null = null! as Awaited<ReturnType<typeof atName.run>>;
+const at2: { email: string } = null! as Exclude<Parameters<typeof atName.run>[1], readonly unknown[]>;
+const at3: Exclude<Parameters<typeof atName.run>[1], readonly unknown[]> = null! as { email: string };
+const do1: { name: string } | null = null! as Awaited<ReturnType<typeof dollarName.run>>;
+const do2: { id: number } = null! as Exclude<Parameters<typeof dollarName.run>[1], readonly unknown[]>;
+const do3: Exclude<Parameters<typeof dollarName.run>[1], readonly unknown[]> = null! as { id: number };

@@ -1,14 +1,15 @@
 //! Placeholders, read off the raw statement text.
 //!
 //! One named form works in every dialect, `:name`, which is also the form mysql2's
-//! `namedPlaceholders` and SQLite accept. Beside it a statement may use its database's own
-//! positional form instead, never both: `$1` on Postgres, `?` on MySQL, `?` and `?NNN` on SQLite.
-//! A form the database does not have is refused where the database would misread it: SQLite takes
-//! `$name` and `@name` for parameters of its own, and a Postgres `$name` outside a dollar quote is
-//! a syntax error, so each is an error that says to write `:name`; MySQL's `@name` is a user
-//! variable and `$` a character of its identifiers, so both stay text there, as `@` (an operator)
-//! does on Postgres. A parameter's name drops the prefix: `:id` is `id`, and `$2` and `?2` are both
-//! `2`. A bare `?` takes the number after the largest one so far, as SQLite numbers it, so `?, ?`
+//! `namedPlaceholders` and SQLite accept; SQLite's own `@name` and `$name` are named placeholders
+//! there too. Beside them a statement may use its database's own positional form instead, never
+//! both: `$1` on Postgres, `?` on MySQL, `?` and `?NNN` on SQLite. A form the database does not
+//! have is refused where the database would misread it: SQLite takes `$1` for a parameter named
+//! `$1`, and a Postgres `$name` outside a dollar quote is a syntax error, so each is an error that
+//! says what to write; MySQL's `@name` is a user variable and `$` a character of its identifiers,
+//! so both stay text there, as `@` (an operator) does on Postgres. A parameter's name drops the
+//! prefix: `:id`, `@id` and `$id` are `id`, and `$2` and `?2` are both `2`. SQLite reads `:id` and
+//! `@id` as two parameters, so the named placeholders of one statement share one prefix. A bare `?` takes the number after the largest one so far, as SQLite numbers it, so `?, ?`
 //! is `1`, `2`. A name may be dotted (`:auth.user_id`): each `.segment` starts like a name, so
 //! `arr[1:2]` and `:t.*` end where they should. The engine rewrites placeholders to whatever the
 //! database binds by position (`$n` on Postgres, `?` on MySQL, `?n` for the SQLite prepare, where
@@ -169,7 +170,21 @@ fn find_bytes(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
     hay[from..].windows(needle.len()).position(|w| w == needle).map(|p| p + from)
 }
 
+/// Which named placeholders a statement may use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Named {
+    /// `:name` everywhere, and SQLite's own `@name` and `$name` there: the loader's rule.
+    Dialect,
+    /// `:name` alone; SQLite's `@name` and `$name` are errors: the framework's rule.
+    Colon,
+}
+
 pub fn lex(sql: &str, dialect: Dialect) -> Result<Lexed, LexError> {
+    lex_with(sql, dialect, Named::Dialect)
+}
+
+pub fn lex_with(sql: &str, dialect: Dialect, named: Named) -> Result<Lexed, LexError> {
+    let sqlite_named = dialect == Dialect::Sqlite && named == Named::Dialect;
     let b = sql.as_bytes();
     let mut i = 0usize;
     let mut params: Vec<String> = Vec::new();
@@ -177,6 +192,8 @@ pub fn lex(sql: &str, dialect: Dialect) -> Result<Lexed, LexError> {
     let mut opaque: Vec<(usize, usize)> = Vec::new();
     // The largest position a positional placeholder has named so far; a bare `?` takes the next.
     let mut largest = 0u64;
+    // The span of the first named placeholder, whose prefix every later one repeats.
+    let mut first_named: Option<(usize, usize)> = None;
     let mut push = |name: String, start: usize, end: usize, params: &mut Vec<String>| {
         if !params.contains(&name) {
             params.push(name.clone());
@@ -281,6 +298,7 @@ pub fn lex(sql: &str, dialect: Dialect) -> Result<Lexed, LexError> {
                 match b.get(i + 1) {
                     Some(&n) if is_name_start(n) && !prev_is_name_char(b, i) => {
                         let end = dotted_name_end(b, i + 1);
+                        one_prefix(sql, &mut first_named, i, end)?;
                         push(sql[i + 1..end].to_string(), i, end, &mut params);
                         i = end;
                     }
@@ -314,6 +332,12 @@ pub fn lex(sql: &str, dialect: Dialect) -> Result<Lexed, LexError> {
                         push(position(&sql[i + 1..end], &mut largest), i, end, &mut params);
                         i = end;
                     }
+                    Some(&n) if is_name_start(n) && sqlite_named => {
+                        let end = dotted_name_end(b, i + 1);
+                        one_prefix(sql, &mut first_named, i, end)?;
+                        push(sql[i + 1..end].to_string(), i, end, &mut params);
+                        i = end;
+                    }
                     Some(&n) if (is_name_start(n) || n.is_ascii_digit()) && dialect != Dialect::Mysql => {
                         return Err(foreign(sql, i, dialect));
                     }
@@ -321,6 +345,12 @@ pub fn lex(sql: &str, dialect: Dialect) -> Result<Lexed, LexError> {
                 }
             }
             b'@' => match b.get(i + 1) {
+                Some(&n) if is_name_start(n) && !prev_is_name_char(b, i) && sqlite_named => {
+                    let end = dotted_name_end(b, i + 1);
+                    one_prefix(sql, &mut first_named, i, end)?;
+                    push(sql[i + 1..end].to_string(), i, end, &mut params);
+                    i = end;
+                }
                 Some(&n) if is_name_start(n) && !prev_is_name_char(b, i) && dialect == Dialect::Sqlite => {
                     return Err(foreign(sql, i, dialect));
                 }
@@ -359,8 +389,31 @@ pub fn lex(sql: &str, dialect: Dialect) -> Result<Lexed, LexError> {
     Ok(Lexed { params, placeholders, style, opaque })
 }
 
+/// SQLite reads `:a`, `@a` and `$a` as three parameters, and a name here drops its prefix, so every
+/// named placeholder of a statement repeats the prefix of the first.
+fn one_prefix(sql: &str, first: &mut Option<(usize, usize)>, start: usize, end: usize) -> Result<(), LexError> {
+    match *first {
+        None => {
+            *first = Some((start, end));
+            Ok(())
+        }
+        Some((s, _)) if sql.as_bytes()[s] == sql.as_bytes()[start] => Ok(()),
+        Some((s, e)) => Err(LexError {
+            message: format!(
+                "{} and {} have different prefixes; write every named parameter of a statement with one prefix, here {}{}",
+                &sql[start..end],
+                &sql[s..e],
+                &sql[s..s + 1],
+                &sql[start + 1..end]
+            ),
+            offset: start,
+        }),
+    }
+}
+
 /// The error for a `$name`, `$1` or `@name` the dialect would misread: Porg's named placeholder is
-/// `:name`, and SQLite's numbered one `?1`.
+/// `:name` (and, outside [`Named::Colon`], SQLite's own `@name` and `$name`), and SQLite's
+/// numbered one `?1`.
 fn foreign(sql: &str, i: usize, dialect: Dialect) -> LexError {
     let b = sql.as_bytes();
     let digits = b.get(i + 1).is_some_and(u8::is_ascii_digit);
@@ -504,7 +557,6 @@ mod tests {
         // A form the dialect would misread is an error that says what to write.
         let err = |sql: &str, d: Dialect| lex(sql, d).unwrap_err();
         assert_eq!(err("select $name", Dialect::Postgres).message, "$name is not a placeholder here; Porg's named placeholder is :name");
-        assert_eq!(err("select @a.b from t", Dialect::Sqlite).message, "SQLite reads @a.b as a parameter that Porg does not bind; write :a.b");
         assert_eq!(err("select 1 where x = $2", Dialect::Sqlite).message, "SQLite reads $2 as a parameter that Porg does not bind; write ?2");
         assert_eq!(err("select ?2", Dialect::Mysql).message, "MySQL has no numbered placeholder ?2; write ? for each value, or :name");
         assert_eq!(err("select $name", Dialect::Postgres).offset, 7);
@@ -514,6 +566,33 @@ mod tests {
         assert!(names("select @ -5, a$1, b$c from t", Dialect::Postgres).is_empty());
         // A `-- @returns one` line is a comment like any other.
         assert!(names("-- @returns one\nselect 1", Dialect::Postgres).is_empty());
+    }
+
+    #[test]
+    fn sqlite_named_prefixes() {
+        // SQLite's `@name` and `$name` are named placeholders there, dotted like `:name`, and the
+        // name drops the prefix.
+        for sql in ["select @a.b, @c, @a.b", "select $a.b, $c, $a.b"] {
+            let l = lex(sql, Dialect::Sqlite).unwrap();
+            assert_eq!(l.params, ["a.b", "c"]);
+            assert_eq!(l.style, Style::Named);
+            assert_eq!(rewrite(sql, &l, Target::Numbered).sql, "select ?1, ?2, ?1");
+        }
+        // SQLite reads `:a` and `@a` as two parameters, so one statement keeps one prefix.
+        let e = lex("select :a, @b where x = $a", Dialect::Sqlite).unwrap_err();
+        assert_eq!(e.message, "@b and :a have different prefixes; write every named parameter of a statement with one prefix, here :b");
+        assert_eq!(e.offset, 11);
+        assert_eq!(lex("select @a, :a", Dialect::Sqlite).unwrap_err().offset, 11);
+        // Named and positional still do not mix, and `a$b` and `a@b` are not placeholders.
+        assert_eq!(lex("select @a, ?", Dialect::Sqlite).unwrap().style, Style::Mixed);
+        assert!(names("select a$b, a@b from t", Dialect::Sqlite).is_empty());
+        // Elsewhere the forms keep their meaning: Postgres `@` is an operator, MySQL `@x` a variable.
+        assert!(names("select @a from t", Dialect::Postgres).is_empty());
+        assert!(names("select @a, $b from t", Dialect::Mysql).is_empty());
+        // The framework takes `:name` alone.
+        let colon = |sql: &str| lex_with(sql, Dialect::Sqlite, Named::Colon).unwrap_err().message;
+        assert_eq!(colon("select @a.b from t"), "SQLite reads @a.b as a parameter that Porg does not bind; write :a.b");
+        assert_eq!(colon("select :x, $y"), "SQLite reads $y as a parameter that Porg does not bind; write :y");
     }
 
     #[test]
