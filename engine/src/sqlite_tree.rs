@@ -123,6 +123,8 @@ pub struct From {
     /// Joined by a RIGHT or FULL JOIN, which keeps the rows of the side before it that match nothing.
     pub right: bool,
     pub tab_func: bool,
+    /// A table-valued function's arguments (`json_each(:ids)`).
+    pub args: Vec<Node>,
     pub cte: bool,
     pub view: bool,
     #[serde(rename = "virtual")]

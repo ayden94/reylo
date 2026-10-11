@@ -293,6 +293,9 @@ fn guarded_params(t: &Tree) -> HashSet<String> {
             if let Some(sub) = &f.subquery {
                 walk_select(sub, out);
             }
+            for a in &f.args {
+                walk(a, out);
+            }
         }
         if let Some(prior) = &sel.prior {
             walk_select(prior, out);
@@ -865,6 +868,11 @@ impl Analyzer<'_> {
             }
             if let Some(on) = &f.on {
                 self.walk(on, Ctx::Bool, &inner, found);
+            }
+            // `json_each` and `json_tree` read JSON text and a path (`IN (SELECT value FROM json_each(:ids))`).
+            let json = f.tab_func && matches!(f.table.as_deref(), Some("json_each" | "json_tree"));
+            for (i, a) in f.args.iter().enumerate() {
+                self.walk(a, if json && i < 2 { Ctx::Typed(Some(Fact::new("text", true))) } else { Ctx::None }, &inner, found);
             }
         }
         if let Some(w) = &sel.where_ {
@@ -1672,6 +1680,25 @@ mod tests {
         assert_eq!(param(&a, "score"), "real");
         assert_eq!(param(&a, "id"), "integer");
         assert_eq!(a.cardinality, "maybeOne");
+    }
+
+    #[test]
+    fn json_each_reads_text() {
+        // A list of values in one parameter: the JSON text and the path are text, as written or cast.
+        let a = analysis("select id from users where id in (select value from json_each(:ids))");
+        assert_eq!(param(&a, "ids"), "text");
+        assert!(!a.params.iter().find(|p| p.name == "ids").unwrap().nullable);
+        let a = analysis("select key, value from json_tree(:doc, :path)");
+        assert_eq!(param(&a, "doc"), "text");
+        assert_eq!(param(&a, "path"), "text");
+        assert_eq!(param(&analysis("select value from json_each(cast(:ids as text))"), "ids"), "text");
+        let a = analysis("select value from json_each(coalesce(:ids, '[]'))");
+        assert_eq!(param(&a, "ids"), "text");
+        assert!(a.params.iter().find(|p| p.name == "ids").unwrap().nullable);
+        // A parameter beside the call keeps its own context.
+        let a = analysis("select users.id from users, json_each(:ids) j where users.id = j.value and users.name = :n");
+        assert_eq!(param(&a, "ids"), "text");
+        assert_eq!(param(&a, "n"), "text");
     }
 
     #[test]

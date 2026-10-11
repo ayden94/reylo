@@ -70,3 +70,8 @@ const at3: Exclude<Parameters<typeof atName.run>[1], readonly unknown[]> = null!
 const do1: { name: string } | null = null! as Awaited<ReturnType<typeof dollarName.run>>;
 const do2: { id: number } = null! as Exclude<Parameters<typeof dollarName.run>[1], readonly unknown[]>;
 const do3: Exclude<Parameters<typeof dollarName.run>[1], readonly unknown[]> = null! as { id: number };
+// A list of values in one parameter: `json_each` reads JSON text, so `:ids` is a string.
+import inList from "./in_list.sql";
+const l1: { ids: string } = null! as Exclude<Parameters<typeof inList.run>[1], readonly unknown[]>;
+const l2: Exclude<Parameters<typeof inList.run>[1], readonly unknown[]> = null! as { ids: string };
+const l3: { id: number; name: string }[] = null! as Awaited<ReturnType<typeof inList.run>>;

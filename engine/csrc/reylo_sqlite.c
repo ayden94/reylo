@@ -282,6 +282,7 @@ static void selectJson(sqlite3_str *s, Select *p){
     kv_bool(s, "cross", (pItem->fg.jointype & JT_CROSS)!=0);
     kv_bool(s, "right", (pItem->fg.jointype & JT_RIGHT)!=0);
     kv_bool(s, "tabFunc", pItem->fg.isTabFunc);
+    if( pItem->fg.isTabFunc ){ key(s, "args"); exprList(s, pItem->u1.pFuncArg, p); sqlite3_str_appendchar(s, 1, ','); }
     kv_bool(s, "cte", pItem->fg.isCte);
     if( pItem->pSTab ){
       tableSeen(pItem->pSTab);
