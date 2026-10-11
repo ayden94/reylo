@@ -14,15 +14,24 @@
 //!
 //! 1. It has the shape of one row, which is [`infer::single_row`]'s reading: no set operation, no
 //!    `VALUES`, no `GROUP BY` (a row per group, and none over no rows), no `HAVING` (it can drop
-//!    the one group), no `LIMIT` or `OFFSET` (`LIMIT 0` and `OFFSET 1` drop the row).
-//! 2. It aggregates, or it has neither a `FROM` nor a `WHERE`. An aggregate with no `GROUP BY` is
-//!    one group over any input, empty included (`SELECT count(*) FROM t WHERE false` and even
-//!    `SELECT count(*) WHERE false` are one row on both dialects); whether a target aggregates is
-//!    [`infer::aggregates`]'s reading. Without one, a `FROM` is a row per row it matches, and a
-//!    `WHERE` with no `FROM` drops the one row when it is false (`SELECT 1 WHERE :x = 1`).
+//!    the one group), no `LIMIT` or `OFFSET` that can drop the row (`LIMIT 0`, `LIMIT $1`,
+//!    `OFFSET 1`; a constant `LIMIT` of one row or more drops nothing).
+//! 2. It aggregates, or it has neither a `FROM` nor a `WHERE`, or its `FROM` is one row and it has
+//!    no `WHERE`. An aggregate with no `GROUP BY` is one group over any input, empty included
+//!    (`SELECT count(*) FROM t WHERE false` and even `SELECT count(*) WHERE false` are one row on
+//!    both dialects); whether a target aggregates is [`infer::aggregates`]'s reading. Without
+//!    one, a `FROM` is a row per row it matches, and a `WHERE` drops the one row when it is false
+//!    (`SELECT 1 WHERE :x = 1`).
 //! 3. Nothing at its own level returns a set (Postgres only; see below). `SELECT
 //!    generate_series(1, 3)` is three rows, `SELECT unnest('{}'::int[])` none, and an aggregate
 //!    beside one is as many rows as the set (`SELECT count(*), generate_series(1, 3) FROM t`).
+//!
+//! A `FROM` is one row when it is never empty ([`never_empty`]) and at most one row ([`From`]).
+//! The items that are never empty: a WITH query or a subquery that is itself exactly one row, a
+//! function in `FROM` that returns no set (`FROM now()`, `FROM one_text($1)`; a function that is
+//! not `SETOF` returns one row, of NULLs when it answers NULL), and a sequence, which holds one
+//! row. A cross join of such items is never empty, and so is an outer join whose preserved side
+//! is not; an inner join under a condition can drop the row.
 //!
 //! A `WITH` changes none of this: the main statement reads a CTE only through a `FROM` or a
 //! subquery. A subquery answers one value to the level above it whatever it returns: `EXISTS`
@@ -59,6 +68,7 @@
 use crate::dialect::Dialect;
 use crate::infer::{self, Trust};
 use crate::jsonshape::last_string;
+use crate::levels::{Columns, Level, Withs};
 use crate::pgtypes::oid;
 use pg_query::protobuf::{self, node::Node as NodeEnum, SelectStmt};
 use serde_json::Value;
@@ -98,6 +108,9 @@ pub struct Catalog {
     /// whose equality is not identity: `'a' = 'A'` there, and a function of the column can tell
     /// the two apart.
     pub nondeterministic: std::collections::HashMap<String, HashSet<String>>,
+    /// The relations, as named in `unique_keys`, that hold exactly one row whatever is written: a
+    /// sequence (`SELECT last_value FROM my_sequence`).
+    pub single_row: HashSet<String>,
     /// Function names with a volatile overload (`provolatile = 'v'`). A volatile call is evaluated
     /// for each row, so `id = random_id()` is no value a key can be pinned to.
     pub volatile: HashSet<String>,
@@ -133,6 +146,16 @@ pub struct Catalog {
     /// subquery, a WITH query's body or a set operation's arm is proven on its own as: such a
     /// name read there unqualified is that WITH query, never the table of the same name.
     pub enclosing_ctes: Vec<String>,
+    /// Whether the statement being proven is a subquery of another one, whose columns it may read
+    /// (a `SUBQ` site of the framework, proven on its own). An aggregate over such columns alone
+    /// belongs to that statement and leaves the subquery a row per row of its FROM, so a nested
+    /// statement is one row by an aggregate only where [`crate::levels`] finds the aggregate its
+    /// own, from `columns`. A host that sets this lists the enclosing statement's WITH queries in
+    /// `enclosing_ctes` ([`with_queries`]).
+    pub nested: bool,
+    /// Every column of each relation, in order, as [`COLUMNS_QUERY`] reports them: what says
+    /// which query a bare column name in a nested statement belongs to.
+    pub columns: Columns,
 }
 
 impl Catalog {
@@ -161,6 +184,8 @@ macro_rules! relation_named {
         )
     };
 }
+
+pub(crate) use relation_named;
 
 /// The `pg_trigger.tgtype` bits [`Catalog::skipping_triggers`] reports.
 pub const TRIGGER_ROW_INSERT: i32 = 4;
@@ -236,14 +261,16 @@ pub const UNIQUE_KEYS_QUERY: &str = concat!(
 );
 
 /// `$1` is `text[]` of relation names as the statement writes them: every column of each, `(the
-/// name, column names, their type oids, whether each one's collation is deterministic)`, a
-/// domain's column by its base type, whose equality it uses. What the other side of an equality
-/// is when it is a column (`u.id = p.author_id`), which relation a bare column belongs to, and
-/// whether a column's equality is identity.
+/// name, column names, their type oids, whether each one's collation is deterministic, whether the
+/// relation is a sequence)`, a domain's column by its base type, whose equality it uses. What the
+/// other side of an equality is when it is a column (`u.id = p.author_id`), which relation a bare
+/// column belongs to, whether a column's equality is identity, and whether the relation holds
+/// exactly one row.
 pub const COLUMNS_QUERY: &str = concat!(
     "SELECT x.name, array_agg(a.attname::text ORDER BY a.attnum), \
       array_agg((CASE WHEN t.typtype = 'd' THEN t.typbasetype ELSE a.atttypid END)::int8 ORDER BY a.attnum), \
-      array_agg(coalesce((SELECT o.collisdeterministic FROM pg_collation o WHERE o.oid = a.attcollation), true) ORDER BY a.attnum) \
+      array_agg(coalesce((SELECT o.collisdeterministic FROM pg_collation o WHERE o.oid = a.attcollation), true) ORDER BY a.attnum), \
+      bool_and(c.relkind = 'S') \
     FROM unnest($1::text[]) AS x(name) \
     JOIN pg_class c ON c.oid = ",
     relation_named!("x.name"),
@@ -271,6 +298,9 @@ pub fn exactly_one(sql: &str, dialect: Dialect, trust: &Trust, catalog: &Catalog
 }
 
 fn exactly_one_select(s: &SelectStmt, dialect: Dialect, trust: &Trust, catalog: &Catalog) -> Result<(), String> {
+    if (s.limit_count.is_some() || s.limit_offset.is_some()) && limit_keeps_a_row(s) {
+        return exactly_one_select(&unlimited(s), dialect, trust, catalog);
+    }
     if !infer::single_row(s) {
         return Err(not_one_row_shaped(s).to_string());
     }
@@ -283,27 +313,185 @@ fn exactly_one_select(s: &SelectStmt, dialect: Dialect, trust: &Trust, catalog: 
             return Err(why);
         }
     }
+    // Inside another statement, only an aggregate that is this query's own makes it one row.
+    let level = catalog.nested.then(|| {
+        let withs = Withs::unknown(catalog.enclosing_ctes.iter().cloned()).with(s.with_clause.as_ref(), &catalog.columns);
+        Level::of(&s.from_clause, &withs, &catalog.columns)
+    });
     let aggregates = s.target_list.iter().any(|target| match target.node.as_ref() {
-        Some(NodeEnum::ResTarget(rt)) => rt.val.as_deref().is_some_and(|val| infer::aggregates(val, dialect, trust)),
+        Some(NodeEnum::ResTarget(rt)) => rt.val.as_deref().is_some_and(|val| infer::aggregates(val, dialect, trust, level.as_ref())),
         _ => false,
     });
     if aggregates {
         return Ok(());
     }
-    if let Some(through) = cte_passthrough(s, dialect, trust, catalog) {
-        return match through {
-            Ok(Cardinality::One) if s.where_clause.is_none() => Ok(()),
-            Ok(_) => Err("a WHERE over the WITH query can remove its row".into()),
-            Err(why) => Err(why),
+    if s.from_clause.is_empty() {
+        return match s.where_clause {
+            Some(_) => Err("a WHERE with no FROM can remove the row".into()),
+            None => Ok(()),
         };
     }
-    if !s.from_clause.is_empty() {
-        return Err("a FROM returns a row per row it matches, and only an aggregate with no GROUP BY collapses them to one".into());
+    // A FROM of exactly one row: never empty, and one row at most.
+    for item in &s.from_clause {
+        never_empty(item, s, dialect, trust, catalog)?;
     }
     if s.where_clause.is_some() {
-        return Err("a WHERE with no FROM can remove the row".into());
+        return Err("a WHERE over a FROM of one row can remove its row".into());
+    }
+    // `FOR UPDATE SKIP LOCKED` drops a row another transaction holds, a table's under an outer
+    // join's nullable side too, and its preserved row with it.
+    if !s.locking_clause.is_empty() {
+        return Err("a locking clause can skip a locked row".into());
+    }
+    one_row(s, dialect, trust, catalog)
+}
+
+/// Why a FROM item, with what it joins, may return no row; `Ok` when it returns at least one row
+/// on every database state. An item of exactly one row is never empty: a WITH query or a subquery
+/// the proof shows to be one (a LATERAL one is one row per row before it), a function that returns
+/// no set ([`one_row_function`]), a sequence ([`Catalog::single_row`]). A cross join is never
+/// empty when neither side is, and an outer join when its preserved side is not, whatever its
+/// condition; an inner join under a condition that can fail is empty when it does.
+fn never_empty(node: &protobuf::Node, s: &SelectStmt, dialect: Dialect, trust: &Trust, catalog: &Catalog) -> Result<(), String> {
+    const ROWS: &str = "a FROM returns a row per row it matches, and only an aggregate with no GROUP BY collapses them to one";
+    match node.node.as_ref() {
+        Some(NodeEnum::RangeVar(rv)) => {
+            // A schema-qualified name is the table, never the WITH query of that name.
+            let cte = s.with_clause.as_ref().filter(|_| rv.schemaname.is_empty()).and_then(|w| {
+                w.ctes.iter().find_map(|c| match c.node.as_ref() {
+                    Some(NodeEnum::CommonTableExpr(c)) if c.ctename == rv.relname => Some((c, w.recursive)),
+                    _ => None,
+                })
+            });
+            match cte {
+                Some((cte, false)) => {
+                    let enclosed = catalog.enclosed(&with_names(s));
+                    let one = match cte.ctequery.as_deref().and_then(|q| q.node.as_ref()) {
+                        Some(NodeEnum::SelectStmt(inner)) => exactly_one_select(inner, dialect, trust, &enclosed),
+                        Some(body @ (NodeEnum::InsertStmt(_) | NodeEnum::UpdateStmt(_) | NodeEnum::DeleteStmt(_))) => match dml_node(body, &enclosed) {
+                            Some(Ok(Cardinality::One)) => Ok(()),
+                            Some(Ok(Cardinality::AtMostOne)) => Err("the write may change no row".to_string()),
+                            Some(Err(why)) => Err(why),
+                            None => Err(ROWS.to_string()),
+                        },
+                        _ => Err(ROWS.to_string()),
+                    };
+                    one.map_err(|why| format!("the WITH query `{}` may return no row, or several: {why}", rv.relname))
+                }
+                Some((_, true)) => Err(format!("the WITH query `{}` is recursive, which returns any number of rows", rv.relname)),
+                None if rv.schemaname.is_empty() && catalog.enclosing_ctes.contains(&rv.relname) => Err(format!("`{}` is a WITH query of an enclosing statement, which returns any number of rows", rv.relname)),
+                None if catalog.single_row.contains(&catalog_name(rv)) => Ok(()),
+                None => Err(ROWS.into()),
+            }
+        }
+        Some(NodeEnum::RangeSubselect(r)) => match r.subquery.as_deref().and_then(|n| n.node.as_ref()) {
+            Some(NodeEnum::SelectStmt(sub)) => exactly_one_select(sub, dialect, trust, &catalog.enclosed(&with_names(s)))
+                .map_err(|why| format!("the subquery `{}` may return no row, or several: {why}", r.alias.as_ref().map_or("", |a| a.aliasname.as_str()))),
+            _ => Err(ROWS.into()),
+        },
+        Some(NodeEnum::RangeFunction(f)) => one_row_function(f, catalog),
+        Some(NodeEnum::JoinExpr(j)) => {
+            use protobuf::JoinType;
+            let side = |side: Option<&protobuf::Node>| side.map_or(Err(ROWS.to_string()), |n| never_empty(n, s, dialect, trust, catalog));
+            if j.jointype == JoinType::JoinInner as i32 {
+                side(j.larg.as_deref())?;
+                side(j.rarg.as_deref())?;
+                if j.is_natural || !j.using_clause.is_empty() || !j.quals.as_deref().is_none_or(|q| always_true(q, catalog)) {
+                    return Err("an inner join under a condition returns no row where the condition fails".into());
+                }
+                Ok(())
+            } else if j.jointype == JoinType::JoinLeft as i32 {
+                side(j.larg.as_deref())
+            } else if j.jointype == JoinType::JoinRight as i32 {
+                side(j.rarg.as_deref())
+            } else {
+                Err("a FULL JOIN returns a row for each side that matches nothing, so two rows where each side has one".into())
+            }
+        }
+        _ => Err(ROWS.into()),
+    }
+}
+
+/// Whether a join condition holds of every pair of rows: the constant `true`, or an integer
+/// literal equated to itself (`ON 1 = 1`) where `=` can only be the built-in one.
+fn always_true(quals: &protobuf::Node, catalog: &Catalog) -> bool {
+    let integer = |n: &protobuf::Node| match n.node.as_ref() {
+        Some(NodeEnum::AConst(c)) if !c.isnull => match &c.val {
+            Some(protobuf::a_const::Val::Ival(i)) => Some(i.ival),
+            _ => None,
+        },
+        _ => None,
+    };
+    match quals.node.as_ref() {
+        Some(NodeEnum::AConst(c)) => !c.isnull && matches!(&c.val, Some(protobuf::a_const::Val::Boolval(b)) if b.boolval),
+        Some(NodeEnum::AExpr(e)) if is_equality(e) && e.name.len() == 1 && !catalog.equality_shadowed => match (e.lexpr.as_deref().and_then(integer), e.rexpr.as_deref().and_then(integer)) {
+            (Some(l), Some(r)) => l == r,
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// Why a function item of a FROM may return another number of rows than one; `Ok` when every
+/// function in it (one, or the several of `ROWS FROM (…)`) returns no set, with or without `WITH
+/// ORDINALITY`. Such a function returns exactly one row: its value, a row of NULLs for a NULL
+/// composite, or an error. The server refuses a set-returning call anywhere but at the top of the
+/// item ("set-returning functions must appear at top level of FROM"), so the name the item calls
+/// decides, read as the select list's calls are: across every overload and schema, and unproven
+/// when the catalog does not have it. `CURRENT_DATE` and its kin are one value.
+fn one_row_function(f: &protobuf::RangeFunction, catalog: &Catalog) -> Result<(), String> {
+    for function in &f.functions {
+        let call = match function.node.as_ref() {
+            Some(NodeEnum::List(l)) => l.items.first().and_then(|n| n.node.as_ref()),
+            _ => None,
+        };
+        match call {
+            Some(NodeEnum::SqlvalueFunction(_)) => {}
+            Some(NodeEnum::FuncCall(c)) => {
+                let Some(name) = c.funcname.last().and_then(field_name) else { return Err("a function in the FROM the engine cannot name returns any number of rows".into()) };
+                if catalog.set_returning.contains(name) {
+                    return Err(format!("the set-returning function {name} in the FROM returns any number of rows"));
+                }
+                if !catalog.functions.contains(name) {
+                    return Err(format!("the function {name} is not in the catalog, so the build cannot rule out that it returns a set"));
+                }
+            }
+            _ => return Err("a table expression in the FROM the engine does not read returns any number of rows".into()),
+        }
+    }
+    if f.functions.is_empty() {
+        return Err("a table expression in the FROM the engine does not read returns any number of rows".into());
     }
     Ok(())
+}
+
+/// Whether a statement's LIMIT and OFFSET keep every row of a result of one row: a constant
+/// `LIMIT` of one row or more, or `LIMIT ALL` (which `LIMIT NULL` is too), and no `OFFSET` but a
+/// constant 0. A parameter may be 0 or NULL, and `LIMIT 0` and `OFFSET 1` drop the row.
+fn limit_keeps_a_row(s: &SelectStmt) -> bool {
+    let constant = |n: Option<&protobuf::Node>| match n.and_then(|n| n.node.as_ref()) {
+        Some(NodeEnum::AConst(c)) => Some(match &c.val {
+            _ if c.isnull => None,
+            Some(protobuf::a_const::Val::Ival(i)) => Some(i.ival),
+            _ => return None,
+        }),
+        _ => None,
+    };
+    let count = match s.limit_count.as_deref() {
+        None => true,
+        some => matches!(constant(some), Some(None) | Some(Some(1..))),
+    };
+    let offset = match s.limit_offset.as_deref() {
+        None => true,
+        some => matches!(constant(some), Some(None) | Some(Some(0))),
+    };
+    count && offset
+}
+
+/// A statement without its LIMIT and its OFFSET, which only ever remove rows: what it returns
+/// with them is a subset of what it returns without.
+fn unlimited(s: &SelectStmt) -> SelectStmt {
+    SelectStmt { limit_count: None, limit_offset: None, limit_option: protobuf::LimitOption::Default as i32, ..s.clone() }
 }
 
 /// Prove that one rewritten statement returns **at most** one row — no row, or one — or say why
@@ -322,6 +510,9 @@ fn exactly_one_select(s: &SelectStmt, dialect: Dialect, trust: &Trust, catalog: 
 ///    equality never matches NULL, so at most one row survives — which holds whether or not the
 ///    key's columns are `NOT NULL`, since a unique index only lets NULLs repeat.
 ///
+/// Any other LIMIT, and an OFFSET, only ever remove rows: the second and the third are read off
+/// the statement without them, so `WHERE id = $1 LIMIT 5` is still at most one row.
+///
 /// The third is why an index changes an inferred type. The proof reads the index that exists at
 /// build time; `reylo.lock` and the boot re-describe turn a later `CREATE`/`DROP INDEX` into a
 /// contract mismatch the deploy reports, rather than a shape that quietly drifts.
@@ -331,18 +522,18 @@ pub fn at_most_one(sql: &str, dialect: Dialect, trust: &Trust, catalog: &Catalog
 }
 
 fn at_most_one_select(s: &SelectStmt, dialect: Dialect, trust: &Trust, catalog: &Catalog) -> Result<(), String> {
-    if let Some(n) = const_limit(s) {
-        if n <= 1 {
-            return Ok(());
-        }
+    // A negative LIMIT is an error on Postgres and no limit at all on SQLite.
+    if const_limit(s).is_some_and(|n| (0..=1).contains(&n)) {
+        return Ok(());
+    }
+    // Anything else is a LIMIT above one, or one written as an expression the build cannot read:
+    // like an OFFSET it only ever removes rows, so the bound is the one the statement has
+    // without them.
+    if s.limit_count.is_some() || s.limit_offset.is_some() {
+        return at_most_one_select(&unlimited(s), dialect, trust, catalog);
     }
     if exactly_one_select(s, dialect, trust, catalog).is_ok() {
         return Ok(());
-    }
-    if s.limit_count.is_some() {
-        // Anything still here is a LIMIT above one, or one written as an expression the build
-        // cannot read. An OFFSET alone only ever removes rows, so it is left to the key proof.
-        return Err("a LIMIT of more than one row, or one the build cannot read, bounds nothing".into());
     }
     // An INTERSECT returns only rows both arms return, and an EXCEPT only rows of its left arm,
     // with ALL or without: at most one row when an arm it draws every row from is.
@@ -480,9 +671,13 @@ fn output(s: &SelectStmt, n: i32) -> Option<&protobuf::Node> {
 ///    JOIN its right side (RIGHT JOIN mirrors it): each row of the other side meets one row of the
 ///    item at most, or its null extension. A FULL JOIN proves nothing, since it returns a row for
 ///    each side that matches nothing.
-/// 3. A WITH query or a subquery the proof shows to be at most one row is determined; a LATERAL
-///    one once every item before it is, because it is at most one row per row of those.
-/// 4. A function in FROM never is.
+/// 3. A WITH query or a subquery the proof shows to be at most one row is determined.
+/// 4. An item of one row at most per row of the rest is determined once every item that is not
+///    such a one is: a LATERAL subquery the proof bounds, a function in FROM that returns no set
+///    ([`one_row_function`]), a sequence ([`Catalog::single_row`]). A join with one multiplies no
+///    row. What such an item holds is computed anew for each row it is joined to (a volatile
+///    call, a sequence another session advances), so it pins no other item, and under `constant`
+///    only a LATERAL subquery counts, once every other item does.
 ///
 /// Each equality must also be the key's own equality ([`equality_bounds`]), and `v` must call
 /// nothing volatile, which is evaluated anew for each row.
@@ -521,7 +716,9 @@ enum Source<'a> {
     Subquery(&'a SelectStmt, bool),
     /// A WITH query of an enclosing statement, read by name: the proof does not read its body.
     Enclosing,
-    /// A function, `TABLESAMPLE`, `XMLTABLE`, `JSON_TABLE`: nothing the proof reads.
+    /// A function, or the several of `ROWS FROM (…)`.
+    Function(&'a protobuf::RangeFunction),
+    /// `TABLESAMPLE`, `XMLTABLE`, `JSON_TABLE`: nothing the proof reads.
     Opaque,
 }
 
@@ -642,10 +839,7 @@ impl<'a> From<'a> {
                 // A function goes by its alias, or by its own name; anything else without an alias
                 // could be read under a name the proof does not know.
                 let alias = match other {
-                    Some(NodeEnum::RangeFunction(f)) => f.alias.as_ref().map(|a| a.aliasname.clone()).or_else(|| {
-                        let tree = serde_json::to_value(&f.functions).ok()?;
-                        first_function_name(&tree)
-                    }),
+                    Some(NodeEnum::RangeFunction(f)) => f.alias.as_ref().map(|a| a.aliasname.clone()).or_else(|| infer::function_item_name(f)),
                     Some(NodeEnum::RangeTableSample(t)) => match t.relation.as_deref().and_then(|r| r.node.as_ref()) {
                         Some(NodeEnum::RangeVar(rv)) => Some(rv.alias.as_ref().map_or_else(|| rv.relname.clone(), |a| a.aliasname.clone())),
                         _ => None,
@@ -653,8 +847,12 @@ impl<'a> From<'a> {
                     Some(NodeEnum::RangeTableFunc(f)) => f.alias.as_ref().map(|a| a.aliasname.clone()),
                     _ => None,
                 };
+                let source = match other {
+                    Some(NodeEnum::RangeFunction(f)) => Source::Function(f),
+                    _ => Source::Opaque,
+                };
                 match alias {
-                    Some(alias) => self.items.push(Item { alias, source: Source::Opaque, nullable, renamed: true }),
+                    Some(alias) => self.items.push(Item { alias, source, nullable, renamed: true }),
                     None => self.refused = Some("a FROM item the engine cannot name"),
                 }
             }
@@ -666,6 +864,17 @@ impl<'a> From<'a> {
     /// the FROM then carries the same row of each, which is what grouping and DISTINCT ask.
     fn determined(&self, constant: bool, dialect: Dialect, trust: &Trust, catalog: &Catalog) -> Vec<bool> {
         let n = self.items.len();
+        // The items of one row at most per row of the rest (rule 4).
+        let per_row: Vec<bool> = self
+            .items
+            .iter()
+            .map(|item| match &item.source {
+                Source::Relation(rv) => catalog.single_row.contains(&catalog_name(rv)),
+                Source::Subquery(_, lateral) => *lateral,
+                Source::Function(_) => true,
+                _ => false,
+            })
+            .collect();
         let mut done = vec![false; n];
         loop {
             let mut changed = false;
@@ -674,11 +883,14 @@ impl<'a> From<'a> {
                     continue;
                 }
                 let item = &self.items[i];
+                let rest = || (0..n).all(|j| j == i || done[j] || (!constant && per_row[j]));
                 let pinned = match &item.source {
+                    Source::Relation(_) if per_row[i] => !constant && rest(),
                     Source::Relation(rv) => self.key_pinned(i, rv, &done, constant, catalog),
                     _ if constant && item.nullable => false,
                     Source::With(cte, recursive) => !*recursive && with_query_at_most_one(cte, dialect, trust, &catalog.enclosed(&self.ctes)),
-                    Source::Subquery(sub, lateral) => (!*lateral || (0..n).all(|j| j == i || done[j])) && at_most_one_select(sub, dialect, trust, &catalog.enclosed(&self.ctes)).is_ok(),
+                    Source::Subquery(sub, lateral) => (!*lateral || rest()) && at_most_one_select(sub, dialect, trust, &catalog.enclosed(&self.ctes)).is_ok(),
+                    Source::Function(f) => !constant && rest() && one_row_function(f, catalog).is_ok(),
                     Source::Enclosing | Source::Opaque => false,
                 };
                 if pinned {
@@ -1035,7 +1247,13 @@ impl<'a> From<'a> {
 
     /// Why the closure leaves the FROM more than one row, from its first undetermined item.
     fn why_not(&self, determined: &[bool], catalog: &Catalog) -> String {
-        let Some(i) = determined.iter().position(|d| !d) else { return "every relation is pinned to one row".into() };
+        // An item of one row per row of the rest only waits for the others: name one of those.
+        let waits = |i: &usize| match &self.items[*i].source {
+            Source::Relation(rv) => catalog.single_row.contains(&catalog_name(rv)),
+            Source::Function(f) => one_row_function(f, catalog).is_ok(),
+            _ => false,
+        };
+        let Some(i) = (0..determined.len()).filter(|i| !determined[*i]).min_by_key(waits) else { return "every relation is pinned to one row".into() };
         let item = &self.items[i];
         match &item.source {
             Source::Relation(rv) => {
@@ -1060,17 +1278,8 @@ impl<'a> From<'a> {
             Source::With(cte, _) => format!("the WITH query `{}` returns any number of rows", cte.ctename),
             Source::Enclosing => format!("`{}` is a WITH query of an enclosing statement, which returns any number of rows", item.alias),
             Source::Subquery(..) => format!("the subquery `{}` returns any number of rows", item.alias),
-            Source::Opaque => format!("`{}` in the FROM is a function or table function, which returns any number of rows", item.alias),
+            Source::Function(_) | Source::Opaque => format!("`{}` in the FROM is a function or table function, which returns any number of rows", item.alias),
         }
-    }
-}
-
-/// The name of the first function call in a parse tree, as JSON.
-fn first_function_name(v: &Value) -> Option<String> {
-    match v {
-        Value::Object(map) => map.get("FuncCall").and_then(|f| last_name(f.get("funcname"))).or_else(|| map.values().find_map(first_function_name)),
-        Value::Array(items) => items.iter().find_map(first_function_name),
-        _ => None,
     }
 }
 
@@ -1268,6 +1477,29 @@ fn scalar_type(l: &protobuf::SubLink, ctes: &[String], catalog: &Catalog) -> Opt
     let Some(NodeEnum::ResTarget(r)) = target.node.as_ref() else { return None };
     let Some(NodeEnum::ColumnRef(c)) = r.val.as_deref()?.node.as_ref() else { return None };
     projected(sub, c, ctes, catalog)
+}
+
+/// The name of every WITH query anywhere in a statement: what a host puts in
+/// [`Catalog::enclosing_ctes`] before it proves a subquery of the statement on its own, so that a
+/// name the subquery reads is never taken for the table of the same name.
+pub fn with_queries(sql: &str) -> Vec<String> {
+    fn walk(v: &Value, out: &mut Vec<String>) {
+        match v {
+            Value::Object(map) => {
+                out.extend(map.get("CommonTableExpr").and_then(|c| c.get("ctename")).and_then(Value::as_str).map(String::from));
+                map.values().for_each(|child| walk(child, out));
+            }
+            Value::Array(items) => items.iter().for_each(|child| walk(child, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    if let Some(tree) = pg_query::parse(sql).ok().and_then(|parsed| serde_json::to_value(&parsed.protobuf).ok()) {
+        walk(&tree, &mut out);
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
 }
 
 /// Every alias a statement gives a relation, through every subquery, to the relation's name as
@@ -1828,6 +2060,49 @@ mod tests {
     }
 
     #[test]
+    fn a_nested_statement_is_one_row_by_an_aggregate_of_its_own_only() {
+        // A subquery proven on its own, as a host proves a site inside a statement that reads
+        // `users u`: `name` and `u.id` are that statement's columns.
+        let mut c = joined();
+        c.nested = true;
+        c.columns = [("posts", vec!["id", "author_id", "title", "score"]), ("comments", vec!["id", "post_id", "body"])].into_iter().collect();
+        let one = |sql: &str, c: &Catalog| exactly_one(sql, Dialect::Postgres, &Trust::default(), c).is_ok();
+        for sql in [
+            "select count(*) as n from posts p where p.author_id = u.id",
+            "select count(id) as n from posts where author_id = u.id",
+            "select count(p.id) as n from posts p",
+            "select count(score) + 1 as n from posts",
+            "select count(body) as n from posts join comments c on c.post_id = posts.id",
+            "select s.n from (select count(title) as n from posts) s",
+            "with s as (select count(title) as n from posts) select n from s",
+        ] {
+            assert!(one(sql, &c), "{sql}");
+        }
+        for sql in [
+            "select count(u.id) as n from posts",
+            "select count(name) as n from posts",
+            "select count(*) filter (where name <> '') as n from posts",
+            "select s.n from (select count(name) as n from posts) s",
+            "with s as (select count(name) as n from posts) select n from s",
+            // A WITH query of the enclosing statement is no table of that name.
+            "select count(title) as n from enclosing",
+        ] {
+            let mut c = c.clone();
+            c.enclosing_ctes.push("enclosing".into());
+            c.columns.insert("enclosing", vec!["title".to_string()]);
+            assert!(!one(sql, &c), "{sql}");
+            // A statement of its own has no query around it to give the aggregate to.
+            c.nested = false;
+            assert!(one(sql, &c) || sql.contains("enclosing"), "{sql}");
+        }
+        // Without the relation's columns a bare name proves nothing.
+        c.columns = Columns::default();
+        assert!(!one("select count(id) as n from posts", &c));
+        assert!(one("select count(*) as n from posts", &c));
+        assert_eq!(with_queries("with a as (select 1) select (with b as (select 2) select * from b) from a"), ["a", "b"]);
+    }
+
+    #[test]
     fn a_join_on_a_unique_key_of_a_pinned_row_is_at_most_one_row() {
         let mut c = joined();
         // `q` is a comment row of an enclosing query, as a host proving a subquery says.
@@ -2268,7 +2543,7 @@ mod tests {
     fn limits_group_by_having_and_set_operations_are_unproven() {
         for (sql, fragment) in [
             ("SELECT 1 AS x LIMIT 0", "LIMIT or an OFFSET"),
-            ("SELECT 1 AS x LIMIT 1", "LIMIT or an OFFSET"),
+            ("SELECT 1 AS x LIMIT $1", "LIMIT or an OFFSET"),
             ("SELECT 1 AS x OFFSET 1", "LIMIT or an OFFSET"),
             ("SELECT 1 AS x FETCH FIRST 0 ROWS ONLY", "LIMIT or an OFFSET"),
             ("SELECT count(*) AS n FROM pg_class GROUP BY relkind", "GROUP BY"),
@@ -2353,9 +2628,10 @@ mod tests {
             // A derived table of any number of rows, and a UNION.
             ("SELECT x.title FROM (SELECT * FROM todos) x WHERE x.id = $1", "the subquery `x`"),
             ("SELECT title FROM todos WHERE id = $1 UNION SELECT title FROM todos", "a set operation"),
-            // A LIMIT above one, or one the build cannot read, bounds nothing.
-            ("SELECT title FROM todos WHERE id = $1 LIMIT 2", "bounds nothing"),
-            ("SELECT title FROM todos WHERE id = $1 LIMIT $2", "bounds nothing"),
+            // A LIMIT above one, or one the build cannot read, bounds nothing by itself.
+            ("SELECT title FROM todos WHERE owner_id = $1 LIMIT 2", "does not equate every column"),
+            ("SELECT title FROM todos WHERE owner_id = $1 LIMIT $2", "does not equate every column"),
+            ("SELECT title FROM todos WHERE owner_id = $1 ORDER BY id FETCH FIRST 1 ROWS WITH TIES", "does not equate every column"),
             // A set-returning call multiplies the one row the key found.
             ("SELECT generate_series(1, 3) AS g FROM todos WHERE id = $1", "set-returning function"),
         ] {
@@ -2363,6 +2639,219 @@ mod tests {
         }
         // The key pins one row of `todos` and the GROUP BY reads only its columns: one group at most.
         assert_eq!(pg_most("SELECT count(*) AS n FROM todos WHERE id = $1 GROUP BY owner_id"), Ok(()));
+    }
+
+    #[test]
+    fn a_limit_only_lowers_a_bound() {
+        // A LIMIT above one, one the build cannot read and an OFFSET remove rows and add none:
+        // the key's bound stands.
+        for sql in [
+            "SELECT title FROM todos WHERE id = $1 LIMIT 5",
+            "SELECT title FROM todos WHERE id = $1 LIMIT $2",
+            "SELECT title FROM todos WHERE id = $1 LIMIT $2 OFFSET $3",
+            "SELECT title FROM todos WHERE id = $1 LIMIT ALL",
+            "SELECT title FROM todos WHERE id = $1 ORDER BY title FETCH FIRST 3 ROWS WITH TIES",
+            "SELECT count(*) AS n FROM todos LIMIT $1",
+            "SELECT count(*) AS n FROM todos OFFSET $1",
+            "SELECT id FROM users WHERE id = $1 INTERSECT SELECT owner_id FROM todos LIMIT 10",
+            "SELECT s.title FROM (SELECT title FROM todos WHERE id = $1 LIMIT 5) s",
+        ] {
+            assert_eq!(pg_most(sql), Ok(()), "{sql}");
+            refused(pg(sql), "", sql);
+        }
+        // Exactly one row stays one under a constant LIMIT of a row or more and no OFFSET; LIMIT 0,
+        // a parameter (0, or NULL for none) and an OFFSET can drop it.
+        for sql in [
+            "SELECT count(*) AS n FROM todos LIMIT 5",
+            "SELECT count(*) AS n FROM todos LIMIT 1",
+            "SELECT count(*) AS n FROM todos LIMIT ALL",
+            "SELECT count(*) AS n FROM todos LIMIT NULL",
+            "SELECT count(*) AS n FROM todos LIMIT 5 OFFSET 0",
+            "SELECT count(*) AS n FROM todos ORDER BY 1 FETCH FIRST 1 ROWS WITH TIES",
+            "SELECT 1 AS x LIMIT 1",
+        ] {
+            assert_eq!(pg(sql), Ok(()), "{sql}");
+        }
+        for sql in [
+            "SELECT count(*) AS n FROM todos LIMIT 0",
+            "SELECT count(*) AS n FROM todos LIMIT $1",
+            "SELECT count(*) AS n FROM todos LIMIT 1 + 1",
+            "SELECT count(*) AS n FROM todos LIMIT 5 OFFSET 1",
+            "SELECT count(*) AS n FROM todos LIMIT 5 OFFSET $1",
+            "SELECT count(*) AS n FROM todos OFFSET 1",
+        ] {
+            refused(pg(sql), "LIMIT or an OFFSET", sql);
+            assert_eq!(pg_most(sql), Ok(()), "{sql}");
+        }
+        // SQLite reads the same rule; its negative LIMIT is no limit at all.
+        let catalog = Catalog { unique_keys: stock().unique_keys, ..Catalog::default() };
+        let most = |sql: &str| at_most_one(sql, Dialect::Sqlite, &Trust::default(), &catalog);
+        assert_eq!(most("SELECT title FROM todos WHERE id = ?1 LIMIT 5"), Ok(()));
+        assert_eq!(most("SELECT title FROM todos WHERE id = ?1 LIMIT ?2 OFFSET ?3"), Ok(()));
+        assert_eq!(lite("SELECT count(*) AS n FROM todos LIMIT 5"), Ok(()));
+        refused(lite("SELECT count(*) AS n FROM todos LIMIT ?1"), "LIMIT or an OFFSET", "sqlite");
+        refused(most("SELECT title FROM todos LIMIT -1"), "does not equate every column", "a negative limit");
+        refused(most("SELECT title FROM todos WHERE owner_id = ?1 LIMIT 5"), "does not equate every column", "sqlite");
+    }
+
+    #[test]
+    fn a_function_in_from_that_returns_no_set_is_one_row() {
+        let mut c = stock();
+        c.functions.extend(["now", "one_text", "out_pair"].map(String::from));
+        let one = |sql: &str| exactly_one(sql, Dialect::Postgres, &Trust::default(), &c);
+        let most = |sql: &str| at_most_one(sql, Dialect::Postgres, &Trust::default(), &c);
+        for sql in [
+            "SELECT * FROM now()",
+            "SELECT * FROM pg_catalog.now()",
+            "SELECT * FROM CURRENT_DATE",
+            "SELECT * FROM one_text($1)",
+            "SELECT a, b FROM out_pair($1)",
+            "SELECT * FROM one_text($1) WITH ORDINALITY AS t (v, n)",
+            "SELECT * FROM ROWS FROM (now(), one_text($1))",
+            // Each is one row per row of the other.
+            "SELECT * FROM now() a, now() b",
+            "SELECT * FROM now() a CROSS JOIN LATERAL one_text(a::text) b",
+            "SELECT * FROM now() a JOIN one_text($1) b ON true",
+        ] {
+            assert_eq!(one(sql), Ok(()), "{sql}");
+        }
+        for (sql, fragment) in [
+            ("SELECT * FROM generate_series(1, 3)", "set-returning function generate_series"),
+            ("SELECT * FROM unnest($1::int[]) WITH ORDINALITY", "set-returning function unnest"),
+            ("SELECT * FROM ROWS FROM (now(), generate_series(1, 3))", "set-returning function generate_series"),
+            // A name the catalog does not have may return a set.
+            ("SELECT * FROM mystery($1)", "is not in the catalog"),
+            ("SELECT * FROM XMLTABLE('/a' PASSING '<a/>' COLUMNS v text PATH '.') x", "a FROM returns a row per row"),
+            ("SELECT * FROM todos TABLESAMPLE SYSTEM (50)", "a FROM returns a row per row"),
+            ("SELECT * FROM now() WHERE $1", "can remove its row"),
+            ("SELECT * FROM now() a JOIN one_text($1) b ON b = a::text", "an inner join under a condition"),
+            ("SELECT u.email, t FROM users u, now() t WHERE u.id = $1", "a FROM returns a row per row"),
+        ] {
+            refused(one(sql), fragment, sql);
+        }
+        // A join with one multiplies no row.
+        assert_eq!(most("SELECT * FROM now() WHERE $1"), Ok(()));
+        assert_eq!(most("SELECT u.email, t FROM users u, now() t WHERE u.id = $1"), Ok(()));
+        assert_eq!(most("SELECT u.email, t FROM users u CROSS JOIN LATERAL lower(u.email) t WHERE u.id = $1"), Ok(()));
+        assert_eq!(most("SELECT u.email, a, b FROM now() a, users u, one_text(u.email) b WHERE u.id = $1"), Ok(()));
+        refused(most("SELECT u.email, t FROM users u, now() t"), "of `u`", "an unpinned relation beside it");
+        refused(most("SELECT u.email, g FROM users u, generate_series(1, 2) g WHERE u.id = $1"), "`g` in the FROM", "a set");
+        // What it returns is computed for each row it is joined to, so it pins no key.
+        refused(most("SELECT u.id FROM one_text($1) t, users u WHERE u.email = t"), "of `u`", "a key pinned to a function's value");
+        // Nor is it one value for a DISTINCT or a GROUP BY.
+        refused(most("SELECT DISTINCT t FROM users u, now() t"), "", "distinct over a function");
+        // SQLite's functions in FROM are table-valued, and no catalog names them.
+        refused(exactly_one("SELECT value FROM json_each(?1)", Dialect::Sqlite, &Trust::default(), &Catalog::default()), "is not in the catalog", "sqlite");
+        assert!(at_most_one("SELECT value FROM json_each(?1)", Dialect::Sqlite, &Trust::default(), &Catalog::default()).is_err());
+    }
+
+    #[test]
+    fn a_sequence_is_one_row() {
+        let mut c = stock();
+        c.single_row.insert("my_sequence".into());
+        let one = |sql: &str| exactly_one(sql, Dialect::Postgres, &Trust::default(), &c);
+        let most = |sql: &str| at_most_one(sql, Dialect::Postgres, &Trust::default(), &c);
+        assert_eq!(one("SELECT last_value FROM my_sequence"), Ok(()));
+        assert_eq!(one("SELECT a.last_value, b.is_called FROM my_sequence a, my_sequence b"), Ok(()));
+        refused(one("SELECT last_value FROM my_sequence WHERE is_called"), "can remove its row", "a WHERE");
+        assert_eq!(most("SELECT last_value FROM my_sequence WHERE is_called"), Ok(()));
+        assert_eq!(most("SELECT t.title, s.last_value FROM todos t, my_sequence s WHERE t.id = $1"), Ok(()));
+        // A WITH query of the name is not the sequence, and another schema's relation is not it.
+        refused(one("WITH my_sequence AS (SELECT id FROM todos) SELECT * FROM my_sequence"), "the WITH query `my_sequence`", "shadowed");
+        refused(one("SELECT last_value FROM other.my_sequence"), "a FROM returns a row per row", "another schema");
+        // Another session advances it between two reads of it, so it pins no key.
+        refused(most("SELECT t.title FROM my_sequence s, todos t WHERE t.id = s.last_value"), "of `t`", "a key pinned to a sequence");
+    }
+
+    #[test]
+    fn a_from_of_one_row_items_is_one_row() {
+        let mut c = stock();
+        c.functions.extend(["now", "nextval"].map(String::from));
+        let one = |sql: &str| exactly_one(sql, Dialect::Postgres, &Trust::default(), &c);
+        let most = |sql: &str| at_most_one(sql, Dialect::Postgres, &Trust::default(), &c);
+        for sql in [
+            // A derived table is what the same query is as a WITH query.
+            "SELECT * FROM (SELECT count(*) AS n FROM todos) s",
+            "SELECT pk FROM (SELECT nextval('s') AS pk) alias",
+            "SELECT s.n FROM (SELECT t.n FROM (SELECT count(*) AS n FROM todos) t) s",
+            // A cross join of one-row items, however it is written.
+            "WITH a AS (SELECT count(*) AS n FROM todos), b AS (SELECT count(*) AS m FROM users) SELECT a.n, b.m FROM a CROSS JOIN b",
+            "WITH a AS (SELECT count(*) AS n FROM todos), b AS (SELECT count(*) AS m FROM users) SELECT a.n, b.m FROM a, b",
+            "WITH a AS (SELECT count(*) AS n FROM todos) SELECT x.n, y.n AS m FROM a x JOIN a y ON 1 = 1",
+            "WITH a AS (SELECT count(*) AS n FROM todos) SELECT x.n, y.n AS m FROM a x JOIN a y ON true",
+            "SELECT a.n, b.m, t FROM (SELECT count(*) AS n FROM todos) a, (SELECT max(id) AS m FROM users) b, now() t",
+            "SELECT a.n, b.m FROM (SELECT count(*) AS n FROM todos) a CROSS JOIN LATERAL (SELECT count(*) AS m FROM users WHERE id = a.n) b",
+            "WITH ins AS (INSERT INTO todos (title) VALUES ($1) RETURNING id) SELECT ins.id, c.n FROM ins, (SELECT count(*) AS n FROM todos) c",
+            // An outer join keeps the row of its preserved side, whatever its condition.
+            "SELECT a.n, u.email FROM (SELECT count(*) AS n FROM todos) a LEFT JOIN users u ON u.id = $1",
+            "SELECT a.n, u.email FROM users u RIGHT JOIN (SELECT count(*) AS n FROM todos) a ON u.id = $1",
+            "WITH ins AS (INSERT INTO todos (title) VALUES ($1) RETURNING id, owner_id) SELECT ins.id, u.email FROM ins LEFT JOIN users u ON u.email = $2",
+        ] {
+            assert_eq!(one(sql), Ok(()), "{sql}");
+        }
+        for (sql, fragment) in [
+            // An inner join under a condition that can fail, and a WHERE, can drop the row.
+            ("WITH a AS (SELECT count(*) AS n FROM todos) SELECT x.n FROM a x JOIN a y ON x.n = y.n + $1", "an inner join under a condition"),
+            ("WITH a AS (SELECT count(*) AS n FROM todos) SELECT x.n FROM a x JOIN a y ON 1 = 2", "an inner join under a condition"),
+            ("WITH a AS (SELECT count(*) AS n FROM todos) SELECT x.n FROM a x JOIN a y USING (n)", "an inner join under a condition"),
+            ("WITH a AS (SELECT count(*) AS n FROM todos) SELECT x.n FROM a x NATURAL JOIN a y", "an inner join under a condition"),
+            ("SELECT * FROM (SELECT count(*) AS n FROM todos) s WHERE s.n > $1", "can remove its row"),
+            // A FULL JOIN is two rows where the condition fails.
+            ("SELECT a.n, b.m FROM (SELECT count(*) AS n FROM todos) a FULL JOIN (SELECT count(*) AS m FROM users) b ON a.n = b.m", "FULL JOIN"),
+        ] {
+            refused(one(sql), fragment, sql);
+            if !fragment.contains("FULL") {
+                assert_eq!(most(sql), Ok(()), "{sql}");
+            }
+        }
+        for (sql, fragment) in [
+            // The item on the preserved side decides, and the other side must still be one row at most.
+            ("SELECT a.n, u.email FROM users u LEFT JOIN (SELECT count(*) AS n FROM todos) a ON true", "a FROM returns a row per row"),
+            ("SELECT a.n, u.email FROM (SELECT count(*) AS n FROM todos) a LEFT JOIN users u ON u.name = $1", "of `u`"),
+            // An item that may be empty, or many rows.
+            ("SELECT * FROM (SELECT id FROM todos WHERE id = $1) s", "the subquery `s` may return no row"),
+            ("SELECT * FROM (SELECT count(*) AS n FROM todos GROUP BY owner_id) s", "the subquery `s` may return no row"),
+            ("SELECT * FROM (SELECT count(*) AS n FROM todos LIMIT $1) s", "the subquery `s` may return no row"),
+            ("WITH RECURSIVE a AS (SELECT 1 AS n) SELECT n FROM a", "recursive"),
+            // A subquery is proven on its own, and does not read the body of a WITH query around it.
+            ("WITH a AS (SELECT count(*) AS n FROM todos) SELECT s.n FROM (SELECT n FROM a) s", "enclosing statement"),
+            ("WITH gone AS (DELETE FROM todos WHERE id = $1 RETURNING id) SELECT id FROM gone", "the WITH query `gone`"),
+            // A locking clause can skip the row a table under the outer join holds.
+            ("SELECT a.n, u.email FROM (SELECT count(*) AS n FROM todos) a LEFT JOIN users u ON u.id = $1 FOR UPDATE OF u SKIP LOCKED", "locking clause"),
+        ] {
+            refused(one(sql), fragment, sql);
+        }
+        // With a user's `=` in the database, `1 = 1` may be theirs.
+        c.equality_shadowed = true;
+        refused(exactly_one("WITH a AS (SELECT count(*) AS n FROM todos) SELECT x.n FROM a x JOIN a y ON 1 = 1", Dialect::Postgres, &Trust::default(), &c), "an inner join under a condition", "a shadowed =");
+        // SQLite reads the same shapes.
+        for sql in [
+            "SELECT * FROM (SELECT count(*) AS n FROM todos) s",
+            "SELECT a.n, b.m FROM (SELECT count(*) AS n FROM todos) a, (SELECT count(*) AS m FROM users) b",
+            "SELECT a.n, b.m FROM (SELECT count(*) AS n FROM todos) a JOIN (SELECT count(*) AS m FROM users) b ON 1 = 1",
+        ] {
+            assert_eq!(lite(sql), Ok(()), "{sql}");
+        }
+    }
+
+    #[test]
+    fn an_ordered_set_aggregate_is_an_aggregate() {
+        let mut c = stock();
+        c.functions.extend(["percentile_disc", "mode", "rank", "my_median"].map(String::from));
+        let one = |sql: &str| exactly_one(sql, Dialect::Postgres, &Trust::default(), &c);
+        for sql in [
+            "SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY title) FROM todos",
+            "SELECT mode() WITHIN GROUP (ORDER BY title) FROM todos WHERE owner_id = $1",
+            "SELECT rank(1) WITHIN GROUP (ORDER BY id) FROM todos",
+            "SELECT coalesce(mode() WITHIN GROUP (ORDER BY title), 'none') AS top FROM todos",
+            // A user's ordered-set aggregate takes the clause too, and nothing else does.
+            "SELECT public.my_median(0.5) WITHIN GROUP (ORDER BY id) FROM todos",
+        ] {
+            assert_eq!(one(sql), Ok(()), "{sql}");
+        }
+        refused(one("SELECT mode() WITHIN GROUP (ORDER BY title) FROM todos GROUP BY owner_id"), "GROUP BY", "grouped");
+        refused(one("SELECT mode() WITHIN GROUP (ORDER BY title), generate_series(1, 2) FROM todos"), "set-returning function", "beside a set");
+        refused(lite("SELECT mode() WITHIN GROUP (ORDER BY title) FROM todos"), "a FROM returns a row per row", "sqlite");
     }
 
     #[test]

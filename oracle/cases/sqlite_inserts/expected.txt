@@ -1,0 +1,12 @@
+insert_copy.sql: none () -> {  }
+insert_select.sql: none (1: text, 2: numeric) -> {  }
+insert_select_compound.sql: many (a: integer, b: text) -> { name: text, k: integer? }
+insert_select_returning.sql: many (meta: text, d: integer, n: integer) -> { name: text, meta: text?, k: integer? }
+numeric_column.sql: many (ready: numeric) -> { name: text }
+values_alone.sql: many (p: real, q: integer) -> { column1: integer, column2: text?, column3: real }
+values_not_null_wins.sql: many (x: text, y: text, z: text?) -> { name: text, nick: text? }
+values_one_row.sql: one () -> { column1: integer, column2: text }
+values_positional.sql: many (name: text, meta: text?, k: integer?, name2: text, meta2: text?, k2: integer?) -> { name: text, meta: text?, k: integer? }
+values_rows.sql: none (a: integer, b: text, c: integer, d: text) -> {  }
+values_rows_returning.sql: many (a: text, n: text?, b: text, m: text?, c: text, u: text) -> { id: integer, name: text, nick: text? }
+values_subquery.sql: many () -> { column1: integer }

@@ -275,8 +275,9 @@ function writeEntry(root: string, file: string, entry: Entry): void {
  * their columns, inheritance, constraints, indexes, row triggers and rules (nullability and the row
  * count read them), enum labels, domains, functions, user operators (the trust check reads them) and view
  * definitions, and the server settings that change a statement's types. SQLite's whole schema is
- * its `sqlite_schema` table. A `"char"` column is cast to text: `text || "char"` is ambiguous, and
- * a query the server refuses leaves every entry unverified.
+ * its `sqlite_schema` table, and the functions of the SQLite that opened it are part of what an
+ * analysis reads: another Node has another SQLite. A `"char"` column is cast to text:
+ * `text || "char"` is ambiguous, and a query the server refuses leaves every entry unverified.
  */
 const NS = `not in ('pg_catalog', 'information_schema') and n.nspname !~ '^pg_(toast|temp)'`;
 const FINGERPRINT: Record<ResolvedProject["dialect"], string> = {
@@ -301,5 +302,6 @@ const FINGERPRINT: Record<ResolvedProject["dialect"], string> = {
     union all select concat_ws(' ', 'v', table_name, md5(view_definition)) from information_schema.views where table_schema = database()
     union all select concat_ws(' ', 'r', routine_name, routine_type, coalesce(dtd_identifier, ''), md5(coalesce(routine_definition, ''))) from information_schema.routines where routine_schema = database()
   ) t`,
-  sqlite: `select type, name, tbl_name, coalesce(sql, '') from sqlite_schema order by type, name`,
+  sqlite: `select type, name, tbl_name, coalesce(sql, '') from sqlite_schema
+    union all select 'function', name, type, narg from pragma_function_list order by 1, 2, 3, 4`,
 };

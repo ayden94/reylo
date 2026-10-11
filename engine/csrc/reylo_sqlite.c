@@ -1,17 +1,20 @@
 /*
 ** SQLite's own resolved parse tree, as JSON, for the engine's SQLite analysis.
 **
-** Built as ONE translation unit with the patched amalgamation (csrc/patch-sqlite.py inserts five
-** one-line hooks, each right after name resolution), so the SQLITE_PRIVATE internals are callable
-** here. The engine gives this file the schema DDL and one statement; the hooks fire while SQLite
-** prepares the statement against an in-memory replay of that schema, and the walker serializes
-** what SQLite resolved: every expression with sqlite3ExprAffinity and sqlite3ExprCanBeNull, every
-** column reference with its Table, Column, NOT NULL and outer-join mark (EP_CanBeNull), the FROM
-** items with their join type and cursor, the DML target columns per value position, and each
-** table's columns and unique keys. The rules (function result types, arithmetic, the row-count
-** proof) live in Rust; nothing here decides a type. A host that registers scalar functions of its
-** own on its connection names them with their argument counts, and the replay registers a stub
-** for each, so a statement calling one prepares here as it does there.
+** Built as ONE translation unit with the patched amalgamation (csrc/patch-sqlite.py inserts six
+** one-line hooks, five of them right after name resolution), so the SQLITE_PRIVATE internals are
+** callable here. The engine gives this file the schema DDL and one statement; the hooks fire while
+** SQLite prepares the statement against an in-memory replay of that schema, and the walker
+** serializes what SQLite resolved: every expression with sqlite3ExprAffinity and
+** sqlite3ExprCanBeNull, every column reference with its Table, Column, NOT NULL and outer-join
+** mark (EP_CanBeNull), the FROM items with their join type and cursor, the DML target columns per
+** value position, and each table's columns and unique keys. The rules (function result types,
+** arithmetic, the row-count proof) live in Rust; nothing here decides a type. A host that
+** registers scalar functions of its own on its connection names them with their argument counts,
+** and the replay registers a stub for each, so a statement calling one prepares here as it does
+** there. A host that lists the functions of its own SQLite (pragma_function_list) decides which
+** functions exist: one it has and this build lacks gets a stub too, and one this build has and it
+** lacks is refused.
 */
 #include <stdio.h>
 #include <string.h>
@@ -23,11 +26,13 @@ typedef void (*reylo_insert_fn)(struct Parse*, struct Table*, struct IdList*, st
 typedef void (*reylo_update_fn)(struct Parse*, struct Table*, struct ExprList*, struct Expr*, int*, struct SrcList*, int, struct Upsert*);
 typedef void (*reylo_delete_fn)(struct Parse*, struct Table*, struct Expr*);
 typedef void (*reylo_returning_fn)(struct Parse*, struct Table*, struct ExprList*);
+typedef void (*reylo_insert_select_fn)(struct Parse*, struct Select*);
 static reylo_select_fn reylo_select_hook;
 static reylo_insert_fn reylo_insert_hook;
 static reylo_update_fn reylo_update_hook;
 static reylo_delete_fn reylo_delete_hook;
 static reylo_returning_fn reylo_returning_hook;
+static reylo_insert_select_fn reylo_insert_select_hook;
 
 #include "sqlite3-patched.c"
 
@@ -39,7 +44,7 @@ static sqlite3_str *gStmt;      /* the top-level SELECT, or a DML's SELECT sourc
 static sqlite3_str *gDml;       /* the INSERT / UPDATE / DELETE */
 static sqlite3_str *gReturning; /* the RETURNING list */
 static int gCaptured;           /* the first top-level hook has fired */
-static int gWantSelect;         /* a DML is waiting for its SELECT source */
+static Select *gInsertSelect;   /* the SELECT or VALUES that feeds the INSERT, about to be coded */
 static Table *gTables[128];
 static int gnTables;
 
@@ -257,9 +262,14 @@ static void expr(sqlite3_str *s, Expr *p, Select *pSel){
   closeObj(s);
 }
 
-static void selectJson(sqlite3_str *s, Select *p){
-  int i;
+static void selectJson(sqlite3_str *s, Select *pTop){
+  Select *p = pTop;
+  int i, nMore = 0;
   if( p==0 ){ sqlite3_str_appendall(s, "null"); return; }
+  /* A multi-row VALUES is a chain of one-row SELECTs under UNION ALL, the last row on top. Its
+  ** first row stands for it here, with the rows after it in "rows", so a list of any length nests
+  ** nothing; an ORDER BY or a LIMIT is on the top row, as on any compound. */
+  while( (p->selFlags & SF_Values) && p->op==TK_ALL && p->pPrior && (p->pPrior->selFlags & SF_Values) ){ p = p->pPrior; nMore++; }
   sqlite3_str_appendchar(s, 1, '{');
   key(s, "columns"); sqlite3_str_appendchar(s, 1, '[');
   for(i=0; p->pEList && i<p->pEList->nExpr; i++){
@@ -271,12 +281,23 @@ static void selectJson(sqlite3_str *s, Select *p){
     closeObj(s); sqlite3_str_appendchar(s, 1, ',');
   }
   closeArr(s); sqlite3_str_appendchar(s, 1, ',');
+  if( nMore ){
+    Select **apRow = sqlite3_malloc64(sizeof(Select*)*(sqlite3_uint64)nMore);
+    Select *q;
+    key(s, "rows"); sqlite3_str_appendchar(s, 1, '[');
+    for(i=nMore, q=pTop; apRow && i>0; q=q->pPrior) apRow[--i] = q;
+    for(i=0; apRow && i<nMore; i++){ exprList(s, apRow[i]->pEList, apRow[i]); sqlite3_str_appendchar(s, 1, ','); }
+    sqlite3_free(apRow);
+    closeArr(s); sqlite3_str_appendchar(s, 1, ',');
+  }
   key(s, "from"); sqlite3_str_appendchar(s, 1, '[');
   for(i=0; p->pSrc && i<p->pSrc->nSrc; i++){
     SrcItem *pItem = &p->pSrc->a[i];
     sqlite3_str_appendchar(s, 1, '{');
     kv_int(s, "cursor", pItem->iCursor);
-    kv_str(s, "table", pItem->zName);
+    /* A table by the name its DDL spells, which "tables" is keyed by: SQLite's names fold ASCII
+    ** case, so the statement may spell it another way. A table-valued function by its module's. */
+    kv_str(s, "table", pItem->pSTab && !pItem->fg.isSubquery ? pItem->pSTab->zName : pItem->zName);
     kv_str(s, "alias", pItem->zAlias);
     kv_bool(s, "outer", (pItem->fg.jointype & (JT_LEFT|JT_LTORJ))!=0);
     kv_bool(s, "cross", (pItem->fg.jointype & JT_CROSS)!=0);
@@ -300,9 +321,9 @@ static void selectJson(sqlite3_str *s, Select *p){
   key(s, "where"); expr(s, p->pWhere, p); sqlite3_str_appendchar(s, 1, ',');
   key(s, "groupBy"); exprList(s, p->pGroupBy, p); sqlite3_str_appendchar(s, 1, ',');
   key(s, "having"); expr(s, p->pHaving, p); sqlite3_str_appendchar(s, 1, ',');
-  key(s, "orderBy"); exprList(s, p->pOrderBy, p); sqlite3_str_appendchar(s, 1, ',');
-  key(s, "limit"); expr(s, p->pLimit ? p->pLimit->pLeft : 0, p); sqlite3_str_appendchar(s, 1, ',');
-  key(s, "offset"); expr(s, p->pLimit ? p->pLimit->pRight : 0, p); sqlite3_str_appendchar(s, 1, ',');
+  key(s, "orderBy"); exprList(s, pTop->pOrderBy, pTop); sqlite3_str_appendchar(s, 1, ',');
+  key(s, "limit"); expr(s, pTop->pLimit ? pTop->pLimit->pLeft : 0, pTop); sqlite3_str_appendchar(s, 1, ',');
+  key(s, "offset"); expr(s, pTop->pLimit ? pTop->pLimit->pRight : 0, pTop); sqlite3_str_appendchar(s, 1, ',');
   kv_bool(s, "distinct", (p->selFlags & SF_Distinct)!=0);
   kv_bool(s, "hasAgg", (p->selFlags & SF_HasAgg)!=0);
   kv_bool(s, "aggregate", (p->selFlags & SF_Aggregate)!=0);
@@ -321,13 +342,19 @@ static int skipHook(Parse *pParse){ return pParse->nErr || pParse->db->init.busy
 
 static void selectHook(Parse *pParse, Select *p, SelectDest *pDest){
   if( skipHook(pParse) ) return;
-  if( !gCaptured && pDest->eDest==SRT_Output ){
+  if( p==gInsertSelect ){
+    gInsertSelect = 0;
+    selectJson(gStmt, p);
+  }else if( !gCaptured && pDest->eDest==SRT_Output ){
     gCaptured = 1;
     selectJson(gStmt, p);
-  }else if( gWantSelect ){
-    gWantSelect = 0;
-    selectJson(gStmt, p);
   }
+}
+/* SQLite codes the SELECT that feeds an INSERT before it reaches the INSERT hook: this names it,
+** and the SELECT hook serializes it as resolved, before the code generator rewrites it. */
+static void insertSelectHook(Parse *pParse, Select *pSelect){
+  if( skipHook(pParse) || gCaptured || sqlite3_str_length(gStmt) ) return;
+  gInsertSelect = pSelect;
 }
 
 static int insertColumnIndex(Table *pTab, IdList *pColumn, int i){
@@ -335,7 +362,8 @@ static int insertColumnIndex(Table *pTab, IdList *pColumn, int i){
   if( pColumn ){
     if( i>=pColumn->nId ) return -1;
     for(j=0; j<pTab->nCol; j++) if( sqlite3StrICmp(pTab->aCol[j].zCnName, pColumn->a[i].zName)==0 ) return j;
-    return -1;
+    /* The rowid by one of its names is the INTEGER PRIMARY KEY column, where the table has one. */
+    return sqlite3IsRowid(pColumn->a[i].zName) ? pTab->iPKey : -1;
   }
   for(j=0; j<pTab->nCol; j++){
     if( pTab->aCol[j].colFlags & COLFLAG_NOINSERT ) continue;
@@ -389,7 +417,6 @@ static void insertHook(Parse *pParse, Table *pTab, IdList *pColumn, ExprList *pL
     Select *q;
     if( pSelect->selFlags & SF_Values ){ for(q=pSelect; q; q=q->pPrior) rows++; }
     kv_int(gDml, "rows", (pSelect->selFlags & SF_Values) ? rows : -1);
-    gWantSelect = 1;
   }else{
     kv_int(gDml, "rows", 1);
   }
@@ -503,6 +530,7 @@ static void installHooks(int on){
   reylo_update_hook = on ? updateHook : 0;
   reylo_delete_hook = on ? deleteHook : 0;
   reylo_returning_hook = on ? returningHook : 0;
+  reylo_insert_select_hook = on ? insertSelectHook : 0;
 }
 
 /* A host function's stand-in: the replay only prepares, so it is never called. */
@@ -510,14 +538,67 @@ static void hostFunctionStub(sqlite3_context *ctx, int argc, sqlite3_value **arg
   (void)argc; (void)argv;
   sqlite3_result_null(ctx);
 }
+static void hostFinalStub(sqlite3_context *ctx){ sqlite3_result_null(ctx); }
+
+static void functionError(sqlite3_str *errors, const char *zName){
+  sqlite3_str_appendchar(errors, 1, '{');
+  kv_str(errors, "function", zName);
+  kv_str(errors, "message", sqlite3_errmsg(gDb));
+  closeObj(errors); sqlite3_str_appendchar(errors, 1, ',');
+}
+
+/* Whether a replay step that failed is no failure: the statement creates one of SQLite's own
+** tables, which sqlite_schema lists like any other. The replay has made sqlite_sequence itself
+** with the first AUTOINCREMENT table, and a virtual table's shadow tables with the virtual table;
+** any other sqlite_ table (sqlite_stat1, or sqlite_sequence where no AUTOINCREMENT table is
+** left) is made here as the plain table it is, which only a writable schema allows. */
+static int internalTable(const char *zDdl, const char *zErr){
+  static const char zReserved[] = "object name reserved for internal use: ";
+  static const char zExists[] = " already exists";
+  char *zErr2 = 0;
+  int n, ok = 0;
+  if( zErr==0 ) return 0;
+  if( strncmp(zErr, zReserved, sizeof(zReserved)-1)==0 ){
+    sqlite3_db_config(gDb, SQLITE_DBCONFIG_WRITABLE_SCHEMA, 1, (int*)0);
+    ok = sqlite3_exec(gDb, zDdl, 0, 0, &zErr2)==SQLITE_OK;
+    sqlite3_db_config(gDb, SQLITE_DBCONFIG_WRITABLE_SCHEMA, 0, (int*)0);
+    if( !ok && zErr2 ){
+      n = (int)strlen(zErr2);
+      ok = n>(int)sizeof(zExists) && strcmp(&zErr2[n-(sizeof(zExists)-1)], zExists)==0;
+    }
+    sqlite3_free(zErr2);
+    return ok;
+  }
+  n = (int)strlen(zErr);
+  if( strncmp(zErr, "table ", 6)==0 && n>6+(int)sizeof(zExists)-1 && strcmp(&zErr[n-(sizeof(zExists)-1)], zExists)==0 ){
+    char *zName = sqlite3_mprintf("%.*s", n-6-(int)(sizeof(zExists)-1), &zErr[6]);
+    if( zName ){
+      Table *pTab;
+      sqlite3Dequote(zName);
+      pTab = sqlite3FindTable(gDb, zName, "main");
+      ok = pTab!=0 && (pTab->tabFlags & TF_Shadow)!=0;
+      sqlite3_free(zName);
+    }
+  }
+  return ok;
+}
 
 /* Replays the DDL into a fresh in-memory database; errors are reported, not fatal. The host's
-** functions are registered first, so a view, an index or a CHECK that calls one replays too. */
-static int openSchema(const char *const *azDdl, int nDdl, const char *const *azFn, const int *aFnArg, int nFn, sqlite3_str *errors){
+** functions are registered first, so a view, an index or a CHECK that calls one replays too: the
+** ones it registers on its connection (azFn), and of the ones its SQLite lists (azHost, with the
+** argument count and 's', 'a' or 'w' for a scalar, an aggregate or a window function; nHost is
+** negative when it lists none), every one this build has no function of that name for. */
+static int openSchema(
+  const char *const *azDdl, int nDdl, const char *const *azFn, const int *aFnArg, int nFn,
+  const char *const *azHost, const int *aHostArg, const char *zHostType, int nHost, sqlite3_str *errors
+){
   sqlite3_str *k = sqlite3_str_new(0);
   char *zKey;
+  char *aMissing = 0;
   int i, rc;
+  const int flags = SQLITE_UTF8|SQLITE_DETERMINISTIC|SQLITE_INNOCUOUS;
   for(i=0; i<nFn; i++){ sqlite3_str_appendf(k, "%s/%d", azFn[i], aFnArg[i]); sqlite3_str_appendchar(k, 1, '\2'); }
+  for(i=0; i<nHost; i++){ sqlite3_str_appendf(k, "%s/%d/%c", azHost[i], aHostArg[i], zHostType[i]); sqlite3_str_appendchar(k, 1, '\3'); }
   for(i=0; i<nDdl; i++){ sqlite3_str_appendall(k, azDdl[i]); sqlite3_str_appendchar(k, 1, '\1'); }
   zKey = sqlite3_str_finish(k);
   if( zKey==0 ) zKey = sqlite3_mprintf("");
@@ -530,16 +611,24 @@ static int openSchema(const char *const *azDdl, int nDdl, const char *const *azF
   for(i=0; i<nFn; i++){
     /* Deterministic and innocuous: whatever the host's own flags, the replay accepts every place
     ** the host's schema could already call it from. */
-    if( sqlite3_create_function_v2(gDb, azFn[i], aFnArg[i], SQLITE_UTF8|SQLITE_DETERMINISTIC|SQLITE_INNOCUOUS, 0, hostFunctionStub, 0, 0, 0)!=SQLITE_OK ){
-      sqlite3_str_appendchar(errors, 1, '{');
-      kv_str(errors, "function", azFn[i]);
-      kv_str(errors, "message", sqlite3_errmsg(gDb));
-      closeObj(errors); sqlite3_str_appendchar(errors, 1, ',');
-    }
+    if( sqlite3_create_function_v2(gDb, azFn[i], aFnArg[i], flags, 0, hostFunctionStub, 0, 0, 0)!=SQLITE_OK ) functionError(errors, azFn[i]);
   }
+  /* Which of the host SQLite's functions this build lacks is settled before any stub is made: a
+  ** stub for one argument count must not hide that the next row's count is missing too. */
+  if( nHost>0 ) aMissing = sqlite3_malloc64((sqlite3_uint64)nHost);
+  for(i=0; aMissing && i<nHost; i++) aMissing[i] = sqlite3FindFunction(gDb, azHost[i], -2, SQLITE_UTF8, 0)==0;
+  for(i=0; aMissing && i<nHost; i++){
+    int nArg = aHostArg[i]<0 ? -1 : aHostArg[i];
+    if( !aMissing[i] ) continue;
+    if( zHostType[i]=='w' ) rc = sqlite3_create_window_function(gDb, azHost[i], nArg, flags, 0, hostFunctionStub, hostFinalStub, hostFinalStub, hostFunctionStub, 0);
+    else if( zHostType[i]=='a' ) rc = sqlite3_create_function_v2(gDb, azHost[i], nArg, flags, 0, 0, hostFunctionStub, hostFinalStub, 0);
+    else rc = sqlite3_create_function_v2(gDb, azHost[i], nArg, flags, 0, hostFunctionStub, 0, 0, 0);
+    if( rc!=SQLITE_OK ) functionError(errors, azHost[i]);
+  }
+  sqlite3_free(aMissing);
   for(i=0; i<nDdl; i++){
     char *zErr = 0;
-    if( sqlite3_exec(gDb, azDdl[i], 0, 0, &zErr)!=SQLITE_OK ){
+    if( sqlite3_exec(gDb, azDdl[i], 0, 0, &zErr)!=SQLITE_OK && !internalTable(azDdl[i], zErr) ){
       sqlite3_str_appendchar(errors, 1, '{');
       kv_int(errors, "index", i);
       kv_str(errors, "message", zErr);
@@ -550,20 +639,96 @@ static int openSchema(const char *const *azDdl, int nDdl, const char *const *azF
   return SQLITE_OK;
 }
 
+/* ---- the functions of the host's SQLite ------------------------------------------------------ */
+
+static const char *const *gHost;  /* the names the host's SQLite lists */
+static int gnHost;
+static const char *const *gExtra; /* the names the host registers on its connection */
+static int gnExtra;
+static int gnDenied;              /* calls refused while this statement was prepared */
+static char *gDeniedView;         /* the view the first of them is in, if it is in one */
+
+/* SQLite asks this of every function a statement calls, the ones in the views it reads included.
+** A function this build has and the host's SQLite does not list is refused, and the prepare fails
+** at the call. Both lists are pragma_function_list's, which shows no internal function, so one
+** of those is never refused. */
+static int functionAuth(void *pArg, int code, const char *z1, const char *zFn, const char *z3, const char *zInside){
+  FuncDef *pDef;
+  int i;
+  (void)pArg; (void)z1; (void)z3;
+  if( code!=SQLITE_FUNCTION || zFn==0 ) return SQLITE_OK;
+  for(i=0; i<gnHost; i++) if( sqlite3StrICmp(gHost[i], zFn)==0 ) return SQLITE_OK;
+  for(i=0; i<gnExtra; i++) if( sqlite3StrICmp(gExtra[i], zFn)==0 ) return SQLITE_OK;
+  pDef = sqlite3FindFunction(gDb, zFn, -2, SQLITE_UTF8, 0);
+  if( pDef==0 || (pDef->funcFlags & SQLITE_FUNC_INTERNAL)!=0 ) return SQLITE_OK;
+  if( gnDenied++==0 && zInside ){
+    Table *pTab = sqlite3FindTable(gDb, zInside, 0);
+    if( pTab && IsView(pTab) ) gDeniedView = sqlite3_mprintf("%s", zInside);
+  }
+  return SQLITE_DENY;
+}
+
+/* The schema a failed lookup named, where the replay has no schema of that name: for "no such
+** table: baz.users", the `baz` of a `baz.users` in the statement, with the reference's offset
+** and length. SQLite's own tokenizer finds it, so quoting and comments are read as SQLite reads
+** them. 0 when the message is another one or names a schema that exists (main, temp). */
+static char *missingSchema(const char *zSql, const char *zMsg, int *piOfst, int *pnLen){
+  static const char zPrefix[] = "no such table: ";
+  const unsigned char *z = (const unsigned char*)zSql;
+  const unsigned char *aTok[3] = {0, 0, 0};
+  int aLen[3] = {0, 0, 0};
+  int aType[3] = {0, 0, 0};
+  if( strncmp(zMsg, zPrefix, sizeof(zPrefix)-1)!=0 ) return 0;
+  while( *z ){
+    int tk = 0;
+    int n = (int)sqlite3GetToken(z, &tk);
+    if( n<=0 ) break;
+    if( tk!=TK_SPACE && tk!=TK_COMMENT ){
+      int name = tk==TK_ID || tk==TK_STRING || (tk<TK_SPACE && sqlite3ParserFallback(tk)==TK_ID);
+      aTok[0] = aTok[1]; aLen[0] = aLen[1]; aType[0] = aType[1];
+      aTok[1] = aTok[2]; aLen[1] = aLen[2]; aType[1] = aType[2];
+      aTok[2] = z; aLen[2] = n; aType[2] = name ? 1 : tk==TK_DOT ? 2 : 0;
+      if( aType[0]==1 && aType[1]==2 && aType[2]==1 ){
+        char *zDb = sqlite3_mprintf("%.*s", aLen[0], aTok[0]);
+        char *zTab = sqlite3_mprintf("%.*s", aLen[2], aTok[2]);
+        char *zFull = 0;
+        if( zDb && zTab ){
+          sqlite3Dequote(zDb); sqlite3Dequote(zTab);
+          zFull = sqlite3_mprintf("%s%s.%s", zPrefix, zDb, zTab);
+        }
+        if( zFull && strcmp(zFull, zMsg)==0 && sqlite3FindDbName(gDb, zDb)<0 ){
+          *piOfst = (int)(aTok[0] - (const unsigned char*)zSql);
+          *pnLen = (int)(aTok[2] + aLen[2] - aTok[0]);
+          sqlite3_free(zTab); sqlite3_free(zFull);
+          return zDb;
+        }
+        sqlite3_free(zDb); sqlite3_free(zTab); sqlite3_free(zFull);
+      }
+    }
+    z += n;
+  }
+  return 0;
+}
+
 /*
 ** Analyzes one statement against the schema DDL, with the host's scalar functions (azFn[i] taking
-** aFnArg[i] arguments, -1 for any number) registered on the replay. Returns a JSON document (free
-** with reylo_sqlite_free): { statement, dml, returning, tables, columns, params, readonly, error,
-** schemaErrors }.
+** aFnArg[i] arguments, -1 for any number) registered on the replay, and the functions of the
+** host's SQLite (azHost[i] taking aHostArg[i] arguments, of type zHostType[i]; nHost is negative
+** when the host did not list them, and every function this build has is then taken to exist).
+** Returns a JSON document (free with reylo_sqlite_free): { statement, dml, returning, tables,
+** columns, params, readonly, error, schemaErrors }.
 */
-char *reylo_sqlite_analyze(const char *const *azDdl, int nDdl, const char *zSql, const char *const *azFn, const int *aFnArg, int nFn){
+char *reylo_sqlite_analyze(
+  const char *const *azDdl, int nDdl, const char *zSql, const char *const *azFn, const int *aFnArg, int nFn,
+  const char *const *azHost, const int *aHostArg, const char *zHostType, int nHost
+){
   sqlite3_str *out = sqlite3_str_new(0);
   sqlite3_str *schemaErrors = sqlite3_str_new(0);
   sqlite3_stmt *pStmt = 0;
   const char *zTail = 0;
   int rc, i, n;
   sqlite3_str_appendchar(schemaErrors, 1, '[');
-  rc = openSchema(azDdl, nDdl, azFn, aFnArg, nFn, schemaErrors);
+  rc = openSchema(azDdl, nDdl, azFn, aFnArg, nFn, azHost, aHostArg, zHostType, nHost, schemaErrors);
   closeArr(schemaErrors);
   sqlite3_str_appendchar(out, 1, '{');
   if( rc!=SQLITE_OK ){
@@ -573,15 +738,31 @@ char *reylo_sqlite_analyze(const char *const *azDdl, int nDdl, const char *zSql,
     return sqlite3_str_finish(out);
   }
   gStmt = sqlite3_str_new(0); gDml = sqlite3_str_new(0); gReturning = sqlite3_str_new(0);
-  gCaptured = 0; gWantSelect = 0; gnTables = 0;
+  gCaptured = 0; gInsertSelect = 0; gnTables = 0;
+  gHost = azHost; gnHost = nHost; gExtra = azFn; gnExtra = nFn; gnDenied = 0; gDeniedView = 0;
+  if( nHost>=0 ) sqlite3_set_authorizer(gDb, functionAuth, 0);
   installHooks(1);
   rc = sqlite3_prepare_v2(gDb, zSql, -1, &pStmt, &zTail);
   installHooks(0);
+  if( nHost>=0 ) sqlite3_set_authorizer(gDb, 0, 0);
+  gInsertSelect = 0;
   if( rc!=SQLITE_OK ){
+    static const char zDenied[] = "not authorized to use function: ";
+    const char *zMsg = sqlite3_errmsg(gDb);
+    int iOfst = sqlite3_error_offset(gDb);
+    int nLen = 0;
+    char *zSchema = missingSchema(zSql, zMsg, &iOfst, &nLen);
     key(out, "error"); sqlite3_str_appendchar(out, 1, '{');
-    kv_str(out, "message", sqlite3_errmsg(gDb));
-    kv_int(out, "offset", sqlite3_error_offset(gDb));
+    if( gnDenied && strncmp(zMsg, zDenied, sizeof(zDenied)-1)==0 ){
+      /* The call is in the view's text, not the statement's: its offset would point nowhere. */
+      kv_str(out, "missingFunction", &zMsg[sizeof(zDenied)-1]);
+      if( gDeniedView ){ kv_str(out, "view", gDeniedView); iOfst = -1; }
+    }
+    kv_str(out, "message", zMsg);
+    kv_int(out, "offset", iOfst);
+    if( zSchema ){ kv_str(out, "missingSchema", zSchema); kv_int(out, "length", nLen); }
     closeObj(out); sqlite3_str_appendchar(out, 1, ',');
+    sqlite3_free(zSchema);
   }else{
     key(out, "statement"); if( sqlite3_str_length(gStmt) ) sqlite3_str_appendall(out, sqlite3_str_value(gStmt)); else sqlite3_str_appendall(out, "null");
     sqlite3_str_appendchar(out, 1, ',');
@@ -620,6 +801,8 @@ char *reylo_sqlite_analyze(const char *const *azDdl, int nDdl, const char *zSql,
   sqlite3_free(sqlite3_str_finish(gStmt)); sqlite3_free(sqlite3_str_finish(gDml)); sqlite3_free(sqlite3_str_finish(gReturning));
   sqlite3_free(sqlite3_str_finish(schemaErrors));
   gStmt = gDml = gReturning = 0;
+  sqlite3_free(gDeniedView); gDeniedView = 0;
+  gHost = gExtra = 0; gnHost = gnExtra = 0;
   return sqlite3_str_finish(out);
 }
 
@@ -640,7 +823,7 @@ int main(int argc, char **argv){
   while( fgets(line, sizeof line, f) ){
     char *nl = strchr(line, '\n'); if( nl ) *nl = 0;
     if( line[0]==0 || line[0]=='#' ) continue;
-    char *json = reylo_sqlite_analyze(azDdl, nDdl, line, 0, 0, 0);
+    char *json = reylo_sqlite_analyze(azDdl, nDdl, line, 0, 0, 0, 0, 0, 0, -1);
     printf("%s\n", json);
     reylo_sqlite_free(json);
   }

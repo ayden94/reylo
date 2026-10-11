@@ -14,7 +14,13 @@
 //! without its subquery items; a column is NOT NULL when either prepare says so.
 
 use crate::jsonshape::{Probe, Shape};
-use sqlparser::ast::{self, DataType, Expr, FunctionArg, FunctionArgExpr, FunctionArguments, Query, SelectItem, SetExpr, TableWithJoins, Value};
+use sqlparser::ast::{self, DataType, Expr, FunctionArg, FunctionArgExpr, FunctionArguments, Query, SelectItem, SetExpr, TableFactor, TableWithJoins, Value};
+use std::collections::{HashMap, HashSet};
+
+/// The columns of the tables a statement names, by the table's name as the statement writes it,
+/// each column in lower case, which is how MySQL compares a column name. What says whose an
+/// aggregate in a scalar subquery is ([`Builder::owns`]).
+pub type Columns = HashMap<String, HashSet<String>>;
 
 /// How many synthesized statements one statement may cost; past it the statement's shapes are
 /// abandoned rather than turning one prepare into dozens.
@@ -28,13 +34,17 @@ pub struct Plan {
     /// The leaves (probe, index) whose expression is a truth value: MySQL types a comparison as
     /// an integer, but writes it into a JSON document as `true` or `false`.
     pub booleans: Vec<(usize, usize)>,
+    /// The tables whose columns the plan needed and `columns` did not have: with them it may
+    /// read a subquery's aggregate over a bare column as the subquery's own. The probes do not
+    /// depend on the answer.
+    pub wanted: Vec<String>,
 }
 
 /// Read one statement's JSON constructors; the probes come back as text for the build to prepare.
-pub fn plan(q: &Query) -> Plan {
+pub fn plan(q: &Query, columns: &Columns) -> Plan {
     let SetExpr::Select(select) = q.body.as_ref() else { return Plan::default() };
     let with = q.with.as_ref().map(|w| format!("{w} ")).unwrap_or_default();
-    let mut b = Builder { stack: vec![(0, select.from.clone())], next_ctx: 0, drafts: Vec::new(), overflowed: false, booleans: Vec::new() };
+    let mut b = Builder { stack: vec![(0, select.from.clone())], columns, ctes: with_names(q), wanted: Vec::new(), next_ctx: 0, drafts: Vec::new(), overflowed: false, booleans: Vec::new() };
     let mut columns = Vec::new();
     for item in &select.projection {
         // The server names an unaliased expression by its text, which no build reproduces
@@ -54,7 +64,14 @@ pub fn plan(q: &Query) -> Plan {
         }
     }
     let probes = b.drafts.iter().map(|d| Probe { sql: text(&with, &d.items, &d.from), wider: d.wider.as_ref().map(|f| text(&with, &d.items, f)) }).collect();
-    Plan { columns, probes, booleans: b.booleans }
+    b.wanted.sort_unstable();
+    b.wanted.dedup();
+    Plan { columns, probes, booleans: b.booleans, wanted: b.wanted }
+}
+
+/// The names of a query's own WITH queries, in lower case.
+fn with_names(q: &Query) -> Vec<String> {
+    q.with.iter().flat_map(|w| w.cte_tables.iter().map(|c| c.alias.name.value.to_ascii_lowercase())).collect()
 }
 
 /// The statement without its subquery items, and the projection indexes it keeps: prepared, it
@@ -84,6 +101,42 @@ pub fn outer_probe(q: &Query) -> Option<(String, Vec<usize>)> {
     Some((format!("{with}{probe}"), kept))
 }
 
+/// The columns an expression reads, each as its parts; false where the expression has a part this
+/// does not read, a subquery among them, whose columns have a scope of their own.
+fn references(e: &Expr, out: &mut Vec<Vec<String>>) -> bool {
+    match e {
+        Expr::Identifier(i) => {
+            out.push(vec![i.value.clone()]);
+            true
+        }
+        Expr::CompoundIdentifier(parts) => {
+            out.push(parts.iter().map(|p| p.value.clone()).collect());
+            true
+        }
+        Expr::Value(_) => true,
+        Expr::Nested(inner) | Expr::UnaryOp { expr: inner, .. } | Expr::Cast { expr: inner, .. } | Expr::IsNull(inner) | Expr::IsNotNull(inner) => references(inner, out),
+        Expr::BinaryOp { left, right, .. } => {
+            let left = references(left, out);
+            references(right, out) && left
+        }
+        Expr::Function(f) if f.over.is_none() && f.filter.is_none() && f.within_group.is_empty() => match &f.args {
+            FunctionArguments::None => true,
+            FunctionArguments::List(list) => {
+                let mut whole = list.clauses.is_empty();
+                for arg in &list.args {
+                    whole &= match arg {
+                        FunctionArg::Unnamed(FunctionArgExpr::Expr(x)) => references(x, out),
+                        _ => false,
+                    };
+                }
+                whole
+            }
+            FunctionArguments::Subquery(_) => false,
+        },
+        _ => false,
+    }
+}
+
 /// Whether an expression holds a subquery anywhere the walk can see; what it cannot see counts as none, which only leaves that item in the probe.
 fn contains_subquery(e: &Expr) -> bool {
     match e {
@@ -108,10 +161,14 @@ fn text(with: &str, items: &[Expr], from: &[TableWithJoins]) -> String {
     }
 }
 
-struct Builder {
+struct Builder<'a> {
     /// The `FROM` clauses in scope, outermost first, each with an id of its own so two sibling
     /// subqueries at one depth do not pool their columns into one probe.
     stack: Vec<(usize, Vec<TableWithJoins>)>,
+    columns: &'a Columns,
+    /// The WITH queries in scope where the builder stands, whose names are no tables'.
+    ctes: Vec<String>,
+    wanted: Vec<String>,
     next_ctx: usize,
     drafts: Vec<Draft>,
     overflowed: bool,
@@ -127,7 +184,67 @@ struct Draft {
     items: Vec<Expr>,
 }
 
-impl Builder {
+impl Builder<'_> {
+    /// Whether an aggregate call in the select list of a subquery over `from` is that subquery's
+    /// own, for certain. An aggregate belongs to the innermost query one of the columns it reads
+    /// comes from, so one over columns of an outer query alone is that query's, and the subquery
+    /// is then a row per row of its FROM: NULL as a scalar where that is empty. The call is the
+    /// subquery's when it reads no column, a column qualified with the name of one of the FROM's
+    /// tables, or a bare column one of those tables has (`columns`). Everything else proves
+    /// nothing: a derived table, a WITH query, a table of another schema, an alias with a column
+    /// list, a qualifier in another case than the alias, and a call with a part this does not
+    /// read, unless it reads a column of the FROM beside it.
+    fn owns(&mut self, f: &ast::Function, from: &[TableWithJoins]) -> bool {
+        let mut reads: Vec<Vec<String>> = Vec::new();
+        let mut whole = f.filter.is_none() && f.within_group.is_empty();
+        match &f.args {
+            FunctionArguments::None => {}
+            FunctionArguments::List(list) => {
+                whole &= list.clauses.is_empty();
+                for arg in &list.args {
+                    match arg {
+                        FunctionArg::Unnamed(FunctionArgExpr::Expr(e)) => whole &= references(e, &mut reads),
+                        // `count(*)` reads no column.
+                        FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => {}
+                        _ => whole = false,
+                    }
+                }
+            }
+            FunctionArguments::Subquery(_) => whole = false,
+        }
+        // The FROM's tables: the name that qualifies each one's columns, and the table where its
+        // columns are the catalog's to say.
+        let mut items: Vec<(String, Option<String>)> = Vec::new();
+        for factor in from.iter().flat_map(|t| std::iter::once(&t.relation).chain(t.joins.iter().map(|j| &j.relation))) {
+            if let TableFactor::Table { name, alias, args: None, .. } = factor {
+                let table = match name.0.as_slice() {
+                    [ast::ObjectNamePart::Identifier(i)] => Some(i.value.clone()),
+                    _ => None,
+                };
+                let known = table.clone().filter(|t| alias.as_ref().is_none_or(|a| a.columns.is_empty()) && !self.ctes.contains(&t.to_ascii_lowercase()));
+                if let Some(qualifier) = alias.as_ref().map(|a| a.name.value.clone()).or(table) {
+                    items.push((qualifier, known));
+                }
+            }
+        }
+        let mut own = false;
+        for read in &reads {
+            match read.as_slice() {
+                [column] => {
+                    for table in items.iter().filter_map(|(_, table)| table.as_ref()) {
+                        match self.columns.get(table) {
+                            Some(columns) => own |= columns.contains(&column.to_ascii_lowercase()),
+                            None => self.wanted.push(table.clone()),
+                        }
+                    }
+                }
+                [qualifier, _] => own |= items.iter().any(|(name, _)| name == qualifier),
+                _ => {}
+            }
+        }
+        own || (whole && reads.is_empty())
+    }
+
     fn walk(&mut self, e: &Expr) -> Shape {
         if self.overflowed {
             return Shape::Unknown;
@@ -171,14 +288,20 @@ impl Builder {
             Expr::Subquery(q) => {
                 let SetExpr::Select(select) = q.body.as_ref() else { return Shape::Unknown };
                 let Some(inner) = single_projection(q) else { return Shape::Unknown };
+                let outer_ctes = self.ctes.len();
+                self.ctes.extend(with_names(q));
                 self.next_ctx += 1;
                 self.stack.push((self.next_ctx, select.from.clone()));
                 let shape = self.walk(inner);
                 self.stack.pop();
-                // A scalar subquery is one row only when it is an ungrouped aggregate; anything
-                // else can match nothing and hand back NULL, and for a plain value the server's
-                // own (nullable) verdict stands.
-                if crate::mysql::exactly_one(q).is_ok() && crate::mysql::has_aggregate(inner) {
+                // A scalar subquery is one row only when it is an ungrouped aggregate of its own
+                // (`owns`); anything else can match nothing and hand back NULL, and for a plain
+                // value the server's own (nullable) verdict stands. A LIMIT is left out here, as
+                // it was before the row count learned that a constant one of a row or more keeps
+                // the row.
+                let one_row = q.limit_clause.is_none() && crate::mysql::exactly_one(q).is_ok() && crate::mysql::aggregate_where(inner, &mut |f| self.owns(f, &select.from));
+                self.ctes.truncate(outer_ctes);
+                if one_row {
                     shape
                 } else {
                     match shape {
@@ -252,7 +375,7 @@ pub fn is_constructor(e: &Expr) -> bool {
 }
 
 fn name(f: &ast::Function) -> String {
-    f.name.0.last().map(|p| p.to_string().to_ascii_lowercase()).unwrap_or_default()
+    crate::mysql::builtin(f)
 }
 
 /// The plain expression arguments of a call; `None` for a wildcard, a named argument or a subquery form.
@@ -331,7 +454,7 @@ mod tests {
     #[test]
     fn nested_fetch_plans_two_probes() {
         let q = query("select u.id, (select coalesce(json_arrayagg(json_object('id', p.id, 'title', p.title)), json_array()) from posts p where p.user_id = u.id) as posts, json_object('email', u.email, 'n', u.id + ?) as meta from users u where u.id = ?");
-        let plan = plan(&q);
+        let plan = plan(&q, &Columns::new());
         assert_eq!(plan.probes.len(), 2);
         assert_eq!(plan.probes[0].sql, "SELECT p.id, p.title FROM posts p");
         assert_eq!(plan.probes[0].wider.as_deref(), Some("SELECT p.id, p.title FROM posts p, users u"));
@@ -345,7 +468,7 @@ mod tests {
     #[test]
     fn a_truth_value_inside_a_constructor_is_marked_boolean() {
         let q = query("select json_object('t', true, 'c', u.id > 0, 'in', u.id in (1, 2), 'not', not (u.id = 1), 'n', u.id, 's', u.name) as o from users u");
-        let plan = plan(&q);
+        let plan = plan(&q, &Columns::new());
         assert_eq!(plan.probes[0].sql, "SELECT true, u.id > 0, u.id IN (1, 2), NOT (u.id = 1), u.id, u.name FROM users u");
         assert_eq!(plan.booleans, vec![(0, 0), (0, 1), (0, 2), (0, 3)]);
     }
@@ -353,7 +476,7 @@ mod tests {
     #[test]
     fn subquery_items_are_planned_and_left_out_of_the_outer_probe() {
         let q = query("select u.id, u.name, (select count(*) from posts p where p.user_id = u.id) as n, (select p.id from posts p where p.user_id = u.id limit 1) as first from users u where u.id = ?");
-        let plan = plan(&q);
+        let plan = plan(&q, &Columns::new());
         // The exactly-one aggregate keeps its column; the `limit 1` fetch falls back to the server's verdict.
         assert_eq!(plan.columns, vec![("n".to_string(), Shape::Column { probe: 0, index: 0 })]);
         assert_eq!(plan.probes[0].sql, "SELECT count(*) FROM posts p");
@@ -365,9 +488,64 @@ mod tests {
     }
 
     #[test]
+    fn an_aggregate_over_outer_columns_leaves_the_subquery_nullable() {
+        let columns: Columns = [("posts", vec!["id", "user_id", "title"]), ("users", vec!["id", "name"])].into_iter().map(|(t, c)| (t.to_string(), c.into_iter().map(String::from).collect())).collect();
+        // The first column's shape, and the tables whose columns the plan lacked.
+        let first = |sql: &str, columns: &Columns| {
+            let plan = plan(&query(sql), columns);
+            (plan.columns.first().map(|(_, shape)| shape.clone()), plan.wanted)
+        };
+        let kept = |sql: &str| matches!(first(sql, &columns).0, Some(Shape::Column { .. } | Shape::Array { non_null: true, .. }));
+        // The subquery's own: no column, a column of its FROM by qualifier, a bare one a table of
+        // its FROM has, and any of those beside an outer column.
+        for sql in [
+            "select (select count(*) from posts p where p.user_id = u.id) as n from users u",
+            "select (select count(p.id) from posts p where p.user_id = u.id) as n from users u",
+            "select (select count(posts.id) from posts) as n from users u",
+            "select (select count(title) from posts where user_id = u.id) as n from users u",
+            "select (select coalesce(sum(length(title)), 0) from posts) as n from users u",
+            "select (select count(distinct title) from posts) as n from users u",
+            "select (select count(length(name) + length(title)) from posts) as n from users u",
+            "select (select coalesce(json_arrayagg(title), json_array()) from posts) as titles from users u",
+            "select (select group_concat(title order by name) from posts) as n from users u",
+        ] {
+            assert!(kept(sql), "{sql}");
+        }
+        // The outer query's, or not provably the subquery's.
+        for sql in [
+            "select (select count(u.id) from posts) as n from users u",
+            "select (select count(name) from posts) as n from users u",
+            "select (select coalesce(max(length(name)), 0) from posts) as n from users u",
+            "select (select coalesce(json_arrayagg(name), json_array()) from posts) as names from users u",
+            "select (select coalesce(json_arrayagg(u.name), json_array()) from posts) as names from users u",
+            // The qualifier is another name than the alias, in case too.
+            "select (select count(posts.id) from posts p) as n from users posts",
+            "select (select count(P.id) from posts p) as n from users P",
+            // A WITH query, a derived table and a table of another schema do not say their columns here.
+            "with posts as (select id from users) select (select count(title) from posts) as n from users u",
+            "select (select count(title) from (select title from posts) p) as n from users u",
+            "select (select count(title) from app.posts) as n from users u",
+            "select (select count(title) from posts p (a, b, c)) as n from users u",
+            // A part of the call this does not read.
+            "select (select count(case when title is null then 1 end) from posts) as n from users u",
+            "select (select group_concat(name order by title) from posts) as n from users u",
+        ] {
+            assert!(!kept(sql), "{sql}");
+        }
+        // A constructor qualified with a schema is a stored function of that name.
+        assert!(plan(&query("select app.json_object('id', u.id) as o from users u"), &columns).columns.is_empty());
+        assert!(!kept("select (select app.count(p.id) from posts p) as n from users u"));
+        // Without the table's columns a bare name proves nothing, and the plan says which table.
+        let bare = "select (select count(title) from posts where user_id = u.id) as n from users u";
+        assert_eq!(first(bare, &Columns::new()), (None, vec!["posts".to_string()]));
+        assert_eq!(first(bare, &columns).1, Vec::<String>::new());
+        assert_eq!(first("select (select count(p.id) from posts p) as n from users u", &Columns::new()).1, Vec::<String>::new());
+    }
+
+    #[test]
     fn a_scalar_subquery_that_can_miss_is_nullable() {
         let q = query("select (select json_object('id', p.id) from posts p where p.user_id = u.id limit 1) as first, json_arrayagg(u.id) as ids, u.name from users u");
-        let plan = plan(&q);
+        let plan = plan(&q, &Columns::new());
         assert!(matches!(plan.columns[0].1, Shape::Object { non_null: false, .. }));
         assert!(matches!(plan.columns[1].1, Shape::Array { non_null: false, .. }));
         assert_eq!(plan.columns.len(), 2);

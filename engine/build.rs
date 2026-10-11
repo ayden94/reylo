@@ -1,4 +1,4 @@
-// Compiles SQLite's amalgamation, patched with the engine's five resolution hooks, together with
+// Compiles SQLite's amalgamation, patched with the engine's resolution hooks, together with
 // the tree serializer in `csrc/reylo_sqlite.c`, for the native and the wasm32-wasip1 target alike.
 // `build.sh` fetches the amalgamation and applies `csrc/patch-sqlite.py`; this script only compiles.
 use std::env;
@@ -62,9 +62,24 @@ fn main() {
         .define("SQLITE_THREADSAFE", "0")
         .define("SQLITE_OMIT_LOAD_EXTENSION", None)
         .define("SQLITE_ENABLE_COLUMN_METADATA", None)
+        // Every optional family of SQL functions and virtual tables: the host's SQLite decides
+        // which functions a statement may call (`sqlite::FUNCTIONS_QUERY`), and this build must
+        // have each one some host has, to type a call to it and to replay a schema that uses it.
+        .define("SQLITE_ENABLE_FTS3", None)
+        .define("SQLITE_ENABLE_FTS3_PARENTHESIS", None)
+        .define("SQLITE_ENABLE_FTS4", None)
         .define("SQLITE_ENABLE_FTS5", None)
         .define("SQLITE_ENABLE_RTREE", None)
+        .define("SQLITE_ENABLE_GEOPOLY", None)
         .define("SQLITE_ENABLE_MATH_FUNCTIONS", None)
+        .define("SQLITE_ENABLE_PERCENTILE", None)
+        .define("SQLITE_ENABLE_OFFSET_SQL_FUNC", None)
+        .define("SQLITE_SOUNDEX", None)
+        .define("SQLITE_ENABLE_DBSTAT_VTAB", None)
+        .define("SQLITE_ENABLE_DBPAGE_VTAB", None)
+        .define("SQLITE_ENABLE_STMTVTAB", None)
+        .define("SQLITE_ENABLE_BYTECODE_VTAB", None)
+        .define("SQLITE_ENABLE_CARRAY", None)
         .define("SQLITE_DEFAULT_MEMSTATUS", "0")
         .define("SQLITE_OMIT_DEPRECATED", None)
         .define("SQLITE_OMIT_SHARED_CACHE", None)

@@ -24,6 +24,11 @@ const UNIQUE_KEYS_QUERY: &str = "select s.table_name, s.index_name, s.column_nam
     left join information_schema.columns c on c.table_schema = s.table_schema and c.table_name = s.table_name and c.column_name = s.column_name \
     where s.table_schema = database() and s.non_unique = 0 and find_in_set(s.table_name, ?) order by s.table_name, s.index_name, s.seq_in_index";
 
+/// One row per column of the named tables and views of the current schema. `?` is the
+/// comma-joined table names.
+const TABLE_COLUMNS_QUERY: &str = "select c.table_name, c.column_name from information_schema.columns c \
+    where c.table_schema = database() and find_in_set(c.table_name, ?) order by c.table_name, c.ordinal_position";
+
 /// The statements the MySQL analysis types. A server prepares DDL too, so a migration would
 /// otherwise come back typed as a statement that returns no rows.
 const KINDS: &[&str] = &["select", "with", "table", "values", "insert", "replace", "update", "delete"];
@@ -50,9 +55,17 @@ pub fn analyze(sql: &str, lexed: &Lexed, host: &Host) -> Lazy<Analysis> {
     let mut shaped: Vec<(String, Type, bool)> = Vec::new();
     let mut outer_not_null: Vec<usize> = Vec::new();
     if let Some(Statement::Query(q)) = &parsed {
-        let plan = crate::mysql_shape::plan(q);
-        let mut outcomes: Vec<Option<MysqlDescribe>> = Vec::with_capacity(plan.probes.len());
+        // Whose an aggregate in a scalar subquery is can turn on the columns of the subquery's
+        // tables, which the plan asks for by naming them; the probes are the same either way.
+        let mut plan = crate::mysql_shape::plan(q, &Default::default());
         let mut pending = false;
+        if !plan.wanted.is_empty() {
+            match table_columns(host, &plan.wanted) {
+                Some(columns) => plan = crate::mysql_shape::plan(q, &columns),
+                None => pending = true,
+            }
+        }
+        let mut outcomes: Vec<Option<MysqlDescribe>> = Vec::with_capacity(plan.probes.len());
         for probe in &plan.probes {
             let mut outcome = host.describe_mysql(&probe.sql);
             if let (Some(Err(_)), Some(wider)) = (&outcome, &probe.wider) {
@@ -240,6 +253,19 @@ enum Class {
     Other,
 }
 
+/// The columns of `tables`, each table by its name as given: a table the server has under
+/// another case answers to none of them.
+fn table_columns(host: &Host, tables: &[String]) -> Lazy<crate::mysql_shape::Columns> {
+    let rows = host.query(TABLE_COLUMNS_QUERY, vec![json!(tables.join(","))], Scope::Statement)?;
+    let mut columns = crate::mysql_shape::Columns::new();
+    for row in rows.unwrap_or_default() {
+        if let (Some(table), Some(column)) = (row.first().and_then(as_str), row.get(1).and_then(as_str)) {
+            columns.entry(table.to_string()).or_default().insert(column.to_ascii_lowercase());
+        }
+    }
+    Some(columns)
+}
+
 fn unique_keys(host: &Host, tables: &[String]) -> Lazy<Keys> {
     let rows = host.query(UNIQUE_KEYS_QUERY, vec![json!(tables.join(","))], Scope::Statement)?;
     Some(keys_of(rows.unwrap_or_default()))
@@ -293,10 +319,11 @@ fn relations(select: &Select) -> Option<Vec<Relation>> {
         for factor in std::iter::once(&twj.relation).chain(twj.joins.iter().map(|j| &j.relation)) {
             match factor {
                 TableFactor::Table { name, alias, .. } => {
-                    let table = name.0.last().and_then(|p| match p {
-                        ast::ObjectNamePart::Identifier(i) => Some(i.value.to_ascii_lowercase()),
+                    // A table of another schema has keys the query for this one's does not read.
+                    let table = match name.0.as_slice() {
+                        [ast::ObjectNamePart::Identifier(i)] => Some(i.value.to_ascii_lowercase()),
                         _ => None,
-                    })?;
+                    }?;
                     let alias = alias.as_ref().map(|a| a.name.value.to_ascii_lowercase()).unwrap_or_else(|| table.clone());
                     out.push(Relation { table, alias });
                 }
@@ -349,6 +376,20 @@ fn const_limit(q: &Query) -> Option<Option<i64>> {
 }
 
 pub(crate) fn exactly_one(q: &Query) -> Result<(), String> {
+    // A constant LIMIT of a row or more with no OFFSET keeps the one row.
+    let keeps = match &q.limit_clause {
+        None => true,
+        Some(LimitClause::LimitOffset { offset: None, limit_by, .. }) if limit_by.is_empty() => const_limit(q).is_none_or(|n| n.is_some_and(|n| n >= 1)),
+        Some(_) => false,
+    };
+    if !keeps {
+        return Err("a LIMIT or an OFFSET can remove the row (LIMIT 0, OFFSET 1)".into());
+    }
+    one_before_limit(q)
+}
+
+/// Exactly one row before the statement's LIMIT and OFFSET apply.
+fn one_before_limit(q: &Query) -> Result<(), String> {
     if let SetExpr::Values(v) = q.body.as_ref() {
         return if v.rows.len() == 1 { Ok(()) } else { Err("a VALUES list returns a row per row it lists".into()) };
     }
@@ -358,9 +399,6 @@ pub(crate) fn exactly_one(q: &Query) -> Result<(), String> {
     }
     if s.having.is_some() {
         return Err("HAVING can remove the row".into());
-    }
-    if q.limit_clause.is_some() {
-        return Err("a LIMIT or an OFFSET can remove the row (LIMIT 0, OFFSET 1)".into());
     }
     if s.projection.iter().any(|item| match item {
         SelectItem::UnnamedExpr(e) | SelectItem::ExprWithAlias { expr: e, .. } => has_aggregate(e),
@@ -375,11 +413,13 @@ pub(crate) fn exactly_one(q: &Query) -> Result<(), String> {
 }
 
 fn at_most_one(q: &Query, keys: &Keys) -> Result<(), String> {
-    if let Some(limit) = const_limit(q) {
-        return match limit {
-            Some(n) if n <= 1 => Ok(()),
-            _ => Err("a LIMIT of more than one row, or one the build cannot read, bounds nothing".into()),
-        };
+    if matches!(const_limit(q), Some(Some(n)) if (0..=1).contains(&n)) {
+        return Ok(());
+    }
+    // Any other LIMIT, and an OFFSET, only remove rows: the bound is the one the statement has
+    // without them.
+    if one_before_limit(q).is_ok() {
+        return Ok(());
     }
     let s = select_of(q)?;
     let Some(relations) = relations(s) else { return Err("only plain tables in the FROM are matched against a unique key".into()) };
@@ -514,7 +554,7 @@ fn value_class(e: &Expr) -> Option<Class> {
         Expr::UnaryOp { .. } => Class::Number,
         Expr::BinaryOp { op: ast::BinaryOperator::Plus | ast::BinaryOperator::Minus | ast::BinaryOperator::Multiply | ast::BinaryOperator::Divide | ast::BinaryOperator::Modulo | ast::BinaryOperator::MyIntegerDivide, .. } => Class::Number,
         Expr::Function(f) => {
-            let name = f.name.0.last().map(|p| p.to_string().to_ascii_lowercase()).unwrap_or_default();
+            let name = builtin(f);
             if TEXT.contains(&name.as_str()) {
                 Class::Text
             } else if NUMBER.contains(&name.as_str()) {
@@ -552,7 +592,7 @@ fn deterministic(e: &Expr) -> bool {
         Expr::Nested(inner) | Expr::UnaryOp { expr: inner, .. } | Expr::Cast { expr: inner, .. } => deterministic(inner),
         Expr::BinaryOp { left, right, .. } => deterministic(left) && deterministic(right),
         Expr::Function(f) => {
-            let name = f.name.0.last().map(|p| p.to_string().to_ascii_lowercase()).unwrap_or_default();
+            let name = builtin(f);
             KNOWN.contains(&name.as_str())
                 && match &f.args {
                     ast::FunctionArguments::None => true,
@@ -588,24 +628,39 @@ fn reads_column(e: &Expr) -> bool {
 
 const AGGREGATES: &[&str] = &["count", "sum", "avg", "min", "max", "group_concat", "json_arrayagg", "json_objectagg", "bit_and", "bit_or", "bit_xor", "std", "stddev", "stddev_pop", "stddev_samp", "var_pop", "var_samp", "variance"];
 
+/// The name of the built-in function a call names, in lower case, or nothing for a name qualified
+/// with a schema: that is a stored function, whatever built-in shares its name, and an unqualified
+/// name is the built-in's wherever there is one.
+pub(crate) fn builtin(f: &ast::Function) -> String {
+    match f.name.0.as_slice() {
+        [only] => only.to_string().to_ascii_lowercase(),
+        _ => String::new(),
+    }
+}
+
 /// Whether an expression calls an aggregate at this level: not under OVER, not inside a subquery.
 pub(crate) fn has_aggregate(e: &Expr) -> bool {
+    aggregate_where(e, &mut |_| true)
+}
+
+/// Whether an expression calls, at this level, an aggregate that `counts`.
+pub(crate) fn aggregate_where(e: &Expr, counts: &mut dyn FnMut(&ast::Function) -> bool) -> bool {
     match e {
         Expr::Function(f) => {
-            let name = f.name.0.last().map(|p| p.to_string().to_ascii_lowercase()).unwrap_or_default();
-            if f.over.is_none() && AGGREGATES.contains(&name.as_str()) {
+            let name = builtin(f);
+            if f.over.is_none() && AGGREGATES.contains(&name.as_str()) && counts(f) {
                 return true;
             }
             match &f.args {
                 ast::FunctionArguments::List(list) => list.args.iter().any(|a| match a {
-                    ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(x)) | ast::FunctionArg::Named { arg: ast::FunctionArgExpr::Expr(x), .. } | ast::FunctionArg::ExprNamed { arg: ast::FunctionArgExpr::Expr(x), .. } => has_aggregate(x),
+                    ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(x)) | ast::FunctionArg::Named { arg: ast::FunctionArgExpr::Expr(x), .. } | ast::FunctionArg::ExprNamed { arg: ast::FunctionArgExpr::Expr(x), .. } => aggregate_where(x, counts),
                     _ => false,
                 }),
                 _ => false,
             }
         }
-        Expr::Nested(inner) | Expr::UnaryOp { expr: inner, .. } | Expr::Cast { expr: inner, .. } | Expr::IsNull(inner) | Expr::IsNotNull(inner) => has_aggregate(inner),
-        Expr::BinaryOp { left, right, .. } => has_aggregate(left) || has_aggregate(right),
+        Expr::Nested(inner) | Expr::UnaryOp { expr: inner, .. } | Expr::Cast { expr: inner, .. } | Expr::IsNull(inner) | Expr::IsNotNull(inner) => aggregate_where(inner, counts),
+        Expr::BinaryOp { left, right, .. } => aggregate_where(left, counts) || aggregate_where(right, counts),
         _ => false,
     }
 }
@@ -631,6 +686,11 @@ mod tests {
 
     #[test]
     fn placeholders_parse_and_keys_prove() {
+        // A name qualified with a schema is that schema's: a stored function is no aggregate,
+        // and a table there has keys of its own.
+        assert_eq!(card("select app.count(id) as n from users"), "many");
+        assert_eq!(card("select id from app.users where id = ?"), "many");
+        assert_eq!(card("select id from users where id = app.lower(?)"), "many");
         assert_eq!(card("select id, name from users where id = ? and name <> ?"), "maybeOne");
         assert_eq!(card("select id from users where email = ?"), "maybeOne");
         assert_eq!(card("select id from users where name = ?"), "many");
@@ -638,6 +698,15 @@ mod tests {
         assert_eq!(card("select u.id, count(p.id) as n from users u left join posts p on p.user_id = u.id where u.id = ? group by u.id"), "maybeOne");
         assert_eq!(card("select id from users limit 1"), "maybeOne");
         assert_eq!(card("select id from users limit 5, 1"), "maybeOne");
+        // A LIMIT above one, one from a parameter and an OFFSET remove rows and add none.
+        assert_eq!(card("select id from users where id = ? limit 5"), "maybeOne");
+        assert_eq!(card("select id from users where id = ? limit ? offset ?"), "maybeOne");
+        assert_eq!(card("select id from users where name = ? limit 5"), "many");
+        assert_eq!(card("select count(*) as n from users limit 5"), "one");
+        assert_eq!(card("select count(*) as n from users limit 0"), "maybeOne");
+        assert_eq!(card("select count(*) as n from users limit ?"), "maybeOne");
+        assert_eq!(card("select count(*) as n from users limit 5 offset 1"), "maybeOne");
+        assert_eq!(card("select count(*) as n from users limit 1, 5"), "maybeOne");
         assert_eq!(card("select id from users union all select user_id from posts"), "many");
         assert_eq!(card("select id from users where id = ? + 1"), "maybeOne");
         assert_eq!(card("select id from users u join posts p on p.user_id = u.id where u.id = p.user_id"), "many");

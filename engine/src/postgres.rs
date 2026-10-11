@@ -15,6 +15,7 @@ use crate::dialect::Dialect;
 use crate::host::{as_bool, as_str, as_strings, as_u32, Host, Lazy};
 use crate::infer::{self, Trust};
 use crate::jsonshape;
+use crate::levels::Columns;
 use crate::lex::{self, Lexed, Rewritten, Style, Target};
 use crate::pgtypes::{not_null_rows, TypeRegistry, RELATION_TYPES_QUERY, TYPE_QUERY};
 use crate::types::{DescribedColumn, DescribedStatement, Type};
@@ -82,6 +83,25 @@ pub const TRUST_QUERY: &str = "SELECT false, o.oprname::text FROM pg_operator o 
       AND NOT EXISTS (SELECT 1 FROM pg_type u WHERE u.oid >= 16384 AND u.typname = t.typname) \
       AND NOT EXISTS (SELECT 1 FROM pg_cast c WHERE c.oid >= 16384 AND c.casttarget = t.oid AND c.castmethod = 'f')";
 
+/// `$1` is `text[]` of relation names as the statement writes them: one row per unique index of
+/// each that is a plain or a partitioned table, `(the name, the index's key columns with NULL for
+/// a key part that is an expression, the index's predicate as the server prints it)`, and for such
+/// a table with no unique index one row of the name beside NULLs. These are the indexes an `ON
+/// CONFLICT (…)` may infer as its arbiter (the planner's `infer_arbiter_indexes`), and more: an
+/// invalid one is listed too, so a missing row is a missing index. A view, whose write goes to
+/// another relation, has no row.
+pub const ARBITERS_QUERY: &str = concat!(
+    "SELECT x.name, \
+      (SELECT array_agg(a.attname::text ORDER BY k.ord) FROM unnest(i.indkey::int2[]) WITH ORDINALITY AS k(attnum, ord) \
+        LEFT JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum AND k.attnum > 0 WHERE k.ord <= i.indnkeyatts), \
+      pg_catalog.pg_get_expr(i.indpred, i.indrelid, true) \
+    FROM unnest($1::text[]) AS x(name) \
+    JOIN pg_class c ON c.oid = ",
+    cardinality::relation_named!("x.name"),
+    " AND c.relkind IN ('r', 'p') \
+    LEFT JOIN pg_index i ON i.indrelid = c.oid AND i.indisunique"
+);
+
 pub fn analyze(sql: &str, dialect: Dialect, host: &Host) -> Lazy<Analysis> {
     let lexed = match lexed(sql, dialect) {
         Ok(l) => l,
@@ -144,6 +164,33 @@ pub fn catalog(host: &Host, functions: &[String], relations: &[String]) -> Lazy<
     let mut catalog = build_catalog(&operators, rows);
     trusted(&mut catalog, &trust);
     Some(catalog)
+}
+
+/// The columns of the relations `sql` reads, for a statement with a scalar subquery, where an
+/// aggregate is the subquery's own only if a column it reads is one of the subquery's FROM
+/// ([`crate::levels`]); no columns, and no question to the host, for any other statement. `sql`
+/// is in the server's `$n` form. For the main statement this is the question the row-count proof
+/// asks of the same relations, so it costs no query of its own.
+fn level_columns(sql: &str, host: &Host) -> Lazy<Columns> {
+    columns_where(crate::levels::needed(sql), sql, host)
+}
+
+/// The columns [`jsonshape::plan`] reads for `sql`, for a host that plans the shapes itself: none,
+/// and no question, for a statement whose shapes do not turn on them.
+pub fn shape_columns(sql: &str, host: &Host) -> Lazy<Columns> {
+    columns_where(jsonshape::needs_columns(sql), sql, host)
+}
+
+fn columns_where(needed: bool, sql: &str, host: &Host) -> Lazy<Columns> {
+    if !needed {
+        return Some(Columns::default());
+    }
+    let relations = relations_of(analyze::analyze(sql).ok().as_ref());
+    if relations.is_empty() {
+        return Some(Columns::default());
+    }
+    let rows = host.query(cardinality::COLUMNS_QUERY, vec![json!(relations)], Scope::Statement)?;
+    Some(Columns::from_rows(&rows.unwrap_or_default()))
 }
 
 /// What the trust check says that the row-count proof reads: whether `=` is only the built-in
@@ -285,10 +332,17 @@ impl<'a> Engine<'a> {
         let described = self.described(&rewritten.sql, parsed.as_ref(), &relations, trust.as_ref());
         let functions: &[String] = parsed.as_ref().map(|p| p.functions.as_slice()).unwrap_or(&[]);
         let catalog_rows = catalog_rows(self.host, functions, &relations);
-        for probe in &jsonshape::plan(&rewritten.sql).probes {
+        for probe in &jsonshape::probes_ahead(&rewritten.sql) {
             self.prewarm(&probe.sql);
         }
-        let (Some(described), Some(trust), Some(operators), Some(catalog_rows)) = (described, trust, operators, catalog_rows) else { return None };
+        // The unique indexes of every table an `ON CONFLICT (…)` names its arbiter's columns for.
+        let conflicts = conflict_targets(&rewritten.sql);
+        let arbiters = if conflicts.is_empty() {
+            Some(Ok(Vec::new()))
+        } else {
+            self.host.query(ARBITERS_QUERY, vec![json!(sorted(conflicts.iter().map(|c| c.relation.clone()).collect()))], Scope::Statement)
+        };
+        let (Some(described), Some(trust), Some(operators), Some(catalog_rows), Some(arbiters)) = (described, trust, operators, catalog_rows, arbiters) else { return None };
         let (raw, described) = match described {
             Ok(d) => d,
             Err(e) => {
@@ -300,9 +354,17 @@ impl<'a> Engine<'a> {
         let mut catalog = build_catalog(&operators, catalog_rows);
         catalog.param_types = raw.params.clone();
         trusted(&mut catalog, &trust);
+        let arbiters = arbiters.unwrap_or_default();
+        for target in &conflicts {
+            if let Some(message) = unmatched_conflict(target, &arbiters, &catalog) {
+                let start = rewritten.to_original(target.start).min(sql.len());
+                let length = sql[start..].find(')').map_or(1, |close| close + 1);
+                diagnostics.push(diag(message, start, length, 13));
+            }
+        }
 
         // JSON shapes.
-        let plan = jsonshape::plan(&rewritten.sql);
+        let plan = jsonshape::plan(&rewritten.sql, Dialect::Postgres, &trust, &catalog.columns);
         let mut outcomes: Vec<Option<jsonshape::Outcome>> = Vec::with_capacity(plan.probes.len());
         let mut pending = false;
         for probe in &plan.probes {
@@ -502,13 +564,16 @@ impl<'a> Engine<'a> {
     fn described(&self, sql: &str, parsed: Option<&Parsed>, relations: &[String], trust: Option<&Trust>) -> Lazy<Result<(RawDescribe, DescribedStatement), DbError>> {
         let raw = self.host.describe(sql);
         let prefetched = self.prefetch(relations);
-        if let Some((_, queries)) = infer::with_reads(sql) {
-            for query in queries.values() {
+        if let Some((_, queries)) = infer::item_reads(sql) {
+            for query in &queries {
                 self.prewarm(&query.sql);
             }
         }
+        // The columns that say whose an aggregate in a scalar subquery is, which `refine` reads:
+        // no probe waits on them.
+        let columns = level_columns(sql, self.host).unwrap_or_default();
         if let Some(trust) = trust {
-            let plan = infer::plan(sql, Dialect::Postgres, trust);
+            let plan = infer::plan(sql, Dialect::Postgres, trust, &columns);
             if let Some(set) = &plan.set_op {
                 self.prewarm(&set.left);
                 self.prewarm(&set.right);
@@ -659,10 +724,11 @@ impl<'a> Engine<'a> {
         // nothing about the other arms. The statement's own columns stay nullable; a column read
         // from a WITH query is settled from that query's own probe, whose arms are combined.
         let degraded = hidden || parsed.is_some_and(|p| p.has_set_op);
-        // A column read straight from a WITH query is as nullable as that query's own result
-        // says, whatever the catalog says of the table column behind it.
-        let with_columns = if hidden { Some(Vec::new()) } else { self.with_columns(sql, raw.columns.len(), trust) };
-        let Some(with_columns) = with_columns else { return None };
+        // A column read straight from a WITH query, a derived table or a function in FROM is as
+        // nullable as that item's own result says, whatever the catalog says of the table column
+        // behind it.
+        let item_columns = if hidden { Some(Vec::new()) } else { self.item_columns(sql, raw.columns.len(), trust) };
+        let Some(item_columns) = item_columns else { return None };
         let registry = self.registry.borrow();
         let columns: Vec<DescribedColumn> = raw
             .columns
@@ -683,16 +749,20 @@ impl<'a> Engine<'a> {
         let columns = columns
             .into_iter()
             .enumerate()
-            .map(|(i, col)| match with_columns.get(i) {
-                Some(Some((query, nullable))) => DescribedColumn { nullable: *nullable || nullable_tables.iter().any(|t| t == query), ..col },
+            .map(|(i, col)| match item_columns.get(i) {
+                // An outer join nulls a WITH query by its name, and any other item by its place.
+                Some(Some((with, nullable))) => DescribedColumn { nullable: *nullable || with.as_ref().is_some_and(|query| nullable_tables.iter().any(|t| t == query)), ..col },
                 _ => col,
             })
             .collect();
         Some(DescribedStatement { param_oids: raw.params.clone(), columns })
     }
 
-    /// Per result column of `sql` that is a bare reference to a column of one of its WITH
-    /// queries: that query's name, and whether its own settled result has the column nullable.
+    /// Per result column of `sql` that is a bare reference to a column of one of its FROM items
+    /// with a statement of its own ([`infer::ItemQuery`]: a WITH query, a derived table, a
+    /// function): the WITH query's name for one, and whether the item's own settled result has
+    /// the column nullable, or an outer join nulls an item that is no WITH query. A `*` over such
+    /// an item is its columns in order.
     ///
     /// A recursive WITH query reads itself, so its columns' nullability is a fixed point, and
     /// the greatest one is sound. Every column starts as non-null for the reads the query makes
@@ -701,19 +771,26 @@ impl<'a> Engine<'a> {
     /// nothing changes. What survives holds by induction over the iterations: the rows of the
     /// non-recursive arm are non-null on their own account, each later row is non-null given
     /// the rows it was computed from, and a UNION is non-null only where both arms are.
-    fn with_columns(&self, sql: &str, count: usize, trust: &Trust) -> Lazy<Vec<Option<(String, bool)>>> {
-        let Some((reads, queries)) = infer::with_reads(sql) else { return Some(Vec::new()) };
-        if reads.len() != count {
-            return Some(Vec::new());
-        }
-        let mut settled: HashMap<String, Vec<(String, bool)>> = HashMap::new();
+    fn item_columns(&self, sql: &str, count: usize, trust: &Trust) -> Lazy<Vec<Option<(Option<String>, bool)>>> {
+        use infer::ItemRead;
+        let Some((reads, queries)) = infer::item_reads(sql) else { return Some(Vec::new()) };
+        // One `*` at most: its width is what the other targets leave of the result's columns.
+        let stars = reads.iter().filter(|r| matches!(r, ItemRead::Star { .. })).count();
+        let Some(width) = (count + stars).checked_sub(reads.len()).filter(|w| stars == 1 || (stars == 0 && *w == 0)) else { return Some(Vec::new()) };
+        let read = |i: usize| reads.iter().any(|r| matches!(r, ItemRead::Column { item, .. } | ItemRead::Star { item: Some(item) } if *item == i));
+        let mut settled: HashMap<usize, Vec<(String, bool)>> = HashMap::new();
         let mut pending = false;
-        for (name, query) in &queries {
-            // The query reading itself: the answer is the assumption it is being settled under.
+        for (i, query) in queries.iter().enumerate().filter(|(i, _)| read(*i)) {
+            // The query reading itself: the answer is the assumption it is being settled under,
+            // for the columns it reads by name. A `*` there finds no column list of its width.
             if let Some(entry) = self.with_stack.borrow_mut().iter_mut().find(|(text, _, _)| *text == query.sql) {
                 entry.2 = true;
                 let assumed = &entry.1;
-                settled.insert(name.clone(), reads.iter().flatten().filter(|r| &r.query == name).map(|r| (r.column.clone(), assumed.contains(&r.column))).collect());
+                let named = reads.iter().filter_map(|r| match r {
+                    ItemRead::Column { item, column } if *item == i => Some((column.clone(), assumed.contains(column))),
+                    _ => None,
+                });
+                settled.insert(i, named.collect());
                 continue;
             }
             let mut assumed: HashSet<String> = HashSet::new();
@@ -723,7 +800,7 @@ impl<'a> Engine<'a> {
                 let (_, _, read_itself) = self.with_stack.borrow_mut().pop().expect("the entry pushed above");
                 let described = match outcome {
                     Some(Some(described)) => described,
-                    // A WITH query the server will not describe alone proves nothing.
+                    // An item the server will not describe alone proves nothing.
                     Some(None) => break,
                     None => {
                         pending = true;
@@ -733,7 +810,7 @@ impl<'a> Engine<'a> {
                 let columns: Vec<(String, bool)> = described.columns.iter().enumerate().map(|(i, c)| (query.columns.get(i).cloned().unwrap_or_else(|| c.name.clone()), c.nullable)).collect();
                 let refuted: Vec<String> = columns.iter().filter(|(n, nullable)| *nullable && !assumed.contains(n)).map(|(n, _)| n.clone()).collect();
                 if !read_itself || refuted.is_empty() {
-                    settled.insert(name.clone(), columns);
+                    settled.insert(i, columns);
                     break;
                 }
                 assumed.extend(refuted);
@@ -742,25 +819,32 @@ impl<'a> Engine<'a> {
         if pending {
             return None;
         }
-        Some(
-            reads
-                .into_iter()
-                .map(|read| {
-                    let read = read?;
-                    let mut named = settled.get(&read.query)?.iter().filter(|(n, _)| *n == read.column);
-                    match (named.next(), named.next()) {
-                        (Some((_, nullable)), None) => Some((read.query, *nullable)),
+        let answer = |item: usize, nullable: bool| (queries[item].with.clone(), nullable || (queries[item].with.is_none() && queries[item].nulled));
+        let mut out = Vec::with_capacity(count);
+        for read in reads {
+            match read {
+                ItemRead::Other => out.push(None),
+                ItemRead::Column { item, column } => {
+                    let mut named = settled.get(&item).into_iter().flatten().filter(|(n, _)| *n == column);
+                    out.push(match (named.next(), named.next()) {
+                        (Some((_, nullable)), None) => Some(answer(item, *nullable)),
                         _ => None,
-                    }
-                })
-                .collect(),
-        )
+                    });
+                }
+                ItemRead::Star { item } => match item.and_then(|item| Some((item, settled.get(&item).filter(|columns| columns.len() == width)?))) {
+                    Some((item, columns)) => out.extend(columns.iter().map(|(_, nullable)| Some(answer(item, *nullable)))),
+                    None => out.extend(std::iter::repeat(None).take(width)),
+                },
+            }
+        }
+        Some(out)
     }
 
     /// Settle what the describe left open about expression columns from the SQL itself. A column
     /// only ever becomes non-null here, and a probe that cannot be described proves nothing.
     fn refine(&self, sql: &str, described: &mut DescribedStatement, trust: &Trust) -> Lazy<()> {
-        let plan = infer::plan(sql, Dialect::Postgres, trust);
+        let columns = level_columns(sql, self.host)?;
+        let plan = infer::plan(sql, Dialect::Postgres, trust, &columns);
         // Per column: whether it is non-null, and what the statement says of an array's elements.
         let facts: Vec<Option<(bool, Option<bool>)>> = match &plan.set_op {
             Some(set) => {
@@ -872,6 +956,113 @@ impl<'a> Engine<'a> {
         })
         .sql
     }
+}
+
+/// An `ON CONFLICT (a, b)` that names its arbiter index by plain columns alone.
+#[derive(Debug, PartialEq)]
+struct ConflictTarget {
+    /// The INSERT's target, as the statement writes it.
+    relation: String,
+    columns: Vec<String>,
+    /// Whether the columns are followed by a WHERE, which a partial index's predicate is matched by.
+    filtered: bool,
+    /// Where the column list opens, in the statement's text.
+    start: usize,
+}
+
+/// The conflict targets of every INSERT in a statement that are lists of plain columns. `ON
+/// CONSTRAINT name` names its index, and a target with an expression (`(lower(email))`) is matched
+/// against index expressions the build does not compare: neither is one.
+fn conflict_targets(sql: &str) -> Vec<ConflictTarget> {
+    let Ok(parsed) = pg_query::parse(sql) else { return Vec::new() };
+    let Ok(tree) = serde_json::to_value(&parsed.protobuf) else { return Vec::new() };
+    fn walk(v: &Value, out: &mut Vec<ConflictTarget>) {
+        match v {
+            Value::Object(map) => {
+                if let Some(target) = map.get("InsertStmt").and_then(target) {
+                    out.push(target);
+                }
+                map.values().for_each(|child| walk(child, out));
+            }
+            Value::Array(items) => items.iter().for_each(|child| walk(child, out)),
+            _ => {}
+        }
+    }
+    fn target(insert: &Value) -> Option<ConflictTarget> {
+        let relation = insert.get("relation")?;
+        let name = relation.get("relname")?.as_str()?;
+        let relation = match relation.get("schemaname").and_then(Value::as_str) {
+            Some(schema) if !schema.is_empty() => format!("{schema}.{name}"),
+            _ => name.to_string(),
+        };
+        let infer = insert.get("on_conflict_clause")?.get("infer")?;
+        if infer.get("conname").and_then(Value::as_str).is_some_and(|c| !c.is_empty()) {
+            return None;
+        }
+        let columns: Vec<String> = infer
+            .get("index_elems")?
+            .as_array()?
+            .iter()
+            .map(|e| {
+                let elem = e.get("node")?.get("IndexElem")?;
+                let name = elem.get("name")?.as_str().filter(|n| !n.is_empty())?;
+                elem.get("expr").is_none_or(Value::is_null).then(|| name.to_string())
+            })
+            .collect::<Option<_>>()?;
+        if columns.is_empty() {
+            return None;
+        }
+        let filtered = infer.get("where_clause").is_some_and(|w| !w.is_null());
+        let start = usize::try_from(infer.get("location")?.as_i64()?).ok()?;
+        Some(ConflictTarget { relation, columns, filtered, start })
+    }
+    let mut out = Vec::new();
+    walk(&tree, &mut out);
+    out
+}
+
+/// Why the server refuses every execution of an INSERT with this conflict target, when it does:
+/// no unique index of the table has exactly the target's columns as its key, so the planner infers
+/// no arbiter ("there is no unique or exclusion constraint matching the ON CONFLICT
+/// specification", raised when the statement is planned, after it prepared). `rows` are
+/// [`ARBITERS_QUERY`]'s. An index matches only when its key columns are the target's as a set, it
+/// has no expression among them, and its predicate, if it has one, follows from the target's
+/// WHERE: an implication the build does not judge, so a partial index of those columns is taken
+/// to match a target with a WHERE, and never one without. Nothing is said of a relation the rows
+/// do not list, or one a rule rewrites the INSERT of.
+fn unmatched_conflict(target: &ConflictTarget, rows: &[Vec<Value>], catalog: &Catalog) -> Option<String> {
+    if catalog.rewritten.get(&target.relation).is_some_and(|events| events & cardinality::TRIGGER_ROW_INSERT != 0) {
+        return None;
+    }
+    let mut listed = false;
+    let mut partial: Option<&str> = None;
+    let wanted: HashSet<&str> = target.columns.iter().map(String::as_str).collect();
+    for row in rows.iter().filter(|row| row.first().and_then(as_str) == Some(target.relation.as_str())) {
+        listed = true;
+        let Some(parts) = row.get(1).and_then(Value::as_array) else { continue };
+        let key: Option<HashSet<&str>> = parts.iter().map(Value::as_str).collect();
+        if key.is_none_or(|key| key != wanted) {
+            continue;
+        }
+        match row.get(2).and_then(as_str) {
+            Some(predicate) if !target.filtered => partial = Some(predicate),
+            _ => return None,
+        }
+    }
+    if !listed {
+        return None;
+    }
+    let columns = target.columns.join(", ");
+    Some(match partial {
+        Some(predicate) => format!(
+            "ON CONFLICT ({columns}) matches no unique index of `{}`: its unique index on ({columns}) is partial (WHERE {predicate}), and only a target that repeats the predicate, ON CONFLICT ({columns}) WHERE …, infers it. The server prepares this statement and refuses every execution (42P10).",
+            target.relation
+        ),
+        None => format!(
+            "ON CONFLICT ({columns}) matches no unique index or constraint of `{}`: none has exactly ({columns}) as its key. The server prepares this statement and refuses every execution (42P10).",
+            target.relation
+        ),
+    })
 }
 
 /// Per result column of a data-modifying statement, whether it reads a row the statement may not
@@ -1081,13 +1272,17 @@ fn sorted(mut names: Vec<String>) -> Vec<String> {
 }
 
 fn build_catalog(operators: &HashSet<String>, rows: CatalogRows) -> Catalog {
-    let mut catalog = Catalog { set_returning_operators: operators.clone(), ..Catalog::default() };
+    let mut catalog = Catalog { set_returning_operators: operators.clone(), columns: Columns::from_rows(&rows.columns), ..Catalog::default() };
     for row in rows.columns {
         if let (Some(rel), Some(cols)) = (row.first().and_then(as_str), row.get(1).and_then(as_strings)) {
             let types: Vec<Option<u32>> = row.get(2).and_then(Value::as_array).map(|a| a.iter().map(as_u32).collect()).unwrap_or_default();
             // A host that answers without the fourth column reports no collation: every column
             // is then taken as one whose equality is not identity.
             let deterministic: Vec<bool> = row.get(3).and_then(Value::as_array).map(|a| a.iter().map(|v| as_bool(v).unwrap_or(false)).collect()).unwrap_or_default();
+            // A host that answers without the fifth column reports no sequence.
+            if row.get(4).and_then(as_bool).unwrap_or(false) {
+                catalog.single_row.insert(rel.to_string());
+            }
             if types.len() == cols.len() {
                 for (i, col) in cols.iter().enumerate() {
                     if !deterministic.get(i).copied().unwrap_or(false) {
@@ -1237,6 +1432,56 @@ mod tests {
         }
         assert_eq!(with_values(Type::Scalar { name: "text".into() }, Some(&["a".to_string()])), Type::Enum { name: "text".into(), labels: vec!["a".into()] });
         assert_eq!(with_values(Type::Scalar { name: "bpchar".into() }, Some(&["a".to_string()])), Type::Scalar { name: "bpchar".into() });
+    }
+
+    #[test]
+    fn a_conflict_target_no_unique_index_matches_is_refused() {
+        let target = |sql: &str| conflict_targets(sql).into_iter().next();
+        let name = target("INSERT INTO bar (id, name) VALUES ($1, $2) ON CONFLICT (name) DO NOTHING").expect("a target");
+        assert_eq!(name, ConflictTarget { relation: "bar".into(), columns: vec!["name".into()], filtered: false, start: 55 });
+        let pair = target("INSERT INTO app.bar AS b (id, name) VALUES ($1, $2) ON CONFLICT (name, id) WHERE id > 0 DO UPDATE SET name = excluded.name").expect("a target");
+        assert_eq!((pair.relation.as_str(), pair.columns.len(), pair.filtered), ("app.bar", 2, true));
+        // One inside a WITH query is read too.
+        assert_eq!(conflict_targets("WITH i AS (INSERT INTO bar (id) VALUES ($1) ON CONFLICT (id) DO NOTHING RETURNING id) SELECT id FROM i").len(), 1);
+        // No target, a named constraint and an expression are not lists of columns.
+        for sql in [
+            "INSERT INTO bar (id) VALUES ($1)",
+            "INSERT INTO bar (id) VALUES ($1) ON CONFLICT DO NOTHING",
+            "INSERT INTO bar (id) VALUES ($1) ON CONFLICT ON CONSTRAINT bar_pkey DO NOTHING",
+            "INSERT INTO bar (id, name) VALUES ($1, $2) ON CONFLICT (lower(name)) DO NOTHING",
+            "INSERT INTO bar (id, name) VALUES ($1, $2) ON CONFLICT (id, (name || 'x')) DO NOTHING",
+        ] {
+            assert_eq!(target(sql), None, "{sql}");
+        }
+
+        // `bar` has a primary key on id, a unique index on (a, b), one on lower(name), and a
+        // partial one on email; `empty` has no unique index; `v` is a view and has no row.
+        let rows = vec![
+            vec![json!("bar"), json!(["id"]), Value::Null],
+            vec![json!("bar"), json!(["b", "a"]), Value::Null],
+            vec![json!("bar"), json!([null]), Value::Null],
+            vec![json!("bar"), json!(["email"]), json!("active")],
+            vec![json!("empty"), Value::Null, Value::Null],
+        ];
+        let check = |relation: &str, columns: &[&str], filtered: bool, catalog: &Catalog| {
+            unmatched_conflict(&ConflictTarget { relation: relation.into(), columns: columns.iter().map(|c| c.to_string()).collect(), filtered, start: 0 }, &rows, catalog)
+        };
+        let none = Catalog::default();
+        assert_eq!(check("bar", &["id"], false, &none), None);
+        assert_eq!(check("bar", &["a", "b"], false, &none), None, "the key's columns in any order");
+        assert_eq!(check("bar", &["id", "id"], false, &none), None, "a column named twice is one");
+        assert!(check("bar", &["name"], false, &none).is_some_and(|m| m.contains("none has exactly (name)")));
+        assert!(check("bar", &["a"], false, &none).is_some(), "half of a key");
+        assert!(check("bar", &["a", "b", "id"], false, &none).is_some(), "more than a key");
+        assert!(check("empty", &["id"], false, &none).is_some());
+        // A partial index is inferred only by a target with a WHERE that implies its predicate.
+        assert!(check("bar", &["email"], false, &none).is_some_and(|m| m.contains("is partial (WHERE active)")));
+        assert_eq!(check("bar", &["email"], true, &none), None);
+        // A relation the rows do not list, and one whose INSERT a rule rewrites.
+        assert_eq!(check("v", &["id"], false, &none), None);
+        let mut ruled = Catalog::default();
+        ruled.rewritten.insert("empty".into(), cardinality::TRIGGER_ROW_INSERT);
+        assert_eq!(check("empty", &["id"], false, &ruled), None);
     }
 
     #[test]

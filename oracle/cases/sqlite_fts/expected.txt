@@ -1,0 +1,8 @@
+recipe.sql: maybeOne (id: integer) -> { title: text }
+remove.sql: maybeOne (id: integer) -> { id: integer, body: text? }
+retitle.sql: maybeOne (title: text?, id: integer) -> { id: integer, title: text? }
+search.sql: many (q: text) -> { id: integer, title: text }
+search_articles.sql: many (q: text) -> { id: integer, body: text? }
+search_bare.sql: many (q: text) -> { rowid: integer }
+search_index.sql: many (q: text) -> { rowid: integer, title: unknown?, body: unknown? }
+search_words.sql: many (q: text) -> { word: unknown? }

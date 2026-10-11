@@ -1,12 +1,14 @@
 // The SQLite side of the host: node:sqlite (built into Node ≥ 22.5, so no peer dependency)
-// opens the project's database read-only and runs the one query the engine asks for, the schema
-// DDL from `sqlite_schema`. The engine replays that DDL into its embedded SQLite and prepares the
-// statement there, so no describe goes through this file.
+// opens the project's database read-only and runs the two queries the engine asks for, the schema
+// DDL from `sqlite_schema` and the functions this SQLite has from `pragma_function_list`. The
+// engine replays that DDL into its embedded SQLite and prepares the statement there, so no
+// describe goes through this file. The function list is that of the SQLite inside the Node that
+// runs the type check; a project that runs on another driver runs on that driver's SQLite.
 import { fileURLToPath } from "node:url";
 import { isAbsolute, resolve } from "node:path";
 
 export interface SqliteDescriber {
-  /** Rows as arrays of values, in column order: the engine's schema query. */
+  /** Rows as arrays of values, in column order: the engine's schema and function queries. */
   values(sql: string, params?: unknown[]): Promise<unknown[][]>;
   close(): Promise<void>;
 }

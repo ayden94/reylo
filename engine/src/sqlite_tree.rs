@@ -32,6 +32,14 @@ pub struct Tree {
 pub struct TreeError {
     pub message: String,
     pub offset: i64,
+    /// The length of what `offset` points at, where the serializer knows it.
+    pub length: Option<usize>,
+    /// The function, as the statement spells it, that the embedded SQLite has and the host's
+    /// SQLite does not list; `view` names the view that calls it, when one does.
+    pub missing_function: Option<String>,
+    pub view: Option<String>,
+    /// The schema of a `schema.table` the statement reads, where the database has no such schema.
+    pub missing_schema: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -85,6 +93,8 @@ pub struct ColumnInfo {
 #[serde(rename_all = "camelCase", default)]
 pub struct Sel {
     pub columns: Vec<Col>,
+    /// The rows after the first of a multi-row VALUES, whose first row is `columns`.
+    pub rows: Vec<Vec<Node>>,
     pub from: Vec<From>,
     #[serde(rename = "where")]
     pub where_: Option<Node>,
@@ -115,6 +125,8 @@ pub struct Col {
 #[serde(rename_all = "camelCase", default)]
 pub struct From {
     pub cursor: i64,
+    /// A table by the name its DDL spells, whatever case the statement writes it in, and a
+    /// table-valued function by its module's name; a view, a WITH query or a subquery as written.
     pub table: Option<String>,
     pub alias: Option<String>,
     /// On the nullable side of an outer join.
@@ -143,7 +155,8 @@ pub struct Dml {
     /// The target column per value position; `None` where SQLite could not name one.
     pub columns: Vec<Option<String>>,
     pub values: Option<Vec<Node>>,
-    /// 1 for one VALUES row, the row count for a multi-row VALUES, -1 for a SELECT source.
+    /// 1 for one VALUES row, the row count for a multi-row VALUES (whose rows are `statement`'s),
+    /// -1 for a SELECT source.
     pub rows: i64,
     pub set: Vec<SetItem>,
     #[serde(rename = "where")]
@@ -212,23 +225,37 @@ pub struct Node {
 }
 
 extern "C" {
-    fn reylo_sqlite_analyze(ddl: *const *const c_char, n: c_int, sql: *const c_char, functions: *const *const c_char, arities: *const c_int, n_functions: c_int) -> *mut c_char;
+    fn reylo_sqlite_analyze(ddl: *const *const c_char, n: c_int, sql: *const c_char, functions: *const *const c_char, arities: *const c_int, n_functions: c_int, host: *const *const c_char, host_arities: *const c_int, host_kinds: *const c_char, n_host: c_int) -> *mut c_char;
     fn reylo_sqlite_free(p: *mut c_char);
 }
 
+/// A function the host's SQLite lists (`pragma_function_list`): its name, its argument count as
+/// SQLite keeps it (-1 for any number) and its kind, `s` for a scalar, `a` for an aggregate, `w`
+/// for a window function.
+pub type Listed<'a> = (&'a str, i32, char);
+
 /// Prepares `sql` against the schema `ddl` inside the embedded SQLite and returns what it resolved.
 /// `functions` are the host's own scalar functions, by name and argument count (-1 for any): the
-/// replay registers a stub for each, so a statement that calls one prepares.
-pub fn analyze(ddl: &[String], sql: &str, functions: &[(&str, i32)]) -> Result<Tree, String> {
+/// replay registers a stub for each, so a statement that calls one prepares. `host` is every
+/// function the host's SQLite has, when the host could list them: the replay registers a stub for
+/// one the embedded build has no function of that name for, and the prepare refuses a call to one
+/// the embedded build has and the host does not.
+pub fn analyze(ddl: &[String], sql: &str, functions: &[(&str, i32)], host: Option<&[Listed]>) -> Result<Tree, String> {
     let owned: Vec<CString> = ddl.iter().map(|d| CString::new(d.replace('\0', " ")).unwrap()).collect();
     let pointers: Vec<*const c_char> = owned.iter().map(|c| c.as_ptr()).collect();
     let names: Vec<CString> = functions.iter().map(|(n, _)| CString::new(n.replace('\0', " ")).unwrap()).collect();
     let name_pointers: Vec<*const c_char> = names.iter().map(|c| c.as_ptr()).collect();
     let arities: Vec<c_int> = functions.iter().map(|(_, a)| *a as c_int).collect();
+    let listed = host.unwrap_or_default();
+    let host_names: Vec<CString> = listed.iter().map(|(n, _, _)| CString::new(n.replace('\0', " ")).unwrap()).collect();
+    let host_pointers: Vec<*const c_char> = host_names.iter().map(|c| c.as_ptr()).collect();
+    let host_arities: Vec<c_int> = listed.iter().map(|(_, a, _)| *a as c_int).collect();
+    let host_kinds: Vec<c_char> = listed.iter().map(|(_, _, k)| if k.is_ascii() { *k as u8 as c_char } else { b's' as c_char }).collect();
+    let n_host = if host.is_some() { listed.len() as c_int } else { -1 };
     let sql = CString::new(sql.replace('\0', " ")).map_err(|e| e.to_string())?;
     let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let json = unsafe {
-        let p = reylo_sqlite_analyze(pointers.as_ptr(), pointers.len() as c_int, sql.as_ptr(), name_pointers.as_ptr(), arities.as_ptr(), name_pointers.len() as c_int);
+        let p = reylo_sqlite_analyze(pointers.as_ptr(), pointers.len() as c_int, sql.as_ptr(), name_pointers.as_ptr(), arities.as_ptr(), name_pointers.len() as c_int, host_pointers.as_ptr(), host_arities.as_ptr(), host_kinds.as_ptr(), n_host);
         if p.is_null() {
             return Err("the embedded SQLite returned nothing".into());
         }

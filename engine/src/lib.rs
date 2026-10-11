@@ -11,6 +11,7 @@ pub mod extension;
 pub mod host;
 pub mod infer;
 pub mod jsonshape;
+pub mod levels;
 pub mod lex;
 pub mod mysql;
 pub mod mysql_shape;

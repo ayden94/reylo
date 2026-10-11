@@ -1,0 +1,1 @@
+by_pin.sql: no seed value for parameter pin of type pin

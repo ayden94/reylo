@@ -4,7 +4,7 @@
 # Inputs: a Rust toolchain with the `wasm32-wasip1` target, and wasi-sdk 34 (set WASI_SDK_PATH,
 # or unpack it under `.wasi-sdk/`). The `pg_query` crate is the crates.io 6.2.0 source with the
 # patch from `vendor/` applied into `.patched/pg_query`, and SQLite is the 3.53.4 amalgamation
-# fetched into `.sqlite/` with the five hooks of `csrc/patch-sqlite.py` applied; this script
+# fetched into `.sqlite/` with the hooks of `csrc/patch-sqlite.py` applied; this script
 # prepares both. `./build.sh --prepare` stops after that, which is what a native `cargo test` needs,
 # and what any cargo command in the workspace needs first (the workspace `[patch]` points at the copy).
 set -euo pipefail

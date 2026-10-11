@@ -1,0 +1,2 @@
+json_each_upper.sql: malformed JSON
+non_ascii_folded.sql: no such table: été

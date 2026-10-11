@@ -20,6 +20,9 @@
 //! turns the describes of that text into the column's `Type`. The build owns the round trips.
 //! The framework reads it too, and renders the `Type` to JSON Schema itself.
 
+use crate::dialect::Dialect;
+use crate::infer::Trust;
+use crate::levels::{Columns, Level, Withs};
 use crate::pgtypes::{oid, TypeRegistry};
 use crate::types::{DescribedColumn, Field, Type};
 use pg_query::protobuf::{self, node::Node as NodeEnum, AStar, ColumnRef, Node, ParseResult, RawStmt, ResTarget, SelectStmt};
@@ -36,6 +39,9 @@ const AGG_FNS: &[&str] = &["json_agg", "jsonb_agg", "json_group_array"];
 const TOTAL_AGG_FNS: &[&str] = &["json_group_array"];
 /// A whole row, so the shape is the relation's own columns.
 const ROW_FNS: &[&str] = &["to_json", "to_jsonb", "row_to_json"];
+/// Every function name the shapes read on Postgres, for the trust check ([`Trust::shadowed`]): a
+/// name a user has also defined may resolve to that function, which builds what it likes.
+pub const POSTGRES_FUNCTIONS: &[&str] = &["json_build_object", "jsonb_build_object", "json_object", "json_agg", "jsonb_agg", "json_group_array", "to_json", "to_jsonb", "row_to_json"];
 
 /// How many synthesized statements one statement may cost. A nested fetch needs one; a shape
 /// with an aggregate under an object needs two. The cap keeps a pathological statement from
@@ -58,6 +64,8 @@ pub enum Shape {
     Row { probe: usize },
     /// A bound parameter, `$n`; its type is the one the statement's own describe reported.
     Param(i32),
+    /// The value of a scalar subquery that may find no row: the shape inside, or NULL.
+    Nullable(Box<Shape>),
     /// Nothing the build derived.
     Unknown,
 }
@@ -102,7 +110,24 @@ pub struct Resolved {
 
 /// Read one rewritten statement's JSON constructors. Nothing runs against the database here;
 /// the probes come back as text for the build to describe.
-pub fn plan(sql: &str) -> Plan {
+pub fn plan(sql: &str, dialect: Dialect, trust: &Trust, columns: &Columns) -> Plan {
+    plan_with(sql, dialect, trust, columns, false)
+}
+
+/// Whether [`plan`] reads the columns of the statement's relations: for a scalar subquery, whose
+/// aggregate may be the outer query's ([`crate::levels`]), and for `to_json`, `to_jsonb` and
+/// `row_to_json`, whose bare argument is a whole row only where it is no column.
+pub fn needs_columns(sql: &str) -> bool {
+    sql.to_ascii_lowercase().contains("to_json") || crate::levels::needed(sql)
+}
+
+/// Every probe [`plan`] may ask for, whatever the trust check and the relations' columns turn out
+/// to say: what a host can describe ahead of them, in its first round.
+pub fn probes_ahead(sql: &str) -> Vec<Probe> {
+    plan_with(sql, Dialect::Postgres, &Trust::default(), &Columns::default(), true).probes
+}
+
+fn plan_with(sql: &str, dialect: Dialect, trust: &Trust, columns: &Columns, ahead: bool) -> Plan {
     let Ok(parsed) = pg_query::parse(sql) else { return Plan::default() };
     let version = parsed.protobuf.version;
     let Some(top) = parsed.protobuf.stmts.first().and_then(|s| s.stmt.as_deref()).and_then(|n| n.node.as_ref()) else {
@@ -114,7 +139,8 @@ pub fn plan(sql: &str) -> Plan {
         NodeEnum::SelectStmt(s) => s.where_clause.as_deref().cloned(),
         _ => None,
     };
-    let mut builder = Builder { stack: vec![(0, from, filter)], next_ctx: 0, drafts: Vec::new(), overflowed: false };
+    let withs = vec![Withs::default().with(with.as_ref(), columns)];
+    let mut builder = Builder { stack: vec![(0, from, filter)], dialect, trust, columns, withs, ahead, next_ctx: 0, drafts: Vec::new(), overflowed: false };
     let mut columns: Vec<(String, Shape)> = Vec::new();
     for target in &targets {
         let Some(NodeEnum::ResTarget(rt)) = target.node.as_ref() else { continue };
@@ -160,6 +186,7 @@ pub fn oids(shape: &Shape, probes: &[Option<Outcome>], param_oids: &[u32], out: 
     match shape {
         Shape::Object { fields, .. } => fields.iter().for_each(|(_, s)| oids(s, probes, param_oids, out)),
         Shape::Array { items, .. } => oids(items, probes, param_oids, out),
+        Shape::Nullable(inner) => oids(inner, probes, param_oids, out),
         Shape::Column { probe, index } => {
             if let Some(col) = probes.get(*probe).and_then(|o| o.as_ref()).and_then(|o| o.columns.get(*index)) {
                 out.push(col.type_oid);
@@ -184,11 +211,20 @@ pub fn is_json(registry: &TypeRegistry, type_oid: u32) -> bool {
 // Recognition
 // ---------------------------------------------------------------------------------------------
 
-struct Builder {
+struct Builder<'a> {
     /// The `FROM` clauses in scope, outermost first; the innermost is the last. Each carries an
     /// id of its own, because two sibling subqueries sit at the same depth and select from
     /// different relations — keying a probe on the depth alone would pool their columns.
     stack: Vec<(usize, Vec<Node>, Option<Node>)>,
+    dialect: Dialect,
+    trust: &'a Trust,
+    /// The columns of the statement's relations, and the WITH queries in scope at each entry of
+    /// `stack`: what says whose an aggregate in a scalar subquery is, and whether a bare name is
+    /// a column ([`crate::levels`]).
+    columns: &'a Columns,
+    withs: Vec<Withs>,
+    /// Planning ahead of the columns: every probe they could allow is drafted.
+    ahead: bool,
     next_ctx: usize,
     drafts: Vec<Draft>,
     /// Set once the probe budget is spent, which abandons the statement's inference.
@@ -208,14 +244,17 @@ struct Draft {
     items: Vec<Node>,
 }
 
-impl Builder {
+impl Builder<'_> {
     fn walk(&mut self, expr: &Node) -> Shape {
         if self.overflowed {
             return Shape::Unknown;
         }
         match expr.node.as_ref() {
             Some(NodeEnum::FuncCall(f)) => {
-                let name = func_name(f).unwrap_or_default();
+                // A constructor is the built-in one: a name qualified with a schema is somebody
+                // else's function, and so may be an unqualified one a user also defined
+                // (`jsonb_build_object(text, text)` matches a call better than the built-in).
+                let Some(name) = crate::infer::builtin_name(&f.funcname).filter(|n| self.trust.builtin(n)) else { return self.leaf(expr) };
                 if OBJECT_FNS.contains(&name.as_str()) {
                     if f.args.len() % 2 != 0 {
                         return Shape::Unknown;
@@ -244,12 +283,17 @@ impl Builder {
                     };
                     self.next_ctx += 1;
                     self.stack.push((self.next_ctx, from, Some(both)));
+                    self.withs.push(self.withs.last().cloned().unwrap_or_default());
                     let items = self.walk(&f.args[0]);
+                    self.withs.pop();
                     self.stack.pop();
                     Shape::Array { items: Box::new(items), non_null }
                 } else if ROW_FNS.contains(&name.as_str()) {
+                    // A bare name is a column before it is a FROM item, of the innermost query
+                    // that has one of that name: it is the item's whole row only when no FROM in
+                    // scope has such a column, for certain.
                     match f.args.first().and_then(bare_alias) {
-                        Some(alias) if f.args.len() == 1 => self.row(&alias),
+                        Some(alias) if f.args.len() == 1 && self.no_column(&alias) => self.row(&alias),
                         _ => Shape::Unknown,
                     }
                 } else {
@@ -275,13 +319,18 @@ impl Builder {
                 }
                 let Some(select) = s.subselect.as_deref().and_then(as_select) else { return Shape::Unknown };
                 let Some(inner) = single_target(select).and_then(|rt| rt.val.clone()) else { return Shape::Unknown };
+                let withs = self.withs.last().cloned().unwrap_or_default().with(select.with_clause.as_ref(), self.columns);
+                let level = Level::of(&select.from_clause, &withs, self.columns);
                 self.next_ctx += 1;
                 self.stack.push((self.next_ctx, select.from_clause.clone(), None));
+                self.withs.push(withs);
                 let shape = self.walk(&inner);
+                self.withs.pop();
                 self.stack.pop();
-                // A scalar subquery is one row only when it is an ungrouped aggregate; anything
-                // else can match nothing and hand back NULL.
-                if crate::infer::single_row(select) && aggregates(&inner) {
+                // A scalar subquery is one row only when it is an ungrouped aggregate of its own
+                // (one over columns of a query around it is that query's, `levels`); anything
+                // else can match nothing and hand back NULL, whatever its value is.
+                if crate::infer::single_row(select) && (aggregates(&inner, &level, self.trust) || crate::infer::aggregates(&inner, self.dialect, self.trust, Some(&level))) {
                     shape
                 } else {
                     force_nullable(shape)
@@ -311,6 +360,11 @@ impl Builder {
         let index = self.drafts[probe].items.len();
         self.drafts[probe].items.push(expr.clone());
         Shape::Column { probe, index }
+    }
+
+    /// Whether no FROM in scope shows a column of this name, for certain.
+    fn no_column(&self, name: &str) -> bool {
+        self.ahead || self.stack.iter().zip(&self.withs).all(|((_, from, _), withs)| Level::of(from, withs, self.columns).lacks(name))
     }
 
     /// `to_jsonb(u)`: a probe of its own, selecting `u.*`, so the row's own columns are the shape.
@@ -403,11 +457,11 @@ fn is_constructor(expr: &Node) -> bool {
 
 /// Whether the top of this expression is an aggregate, which is what makes an ungrouped
 /// subquery return exactly one row. A call with `OVER` is a window function, one row per input.
-fn aggregates(expr: &Node) -> bool {
+fn aggregates(expr: &Node, level: &Level, trust: &Trust) -> bool {
     match expr.node.as_ref() {
-        Some(NodeEnum::FuncCall(f)) => f.over.is_none() && func_name(f).is_some_and(|n| AGG_FNS.contains(&n.as_str())),
-        Some(NodeEnum::CoalesceExpr(c)) => c.args.first().is_some_and(aggregates),
-        Some(NodeEnum::TypeCast(t)) => t.arg.as_deref().is_some_and(aggregates),
+        Some(NodeEnum::FuncCall(f)) => f.over.is_none() && crate::infer::builtin_name(&f.funcname).is_some_and(|n| AGG_FNS.contains(&n.as_str()) && trust.builtin(&n)) && level.owns(f),
+        Some(NodeEnum::CoalesceExpr(c)) => c.args.first().is_some_and(|first| aggregates(first, level, trust)),
+        Some(NodeEnum::TypeCast(t)) => t.arg.as_deref().is_some_and(|arg| aggregates(arg, level, trust)),
         _ => false,
     }
 }
@@ -416,7 +470,9 @@ fn force_nullable(shape: Shape) -> Shape {
     match shape {
         Shape::Object { fields, .. } => Shape::Object { fields, non_null: false },
         Shape::Array { items, .. } => Shape::Array { items, non_null: false },
-        other => other,
+        Shape::Unknown | Shape::Nullable(_) => shape,
+        // A column, a whole row or a parameter says nothing of the row it is read from.
+        other => Shape::Nullable(Box::new(other)),
     }
 }
 
@@ -548,6 +604,7 @@ impl ResolveCtx<'_> {
             },
             // A placeholder carries the type the statement's own describe gave it; whether it
             // arrived null is the caller's business, so the field stays nullable.
+            Shape::Nullable(inner) => (self.node(inner, path, unresolved).0, false),
             Shape::Param(n) => match self.param_oids.get((*n as usize).saturating_sub(1)) {
                 Some(o) => (self.registry.render(*o), false),
                 None => {
@@ -707,7 +764,8 @@ mod tests {
     use super::*;
 
     fn shapes(sql: &str) -> Plan {
-        plan(sql)
+        let columns: Columns = [("users", vec!["id", "email", "name", "doc"]), ("posts", vec!["id", "author_id", "title", "body"]), ("comments", vec!["id", "post_id", "body", "created_at"])].into_iter().collect();
+        plan(sql, Dialect::Postgres, &Trust::default(), &columns)
     }
 
     #[test]
@@ -807,6 +865,75 @@ mod tests {
         assert_eq!(p.columns[0].1, Shape::Row { probe: 0 });
         let r = shapes("SELECT row_to_json(u) AS author FROM users u");
         assert_eq!(r.columns[0].1, Shape::Row { probe: 0 });
+        // A bare name is a column before it is a FROM item: `doc` is a column of `users`, here
+        // and from inside a subquery over another table, so neither call is a whole row. Nor is
+        // one where a FROM in scope does not say its columns.
+        for sql in [
+            "SELECT to_jsonb(doc) AS author FROM users doc",
+            "SELECT (SELECT to_jsonb(doc) FROM posts doc LIMIT 1) AS post FROM users",
+            "SELECT to_jsonb(u) AS author FROM users u, generate_series(1, 2) g",
+            "SELECT to_jsonb(u) AS author FROM unlisted u",
+            "SELECT to_jsonb(ctid) AS author FROM users ctid",
+        ] {
+            assert!(shapes(sql).columns.is_empty(), "{sql}");
+        }
+        assert_eq!(probes_ahead("SELECT to_jsonb(u) AS author FROM unlisted u")[0].sql, "SELECT u.* FROM unlisted u");
+        assert!(needs_columns("SELECT to_jsonb(u) AS author FROM users u") && needs_columns("SELECT row_to_json(u) FROM users u"));
+        assert!(needs_columns("SELECT (SELECT json_agg(p.id) FROM posts p) AS ids") && !needs_columns("SELECT json_agg(p.id) AS ids FROM posts p"));
+    }
+
+    #[test]
+    fn a_scalar_subquery_that_may_find_no_row_is_nullable_whatever_its_value() {
+        let registry = TypeRegistry::with_builtins();
+        let found = vec![column("a0", oid::TEXT, "text", false)];
+        let resolved = |sql: &str| resolve(&shapes(sql).columns[0].1, &[Some(Outcome { columns: found.clone(), outer_join: false })], &registry, &[]);
+        // Whether the column is nullable, and whether the first field of the object it is.
+        let whole = |sql: &str| !resolved(sql).non_null;
+        let field = |sql: &str| match resolved(sql).ty {
+            Type::Object { fields } => fields[0].nullable,
+            other => panic!("{other:?}"),
+        };
+        // A column, a whole row and an aggregate of the query around the subquery.
+        assert!(field("SELECT json_build_object('first', (SELECT p.title FROM posts p WHERE p.author_id = u.id LIMIT 1)) AS o FROM users u"));
+        assert!(field("SELECT json_build_object('first', (SELECT p.title FROM posts p WHERE p.id = u.id)) AS o FROM users u"));
+        assert!(whole("SELECT (SELECT to_jsonb(p) FROM posts p WHERE p.author_id = u.id LIMIT 1) AS o FROM users u"));
+        assert!(field("SELECT json_build_object('n', (SELECT count(name) FROM posts WHERE false)) AS o FROM users u"));
+        assert!(field("SELECT json_build_object('n', (SELECT count(u.id) FROM posts WHERE false)) AS o FROM users u"));
+        assert!(whole("SELECT (SELECT coalesce(json_agg(name), '[]') FROM posts WHERE false) AS o FROM users u"));
+        // An aggregate of its own is one row.
+        assert!(!field("SELECT json_build_object('n', (SELECT count(*) FROM posts p WHERE p.author_id = u.id)) AS o FROM users u"));
+        assert!(!field("SELECT json_build_object('n', (SELECT count(title) FROM posts WHERE author_id = u.id)) AS o FROM users u"));
+        assert!(!whole("SELECT (SELECT coalesce(json_agg(title), '[]') FROM posts WHERE false) AS o FROM users u"));
+        assert!(!whole("SELECT to_jsonb(p) AS o FROM posts p"));
+        // A user's function of an aggregate's name is not one.
+        let trust = Trust { shadowed: ["count".to_string()].into_iter().collect(), ..Trust::default() };
+        let p = plan("SELECT json_build_object('n', (SELECT count(*) FROM posts)) AS o FROM users u", Dialect::Postgres, &trust, &Columns::default());
+        let Shape::Object { fields, .. } = &p.columns[0].1 else { panic!() };
+        assert!(matches!(fields[0].1, Shape::Nullable(_)));
+    }
+
+    #[test]
+    fn a_constructor_is_the_built_in_one_only() {
+        // A name qualified with a schema is that schema's function, and a name a user has also
+        // defined may resolve to theirs: both are read as any other expression, a column of the
+        // probe, whose type and nullability are the describe's.
+        let leaf = |p: &Plan| matches!(p.columns[0].1, Shape::Column { .. });
+        assert!(leaf(&shapes("SELECT app.json_build_object('a', u.name) AS o FROM users u")));
+        assert!(leaf(&shapes("SELECT app.to_jsonb(u) AS o FROM users u")));
+        assert!(matches!(shapes("SELECT pg_catalog.json_build_object('a', u.name) AS o FROM users u").columns[0].1, Shape::Object { .. }));
+        let trust = Trust { shadowed: ["jsonb_build_object".to_string(), "to_jsonb".to_string(), "json_agg".to_string()].into_iter().collect(), ..Trust::default() };
+        let columns: Columns = [("users", vec!["id", "name"])].into_iter().collect();
+        for sql in [
+            "SELECT jsonb_build_object('a', u.name) AS o FROM users u",
+            "SELECT to_jsonb(u) AS o FROM users u",
+            "SELECT json_agg(u.name) AS o FROM users u",
+        ] {
+            assert!(leaf(&plan(sql, Dialect::Postgres, &trust, &columns)), "{sql}");
+        }
+        // The subquery is one row by an aggregate only where the name is the built-in's.
+        let p = plan("SELECT (SELECT coalesce(json_agg(u.name), '[]') FROM users u) AS o", Dialect::Postgres, &trust, &columns);
+        assert!(matches!(p.columns[0].1, Shape::Nullable(_)), "{:?}", p.columns);
+        assert!(crate::infer::postgres_function_names().contains(&"jsonb_build_object"));
     }
 
     #[test]

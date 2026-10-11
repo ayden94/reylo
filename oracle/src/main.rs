@@ -12,10 +12,25 @@
 //!   cargo run -p reylo-oracle -- --url … --bless oracle/cases/not_null   # rewrite expected.txt
 //!   cargo run -p reylo-oracle -- --url … --analyses old.json oracle/cases  # check other answers
 //!   cargo run -p reylo-oracle -- --url … --dump new.json oracle/cases      # write the answers
+//!   cargo run -p reylo-oracle -- --url … --strict-coverage oracle/cases    # fail on a statement that never ran
+//!   cargo run -p reylo-oracle -- --url … --timeout 2000 oracle/cases       # milliseconds per run
 //!
 //! `--analyses` names a JSON object of analyses keyed `<case>/<file>`, which the seeding checks
 //! in place of the engine's own: how a check that passes shows it can fail, run on the answers of
-//! an engine that had a defect.
+//! an engine that had a defect. `--dump` writes that object, for the cases of both dialects.
+//!
+//! Every run of a statement is bounded: 5000 milliseconds, or `--timeout`, or the number in the
+//! case's `timeout` file, which wins. A run the timeout stopped is evidence of nothing.
+//!
+//! A statement that failed or timed out under every assignment of its parameters, over every
+//! seeded state, was checked for nothing. Each case prints how many of its statements never ran,
+//! and each one's first error, under `UNCHECKED`; the run's last lines count them. A case's
+//! `unchecked.txt` holds those lines: the statements a case means not to run (the timeout, a type
+//! no value is seeded for), or no line at all where a case is about statements that must run. It
+//! is compared like `expected.txt`, a difference fails the case, and `--bless` rewrites it where
+//! it exists or a statement never ran. `--strict-coverage` also fails every case with a statement
+//! that never ran and no `unchecked.txt`, which is how a set of statements from elsewhere shows
+//! what the oracle did not check.
 //!
 //! Each statement goes through the engine's replay exactly as a host runs it: the describe comes
 //! from the extended protocol and every catalog query runs on the case's database. A catalog
@@ -36,6 +51,8 @@ async fn main() -> ExitCode {
     let mut url = std::env::var("ORACLE_URL").ok();
     let mut bless = false;
     let mut keep = false;
+    let mut strict_coverage = false;
+    let mut timeout_ms: u64 = 5000;
     let mut given = Map::new();
     let mut dump: Option<PathBuf> = None;
     let mut paths = Vec::new();
@@ -45,6 +62,14 @@ async fn main() -> ExitCode {
             "--url" => url = args.next(),
             "--bless" => bless = true,
             "--keep" => keep = true,
+            "--strict-coverage" => strict_coverage = true,
+            "--timeout" => match args.next().and_then(|ms| ms.parse::<u64>().ok()).filter(|ms| *ms > 0) {
+                Some(ms) => timeout_ms = ms,
+                None => {
+                    eprintln!("--timeout takes a number of milliseconds");
+                    return ExitCode::from(2);
+                }
+            },
             "--dump" => dump = args.next().map(PathBuf::from),
             "--analyses" => {
                 let path = args.next().unwrap_or_default();
@@ -65,12 +90,15 @@ async fn main() -> ExitCode {
         return ExitCode::from(2);
     }
     let mut failed = 0;
+    let mut never_ran = 0;
+    let mut unnamed = 0;
     let mut dumped = Map::new();
     let mut admin: Option<(Client, Config, i32)> = None;
     for case in &cases {
         let dialect = fs::read_to_string(case.join("dialect")).map(|s| s.trim().to_string()).unwrap_or_else(|_| "postgres".into());
+        let timeout_ms = fs::read_to_string(case.join("timeout")).ok().and_then(|s| s.trim().parse::<u64>().ok()).filter(|ms| *ms > 0).unwrap_or(timeout_ms);
         let outcome = if dialect == "sqlite" {
-            run_sqlite(case)
+            run_sqlite(case, timeout_ms, &given, &mut dumped)
         } else {
             if admin.is_none() {
                 let Some(url) = url.as_deref() else {
@@ -91,11 +119,18 @@ async fn main() -> ExitCode {
                 println!("{}: skipped (server {version} < {min})", case.display());
                 continue;
             }
-            run_postgres(case, client, config, keep, &given, &mut dumped).await
+            run_postgres(case, client, config, keep, timeout_ms, &given, &mut dumped).await
         };
         match outcome {
-            Ok(lines) => {
-                if !check(case, &lines, bless) {
+            Ok((lines, unchecked)) => {
+                never_ran += unchecked.len();
+                if !bless && !case.join("unchecked.txt").is_file() {
+                    unnamed += unchecked.len();
+                }
+                print_unchecked(case, lines.len(), &unchecked);
+                // Both verdicts are printed, whichever fails the case.
+                let matched = check(case, &lines, bless);
+                if !coverage(case, &unchecked, bless, strict_coverage) || !matched {
                     failed += 1;
                 }
             }
@@ -107,6 +142,9 @@ async fn main() -> ExitCode {
     }
     if let Some(path) = dump {
         fs::write(&path, serde_json::to_string_pretty(&Value::Object(dumped)).unwrap_or_default()).expect("the --dump file is writable");
+    }
+    if never_ran > 0 {
+        println!("{never_ran} statement(s) never ran and were checked for nothing, {unnamed} of them in a case with no unchecked.txt{}", if strict_coverage && unnamed > 0 { ", which --strict-coverage fails" } else { "" });
     }
     println!("{} case(s), {failed} failed", cases.len());
     if failed > 0 {
@@ -179,6 +217,68 @@ fn check(case: &Path, lines: &[String], bless: bool) -> bool {
     false
 }
 
+/// Compare the statements of a case that never ran with its `unchecked.txt`, or write them there
+/// under `--bless`. Without that file a statement that never ran fails the case under
+/// `--strict-coverage` alone.
+fn coverage(case: &Path, unchecked: &[String], bless: bool, strict: bool) -> bool {
+    let path = case.join("unchecked.txt");
+    if bless {
+        // An empty unchecked.txt says that every statement of the case ran, and stays.
+        if !unchecked.is_empty() || path.is_file() {
+            fs::write(&path, unchecked.iter().map(|line| format!("{line}\n")).collect::<String>()).expect("unchecked.txt is writable");
+        }
+        return true;
+    }
+    let Ok(expected) = fs::read_to_string(&path) else {
+        if strict && !unchecked.is_empty() {
+            println!("{}: FAILED: --strict-coverage, and no unchecked.txt names the {} statement(s) that never ran", case.display(), unchecked.len());
+            return false;
+        }
+        return true;
+    };
+    let want: Vec<&str> = expected.lines().collect();
+    if want == unchecked {
+        return true;
+    }
+    println!("{}: MISMATCH (unchecked.txt)", case.display());
+    for line in unchecked {
+        if !want.contains(&line.as_str()) {
+            println!("  + {line}");
+        }
+    }
+    for line in &want {
+        if !unchecked.iter().any(|l| l == line) {
+            println!("  - {line}");
+        }
+    }
+    false
+}
+
+/// The statements of a case that never ran, each with its first error.
+fn print_unchecked(case: &Path, statements: usize, unchecked: &[String]) {
+    if !unchecked.is_empty() {
+        println!("{}: UNCHECKED: {} of {statements} statement(s) never ran, so nothing about them was checked:", case.display(), unchecked.len());
+        for line in unchecked {
+            println!("    {line}");
+        }
+    }
+}
+
+/// What a case's seeding found: its notes are printed, a contradiction fails the case, and the
+/// statements that never ran come back as the lines `unchecked.txt` holds.
+fn seeded(case: &Path, statements: usize, report: seed::Report) -> Result<Vec<String>, String> {
+    for note in &report.notes {
+        println!("{}: note: {note}", case.display());
+    }
+    let unchecked: Vec<String> = report.unchecked.iter().map(|(file, why)| format!("{file}: {why}")).collect();
+    if !report.problems.is_empty() {
+        // The case fails here, and what never ran is said all the same.
+        print_unchecked(case, statements, &unchecked);
+        return Err(format!("{} value(s) contradict the types:\n    {}", report.problems.len(), report.problems.join("\n    ")));
+    }
+    Ok(unchecked)
+}
+
 // ---------------------------------------------------------------------------------------------
 // Postgres
 // ---------------------------------------------------------------------------------------------
@@ -201,7 +301,7 @@ async fn connect_admin(url: &str) -> Result<(Client, Config, i32), String> {
     Ok((client, config, version.parse().unwrap_or(0)))
 }
 
-async fn run_postgres(case: &Path, admin: &Client, admin_config: &Config, keep: bool, given: &Map<String, Value>, dumped: &mut Map<String, Value>) -> Result<Vec<String>, String> {
+async fn run_postgres(case: &Path, admin: &Client, admin_config: &Config, keep: bool, timeout_ms: u64, given: &Map<String, Value>, dumped: &mut Map<String, Value>) -> Result<(Vec<String>, Vec<String>), String> {
     let name: String = case.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
     let db = format!("reylo_oracle_{}", name.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' }).collect::<String>());
     // Two messages: in one, CREATE DATABASE would run inside the batch's implicit transaction.
@@ -224,21 +324,13 @@ async fn run_postgres(case: &Path, admin: &Client, admin_config: &Config, keep: 
         analyzed.push((file, sql, analysis));
     }
     // A value that contradicts a type is a failure whatever expected.txt says.
-    let (problems, notes) = seed::check(&client, &analyzed).await.map_err(|e| format!("seeding: {e}"))?;
-    for note in &notes {
-        println!("{}: note: {note}", case.display());
-    }
+    let report = seed::check(&client, &analyzed, timeout_ms).await;
     drop(client);
-    if !problems.is_empty() {
-        if !keep {
-            let _ = admin.batch_execute(&format!("DROP DATABASE IF EXISTS {db} WITH (FORCE)")).await;
-        }
-        return Err(format!("{} value(s) contradict the types:\n    {}", problems.len(), problems.join("\n    ")));
-    }
     if !keep {
         let _ = admin.batch_execute(&format!("DROP DATABASE IF EXISTS {db} WITH (FORCE)")).await;
     }
-    Ok(lines)
+    let unchecked = seeded(case, lines.len(), report.map_err(|e| format!("seeding: {e}"))?)?;
+    Ok((lines, unchecked))
 }
 
 /// The engine's replay with every need answered on `client`.
@@ -355,7 +447,7 @@ fn pg_error(e: &tokio_postgres::Error) -> Value {
 // SQLite
 // ---------------------------------------------------------------------------------------------
 
-fn run_sqlite(case: &Path) -> Result<Vec<String>, String> {
+fn run_sqlite(case: &Path, timeout_ms: u64, given: &Map<String, Value>, dumped: &mut Map<String, Value>) -> Result<(Vec<String>, Vec<String>), String> {
     let name: String = case.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
     let file = std::env::temp_dir().join(format!("reylo-oracle-{name}.db"));
     let _ = fs::remove_file(&file);
@@ -365,21 +457,20 @@ fn run_sqlite(case: &Path) -> Result<Vec<String>, String> {
     let mut lines = Vec::new();
     let mut analyzed = Vec::new();
     for (file_name, sql) in statements(case) {
-        let analysis = analyze_sqlite(&db, &sql).map_err(|e| format!("{file_name}: {e}"))?;
+        let analysis = match given.get(&format!("{name}/{file_name}")) {
+            Some(answer) => answer.clone(),
+            None => analyze_sqlite(&db, &sql).map_err(|e| format!("{file_name}: {e}"))?,
+        };
         lines.push(format!("{file_name}: {}", line(&analysis)));
+        dumped.insert(format!("{name}/{file_name}"), analysis.clone());
         analyzed.push((file_name, sql, analysis));
     }
     // A value that contradicts a type is a failure whatever expected.txt says.
-    let (problems, notes) = seed::check_sqlite(&db, &analyzed).map_err(|e| format!("seeding: {e}"))?;
-    for note in &notes {
-        println!("{}: note: {note}", case.display());
-    }
+    let report = seed::check_sqlite(&db, &analyzed, timeout_ms);
     drop(db);
     let _ = fs::remove_file(&file);
-    if !problems.is_empty() {
-        return Err(format!("{} value(s) contradict the types:\n    {}", problems.len(), problems.join("\n    ")));
-    }
-    Ok(lines)
+    let unchecked = seeded(case, lines.len(), report.map_err(|e| format!("seeding: {e}"))?)?;
+    Ok((lines, unchecked))
 }
 
 fn analyze_sqlite(db: &rusqlite::Connection, sql: &str) -> Result<Value, String> {
