@@ -1,1 +1,1 @@
-export const githubUrl = 'https://github.com/colinhacks/reylo';
+export const githubUrl = 'https://github.com/reylosql/reylo';
