@@ -1,0 +1,2 @@
+param_group_by.sql: the engine refused it: reylo6: Expression #1 of SELECT list is not in GROUP BY clause and contains nonaggregated column 'reylo_oracle_mysql_types.everything.whole' which is not functionally dependent on columns in GROUP BY clause; this is incompatible with sql_mode=only_full_group_by (ER_WRONG_FIELD_WITH_GROUP)
+unsigned_overflow.sql: BIGINT UNSIGNED value is out of range in '(`reylo_oracle_mysql_types`.`everything`.`utiny` - `reylo_oracle_mysql_types`.`everything`.`small`)' (1690)

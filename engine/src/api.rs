@@ -44,6 +44,8 @@ pub enum Answer {
 /// column it comes from (none for an expression), and that table and column.
 /// MySQL's prepare metadata as mysql2 reports it: the protocol type code, the flags (bit 1 is
 /// NOT NULL) and the charset (63 is binary) per result column, and the server's type guess per `?`.
+/// A column also carries its display length and the table it is a column of, which is empty for
+/// an expression; a host that sends neither gets the answer that holds whatever they are.
 #[derive(Debug, Clone, Deserialize)]
 pub struct MysqlDescribe {
     pub columns: Vec<MysqlColumn>,
@@ -57,6 +59,10 @@ pub struct MysqlColumn {
     pub flags: u32,
     #[serde(default)]
     pub charset: u32,
+    #[serde(default)]
+    pub length: Option<u32>,
+    #[serde(default)]
+    pub org_table: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -194,7 +200,11 @@ fn analyze(sql: &str, dialect: Dialect, answers: &HashMap<String, Answer>) -> Re
             None => return Response::Need { needs: host.needs() },
         }
     }
-    match crate::postgres::analyze(sql, dialect, &host) {
+    let analysis = match dialect {
+        Dialect::Mysql => crate::mysql::analyze_text(sql, &host),
+        _ => crate::postgres::analyze(sql, dialect, &host),
+    };
+    match analysis {
         Some(analysis) => Response::Analysis { analysis },
         None => {
             let needs = host.needs();
@@ -205,6 +215,10 @@ fn analyze(sql: &str, dialect: Dialect, answers: &HashMap<String, Answer>) -> Re
 }
 
 pub fn call(request: &str) -> String {
+    crate::stack::run(|| call_here(request))
+}
+
+fn call_here(request: &str) -> String {
     let response = match serde_json::from_str::<Request>(request) {
         Ok(Request::Ping) => Response::Ok { version: env!("CARGO_PKG_VERSION").to_string(), fingerprint: crate::FINGERPRINT.to_string() },
         Ok(Request::Lex { sql, dialect }) => match lex::lex(&sql, dialect) {

@@ -5,10 +5,16 @@
 //! no `expected.txt`, such as the parity check's statements, is checked for soundness alone. A Postgres case
 //! runs in a database of its own, created on the server `--url` names and dropped afterwards, so
 //! the server must be a throwaway one: cases create collations, operators and roles. A case whose
-//! `dialect` file says `sqlite` runs in a fresh SQLite file instead. A case with a `min_version`
-//! file (a `server_version_num`, such as `180000`) is skipped on an older server.
+//! `dialect` file says `sqlite` runs in a fresh SQLite file instead. A case whose `dialect` file
+//! says `mysql` runs in a database of its own on the MySQL server `--mysql-url` (or
+//! `ORACLE_MYSQL_URL`) names, also a throwaway one, which it refuses on port 3306; how its host
+//! answers the engine and how its runs are isolated is in `mysql.rs`. A case with a `min_version`
+//! file (a `server_version_num`, such as `180000`, or for MySQL the version as one number, such
+//! as `80400`) is skipped on an older server. A MySQL case's `sql_mode` file sets its sessions'
+//! `sql_mode`.
 //!
 //!   cargo run -p reylo-oracle -- --url postgres://postgres@localhost:55432/postgres oracle/cases
+//!   cargo run -p reylo-oracle -- --mysql-url mysql://root@127.0.0.1:33411/mysql oracle/cases/mysql_types
 //!   cargo run -p reylo-oracle -- --url … --bless oracle/cases/not_null   # rewrite expected.txt
 //!   cargo run -p reylo-oracle -- --url … --analyses old.json oracle/cases  # check other answers
 //!   cargo run -p reylo-oracle -- --url … --dump new.json oracle/cases      # write the answers
@@ -17,7 +23,7 @@
 //!
 //! `--analyses` names a JSON object of analyses keyed `<case>/<file>`, which the seeding checks
 //! in place of the engine's own: how a check that passes shows it can fail, run on the answers of
-//! an engine that had a defect. `--dump` writes that object, for the cases of both dialects.
+//! an engine that had a defect. `--dump` writes that object, for the cases of every dialect.
 //!
 //! Every run of a statement is bounded: 5000 milliseconds, or `--timeout`, or the number in the
 //! case's `timeout` file, which wins. A run the timeout stopped is evidence of nothing.
@@ -33,9 +39,10 @@
 //! what the oracle did not check.
 //!
 //! Each statement goes through the engine's replay exactly as a host runs it: the describe comes
-//! from the extended protocol and every catalog query runs on the case's database. A catalog
-//! query that fails is a failure of the case, never an empty answer.
+//! from the extended protocol (on MySQL a server-side prepare) and every catalog query runs on
+//! the case's database. A catalog query that fails is a failure of the case, never an empty answer.
 
+mod mysql;
 mod seed;
 
 use serde_json::{json, Map, Value};
@@ -49,6 +56,7 @@ use tokio_postgres::{Client, Config, NoTls};
 #[tokio::main]
 async fn main() -> ExitCode {
     let mut url = std::env::var("ORACLE_URL").ok();
+    let mut mysql_url = std::env::var("ORACLE_MYSQL_URL").ok();
     let mut bless = false;
     let mut keep = false;
     let mut strict_coverage = false;
@@ -60,6 +68,7 @@ async fn main() -> ExitCode {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--url" => url = args.next(),
+            "--mysql-url" => mysql_url = args.next(),
             "--bless" => bless = true,
             "--keep" => keep = true,
             "--strict-coverage" => strict_coverage = true,
@@ -94,11 +103,33 @@ async fn main() -> ExitCode {
     let mut unnamed = 0;
     let mut dumped = Map::new();
     let mut admin: Option<(Client, Config, i32)> = None;
+    let mut mysql_server: Option<mysql::Server> = None;
     for case in &cases {
         let dialect = fs::read_to_string(case.join("dialect")).map(|s| s.trim().to_string()).unwrap_or_else(|_| "postgres".into());
         let timeout_ms = fs::read_to_string(case.join("timeout")).ok().and_then(|s| s.trim().parse::<u64>().ok()).filter(|ms| *ms > 0).unwrap_or(timeout_ms);
+        let min = fs::read_to_string(case.join("min_version")).ok().and_then(|s| s.trim().parse::<i32>().ok()).unwrap_or(0);
         let outcome = if dialect == "sqlite" {
             run_sqlite(case, timeout_ms, &given, &mut dumped)
+        } else if dialect == "mysql" {
+            if mysql_server.is_none() {
+                let Some(url) = mysql_url.as_deref() else {
+                    eprintln!("a MySQL case needs --mysql-url (or ORACLE_MYSQL_URL): a throwaway server, never a shared one");
+                    return ExitCode::from(2);
+                };
+                match mysql::connect(url).await {
+                    Ok(server) => mysql_server = Some(server),
+                    Err(e) => {
+                        eprintln!("cannot connect to {url}: {e}");
+                        return ExitCode::from(2);
+                    }
+                }
+            }
+            let server = mysql_server.as_mut().expect("connected above");
+            if (server.version as i32) < min {
+                println!("{}: skipped (server {} < {min})", case.display(), server.version);
+                continue;
+            }
+            mysql::run(case, server, keep, timeout_ms, &given, &mut dumped, statements(case)).await
         } else {
             if admin.is_none() {
                 let Some(url) = url.as_deref() else {
@@ -114,7 +145,6 @@ async fn main() -> ExitCode {
                 }
             }
             let (client, config, version) = admin.as_ref().expect("connected above");
-            let min = fs::read_to_string(case.join("min_version")).ok().and_then(|s| s.trim().parse::<i32>().ok()).unwrap_or(0);
             if *version < min {
                 println!("{}: skipped (server {version} < {min})", case.display());
                 continue;
@@ -334,11 +364,21 @@ async fn run_postgres(case: &Path, admin: &Client, admin_config: &Config, keep: 
 }
 
 /// The engine's replay with every need answered on `client`.
+/// One request to the engine. Its answer nests as deeply as the statement's JSON shapes do,
+/// past serde_json's default limit of 128 levels for a statement the engine still parses, so it is
+/// read without that limit.
+fn engine_call(request: &Value) -> Result<Value, String> {
+    let text = reylo_engine::call(&request.to_string());
+    let mut reader = serde_json::Deserializer::from_str(&text);
+    reader.disable_recursion_limit();
+    reader.into_iter::<Value>().next().unwrap_or_else(|| Ok(Value::Null)).map_err(|e| e.to_string())
+}
+
 async fn analyze_postgres(client: &Client, sql: &str) -> Result<Value, String> {
     let mut answers = Map::new();
     for _ in 0..64 {
         let request = json!({ "op": "analyze", "sql": sql, "dialect": "postgres", "answers": Value::Object(answers.clone()) });
-        let response: Value = serde_json::from_str(&reylo_engine::call(&request.to_string())).map_err(|e| e.to_string())?;
+        let response = engine_call(&request)?;
         match response["status"].as_str() {
             Some("analysis") => return Ok(response["analysis"].clone()),
             Some("need") => {
@@ -477,7 +517,7 @@ fn analyze_sqlite(db: &rusqlite::Connection, sql: &str) -> Result<Value, String>
     let mut answers = Map::new();
     for _ in 0..16 {
         let request = json!({ "op": "analyze", "sql": sql, "dialect": "sqlite", "answers": Value::Object(answers.clone()) });
-        let response: Value = serde_json::from_str(&reylo_engine::call(&request.to_string())).map_err(|e| e.to_string())?;
+        let response = engine_call(&request)?;
         match response["status"].as_str() {
             Some("analysis") => return Ok(response["analysis"].clone()),
             Some("need") => {

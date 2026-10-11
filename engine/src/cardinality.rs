@@ -224,7 +224,11 @@ pub const TRIGGERS_QUERY: &str = concat!(
 /// part is a column's name, or an expression as the server prints it, in parentheses:
 /// `(lower(email))`. The planner's own conditions (`relation_has_unique_index_ext`): the index is
 /// valid and immediate (a DEFERRABLE constraint lets duplicates stand inside a transaction that
-/// defers it); the relation is not a traditional inheritance parent, whose scan also reads
+/// defers it); it is no exclusion constraint's, which is what PostgreSQL 18 builds for a key
+/// `WITHOUT OVERLAPS` and marks unique all the same (`PRIMARY KEY (room, during WITHOUT OVERLAPS)`
+/// keeps two rows of one room apart only where their ranges overlap, so the room names no row, and
+/// the planner takes no such index for a unique one); the relation is not a traditional
+/// inheritance parent, whose scan also reads
 /// children the index does not cover (a partitioned table's unique index holds across its
 /// partitions); and each part's index collation agrees with the column's on equality (the same
 /// collation, or both deterministic), since a comparison under the column's collation is what the
@@ -246,7 +250,7 @@ pub const UNIQUE_KEYS_QUERY: &str = concat!(
     JOIN unnest(i.indkey::int2[], i.indcollation::oid[]) WITH ORDINALITY AS k(attnum, coll, ord) ON k.ord <= i.indnkeyatts \
     JOIN pg_attribute a ON CASE WHEN k.attnum = 0 THEN a.attrelid = i.indexrelid AND a.attnum = k.ord \
       ELSE a.attrelid = i.indrelid AND a.attnum = k.attnum AND NOT a.attisdropped END \
-    WHERE i.indisunique AND i.indisvalid AND i.indimmediate \
+    WHERE i.indisunique AND NOT i.indisexclusion AND i.indisvalid AND i.indimmediate \
       AND (c.relkind = 'p' OR NOT EXISTS (SELECT 1 FROM pg_inherits h WHERE h.inhparent = c.oid)) \
     GROUP BY x.name, i.indexrelid, i.indnkeyatts \
     HAVING count(*) = i.indnkeyatts AND bool_and(CASE WHEN k.attnum = 0 THEN k.coll = 0 OR ( \
@@ -517,6 +521,10 @@ fn unlimited(s: &SelectStmt) -> SelectStmt {
 /// build time; `reylo.lock` and the boot re-describe turn a later `CREATE`/`DROP INDEX` into a
 /// contract mismatch the deploy reports, rather than a shape that quietly drifts.
 pub fn at_most_one(sql: &str, dialect: Dialect, trust: &Trust, catalog: &Catalog) -> Result<(), String> {
+    crate::stack::run(|| at_most_one_here(sql, dialect, trust, catalog))
+}
+
+fn at_most_one_here(sql: &str, dialect: Dialect, trust: &Trust, catalog: &Catalog) -> Result<(), String> {
     let s = one_select(sql, dialect)?;
     at_most_one_select(&s, dialect, trust, catalog)
 }
@@ -935,7 +943,7 @@ impl<'a> From<'a> {
         if self.natural || !self.using.is_empty() {
             return false;
         }
-        let Ok(parsed) = pg_query::parse(&format!("SELECT 1 WHERE {predicate}")) else { return false };
+        let Ok(parsed) = crate::stack::parse(&format!("SELECT 1 WHERE {predicate}")) else { return false };
         let Some(NodeEnum::SelectStmt(select)) = parsed.protobuf.stmts.first().and_then(|s| s.stmt.as_deref()).and_then(|n| n.node.as_ref()) else { return false };
         let Some(wanted) = select.where_clause.as_deref() else { return false };
         let alias = &self.items[i].alias;
@@ -1393,7 +1401,7 @@ fn normalized(node: &protobuf::Node, alias: &str) -> Value {
 /// Whether `side` spells the expression of an index key part (`(lower(email))`) for the relation
 /// read as `alias`: the same parse tree once [`normalized`].
 fn matches_expression(side: &protobuf::Node, part: &str, alias: &str) -> bool {
-    let Ok(parsed) = pg_query::parse(&format!("SELECT {part}")) else { return false };
+    let Ok(parsed) = crate::stack::parse(&format!("SELECT {part}")) else { return false };
     let Some(NodeEnum::SelectStmt(select)) = parsed.protobuf.stmts.first().and_then(|s| s.stmt.as_deref()).and_then(|n| n.node.as_ref()) else { return false };
     let Some(NodeEnum::ResTarget(target)) = select.target_list.first().and_then(|t| t.node.as_ref()) else { return false };
     let Some(expression) = target.val.as_deref() else { return false };
@@ -1483,6 +1491,10 @@ fn scalar_type(l: &protobuf::SubLink, ctes: &[String], catalog: &Catalog) -> Opt
 /// [`Catalog::enclosing_ctes`] before it proves a subquery of the statement on its own, so that a
 /// name the subquery reads is never taken for the table of the same name.
 pub fn with_queries(sql: &str) -> Vec<String> {
+    crate::stack::run(|| with_queries_here(sql))
+}
+
+fn with_queries_here(sql: &str) -> Vec<String> {
     fn walk(v: &Value, out: &mut Vec<String>) {
         match v {
             Value::Object(map) => {
@@ -1494,7 +1506,7 @@ pub fn with_queries(sql: &str) -> Vec<String> {
         }
     }
     let mut out = Vec::new();
-    if let Some(tree) = pg_query::parse(sql).ok().and_then(|parsed| serde_json::to_value(&parsed.protobuf).ok()) {
+    if let Some(tree) = crate::stack::parse(sql).ok().and_then(|parsed| serde_json::to_value(&parsed.protobuf).ok()) {
         walk(&tree, &mut out);
     }
     out.sort_unstable();
@@ -1506,8 +1518,12 @@ pub fn with_queries(sql: &str) -> Vec<String> {
 /// [`Catalog::unique_keys`] keys it: what a host puts in [`Catalog::outer_aliases`] before it
 /// proves a subquery of the statement on its own. An alias given to two relations is left out.
 pub fn aliases(sql: &str) -> std::collections::HashMap<String, String> {
+    crate::stack::run(|| aliases_here(sql))
+}
+
+fn aliases_here(sql: &str) -> std::collections::HashMap<String, String> {
     let mut out: std::collections::HashMap<String, Option<String>> = std::collections::HashMap::new();
-    let Ok(parsed) = pg_query::parse(sql) else { return Default::default() };
+    let Ok(parsed) = crate::stack::parse(sql) else { return Default::default() };
     let Ok(tree) = serde_json::to_value(&parsed.protobuf) else { return Default::default() };
     fn walk(v: &Value, out: &mut std::collections::HashMap<String, Option<String>>) {
         match v {
@@ -1617,7 +1633,11 @@ fn key_bounds(
 /// `DELETE` whose `WHERE` pins a unique key of its one target relation is at most one; anything
 /// else is any number. `None` when the statement is not one of these.
 pub fn dml(sql: &str, catalog: &Catalog) -> Option<Result<Cardinality, String>> {
-    let parsed = pg_query::parse(sql).ok()?;
+    crate::stack::run(|| dml_here(sql, catalog))
+}
+
+fn dml_here(sql: &str, catalog: &Catalog) -> Option<Result<Cardinality, String>> {
+    let parsed = crate::stack::parse(sql).ok()?;
     let mut stmts = parsed.protobuf.stmts;
     if stmts.len() != 1 {
         return None;
@@ -1919,7 +1939,7 @@ fn one_select(sql: &str, dialect: Dialect) -> Result<Box<SelectStmt>, String> {
         Dialect::Postgres => sql.to_string(),
         Dialect::Sqlite | Dialect::Mysql => infer::dollar_placeholders(sql),
     };
-    let parsed = pg_query::parse(&text).map_err(|_| match dialect {
+    let parsed = crate::stack::parse(&text).map_err(|_| match dialect {
         Dialect::Postgres => "the statement does not parse".to_string(),
         _ => format!("the engine reads a {} statement's shape in the SQL it shares with Postgres, and this one uses syntax outside it", dialect.name()),
     })?;

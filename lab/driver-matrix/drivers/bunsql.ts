@@ -22,7 +22,10 @@ await runJob(meta, async () => {
     adapter === "postgres"
       ? new SQL(process.env.DM_PG_URL ?? "postgres://localhost:5432/postgres", { max: 10 })
       : adapter === "mysql"
-        ? new SQL(a.url!, { max: 10 })
+        ? // Since Bun 1.4 the MySQL adapter refuses to fetch the server's RSA key for
+          // caching_sha2_password over a connection without TLS unless asked to, as mysql2 does
+          // unasked; the containers serve no TLS.
+          new SQL(a.url!, { max: 10, allowPublicKeyRetrieval: true })
         : new SQL({ adapter: "sqlite", filename: a.file! });
   const table = adapter === "sqlite" ? "scratch" : "driver_matrix.scratch";
   const ph = adapter === "postgres" ? "$1" : "?";

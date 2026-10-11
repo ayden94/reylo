@@ -1,2 +1,3 @@
-# The local Postgres that main.ts queries; every build analyzes query.sql against it, or reads .reylo/.
-url: postgres://localhost:5432/postgres
+# The Postgres that main.ts queries; every build analyzes query.sql against it, or reads .reylo/.
+# DATABASE_URL comes from the environment or from .env beside package.json (the lab/basic tables).
+url: ${DATABASE_URL}

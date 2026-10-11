@@ -74,6 +74,8 @@ pub struct Analysis {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnalyzeError {
     Parse(String),
+    /// The statement nests deeper than libpg_query hands over ([`crate::stack::MAX_DEPTH`]).
+    TooDeep,
     NotOneStatement(usize),
     UnsupportedStatement,
 }
@@ -82,6 +84,13 @@ impl std::fmt::Display for AnalyzeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             AnalyzeError::Parse(m) => write!(f, "SQL does not parse: {m}"),
+            AnalyzeError::TooDeep => write!(
+                f,
+                "the statement nests deeper than the analysis reads: at most {} levels of its parse tree, which is about {} levels of an expression such as `a + b + …`, a nested CASE or json_build_object, or {} nested subqueries",
+                crate::stack::MAX_DEPTH,
+                crate::stack::MAX_DEPTH / 2,
+                crate::stack::MAX_DEPTH / 6
+            ),
             AnalyzeError::NotOneStatement(n) => write!(f, "expected exactly one statement, found {n}"),
             AnalyzeError::UnsupportedStatement => f.write_str("only SELECT, INSERT, UPDATE, DELETE and MERGE statements are typed"),
         }
@@ -90,7 +99,14 @@ impl std::fmt::Display for AnalyzeError {
 
 /// Analyze one rewritten statement (placeholders already `$n`).
 pub fn analyze(sql: &str) -> Result<Analysis, AnalyzeError> {
-    let parsed = pg_query::parse(sql).map_err(|e| AnalyzeError::Parse(clean_parse_error(&e.to_string())))?;
+    crate::stack::run(|| analyze_here(sql))
+}
+
+fn analyze_here(sql: &str) -> Result<Analysis, AnalyzeError> {
+    let parsed = crate::stack::parse(sql).map_err(|e| match clean_parse_error(&e.to_string()) {
+        m if crate::stack::too_deep(&m) => AnalyzeError::TooDeep,
+        m => AnalyzeError::Parse(m),
+    })?;
     if parsed.protobuf.stmts.len() != 1 {
         return Err(AnalyzeError::NotOneStatement(parsed.protobuf.stmts.len()));
     }
@@ -171,7 +187,7 @@ pub fn analyze(sql: &str) -> Result<Analysis, AnalyzeError> {
         // a statement returns are still the outer SELECT's, which is what `statement` is for.
         "InsertStmt" | "UpdateStmt" | "DeleteStmt" | "MergeStmt" => {
             kind = StatementKind::Mutation;
-            if node.get("returning_list").and_then(|l| l.as_array()).is_some_and(|l| !l.is_empty()) {
+            if node.get("returning_clause").and_then(|c| c.get("exprs")).and_then(|l| l.as_array()).is_some_and(|l| !l.is_empty()) {
                 has_returning = true;
             }
             let Some(relation) = node.get("relation").and_then(|r| r.get("relname")).and_then(|r| r.as_str()) else { return };
@@ -359,10 +375,14 @@ pub fn analyze(sql: &str) -> Result<Analysis, AnalyzeError> {
 /// which is where "operator does not exist: text = integer" and "function f(integer) does not
 /// exist" point. Empty when nothing bound sits at the position.
 pub fn params_at_position(sql: &str, position: usize) -> Vec<i32> {
+    crate::stack::run(|| params_at_position_here(sql, position))
+}
+
+fn params_at_position_here(sql: &str, position: usize) -> Vec<i32> {
     let Some(offset) = sql.char_indices().nth(position.saturating_sub(1)).map(|(b, _)| b as i64) else {
         return Vec::new();
     };
-    let Ok(parsed) = pg_query::parse(sql) else { return Vec::new() };
+    let Ok(parsed) = crate::stack::parse(sql) else { return Vec::new() };
     let Ok(tree) = serde_json::to_value(&parsed.protobuf) else { return Vec::new() };
     let mut out: Vec<i32> = Vec::new();
     let mut push = |n: Option<i32>| {

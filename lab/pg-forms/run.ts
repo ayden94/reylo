@@ -1,6 +1,6 @@
 // Runs every read-only statement of the lab against the local database and prints the rows,
 // so the inferred type can be compared with what a driver actually hands back.
-// node --import ../../src/register.ts run.ts
+// node --env-file=.env --import ../../src/register.ts run.ts
 import postgres from "postgres";
 import jsonAgg from "./json_agg.sql";
 import arrays from "./arrays.sql";
@@ -29,7 +29,7 @@ import casts from "./casts.sql";
 import types from "./types.sql";
 
 // cte_dml.sql and param_insert.sql write rows, so this script leaves both to the type check.
-const sql = postgres("postgres://localhost:5432/postgres");
+const sql = postgres(process.env["DATABASE_URL"] ?? "postgres://localhost:5432/postgres");
 const show = (name: string, cardinality: string, value: unknown) =>
   console.log(`${name} [${cardinality}] ${JSON.stringify(value)}`);
 

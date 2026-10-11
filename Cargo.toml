@@ -3,10 +3,11 @@
 # binary, which consumes reylo-engine for its analysis) and `pg-extension/`. One lockfile,
 # one `target/`.
 #
-# The `[patch]` is reylo-engine's: the crates.io `pg_query` 6.2.0 source with the WebAssembly patch
-# from `engine/vendor/` applied by `engine/build.sh --prepare`, which also fetches the SQLite
-# amalgamation `engine/build.rs` compiles. Run it once before any cargo command here; cargo refuses to
-# resolve the workspace while the patched copy is missing.
+# The `[patch]` is reylo-engine's: `pg_query` 18.0.0, the Postgres 18 parser, which is upstream's
+# `pg-18` branch at a pinned commit until crates.io has it, with the patch from `engine/vendor/`
+# (WebAssembly, and how deeply a statement may nest) applied by `engine/build.sh --prepare`, which
+# also fetches the SQLite amalgamation `engine/build.rs` compiles. Run it once before any cargo
+# command here; cargo refuses to resolve the workspace while the patched copy is missing.
 [workspace]
 resolver = "2"
 members = ["engine", "framework/engine", "pg-extension", "oracle"]

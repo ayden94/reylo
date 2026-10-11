@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { lexPlaceholders } from "../src/lex.ts";
 import { defineQuery } from "../src/index.ts";
+import { Engine, type Dialect } from "../src/engine.ts";
 
 const names = (sql: string, dialect: "postgres" | "mysql" | "sqlite" = "postgres") => lexPlaceholders(sql, dialect).params;
 
@@ -17,6 +18,41 @@ test("the named forms, the dialect's own positional form, and a position is its 
   assert.deepEqual(names("select ?5, ?, ?2", "sqlite"), ["2", "5", "6"]);
   // Positional parameters bind by number, whatever order the statement names them in.
   assert.deepEqual(names("select $2::text, $1::int"), ["1", "2"]);
+});
+
+test("MySQL text is read as a session in the default sql_mode reads it", () => {
+  // A backslash escapes the character after it, in either quote: a placeholder after `\'` is
+  // still in the string, and one after `'\\'` is not.
+  assert.deepEqual(names("select 'it\\'s :not', 'a\\\\', :x, \"say \\\":no\", 'a\\nb' from t where id = :id", "mysql"), ["x", "id"]);
+  // Postgres and SQLite read the backslash as a character.
+  assert.deepEqual(names("select 'C:\\', :x"), ["x"]);
+  assert.deepEqual(names("select 'C:\\', :x", "sqlite"), ["x"]);
+  assert.deepEqual(names("select 'C:\\', :x", "mysql"), []);
+  // `#` starts a line comment; `--` does only before a space or a control character, or at the end.
+  assert.deepEqual(names("select :a # :b\n, :c", "mysql"), ["a", "c"]);
+  assert.deepEqual(names("select :a --:b", "mysql"), ["a", "b"]);
+  assert.deepEqual(names("select :a -- :b\n, :c --\t:d\n, 1--", "mysql"), ["a", "c"]);
+  assert.deepEqual(names("select :a --:b"), ["a"]);
+  // A block comment ends at its first `*/`, and backquotes quote a name that escapes nothing.
+  assert.deepEqual(names("select /* a /* b */ :x", "mysql"), ["x"]);
+  assert.deepEqual(names("select `a\\`, `:b`, :x", "mysql"), ["x"]);
+});
+
+test("the runtime's lexer agrees with the engine's", async () => {
+  const engine = await Engine.load();
+  const statements: [string, Dialect][] = [
+    ["select 'it\\'s :not', 'a\\\\', :x, \"say \\\":no\", `n:m`, 'a\\nb' from t where id = :id # :c\n and :d --:e\n -- :f\n /* :g */ :h", "mysql"],
+    ["select ?, '?', \"\\\"?\", ? -- ?\n # ?\n", "mysql"],
+    ["select 'C:\\', :x, \"q\"\":y\", `:z`, ':w' -- :v\n /* :u */ from t where a = :a.b", "postgres"],
+    ["select 'C:\\', ?3, `:w`, ? -- :v\n /* :u */", "sqlite"],
+    ["select 'C:\\', :x, \"\\\", :y -- :v\n", "sqlite"],
+  ];
+  for (const [sql, dialect] of statements) {
+    const ours = lexPlaceholders(sql, dialect);
+    const theirs = engine.lex(sql, dialect);
+    assert.deepEqual(ours.params, theirs.params, `${dialect}: ${sql}`);
+    assert.deepEqual(ours.placeholders, theirs.placeholders, `${dialect}: ${sql}`);
+  }
 });
 
 // Without the engine's rewritten statement (a query defined by hand) the runtime rewrites it itself.

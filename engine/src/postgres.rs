@@ -18,6 +18,7 @@ use crate::jsonshape;
 use crate::levels::Columns;
 use crate::lex::{self, Lexed, Rewritten, Style, Target};
 use crate::pgtypes::{not_null_rows, TypeRegistry, RELATION_TYPES_QUERY, TYPE_QUERY};
+use crate::returning::Rows;
 use crate::types::{DescribedColumn, DescribedStatement, Type};
 use pg_query::protobuf::node::Node as NodeEnum;
 use serde_json::{json, Value};
@@ -74,22 +75,29 @@ pub const RELATION_COLUMNS_QUERY: &str = concat!(
     " FROM pg_class c JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped \
     WHERE c.relname = ANY($1::text[]) AND pg_catalog.pg_table_is_visible(c.oid)"
 );
-/// Which of the names the expression rules read a user or an extension has defined, and which
-/// built-in types a cast may target (see [`crate::infer::Trust`]). `$1` is `text[]` of operator
-/// names, `$2` the `text[]` of function names.
+/// Which of the names the expression rules read a user or an extension has defined (`false`
+/// beside the name), and which built-in types a cast may target (`true`; see
+/// [`crate::infer::Trust`]). `$1` is `text[]` of operator names, `$2` the `text[]` of function
+/// names. One more row, a NULL beside [`JSONB_CASTS_RAISE`], comes from a server before 18, whose
+/// cast of a JSON null to a number or a boolean raises an error where 18 answers NULL.
 pub const TRUST_QUERY: &str = "SELECT false, o.oprname::text FROM pg_operator o WHERE o.oid >= 16384 AND o.oprname::text = ANY($1::text[]) \
     UNION ALL SELECT false, p.proname::text FROM pg_proc p WHERE p.oid >= 16384 AND p.proname::text = ANY($2::text[]) \
     UNION ALL SELECT true, t.typname::text FROM pg_type t WHERE t.oid < 16384 AND t.typnamespace = 'pg_catalog'::regnamespace \
       AND NOT EXISTS (SELECT 1 FROM pg_type u WHERE u.oid >= 16384 AND u.typname = t.typname) \
-      AND NOT EXISTS (SELECT 1 FROM pg_cast c WHERE c.oid >= 16384 AND c.casttarget = t.oid AND c.castmethod = 'f')";
+      AND NOT EXISTS (SELECT 1 FROM pg_cast c WHERE c.oid >= 16384 AND c.casttarget = t.oid AND c.castmethod = 'f') \
+    UNION ALL SELECT NULL, 'jsonb casts raise' WHERE pg_catalog.current_setting('server_version_num')::int4 < 180000";
+/// The name of [`TRUST_QUERY`]'s row that says the server is one before PostgreSQL 18.
+const JSONB_CASTS_RAISE: &str = "jsonb casts raise";
 
 /// `$1` is `text[]` of relation names as the statement writes them: one row per unique index of
 /// each that is a plain or a partitioned table, `(the name, the index's key columns with NULL for
 /// a key part that is an expression, the index's predicate as the server prints it)`, and for such
 /// a table with no unique index one row of the name beside NULLs. These are the indexes an `ON
 /// CONFLICT (…)` may infer as its arbiter (the planner's `infer_arbiter_indexes`), and more: an
-/// invalid one is listed too, so a missing row is a missing index. A view, whose write goes to
-/// another relation, has no row.
+/// invalid one is listed too, so a missing row is a missing index. The index of a key `WITHOUT
+/// OVERLAPS` (PostgreSQL 18) is unique by name and an exclusion constraint in fact, which the
+/// planner infers for no column list, so it is none of them. A view, whose write goes to another
+/// relation, has no row.
 pub const ARBITERS_QUERY: &str = concat!(
     "SELECT x.name, \
       (SELECT array_agg(a.attname::text ORDER BY k.ord) FROM unnest(i.indkey::int2[]) WITH ORDINALITY AS k(attnum, ord) \
@@ -99,19 +107,20 @@ pub const ARBITERS_QUERY: &str = concat!(
     JOIN pg_class c ON c.oid = ",
     cardinality::relation_named!("x.name"),
     " AND c.relkind IN ('r', 'p') \
-    LEFT JOIN pg_index i ON i.indrelid = c.oid AND i.indisunique"
+    LEFT JOIN pg_index i ON i.indrelid = c.oid AND i.indisunique AND NOT i.indisexclusion"
 );
 
 pub fn analyze(sql: &str, dialect: Dialect, host: &Host) -> Lazy<Analysis> {
+    host.on_engine_stack(|host| analyze_here(sql, dialect, host))
+}
+
+fn analyze_here(sql: &str, dialect: Dialect, host: &Host) -> Lazy<Analysis> {
     let lexed = match lexed(sql, dialect) {
         Ok(l) => l,
         Err(bare) => return Some(bare),
     };
     if dialect == Dialect::Sqlite {
         return crate::sqlite::analyze(sql, &lexed, host);
-    }
-    if dialect == Dialect::Mysql {
-        return crate::mysql::analyze(sql, &lexed, host);
     }
     let engine = Engine::new(host);
     engine.run(sql, &lexed)
@@ -124,11 +133,13 @@ pub fn analyze(sql: &str, dialect: Dialect, host: &Host) -> Lazy<Analysis> {
 /// because such a host binds whatever its caller sends. `Some(Err)` is the server's refusal of
 /// the statement itself.
 pub fn describe(sql: &str, host: &Host) -> Lazy<Result<DescribedStatement, DbError>> {
-    let engine = Engine::new(host);
-    let parsed = analyze::analyze(sql).ok();
-    let trust = trust(host);
-    let relations = relations_of(parsed.as_ref());
-    engine.described(sql, parsed.as_ref(), &relations, trust.as_ref()).map(|r| r.map(|(_, described)| described))
+    host.on_engine_stack(|host| {
+        let engine = Engine::new(host);
+        let parsed = analyze::analyze(sql).ok();
+        let trust = trust(host);
+        let relations = relations_of(parsed.as_ref());
+        engine.described(sql, parsed.as_ref(), &relations, trust.as_ref()).map(|r| r.map(|(_, described)| described))
+    })
 }
 
 /// Which of the names the expression rules read are the built-ins, as the catalog says: one
@@ -142,11 +153,15 @@ pub fn trust(host: &Host) -> Lazy<Trust> {
     let mut trust = Trust { shadowed: HashSet::new(), cast_targets: Some(HashSet::new()), ..Default::default() };
     if let Ok(rows) = rows {
         for row in rows {
-            let (Some(cast), Some(name)) = (row.first().and_then(as_bool), row.get(1).and_then(as_str)) else { continue };
-            if cast {
-                trust.cast_targets.get_or_insert_with(HashSet::new).insert(name.to_string());
-            } else {
-                trust.shadowed.insert(name.to_string());
+            let Some(name) = row.get(1).and_then(as_str) else { continue };
+            match row.first().and_then(as_bool) {
+                Some(true) => {
+                    trust.cast_targets.get_or_insert_with(HashSet::new).insert(name.to_string());
+                }
+                Some(false) => {
+                    trust.shadowed.insert(name.to_string());
+                }
+                None => trust.jsonb_casts_raise |= name == JSONB_CASTS_RAISE,
             }
         }
     }
@@ -178,7 +193,7 @@ fn level_columns(sql: &str, host: &Host) -> Lazy<Columns> {
 /// The columns [`jsonshape::plan`] reads for `sql`, for a host that plans the shapes itself: none,
 /// and no question, for a statement whose shapes do not turn on them.
 pub fn shape_columns(sql: &str, host: &Host) -> Lazy<Columns> {
-    columns_where(jsonshape::needs_columns(sql), sql, host)
+    host.on_engine_stack(|host| columns_where(jsonshape::needs_columns(sql), sql, host))
 }
 
 fn columns_where(needed: bool, sql: &str, host: &Host) -> Lazy<Columns> {
@@ -600,18 +615,26 @@ impl<'a> Engine<'a> {
         }
         *self.casts.borrow_mut() = raw.params.iter().map(|o| self.registry.borrow().get(*o).map(|t| t.cast_name.clone()).filter(|c| !c.is_empty())).collect();
         self.refine(sql, &mut described, trust)?;
-        // PostgreSQL 18's `RETURNING old.*` and `new.*` read a row that may not exist, whatever
-        // the provenance the describe reports for them says.
-        if parsed.is_some_and(|p| p.kind == analyze::StatementKind::Mutation) {
-            let widths = self.columns_by_name.borrow();
-            let width = |relation: &str| widths.get(relation).map(BTreeMap::len);
-            for (col, missing) in described.columns.iter_mut().zip(missing_rows(sql, raw.columns.len(), &width)) {
-                if missing {
-                    col.nullable = true;
-                }
+        self.without_missing_rows(sql, parsed, &raw, &mut described);
+        Some(Ok((raw, described)))
+    }
+
+    /// PostgreSQL 18's `RETURNING old.*` and `new.*`, and a MERGE's source where the MERGE acts
+    /// without one, read a row that may not exist, whatever the provenance the describe reports
+    /// for them says: such a column is nullable. A probe is settled this way too, since it carries
+    /// the statement's WITH queries, and a data-modifying one may return such a row.
+    fn without_missing_rows(&self, sql: &str, parsed: Option<&Parsed>, raw: &RawDescribe, described: &mut DescribedStatement) {
+        if parsed.is_none_or(|p| p.kind != analyze::StatementKind::Mutation) {
+            return;
+        }
+        let known = self.columns_by_name.borrow();
+        let columns = |relation: &str| known.get(relation).map(|columns| columns.values().map(|(name, _)| name.clone()).collect::<Vec<_>>());
+        let origins: Vec<bool> = raw.columns.iter().map(|c| c.table != 0).collect();
+        for (col, missing) in described.columns.iter_mut().zip(missing_rows(sql, &origins, &columns)) {
+            if missing {
+                col.nullable = true;
             }
         }
-        Some(Ok((raw, described)))
     }
 
     /// Per result column that reads a table's column as it is, the strings a CHECK keeps it to
@@ -936,6 +959,7 @@ impl<'a> Engine<'a> {
         let settled = self.settle(sql, &raw, parsed.as_ref(), trust);
         let (Some(()), Some(mut described)) = (types, settled) else { return None };
         self.refine(sql, &mut described, trust)?;
+        self.without_missing_rows(sql, parsed.as_ref(), &raw, &mut described);
         Some(Some(described))
     }
 
@@ -974,7 +998,7 @@ struct ConflictTarget {
 /// CONSTRAINT name` names its index, and a target with an expression (`(lower(email))`) is matched
 /// against index expressions the build does not compare: neither is one.
 fn conflict_targets(sql: &str) -> Vec<ConflictTarget> {
-    let Ok(parsed) = pg_query::parse(sql) else { return Vec::new() };
+    let Ok(parsed) = crate::stack::parse(sql) else { return Vec::new() };
     let Ok(tree) = serde_json::to_value(&parsed.protobuf) else { return Vec::new() };
     fn walk(v: &Value, out: &mut Vec<ConflictTarget>) {
         match v {
@@ -1065,47 +1089,37 @@ fn unmatched_conflict(target: &ConflictTarget, rows: &[Vec<Value>], catalog: &Ca
     })
 }
 
-/// Per result column of a data-modifying statement, whether it reads a row the statement may not
-/// have. PostgreSQL 18 lets RETURNING name the row before the change (`old`) and after it (`new`):
-/// an INSERT has no old row (nor has the insert of an upsert or of a MERGE), and a DELETE has no
-/// new row (nor has a MERGE that deletes), so a column read from the missing one is NULL whatever
-/// its table's `NOT NULL` says. `width` is the column count of a relation, which a `*` expands to.
-/// When the statement's columns cannot be told apart (a `*` over a relation of unknown width, or a
-/// data-modifying WITH query that reads a missing row), every column may be NULL.
-fn missing_rows(sql: &str, count: usize, width: &dyn Fn(&str) -> Option<usize>) -> Vec<bool> {
-    use pg_query::protobuf::CmdType;
+/// Per result column of a data-modifying statement, whether the provenance the describe reports
+/// for it is of a row the statement may not have ([`crate::returning`]): the old row of an INSERT,
+/// the new row of a DELETE, either by the name RETURNING gives it, or a MERGE's source where the
+/// MERGE acts on a target row the source does not match. Such a column is NULL there whatever its
+/// table's `NOT NULL` says. `origins` says which result columns the describe traced to a table's
+/// column (a reference, also under a cast that changes nothing, and a field of a whole row,
+/// `(old).name`); an expression that carries no provenance is the expression rules' to settle,
+/// which read the same rows. `columns` are a relation's column names, in order: what a `*` expands
+/// to, and what a bare name is before it is a row. When the statement's columns cannot be told
+/// apart (a `*` over more than the target relation, or over a relation of unknown columns, or a
+/// data-modifying WITH query that reads a missing row, whose columns the statement can read
+/// through any expression), every column may be NULL.
+fn missing_rows(sql: &str, origins: &[bool], columns: &dyn Fn(&str) -> Option<Vec<String>>) -> Vec<bool> {
+    let count = origins.len();
     let none = vec![false; count];
-    let Ok(parsed) = pg_query::parse(sql) else { return none };
+    let Ok(parsed) = crate::stack::parse(sql) else { return none };
     let Some(top) = parsed.protobuf.stmts.first().and_then(|s| s.stmt.as_deref()).and_then(|n| n.node.as_ref()) else { return none };
-    // (target relation, RETURNING list, the old row may be missing, the new row may be missing)
-    let shape = |node: &NodeEnum| -> Option<(String, Vec<pg_query::protobuf::Node>, bool, bool)> {
-        match node {
-            NodeEnum::InsertStmt(i) => Some((i.relation.as_ref()?.relname.clone(), i.returning_list.clone(), true, false)),
-            NodeEnum::DeleteStmt(d) => Some((d.relation.as_ref()?.relname.clone(), d.returning_list.clone(), false, true)),
-            NodeEnum::MergeStmt(m) => {
-                let does = |cmd: CmdType| m.merge_when_clauses.iter().any(|w| matches!(w.node.as_ref(), Some(NodeEnum::MergeWhenClause(c)) if c.command_type == cmd as i32));
-                Some((m.relation.as_ref()?.relname.clone(), m.returning_list.clone(), does(CmdType::CmdInsert), does(CmdType::CmdDelete)))
-            }
-            _ => None,
-        }
+    // (the rows RETURNING can name, the target relation, the RETURNING list)
+    let shape = |node: &NodeEnum| -> Option<(Rows, String, Vec<pg_query::protobuf::Node>)> {
+        let (relation, clause) = match node {
+            NodeEnum::InsertStmt(s) => (s.relation.as_ref()?, &s.returning_clause),
+            NodeEnum::UpdateStmt(s) => (s.relation.as_ref()?, &s.returning_clause),
+            NodeEnum::DeleteStmt(s) => (s.relation.as_ref()?, &s.returning_clause),
+            NodeEnum::MergeStmt(s) => (s.relation.as_ref()?, &s.returning_clause),
+            _ => return None,
+        };
+        Some((Rows::of(node)?, relation.relname.clone(), jsonshape::returning(clause)))
     };
-    let reads_missing = |node: &pg_query::protobuf::Node, old: bool, new: bool| -> bool {
-        let Ok(tree) = serde_json::to_value(node) else { return true };
-        fn walk(v: &Value, old: bool, new: bool) -> bool {
-            match v {
-                Value::Object(map) => map.iter().any(|(key, child)| {
-                    if key == "ColumnRef" {
-                        let first = child.get("fields").and_then(|f| f.as_array()).and_then(|f| f.first()).and_then(|n| n.get("node")?.get("String")?.get("sval")?.as_str());
-                        let fields = child.get("fields").and_then(|f| f.as_array()).map_or(0, Vec::len);
-                        return fields > 1 && ((old && first == Some("old")) || (new && first == Some("new")));
-                    }
-                    walk(child, old, new)
-                }),
-                Value::Array(items) => items.iter().any(|i| walk(i, old, new)),
-                _ => false,
-            }
-        }
-        walk(&tree, old, new)
+    let reads_missing = |rows: &Rows, relation: &str, node: &pg_query::protobuf::Node| {
+        let known = columns(relation);
+        rows.reads_missing(node, &|name| known.as_ref().is_some_and(|k| k.iter().any(|c| c == name)))
     };
     // A data-modifying WITH query under the statement: its RETURNING can feed any column.
     let with = match top {
@@ -1118,13 +1132,13 @@ fn missing_rows(sql: &str, count: usize, width: &dyn Fn(&str) -> Option<usize>) 
     };
     for cte in with.map(|w| w.ctes.as_slice()).unwrap_or_default() {
         let Some(NodeEnum::CommonTableExpr(c)) = cte.node.as_ref() else { continue };
-        let Some((_, returning, old, new)) = c.ctequery.as_deref().and_then(|q| q.node.as_ref()).and_then(&shape) else { continue };
-        if returning.iter().any(|r| reads_missing(r, old, new)) {
+        let Some((rows, relation, returning)) = c.ctequery.as_deref().and_then(|q| q.node.as_ref()).and_then(&shape) else { continue };
+        if !rows.all_present() && returning.iter().any(|r| reads_missing(&rows, &relation, r)) {
             return vec![true; count];
         }
     }
-    let Some((relation, returning, old, new)) = shape(top) else { return none };
-    if !old && !new {
+    let Some((rows, relation, returning)) = shape(top) else { return none };
+    if rows.all_present() {
         return none;
     }
     let mut out = Vec::with_capacity(count);
@@ -1132,23 +1146,33 @@ fn missing_rows(sql: &str, count: usize, width: &dyn Fn(&str) -> Option<usize>) 
         let Some(NodeEnum::ResTarget(rt)) = target.node.as_ref() else { return vec![true; count] };
         let Some(val) = rt.val.as_deref() else { return vec![true; count] };
         let star = match val.node.as_ref() {
-            Some(NodeEnum::ColumnRef(c)) if matches!(c.fields.last().and_then(|f| f.node.as_ref()), Some(NodeEnum::AStar(_))) => Some(c.fields.len()),
+            Some(NodeEnum::ColumnRef(c)) => match c.fields.split_last() {
+                Some((last, qualifier)) if matches!(last.node, Some(NodeEnum::AStar(_))) => Some(qualifier),
+                _ => None,
+            },
             _ => None,
         };
+        let missing = reads_missing(&rows, &relation, val);
         match star {
-            Some(fields) => {
-                let Some(n) = width(&relation) else { return vec![true; count] };
-                let missing = fields > 1 && reads_missing(val, old, new);
-                out.extend(std::iter::repeat(missing).take(n));
+            None => out.push(missing),
+            // `o.*`, the target's own `*`, and a `*` with nothing joined in are the target
+            // relation's columns; any other has a width the parse does not show.
+            Some(qualifier) => {
+                let qualifier = match qualifier {
+                    [] => Some(None),
+                    [one] => jsonshape::last_string(std::slice::from_ref(one)).map(Some),
+                    _ => None,
+                };
+                let known = qualifier.filter(|q| rows.star_of_target(q.as_deref())).and_then(|_| columns(&relation));
+                let Some(known) = known else { return vec![true; count] };
+                out.extend(std::iter::repeat(missing).take(known.len()));
             }
-            None => out.push(reads_missing(val, old, new)),
         }
     }
-    if out.len() == count {
-        out
-    } else {
-        vec![true; count]
+    if out.len() != count {
+        return vec![true; count];
     }
+    out.iter().zip(origins).map(|(missing, origin)| *missing && *origin).collect()
 }
 
 /// `ty` as the union of `values` when it is a string a CHECK keeps to them; the labels of an enum
@@ -1168,7 +1192,7 @@ pub fn with_values(ty: Type, values: Option<&[String]>) -> Type {
 /// proves nothing.
 fn check_values(text: &str, column: &str) -> Option<Vec<String>> {
     use pg_query::protobuf::node::Node as N;
-    let parsed = pg_query::parse(&format!("SELECT {text}")).ok()?;
+    let parsed = crate::stack::parse(&format!("SELECT {text}")).ok()?;
     let Some(N::SelectStmt(select)) = parsed.protobuf.stmts.first()?.stmt.as_deref()?.node.as_ref() else { return None };
     let Some(N::ResTarget(target)) = select.target_list.first()?.node.as_ref() else { return None };
     fn uncast(node: &pg_query::protobuf::Node) -> &pg_query::protobuf::Node {
@@ -1379,7 +1403,7 @@ mod tests {
                 None => s.target_list.len(),
             }
         }
-        let parsed = pg_query::parse(sql).expect("the probe parses");
+        let parsed = crate::stack::parse(sql).expect("the probe parses");
         match parsed.protobuf.stmts.first().and_then(|s| s.stmt.as_deref()).and_then(|n| n.node.as_ref()) {
             Some(pg_query::NodeEnum::SelectStmt(s)) => arm(s).max(1),
             _ => 1,
@@ -1486,19 +1510,154 @@ mod tests {
 
     #[test]
     fn returning_reads_a_row_the_statement_may_not_have() {
-        let width = |_: &str| Some(2);
-        assert_eq!(missing_rows("INSERT INTO users (id, name) VALUES ($1, $2) RETURNING old.name, new.name, name", 3, &width), vec![true, false, false]);
-        assert_eq!(missing_rows("DELETE FROM users WHERE id = $1 RETURNING old.name, new.name, new.*", 4, &width), vec![false, true, true, true]);
-        assert_eq!(missing_rows("UPDATE users SET name = $1 WHERE id = $2 RETURNING old.name, new.name", 2, &width), vec![false, false]);
-        assert_eq!(missing_rows("INSERT INTO users VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET name = excluded.name RETURNING old.*", 2, &width), vec![true, true]);
+        let columns = |relation: &str| (relation != "unknown").then(|| vec!["id".to_string(), "name".to_string()]);
+        // Every column traced to a table's column, which is what the answer is about.
+        let missing = |sql: &str, count: usize| missing_rows(sql, &vec![true; count], &columns);
+        assert_eq!(missing("INSERT INTO users (id, name) VALUES ($1, $2) RETURNING old.name, new.name, name", 3), vec![true, false, false]);
+        assert_eq!(missing("DELETE FROM users WHERE id = $1 RETURNING old.name, new.name, new.*", 4), vec![false, true, true, true]);
+        assert_eq!(missing("UPDATE users SET name = $1 WHERE id = $2 RETURNING old.name, new.name", 2), vec![false, false]);
+        assert_eq!(missing("INSERT INTO users VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET name = excluded.name RETURNING old.*", 2), vec![true, true]);
+        // By the names the clause gives the rows, which hide the default ones.
+        assert_eq!(missing("INSERT INTO users (id, name) VALUES ($1, $2) RETURNING WITH (OLD AS o, NEW AS n) o.name, n.name, o.*, n.*", 6), vec![true, false, true, true, false, false]);
+        assert_eq!(missing("DELETE FROM users WHERE id = $1 RETURNING WITH (NEW AS n) n.name, old.name, *", 4), vec![true, false, false, false]);
+        // A relation of the name is read first: the table `old`, the target under the alias `new`.
+        assert_eq!(missing("INSERT INTO old (id, name) VALUES ($1, $2) RETURNING old.name, new.name", 2), vec![false, false]);
+        assert_eq!(missing("DELETE FROM users AS new WHERE id = $1 RETURNING new.name, old.name", 2), vec![false, false]);
+        assert_eq!(missing("INSERT INTO old (id, name) VALUES ($1, $2) RETURNING WITH (OLD AS was) was.name, old.name", 2), vec![true, false]);
+        // A field of the whole row and a cast that changes nothing keep their provenance.
+        assert_eq!(missing("INSERT INTO users (id, name) VALUES ($1, $2) RETURNING (old).name, old.name::text, (new).name", 3), vec![true, true, false]);
+        // A bare name is a column before it is a row.
+        assert_eq!(missing("INSERT INTO users (id, name) VALUES ($1, $2) RETURNING WITH (OLD AS name) name, name.id", 2), vec![false, true]);
+        // An expression carries no provenance: the expression rules settle it.
+        assert_eq!(missing_rows("INSERT INTO users (id, name) VALUES ($1, $2) RETURNING old.name, old.name || '!', old.id IS NULL", &[true, false, false], &columns), vec![true, false, false]);
         // A MERGE that inserts has no old row for that action; one that never deletes always has a new one.
-        let merge = "MERGE INTO users u USING (SELECT 1 AS id) s ON u.id = s.id WHEN MATCHED THEN UPDATE SET name = 'x' WHEN NOT MATCHED THEN INSERT (id, name) VALUES (s.id, 'n') RETURNING old.name, new.name";
-        assert_eq!(missing_rows(merge, 2, &width), vec![true, false]);
+        let merge = "MERGE INTO users u USING (SELECT 1 AS id) s ON u.id = s.id WHEN MATCHED THEN UPDATE SET name = 'x' WHEN NOT MATCHED THEN INSERT (id, name) VALUES (s.id, 'n') RETURNING old.name, new.name, s.id";
+        assert_eq!(missing(merge, 3), vec![true, false, false]);
+        // One that acts where the source matches nothing returns rows with no source row.
+        let by_source = "MERGE INTO users u USING src s ON u.id = s.id WHEN MATCHED THEN UPDATE SET name = s.name WHEN NOT MATCHED BY SOURCE THEN UPDATE SET name = 'gone' RETURNING s.name, u.name, name, label, old.name";
+        assert_eq!(missing(by_source, 5), vec![true, false, false, true, false]);
         // A data-modifying WITH query that reads a missing row may feed any column.
-        assert_eq!(missing_rows("WITH i AS (INSERT INTO users VALUES ($1, 'n') RETURNING old.name AS n) SELECT n, 1 FROM i", 2, &width), vec![true, true]);
-        // A `*` over a relation of unknown width hides which column is which.
-        assert_eq!(missing_rows("INSERT INTO users VALUES ($1, $2) RETURNING new.*, old.name", 3, &|_| None), vec![true, true, true]);
-        assert_eq!(missing_rows("SELECT 1, 2", 2, &width), vec![false, false]);
+        assert_eq!(missing("WITH i AS (INSERT INTO users VALUES ($1, 'n') RETURNING old.name AS n) SELECT n, 1 FROM i", 2), vec![true, true]);
+        assert_eq!(missing("WITH i AS (INSERT INTO users VALUES ($1, 'n') RETURNING WITH (OLD AS o) o.name AS n) SELECT n, 1 FROM i", 2), vec![true, true]);
+        assert_eq!(missing("WITH i AS (INSERT INTO users VALUES ($1, 'n') RETURNING new.name AS n) SELECT n, 1 FROM i", 2), vec![false, false]);
+        // A `*` over a relation of unknown columns, or over more than the target, hides which column is which.
+        assert_eq!(missing("INSERT INTO unknown VALUES ($1, $2) RETURNING new.*, old.name", 3), vec![true, true, true]);
+        assert_eq!(missing("DELETE FROM users USING other WHERE other.id = users.id RETURNING *, new.name", 5), vec![true, true, true, true, true]);
+        assert_eq!(missing("SELECT 1, 2", 2), vec![false, false]);
+    }
+
+    /// A server with one table, `users (id int primary key, name text not null)`, that describes
+    /// every statement as `name` columns of it, one per name in `names`, and types `$1` and `$2`
+    /// as text and int.
+    fn replay_users(sql: &str, names: &[&str]) -> Analysis {
+        let mut answers: HashMap<String, Answer> = HashMap::new();
+        for _ in 0..64 {
+            let host = Host::new(&answers);
+            if let Some(analysis) = analyze(sql, Dialect::Postgres, &host) {
+                return analysis;
+            }
+            for need in host.needs() {
+                match need {
+                    crate::api::Need::Describe { id, .. } => {
+                        let columns = names.iter().map(|name| RawColumn { name: name.to_string(), oid: 25, table: 16400, attnum: 2 }).collect();
+                        answers.insert(id, Answer::Describe { describe: RawDescribe { params: vec![25, 23], columns } });
+                    }
+                    crate::api::Need::Query { id, sql, .. } => {
+                        let rows = match sql.as_str() {
+                            RELATION_COLUMNS_QUERY => vec![
+                                vec![json!(16400), json!("users"), json!(1), json!(true), Value::Null, json!("id"), json!(true)],
+                                vec![json!(16400), json!("users"), json!(2), json!(true), Value::Null, json!("name"), json!(true)],
+                            ],
+                            cardinality::UNIQUE_KEYS_QUERY => vec![vec![json!("users"), json!(["id"]), json!([null]), Value::Null]],
+                            cardinality::COLUMNS_QUERY => vec![vec![json!("users"), json!(["id", "name"]), json!([23, 25]), json!([true, true]), json!(false)]],
+                            _ => vec![],
+                        };
+                        answers.insert(id, Answer::Rows { rows });
+                    }
+                }
+            }
+        }
+        panic!("the replay did not converge");
+    }
+
+    #[test]
+    fn returning_with_names_for_the_old_and_the_new_row_is_typed_as_old_and_new_are() {
+        let nullable = |a: &Analysis| a.columns.iter().map(|c| c.nullable).collect::<Vec<_>>();
+        // PostgreSQL 18's clause parses, so the write by key is at most one row, and both rows of
+        // an UPDATE hold the table's NOT NULL.
+        let update = replay_users("UPDATE users SET name = :name WHERE id = :id RETURNING WITH (OLD AS o, NEW AS n) o.name AS old_name, n.name AS new_name", &["old_name", "new_name"]);
+        assert_eq!((update.kind.as_str(), update.cardinality.as_str(), update.cardinality_reason.as_deref()), ("update", "maybeOne", None));
+        assert!(update.diagnostics.is_empty(), "{:?}", update.diagnostics);
+        assert_eq!(nullable(&update), [false, false]);
+        assert_eq!(update.params.iter().map(|p| (p.name.as_str(), p.type_name.as_str())).collect::<Vec<_>>(), [("name", "text"), ("id", "int4")]);
+        assert_eq!(nullable(&replay_users("UPDATE users SET name = :name WHERE id = :id RETURNING old.name AS old_name, new.name AS new_name", &["old_name", "new_name"])), [false, false]);
+        // An INSERT has no old row and a DELETE no new one, by the clause's names as by the default ones.
+        let insert = replay_users("INSERT INTO users (name, id) VALUES (:name, :id) RETURNING WITH (OLD AS o, NEW AS n) o.name AS old_name, n.name AS new_name", &["old_name", "new_name"]);
+        assert_eq!((insert.cardinality.as_str(), nullable(&insert)), ("one", vec![true, false]));
+        let delete = replay_users("DELETE FROM users WHERE name = :name AND id = :id RETURNING WITH (NEW AS after) old.name AS old_name, after.name AS new_name, name", &["old_name", "new_name", "name"]);
+        assert_eq!((delete.cardinality.as_str(), nullable(&delete)), ("maybeOne", vec![false, true, false]));
+    }
+
+    #[test]
+    fn a_statement_at_the_depth_bound_is_analyzed_whole_and_one_past_it_falls_back_to_the_describe() {
+        // From a thread with a small stack, as a tokio worker or a Postgres backend may call: the
+        // parse, the walks of the expression rules, the row-count proof and the JSON shapes all run
+        // on the engine's own stack.
+        let small = |sql: String| std::thread::scope(|s| std::thread::Builder::new().stack_size(256 << 10).spawn_scoped(s, move || replay_users(&sql, &["x"])).unwrap().join().unwrap());
+        for &(shape, n) in crate::stack::BOUNDS {
+            // Keyed where the shape leaves the WHERE free, so the proof has something to prove
+            // (`replay_users` types `$1` as text and `$2` as int).
+            let sql = crate::stack::nested(shape, n);
+            let keyed = !sql.contains(" where ");
+            let at = small(if keyed { format!("{sql} where name = :name and id = :id") } else { sql });
+            // The key proves at most one row, but for `json_build_object`, which this replay's
+            // catalog does not hold.
+            let rows = if keyed && shape != "json" { "maybeOne" } else { "many" };
+            assert_eq!((at.kind.as_str(), at.cardinality.as_str()), ("select", rows), "{shape} at {n}: {:?}", at.cardinality_reason);
+            let past = small(crate::stack::nested(shape, n + 1));
+            assert_eq!((past.kind.as_str(), past.cardinality.as_str()), ("", "many"), "{shape} at {}", n + 1);
+            assert_eq!(past.cardinality_reason.as_deref(), Some("the statement did not parse locally"));
+            assert!(past.columns.iter().all(|c| c.nullable), "{shape} at {}", n + 1);
+            assert!(past.diagnostics.is_empty(), "{:?}", past.diagnostics);
+        }
+    }
+
+    #[test]
+    fn the_trust_query_says_whether_the_server_casts_a_jsonb_null() {
+        let read = |rows: Vec<Vec<Value>>| {
+            let mut answers: HashMap<String, Answer> = HashMap::new();
+            let host = Host::new(&answers);
+            assert!(trust(&host).is_none());
+            let needs = host.needs();
+            let [crate::api::Need::Query { id, sql, .. }] = needs.as_slice() else { panic!("one query, not {needs:?}") };
+            assert_eq!(sql, TRUST_QUERY);
+            answers.insert(id.clone(), Answer::Rows { rows });
+            trust(&Host::new(&answers)).unwrap()
+        };
+        // A server before 18 answers with one row more, a NULL beside the name: its cast of a
+        // JSON null raises an error, where 18 returns an SQL NULL.
+        let before = read(vec![vec![json!(false), json!("lower")], vec![json!(true), json!("int4")], vec![Value::Null, json!("jsonb casts raise")]]);
+        assert!(before.jsonb_casts_raise);
+        assert!(before.shadowed.contains("lower") && before.cast_targets.as_ref().unwrap().contains("int4"));
+        assert!(!before.shadowed.contains("jsonb casts raise") && !before.cast_targets.as_ref().unwrap().contains("jsonb casts raise"));
+        let later = read(vec![vec![json!(false), json!("lower")], vec![json!(true), json!("int4")]]);
+        assert!(!later.jsonb_casts_raise);
+        // A NULL beside any other name says nothing.
+        assert!(!read(vec![vec![Value::Null, json!("lower")]]).jsonb_casts_raise);
+    }
+
+    #[test]
+    fn a_position_the_parse_reports_is_an_offset_in_the_text_it_read() {
+        // libpg_query 18 leaves comments out of what it parses; a location is still an offset in
+        // the text with them, which is where a diagnostic is put.
+        let sql = "/* upsert */ INSERT INTO bar (id, name) -- the row\n VALUES ($1, $2) /* é */ ON CONFLICT (name) DO NOTHING";
+        let target = conflict_targets(sql).into_iter().next().expect("a target");
+        assert_eq!(&sql[target.start..target.start + 6], "(name)");
+        let compare = "SELECT 1 /* é */ FROM bar -- by name\n WHERE name = $1 AND /* id */ id > $2";
+        let at = |needle: &str| compare[..compare.find(needle).unwrap()].chars().count() + 1;
+        assert_eq!(analyze::params_at_position(compare, at("= $1")), [1]);
+        assert_eq!(analyze::params_at_position(compare, at("$2")), [2]);
+        assert_eq!(analyze::params_at_position(compare, at("> $2")), [2]);
     }
 
     #[test]

@@ -53,3 +53,7 @@ const pos1: { name: string } | null = null! as Awaited<ReturnType<typeof positio
 const pos2: Awaited<ReturnType<typeof positional.run>> = null! as { name: string } | null;
 const pos3: { 1: number; 2: string } = null! as Exclude<Parameters<typeof positional.run>[1], readonly unknown[]>;
 const pos4: Exclude<Parameters<typeof positional.run>[1], readonly unknown[]> = null! as { 1: number; 2: string };
+// A backslash escapes the quote after it and `#` starts a comment, so `:not` and `:nobody` are text.
+import escaped, * as esc from "./escaped.sql";
+const esc1: { id: number; said: string; path: string } | null = await escaped.run(conn, { id: 1 });
+const esc2: readonly ["id"] = esc.params;

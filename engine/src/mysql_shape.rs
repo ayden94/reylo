@@ -2,9 +2,16 @@
 //! the constructor's value expressions are selected as real columns of a synthesized statement
 //! over the constructor's own `FROM`, and the server's prepare types them, with the join's own
 //! nullability. Recognised: `json_object(k, v, …)`, `json_arrayagg(x)`, `coalesce` / `ifnull`
-//! guarding either with a non-null constant (`json_array()`, `'[]'`), `cast(… as json)`, and a
-//! scalar subquery around any of them. A probe keeps the statement's `?` where they are: a
-//! prepare binds nothing, and the server types a `?` from its context there too.
+//! guarding a `json_arrayagg` with an empty array (`json_array()`, `cast('[]' as json)`),
+//! `cast(… as json)`, and a scalar subquery around any of them. A probe keeps the statement's `?`
+//! where they are: a prepare binds nothing, and the server types a `?` from its context there too.
+//!
+//! The server types a truth value (`a = b`, `x is null`) as an integer and writes it into a JSON
+//! document as `true` or `false`, but only where the document's function reads the comparison
+//! itself. Where it reads a copy (a column of the temporary table an aggregate, a window function
+//! or SQL_BUFFER_RESULT is computed through, or a subquery's result) it writes 1 or 0; measured on
+//! 8.4, `json_object('t', id = 1, 'm', max(n))` holds `"t": 1`. So a value is typed `bool` only
+//! where the comparison is certain to be read itself ([`Reads`]), and as either where it is not.
 //!
 //! The same probes repair one pessimism of the server's own flags (measured on 8.4): a correlated
 //! ungrouped aggregate subquery in the select list marks every outer column and the subquery
@@ -34,6 +41,9 @@ pub struct Plan {
     /// The leaves (probe, index) whose expression is a truth value: MySQL types a comparison as
     /// an integer, but writes it into a JSON document as `true` or `false`.
     pub booleans: Vec<(usize, usize)>,
+    /// The leaves the document may hold as `true` or `false` or as the server's integer: a truth
+    /// value the document's function may read a copy of, and an expression not known to be a number.
+    pub either: Vec<(usize, usize)>,
     /// The tables whose columns the plan needed and `columns` did not have: with them it may
     /// read a subquery's aggregate over a bare column as the subquery's own. The probes do not
     /// depend on the answer.
@@ -44,7 +54,7 @@ pub struct Plan {
 pub fn plan(q: &Query, columns: &Columns) -> Plan {
     let SetExpr::Select(select) = q.body.as_ref() else { return Plan::default() };
     let with = q.with.as_ref().map(|w| format!("{w} ")).unwrap_or_default();
-    let mut b = Builder { stack: vec![(0, select.from.clone())], columns, ctes: with_names(q), wanted: Vec::new(), next_ctx: 0, drafts: Vec::new(), overflowed: false, booleans: Vec::new() };
+    let mut b = Builder { stack: vec![(0, select.from.clone())], columns, ctes: with_names(q), wanted: Vec::new(), next_ctx: 0, drafts: Vec::new(), overflowed: false, booleans: Vec::new(), either: Vec::new(), reads: Reads::Itself };
     let mut columns = Vec::new();
     for item in &select.projection {
         // The server names an unaliased expression by its text, which no build reproduces
@@ -66,7 +76,7 @@ pub fn plan(q: &Query, columns: &Columns) -> Plan {
     let probes = b.drafts.iter().map(|d| Probe { sql: text(&with, &d.items, &d.from), wider: d.wider.as_ref().map(|f| text(&with, &d.items, f)) }).collect();
     b.wanted.sort_unstable();
     b.wanted.dedup();
-    Plan { columns, probes, booleans: b.booleans, wanted: b.wanted }
+    Plan { columns, probes, booleans: b.booleans, either: b.either, wanted: b.wanted }
 }
 
 /// The names of a query's own WITH queries, in lower case.
@@ -173,6 +183,37 @@ struct Builder<'a> {
     drafts: Vec<Draft>,
     overflowed: bool,
     booleans: Vec<(usize, usize)>,
+    either: Vec<(usize, usize)>,
+    /// How the function that writes the value now walked reads a truth value.
+    reads: Reads,
+}
+
+/// How a JSON function reads the value it writes, which decides whether a truth value is
+/// written as `true` or `false` (the function reads the comparison) or as 1 or 0 (it reads a copy).
+#[derive(Clone, Copy, PartialEq)]
+enum Reads {
+    /// The comparison itself.
+    Itself,
+    /// A copy of each argument that holds no aggregate and no window function, which is how the
+    /// server evaluates a call that has one among its arguments: a comparison over an aggregate
+    /// is read itself, any other as a copy. A literal `true` is copied nowhere.
+    Split,
+    /// A copy, in some plans: an aggregate's own argument, which is a column of a temporary
+    /// table where the rows are materialized before they are aggregated.
+    Copy,
+    /// A subquery's result, where even a literal `true` is 1.
+    Result,
+}
+
+/// What a value of an integer type is in a JSON document.
+#[derive(PartialEq)]
+enum Written {
+    /// `true` or `false`, where the function that writes it reads the expression itself.
+    Truth,
+    Number,
+    /// Not known: a function the engine does not list may be one MySQL holds for a truth value
+    /// (`isnull(x)`, `strcmp(a, b)`, `json_contains(…)`, `x > all (…)`).
+    Either,
 }
 
 struct Draft {
@@ -258,10 +299,16 @@ impl Builder<'_> {
                         if args.len() % 2 != 0 {
                             return Shape::Unknown;
                         }
-                        let mut fields = Vec::with_capacity(args.len() / 2);
+                        let reads = if self.splits(e) { Reads::Split } else { Reads::Itself };
+                        let mut fields: Vec<(String, Shape)> = Vec::with_capacity(args.len() / 2);
                         for pair in args.chunks(2) {
                             let Some(key) = string_const(pair[0]) else { return Shape::Unknown };
-                            fields.push((key, self.walk(pair[1])));
+                            let value = self.walk_as(pair[1], reads);
+                            // A key given twice holds the last value given for it.
+                            match fields.iter_mut().find(|(k, _)| *k == key) {
+                                Some(field) => field.1 = value,
+                                None => fields.push((key, value)),
+                            }
                         }
                         Shape::Object { fields, non_null: true }
                     }
@@ -270,21 +317,30 @@ impl Builder<'_> {
                         if args.len() != 1 {
                             return Shape::Unknown;
                         }
-                        Shape::Array { items: Box::new(self.walk(args[0])), non_null: false }
+                        Shape::Array { items: Box::new(self.walk_as(args[0], Reads::Copy)), non_null: false }
                     }
+                    // The value is the first argument that is not NULL. A constructor that is
+                    // never NULL is the value whatever follows it; one that may be NULL keeps its
+                    // shape only where every other argument has it too, which the engine knows of
+                    // an empty array alone: `json_array(null)` has an item that is null, a `?` is
+                    // whatever is bound, and `cast('x' as date)` is NULL.
                     "coalesce" | "ifnull" => {
-                        let Some(first) = args.first() else { return Shape::Unknown };
-                        let guarded = args[1..].iter().any(|a| is_non_null_const(a));
-                        match (self.walk(first), guarded) {
-                            (Shape::Object { fields, .. }, true) => Shape::Object { fields, non_null: true },
-                            (Shape::Array { items, .. }, true) => Shape::Array { items, non_null: true },
-                            (shape, _) => shape,
+                        let Some(first) = args.first().filter(|first| is_constructor(first)) else { return self.leaf(e) };
+                        match self.walk(first) {
+                            Shape::Array { items, non_null: false } if args.len() > 1 && args[1..].iter().all(|a| is_empty_array(a)) => Shape::Array { items, non_null: true },
+                            shape @ (Shape::Object { non_null: true, .. } | Shape::Array { non_null: true, .. }) => shape,
+                            shape if args.len() == 1 => shape,
+                            _ => Shape::Unknown,
                         }
                     }
                     _ => self.leaf(e),
                 }
             }
-            Expr::Cast { expr, data_type: DataType::JSON, .. } => self.walk(expr),
+            // A cast to JSON leaves a constructor's document as it is, writes a truth value it
+            // reads itself as `true` or `false`, and parses a string: that one is whatever the
+            // server types the cast as.
+            Expr::Cast { expr, data_type: DataType::JSON, .. } if is_constructor(expr) => self.walk(expr),
+            Expr::Cast { expr, data_type: DataType::JSON, .. } if written(expr) == Written::Truth => self.walk_as(expr, Reads::Itself),
             Expr::Subquery(q) => {
                 let SetExpr::Select(select) = q.body.as_ref() else { return Shape::Unknown };
                 let Some(inner) = single_projection(q) else { return Shape::Unknown };
@@ -292,7 +348,7 @@ impl Builder<'_> {
                 self.ctes.extend(with_names(q));
                 self.next_ctx += 1;
                 self.stack.push((self.next_ctx, select.from.clone()));
-                let shape = self.walk(inner);
+                let shape = self.walk_as(inner, Reads::Result);
                 self.stack.pop();
                 // A scalar subquery is one row only when it is an ungrouped aggregate of its own
                 // (`owns`); anything else can match nothing and hand back NULL, and for a plain
@@ -314,6 +370,56 @@ impl Builder<'_> {
         }
     }
 
+    /// Whether a call may have an aggregate or a window function of its own query among its
+    /// arguments, at any depth. Every aggregate its text names counts, but for those of a scalar
+    /// subquery that are all that subquery's own.
+    fn splits(&mut self, e: &Expr) -> bool {
+        let (mut calls, window) = aggregates_in(&e.to_string());
+        if window {
+            return true;
+        }
+        let mut inner = Vec::new();
+        subqueries(e, &mut inner);
+        for q in inner {
+            if self.keeps_its_aggregates(q) {
+                calls = calls.saturating_sub(aggregates_in(&q.to_string()).0);
+            }
+        }
+        calls > 0
+    }
+
+    /// Whether every aggregate a scalar subquery's text names is its own for certain
+    /// ([`Builder::owns`]) or, likewise, a subquery's inside its one select item.
+    fn keeps_its_aggregates(&mut self, q: &Query) -> bool {
+        let (mut calls, window) = aggregates_in(&q.to_string());
+        let SetExpr::Select(select) = q.body.as_ref() else { return calls == 0 && !window };
+        let Some(item) = single_projection(q) else { return calls == 0 && !window };
+        let outer_ctes = self.ctes.len();
+        self.ctes.extend(with_names(q));
+        let mut own = 0;
+        crate::mysql::aggregate_where(item, &mut |f| {
+            own += usize::from(self.owns(f, &select.from));
+            false
+        });
+        let mut inner = Vec::new();
+        subqueries(item, &mut inner);
+        for q in inner {
+            if self.keeps_its_aggregates(q) {
+                calls = calls.saturating_sub(aggregates_in(&q.to_string()).0);
+            }
+        }
+        self.ctes.truncate(outer_ctes);
+        !window && calls == own
+    }
+
+    /// Walk a value that the function writing it reads as `reads`.
+    fn walk_as(&mut self, e: &Expr, reads: Reads) -> Shape {
+        let outer = std::mem::replace(&mut self.reads, reads);
+        let shape = self.walk(e);
+        self.reads = outer;
+        shape
+    }
+
     /// One value expression, as a column of the probe for the constructor's own `FROM` context.
     fn leaf(&mut self, e: &Expr) -> Shape {
         let ctx = self.stack[self.stack.len() - 1].0;
@@ -326,8 +432,16 @@ impl Builder<'_> {
         };
         let index = self.drafts[probe].items.len();
         self.drafts[probe].items.push(e.clone());
-        if is_truth_value(e) {
-            self.booleans.push((probe, index));
+        let itself = match self.reads {
+            Reads::Itself => true,
+            Reads::Split => crate::mysql::has_aggregate(e) || is_boolean_literal(e),
+            Reads::Copy => is_boolean_literal(e),
+            Reads::Result => false,
+        };
+        match written(e) {
+            Written::Truth if itself => self.booleans.push((probe, index)),
+            Written::Number => {}
+            _ => self.either.push((probe, index)),
         }
         Shape::Column { probe, index }
     }
@@ -413,27 +527,81 @@ fn string_const(e: &Expr) -> Option<String> {
     }
 }
 
-/// A constant that is never NULL, so a `coalesce` over it is never NULL: a literal, or an empty
-/// `json_array()` / `json_object()`.
-/// Whether an expression is a truth value, which a JSON constructor writes as `true` or `false`.
-fn is_truth_value(e: &Expr) -> bool {
+/// What an expression the server types as an integer is in a JSON document (measured on 8.4).
+/// A parenthesis and a unary plus are not there for the server.
+fn written(e: &Expr) -> Written {
     use ast::{BinaryOperator as B, UnaryOperator as U};
+    // What the server computes as a number whatever its arguments are: `coalesce(a = b, false)`
+    // and `max(a = b)` are 1 or 0.
+    const NUMBERS: &[&str] = &[
+        "count", "sum", "min", "max", "bit_and", "bit_or", "bit_xor", "coalesce", "ifnull", "if", "nullif", "abs", "length", "char_length", "character_length", "floor",
+        "ceil", "ceiling", "round", "mod", "json_length", "json_depth", "year", "month", "day", "dayofmonth", "hour", "minute", "second", "datediff", "timestampdiff",
+        "unix_timestamp", "last_insert_id", "row_number", "rank", "dense_rank",
+    ];
     match e {
-        Expr::Nested(inner) => is_truth_value(inner),
+        Expr::Nested(inner) | Expr::UnaryOp { op: U::Plus, expr: inner } => written(inner),
+        Expr::Value(v) => match v.value {
+            Value::Boolean(_) => Written::Truth,
+            Value::Number(..) => Written::Number,
+            _ => Written::Either,
+        },
+        Expr::BinaryOp { op, .. } => match op {
+            B::Eq | B::NotEq | B::Lt | B::LtEq | B::Gt | B::GtEq | B::Spaceship | B::And | B::Or | B::Xor => Written::Truth,
+            B::Plus | B::Minus | B::Multiply | B::Divide | B::Modulo | B::MyIntegerDivide => Written::Number,
+            _ => Written::Either,
+        },
+        Expr::UnaryOp { op: U::Not, .. } => Written::Truth,
+        Expr::UnaryOp { op: U::Minus, .. } => Written::Number,
+        Expr::IsNull(_) | Expr::IsNotNull(_) | Expr::IsTrue(_) | Expr::IsNotTrue(_) | Expr::IsFalse(_) | Expr::IsNotFalse(_) | Expr::IsUnknown(_) | Expr::IsNotUnknown(_) => Written::Truth,
+        Expr::InList { .. } | Expr::InSubquery { .. } | Expr::Between { .. } | Expr::Like { .. } | Expr::RLike { .. } | Expr::Exists { .. } => Written::Truth,
+        // A column is a number, whatever the expression a view or a derived table gives it.
+        Expr::Identifier(_) | Expr::CompoundIdentifier(_) | Expr::Case { .. } | Expr::Cast { .. } => Written::Number,
+        Expr::Function(f) if NUMBERS.contains(&name(f).as_str()) => Written::Number,
+        _ => Written::Either,
+    }
+}
+
+fn is_boolean_literal(e: &Expr) -> bool {
+    match e {
+        Expr::Nested(inner) => is_boolean_literal(inner),
         Expr::Value(v) => matches!(v.value, Value::Boolean(_)),
-        Expr::BinaryOp { op, .. } => matches!(op, B::Eq | B::NotEq | B::Lt | B::LtEq | B::Gt | B::GtEq | B::Spaceship | B::And | B::Or | B::Xor),
-        Expr::UnaryOp { op: U::Not, .. } => true,
-        Expr::IsNull(_) | Expr::IsNotNull(_) | Expr::IsTrue(_) | Expr::IsNotTrue(_) | Expr::IsFalse(_) | Expr::IsNotFalse(_) | Expr::IsUnknown(_) | Expr::IsNotUnknown(_) => true,
-        Expr::InList { .. } | Expr::InSubquery { .. } | Expr::Between { .. } | Expr::Like { .. } | Expr::RLike { .. } | Expr::Exists { .. } => true,
         _ => false,
     }
 }
 
-fn is_non_null_const(e: &Expr) -> bool {
+/// How many aggregate calls a text has, a name inside a string among them, and whether it may
+/// have a window function.
+fn aggregates_in(text: &str) -> (usize, bool) {
+    let text = text.to_ascii_lowercase();
+    let calls = |name: &&str| text.match_indices(&format!("{name}(")).filter(|(at, _)| !text[..*at].ends_with(|c: char| c.is_ascii_alphanumeric() || c == '_')).count();
+    (crate::mysql::AGGREGATES.iter().map(calls).sum(), text.contains(" over ") || text.contains(" over("))
+}
+
+/// The scalar subqueries among an expression's parts, as far as the walk reads; it does not
+/// look inside one.
+fn subqueries<'e>(e: &'e Expr, out: &mut Vec<&'e Query>) {
     match e {
-        Expr::Value(v) => !matches!(v.value, Value::Null | Value::Placeholder(_)),
-        Expr::Nested(inner) | Expr::Cast { expr: inner, .. } => is_non_null_const(inner),
-        Expr::Function(f) => matches!(name(f).as_str(), "json_array" | "json_object"),
+        Expr::Subquery(q) => out.push(q),
+        Expr::Nested(inner) | Expr::UnaryOp { expr: inner, .. } | Expr::Cast { expr: inner, .. } | Expr::IsNull(inner) | Expr::IsNotNull(inner) => subqueries(inner, out),
+        Expr::BinaryOp { left, right, .. } => {
+            subqueries(left, out);
+            subqueries(right, out);
+        }
+        Expr::Function(f) => {
+            for arg in args(f).unwrap_or_default() {
+                subqueries(arg, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// An array that is empty and never NULL: `json_array()`, or the text `[]` cast to JSON.
+fn is_empty_array(e: &Expr) -> bool {
+    match e {
+        Expr::Nested(inner) => is_empty_array(inner),
+        Expr::Function(f) => name(f) == "json_array" && args(f).is_some_and(|a| a.is_empty()) && f.over.is_none(),
+        Expr::Cast { expr, data_type: DataType::JSON, .. } => matches!(expr.as_ref(), Expr::Value(v) if matches!(&v.value, Value::SingleQuotedString(s) if s.split_whitespace().collect::<String>() == "[]")),
         _ => false,
     }
 }
@@ -471,6 +639,60 @@ mod tests {
         let plan = plan(&q, &Columns::new());
         assert_eq!(plan.probes[0].sql, "SELECT true, u.id > 0, u.id IN (1, 2), NOT (u.id = 1), u.id, u.name FROM users u");
         assert_eq!(plan.booleans, vec![(0, 0), (0, 1), (0, 2), (0, 3)]);
+    }
+
+    #[test]
+    fn a_truth_value_the_function_may_read_a_copy_of_is_either() {
+        let marks = |sql: &str| {
+            let plan = plan(&query(sql), &Columns::new());
+            (plan.booleans, plan.either)
+        };
+        // Beside an aggregate each argument without one is copied, a literal aside; an expression
+        // the engine does not know for a number may be a truth value anywhere.
+        assert_eq!(marks("select json_object('t', u.id = 1, 'm', max(u.n), 'c', max(u.id) = 1, 'l', true, 'x', isnull(u.n), 'n', u.n) as o from users u group by u.id"), (vec![(0, 2), (0, 3)], vec![(0, 0), (0, 4)]));
+        assert_eq!(marks("select json_object('t', u.id = 1, 'w', row_number() over ()) as o from users u"), (vec![], vec![(0, 0)]));
+        // An aggregate's own argument is a copy in some plans; a document inside it reads its own.
+        assert_eq!(marks("select json_arrayagg(u.id = 1) as o from users u"), (vec![], vec![(0, 0)]));
+        assert_eq!(marks("select json_arrayagg(true) as o from users u"), (vec![(0, 0)], vec![]));
+        assert_eq!(marks("select json_arrayagg(json_object('t', u.id = 1)) as o from users u"), (vec![(0, 0)], vec![]));
+        assert_eq!(marks("select json_arrayagg(cast(u.id = 1 as json)) as o from users u"), (vec![(0, 0)], vec![]));
+        assert_eq!(marks("select json_object('o', json_object('t', u.id = 1), 'm', max(u.n)) as o from users u"), (vec![(0, 0)], vec![]));
+        // A subquery's result is a copy, a literal too.
+        assert_eq!(marks("select json_object('t', (select p.id = 1 from posts p limit 1), 'l', (select true)) as o from users u"), (vec![], vec![(0, 0), (1, 0)]));
+        // A subquery's own aggregates split nothing outside it; one that may be the outer query's does.
+        let nested = |inner: &str| format!("select json_object('t', u.id = 1, 'ps', (select coalesce(json_arrayagg(json_object('t', p.id = 1, 'cs', (select json_arrayagg({inner}) from comments c where c.post_id = p.id))), json_array()) from posts p where p.user_id = u.id)) as o from users u");
+        assert_eq!(marks(&nested("c.id")), (vec![(0, 0), (1, 0)], vec![]));
+        assert_eq!(marks(&nested("u.id")), (vec![], vec![(0, 0), (1, 0)]));
+        assert_eq!(marks("select json_object('t', u.id = 1, 'n', (select 1 from posts p where p.id = max(u.id))) as o from users u"), (vec![], vec![(0, 0)]));
+    }
+
+    #[test]
+    fn a_guard_keeps_the_shape_it_has_itself() {
+        let shape = |item: &str| plan(&query(&format!("select {item} as o from users u")), &Columns::new()).columns.pop().map(|(_, shape)| shape);
+        let list = |non_null: bool| Some(Shape::Array { items: Box::new(Shape::Column { probe: 0, index: 0 }), non_null });
+        assert_eq!(shape("json_arrayagg(u.id)"), list(false));
+        for guard in ["json_array()", "cast('[]' as json)", "cast(' [ ] ' as json)", "json_array(), (json_array())"] {
+            assert_eq!(shape(&format!("coalesce(json_arrayagg(u.id), {guard})")), list(true), "{guard}");
+        }
+        assert_eq!(shape("ifnull(json_arrayagg(u.id), json_array())"), list(true));
+        // Anything else may be the value, or NULL.
+        for guard in ["json_array(null)", "json_array(1)", "json_object()", "'[]'", "?", "cast('null' as json)", "cast('x' as date)", "null, json_array()", "app.json_array()"] {
+            assert_eq!(shape(&format!("coalesce(json_arrayagg(u.id), {guard})")), None, "{guard}");
+        }
+        assert_eq!(shape("coalesce((select json_object('id', p.id) from posts p limit 1), json_object())"), None);
+        // A constructor that is never NULL is the value whatever follows it.
+        assert!(matches!(shape("coalesce(json_object('id', u.id), ?)"), Some(Shape::Object { non_null: true, .. })));
+        // A guard over anything else is one value, of the type the server gives the whole call.
+        let plan = plan(&query("select json_object('n', coalesce(u.n, 'none'), 'j', cast(u.name as json), 't', cast(u.id = 1 as json)) as o from users u"), &Columns::new());
+        assert_eq!(plan.probes[0].sql, "SELECT coalesce(u.n, 'none'), CAST(u.name AS JSON), u.id = 1 FROM users u");
+        assert_eq!(plan.booleans, vec![(0, 2)]);
+    }
+
+    #[test]
+    fn a_key_given_twice_holds_its_last_value() {
+        let plan = plan(&query("select json_object('id', u.id, 'name', u.name, 'id', u.email) as o from users u"), &Columns::new());
+        let fields = vec![("id".to_string(), Shape::Column { probe: 0, index: 2 }), ("name".to_string(), Shape::Column { probe: 0, index: 1 })];
+        assert_eq!(plan.columns, vec![("o".to_string(), Shape::Object { fields, non_null: true })]);
     }
 
     #[test]

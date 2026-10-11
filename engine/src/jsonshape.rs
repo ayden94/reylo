@@ -24,6 +24,7 @@ use crate::dialect::Dialect;
 use crate::infer::Trust;
 use crate::levels::{Columns, Level, Withs};
 use crate::pgtypes::{oid, TypeRegistry};
+use crate::returning::Rows;
 use crate::types::{DescribedColumn, Field, Type};
 use pg_query::protobuf::{self, node::Node as NodeEnum, AStar, ColumnRef, Node, ParseResult, RawStmt, ResTarget, SelectStmt};
 use serde_json::Value;
@@ -111,6 +112,10 @@ pub struct Resolved {
 /// Read one rewritten statement's JSON constructors. Nothing runs against the database here;
 /// the probes come back as text for the build to describe.
 pub fn plan(sql: &str, dialect: Dialect, trust: &Trust, columns: &Columns) -> Plan {
+    crate::stack::run(|| plan_here(sql, dialect, trust, columns))
+}
+
+fn plan_here(sql: &str, dialect: Dialect, trust: &Trust, columns: &Columns) -> Plan {
     plan_with(sql, dialect, trust, columns, false)
 }
 
@@ -118,17 +123,25 @@ pub fn plan(sql: &str, dialect: Dialect, trust: &Trust, columns: &Columns) -> Pl
 /// aggregate may be the outer query's ([`crate::levels`]), and for `to_json`, `to_jsonb` and
 /// `row_to_json`, whose bare argument is a whole row only where it is no column.
 pub fn needs_columns(sql: &str) -> bool {
+    crate::stack::run(|| needs_columns_here(sql))
+}
+
+fn needs_columns_here(sql: &str) -> bool {
     sql.to_ascii_lowercase().contains("to_json") || crate::levels::needed(sql)
 }
 
 /// Every probe [`plan`] may ask for, whatever the trust check and the relations' columns turn out
 /// to say: what a host can describe ahead of them, in its first round.
 pub fn probes_ahead(sql: &str) -> Vec<Probe> {
+    crate::stack::run(|| probes_ahead_here(sql))
+}
+
+fn probes_ahead_here(sql: &str) -> Vec<Probe> {
     plan_with(sql, Dialect::Postgres, &Trust::default(), &Columns::default(), true).probes
 }
 
 fn plan_with(sql: &str, dialect: Dialect, trust: &Trust, columns: &Columns, ahead: bool) -> Plan {
-    let Ok(parsed) = pg_query::parse(sql) else { return Plan::default() };
+    let Ok(parsed) = crate::stack::parse(sql) else { return Plan::default() };
     let version = parsed.protobuf.version;
     let Some(top) = parsed.protobuf.stmts.first().and_then(|s| s.stmt.as_deref()).and_then(|n| n.node.as_ref()) else {
         return Plan::default();
@@ -140,7 +153,7 @@ fn plan_with(sql: &str, dialect: Dialect, trust: &Trust, columns: &Columns, ahea
         _ => None,
     };
     let withs = vec![Withs::default().with(with.as_ref(), columns)];
-    let mut builder = Builder { stack: vec![(0, from, filter)], dialect, trust, columns, withs, ahead, next_ctx: 0, drafts: Vec::new(), overflowed: false };
+    let mut builder = Builder { stack: vec![(0, from, filter)], dialect, trust, columns, withs, rows: Rows::of(top), ahead, next_ctx: 0, drafts: Vec::new(), overflowed: false };
     let mut columns: Vec<(String, Shape)> = Vec::new();
     for target in &targets {
         let Some(NodeEnum::ResTarget(rt)) = target.node.as_ref() else { continue };
@@ -223,6 +236,9 @@ struct Builder<'a> {
     /// a column ([`crate::levels`]).
     columns: &'a Columns,
     withs: Vec<Withs>,
+    /// The old and the new row a RETURNING list can name where the builder stands
+    /// ([`crate::returning`]); none in a SELECT.
+    rows: Option<Rows>,
     /// Planning ahead of the columns: every probe they could allow is drafted.
     ahead: bool,
     next_ctx: usize,
@@ -293,7 +309,13 @@ impl Builder<'_> {
                     // that has one of that name: it is the item's whole row only when no FROM in
                     // scope has such a column, for certain.
                     match f.args.first().and_then(bare_alias) {
-                        Some(alias) if f.args.len() == 1 && self.no_column(&alias) => self.row(&alias),
+                        // The old or the new row of a RETURNING is the target relation's row, or
+                        // NULL where the statement has no such row.
+                        Some(alias) if f.args.len() == 1 && self.no_column(&alias) => match self.rows.as_ref().and_then(|r| r.whole(&alias)).map(|(target, missing)| (target.to_string(), missing)) {
+                            Some((target, true)) => force_nullable(self.row(&target)),
+                            Some((target, false)) => self.row(&target),
+                            None => self.row(&alias),
+                        },
                         _ => Shape::Unknown,
                     }
                 } else {
@@ -324,7 +346,10 @@ impl Builder<'_> {
                 self.next_ctx += 1;
                 self.stack.push((self.next_ctx, select.from_clause.clone(), None));
                 self.withs.push(withs);
+                let rows = self.rows.take();
+                self.rows = rows.as_ref().map(|r| r.under(&select.from_clause));
                 let shape = self.walk(&inner);
+                self.rows = rows;
                 self.withs.pop();
                 self.stack.pop();
                 // A scalar subquery is one row only when it is an ungrouped aggregate of its own
@@ -349,6 +374,13 @@ impl Builder<'_> {
         if contains_param(expr) {
             return Shape::Unknown;
         }
+        // A RETURNING's old and new rows are no relation a probe can select from: the expression
+        // reads the target relation's columns in their place, and is NULL where it reads a row
+        // the statement may not have.
+        let (expr, missing) = match &self.rows {
+            Some(rows) => rows.rewrite(expr, &|name| self.no_column(name)),
+            None => (expr.clone(), false),
+        };
         let ctx = self.stack[self.stack.len() - 1].0;
         let probe = match self.drafts.iter().position(|d| d.ctx == ctx && !d.row) {
             Some(i) => i,
@@ -358,8 +390,13 @@ impl Builder<'_> {
             },
         };
         let index = self.drafts[probe].items.len();
-        self.drafts[probe].items.push(expr.clone());
-        Shape::Column { probe, index }
+        self.drafts[probe].items.push(expr);
+        let shape = Shape::Column { probe, index };
+        if missing {
+            Shape::Nullable(Box::new(shape))
+        } else {
+            shape
+        }
     }
 
     /// Whether no FROM in scope shows a column of this name, for certain.
@@ -410,16 +447,28 @@ pub fn top_context(top: &NodeEnum) -> Option<(Vec<Node>, Vec<Node>, Option<proto
             Some((s.target_list.clone(), s.from_clause.clone(), s.with_clause.clone()))
         }
         NodeEnum::InsertStmt(s) => {
-            Some((s.returning_list.clone(), relation_from(s.relation.as_ref(), &[]), s.with_clause.clone()))
+            Some((returning(&s.returning_clause), relation_from(s.relation.as_ref(), &[]), s.with_clause.clone()))
         }
         NodeEnum::UpdateStmt(s) => {
-            Some((s.returning_list.clone(), relation_from(s.relation.as_ref(), &s.from_clause), s.with_clause.clone()))
+            Some((returning(&s.returning_clause), relation_from(s.relation.as_ref(), &s.from_clause), s.with_clause.clone()))
         }
         NodeEnum::DeleteStmt(s) => {
-            Some((s.returning_list.clone(), relation_from(s.relation.as_ref(), &s.using_clause), s.with_clause.clone()))
+            Some((returning(&s.returning_clause), relation_from(s.relation.as_ref(), &s.using_clause), s.with_clause.clone()))
+        }
+        // A MERGE's RETURNING reads the target and the source, and the source is no row at all
+        // where the MERGE acts on a target row the source does not match.
+        NodeEnum::MergeStmt(s) => {
+            let source: Vec<Node> = s.source_relation.as_deref().cloned().into_iter().collect();
+            Some((returning(&s.returning_clause), Rows::of(top)?.from(s.relation.as_ref()?, &source), s.with_clause.clone()))
         }
         _ => None,
     }
+}
+
+/// A RETURNING clause's expressions: PostgreSQL 18 holds them beside the clause's `WITH (OLD AS …,
+/// NEW AS …)` options, where earlier parsers had the bare list.
+pub(crate) fn returning(clause: &Option<protobuf::ReturningClause>) -> Vec<Node> {
+    clause.as_ref().map(|c| c.exprs.clone()).unwrap_or_default()
 }
 
 /// A DML statement's `RETURNING` reads the target relation plus whatever it joined in.
@@ -519,7 +568,7 @@ pub(crate) fn select_text(version: i32, items: &[Node], from: &[Node], filter: O
             stmt_len: 0,
         }],
     };
-    let text = pg_query::deparse(&result).ok()?;
+    let text = crate::stack::deparse(&result).ok()?;
     // A probe binds nothing, so a placeholder in its condition is NULL there: a test that is
     // strict in a column stays strict (`u.id = NULL`), which is all the probe reads of it, and a
     // condition the server cannot type proves nothing, the probe failing to describe.
@@ -940,6 +989,38 @@ mod tests {
     fn returning_probes_the_written_relation() {
         let p = shapes("INSERT INTO comments (body) VALUES ('x') RETURNING jsonb_build_object('id', id) AS created");
         assert_eq!(p.probes[0].sql, "SELECT id AS a0 FROM comments");
+    }
+
+    #[test]
+    fn returning_reads_the_old_and_the_new_row_as_the_written_relations() {
+        let fields = |p: &Plan| match &p.columns[0].1 {
+            Shape::Object { fields, non_null: true } => fields.iter().map(|(_, shape)| shape.clone()).collect::<Vec<_>>(),
+            other => panic!("not an object: {other:?}"),
+        };
+        let nullable = |shape: Shape| Shape::Nullable(Box::new(shape));
+        // PostgreSQL 18: an UPDATE has both rows, and a probe reads each as the written relation's.
+        let u = shapes("UPDATE users SET name = 'x' RETURNING WITH (OLD AS o, NEW AS n) jsonb_build_object('was', o.name, 'is', upper(n.name), 'row', to_jsonb(o)) AS change");
+        assert_eq!(u.probes.iter().map(|p| p.sql.as_str()).collect::<Vec<_>>(), ["SELECT users.name AS a0, upper(users.name) AS a1 FROM users", "SELECT users.* FROM users"]);
+        assert_eq!(fields(&u), [Shape::Column { probe: 0, index: 0 }, Shape::Column { probe: 0, index: 1 }, Shape::Row { probe: 1 }]);
+        // An INSERT has no old row: what reads it is NULL, whatever the relation's columns say.
+        let i = shapes("INSERT INTO users (name) VALUES ('x') RETURNING jsonb_build_object('was', old.name, 'is', new.name, 'row', to_jsonb(old), 'up', upper(old.name)) AS change");
+        assert_eq!(i.probes[0].sql, "SELECT users.name AS a0, users.name AS a1, upper(users.name) AS a2 FROM users");
+        assert_eq!(fields(&i), [nullable(Shape::Column { probe: 0, index: 0 }), Shape::Column { probe: 0, index: 1 }, nullable(Shape::Row { probe: 1 }), nullable(Shape::Column { probe: 0, index: 2 })]);
+        // A bare name is a column before it is a row: `doc` is a column of `users`.
+        let c = shapes("UPDATE users SET name = 'x' RETURNING WITH (OLD AS doc) jsonb_build_object('row', to_jsonb(doc), 'was', doc.name) AS change");
+        assert_eq!(fields(&c), [Shape::Unknown, Shape::Column { probe: 0, index: 0 }]);
+        assert_eq!(c.probes[0].sql, "SELECT users.name AS a0 FROM users");
+        // A relation of the name is the one read, the target's own alias and a subquery's FROM item.
+        let named = shapes("DELETE FROM users AS new WHERE id = 1 RETURNING jsonb_build_object('name', new.name, 'row', to_jsonb(new)) AS gone");
+        assert_eq!(named.probes.iter().map(|p| p.sql.as_str()).collect::<Vec<_>>(), ["SELECT new.name AS a0 FROM users new", "SELECT new.* FROM users new"]);
+        assert_eq!(fields(&named), [Shape::Column { probe: 0, index: 0 }, Shape::Row { probe: 1 }]);
+        let inner = shapes("DELETE FROM users WHERE id = 1 RETURNING jsonb_build_object('posts', (SELECT jsonb_agg(jsonb_build_object('title', new.title, 'author', old.name, 'now', (SELECT new.name))) FROM posts new WHERE new.author_id = old.id)) AS gone");
+        assert_eq!(inner.probes[0].sql, "SELECT new.title AS a0, users.name AS a1 FROM posts new");
+        assert_eq!(inner.probes[0].wider.as_deref(), Some("SELECT new.title AS a0, users.name AS a1 FROM posts new, users"));
+        // A MERGE reads its source through an outer join where it acts without a source row.
+        let m = shapes("MERGE INTO users u USING posts s ON u.id = s.author_id WHEN MATCHED THEN UPDATE SET name = s.title WHEN NOT MATCHED BY SOURCE THEN DELETE RETURNING jsonb_build_object('title', s.title, 'was', old.name, 'is', new.name) AS change");
+        assert_eq!(m.probes[0].sql, "SELECT s.title AS a0, u.name AS a1, u.name AS a2 FROM users u LEFT JOIN posts s ON true");
+        assert_eq!(fields(&m), [nullable(Shape::Column { probe: 0, index: 0 }), Shape::Column { probe: 0, index: 1 }, nullable(Shape::Column { probe: 0, index: 2 })]);
     }
 
     #[test]

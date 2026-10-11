@@ -104,6 +104,10 @@ fn object(fields: &[Field], field: impl Fn(&Field) -> Value) -> Value {
 /// A base type by its catalog name. A type the table does not spell is a plain string, which is
 /// how Postgres prints it, named in the description.
 fn scalar(name: &str, opts: SchemaOptions) -> Value {
+    // `a|b` is either (the MySQL analysis: a column whose type the execution decides).
+    if name.contains('|') {
+        return json!({"anyOf": name.split('|').map(|part| scalar(part, opts)).collect::<Vec<_>>()});
+    }
     match name {
         "bool" => json!({"type": "boolean"}),
         "int2" | "int4" => json!({"type": "integer", "format": "int32"}),
@@ -172,6 +176,7 @@ mod tests {
         ] {
             assert_eq!(s(name).json_schema(WIRE), wire, "{name}");
         }
+        assert_eq!(s("int4|float8").json_schema(WIRE), json!({"anyOf": [{"type": "integer", "format": "int32"}, {"type": "number", "format": "double"}]}));
     }
 
     #[test]

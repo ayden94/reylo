@@ -4,18 +4,34 @@
 //! docs/mysql-sources.md). MySQL has no RETURNING and no server surface for the row count, so a
 //! data-modifying statement returns no rows, and a SELECT's row count is the unique-key proof
 //! over a `sqlparser` tree with the keys read from `information_schema.statistics`.
+//!
+//! Two things stand between that tree and the statement the server runs. MySQL reads some text by
+//! the session's `sql_mode` (`||`, a double-quoted word, a backslash in a string, a space before a
+//! call's parenthesis), so where the statement has such text the engine asks for the mode. The
+//! placeholders and the tree are read as the session reads its strings and double quotes
+//! ([`analyze_text`], [`SessionDialect`]), and where the rest reads otherwise than the parser, the
+//! engine reads nothing off its own tree ([`misread`]). And an execution
+//! answers with column types of its own, which are the prepare's except where a bound value or
+//! the plan decides them: such a column is typed as either ([`settle`]).
 
 use crate::api::{Analysis, Column, Diagnostic, MysqlDescribe, Param, Scope};
 use crate::jsonshape::Shape;
 use crate::dialect::Dialect;
 use crate::host::{as_str, Host, Lazy};
-use crate::lex::{self, Lexed, Target};
+use crate::lex::{self, Lexed, MysqlText, Style, Target};
 use crate::types::{Field, Type};
 use serde_json::{json, Value};
-use sqlparser::ast::{self, Expr, GroupByExpr, LimitClause, Query, Select, SelectItem, SetExpr, Statement, TableFactor};
+use sqlparser::ast::{self, Expr, FunctionArg, FunctionArgExpr, GroupByExpr, LimitClause, Query, Select, SelectItem, SetExpr, Statement, TableFactor};
 use sqlparser::dialect::MySqlDialect;
 use sqlparser::parser::Parser;
 use std::collections::{HashMap, HashSet};
+
+/// The session's `sql_mode`, asked only for a statement whose reading turns on it.
+const SQL_MODE_QUERY: &str = "select @@session.sql_mode";
+
+/// Every view the session sees, in any schema. Asked once for a session, and only by a statement
+/// that returns an integer column of a table or a view ([`settle`]).
+const VIEWS_QUERY: &str = "select table_name from information_schema.views";
 
 /// One row per column of every unique index of the named tables, in key order, with the column's
 /// type. `?` is the comma-joined table names, because MySQL binds no arrays. A key part over an
@@ -33,12 +49,185 @@ const TABLE_COLUMNS_QUERY: &str = "select c.table_name, c.column_name from infor
 /// otherwise come back typed as a statement that returns no rows.
 const KINDS: &[&str] = &["select", "with", "table", "values", "insert", "replace", "update", "delete"];
 
-pub fn analyze(sql: &str, lexed: &Lexed, host: &Host) -> Lazy<Analysis> {
+/// The analysis of a statement as the session reads its text. A backslash in a string escapes the
+/// character after it unless the session's `sql_mode` has NO_BACKSLASH_ESCAPES, and `"` quotes a
+/// string unless it has ANSI_QUOTES. Where the statement has either (`'C:\' and id = :id` has no
+/// placeholder by default and one without escapes; `"email"` is a string or a column), the mode
+/// decides, asked of the session, and both the placeholders and the parser's tree are read by it.
+pub fn analyze_text(sql: &str, host: &Host) -> Lazy<Analysis> {
+    let read = |text| lex::lex_mysql(sql, lex::Named::Dialect, text);
+    let first = read(MysqlText::default());
+    let alike = MysqlText::ALL.iter().all(|&text| read(text) == first);
+    let quoted = first.as_ref().is_ok_and(|l| {
+        l.opaque.iter().any(|&(start, end)| {
+            let span = &sql[start..end];
+            span.starts_with('"') || (span.starts_with('\'') && span.contains('\\'))
+        })
+    });
+    let text = if alike && !quoted {
+        Some(MysqlText::default())
+    } else {
+        let rows = host.query(SQL_MODE_QUERY, Vec::new(), Scope::Session)?;
+        rows.ok().and_then(|rows| rows.first().and_then(|row| row.first()).and_then(as_str).map(MysqlText::of_mode))
+    };
+    let lexed = match text {
+        Some(text) => read(text),
+        None if alike => first,
+        None => {
+            let message = "the server did not say its sql_mode, which decides where this statement's strings end and so which of its placeholders are text".to_string();
+            return Some(crate::postgres::bare(sql, &Lexed { params: vec![], placeholders: vec![], style: Style::None, opaque: vec![] }, Dialect::Mysql, vec![Diagnostic { message, start: 0, length: sql.trim_end().len().max(1), code: 1 }]));
+        }
+    };
+    let lexed = match lexed {
+        Ok(lexed) => lexed,
+        Err(e) => return Some(crate::postgres::bare(sql, &Lexed { params: vec![], placeholders: vec![], style: Style::None, opaque: vec![] }, Dialect::Mysql, vec![Diagnostic { message: e.message, start: e.offset, length: 1, code: 1 }])),
+    };
+    if lexed.style == Style::Mixed {
+        let first = lexed.placeholders.iter().find(|p| lex::is_positional(&p.name)).expect("a mixed statement has a positional placeholder");
+        let d = Diagnostic { message: "Named and positional parameters cannot be mixed in one statement.".into(), start: first.start, length: (first.end - first.start).max(1), code: 2 };
+        return Some(crate::postgres::bare(sql, &lexed, Dialect::Mysql, vec![d]));
+    }
+    analyze(sql, &lexed, text, host)
+}
+
+/// `sqlparser`'s MySQL dialect, reading strings and double quotes as a session of this reading
+/// does: a backslash escapes only where it does there, and `"` quotes a name under ANSI_QUOTES.
+/// Everything else is `MySqlDialect`'s, which it also says it is, so the parser's own checks for
+/// MySQL hold for it.
+#[derive(Debug)]
+struct SessionDialect(MysqlText);
+
+impl sqlparser::dialect::Dialect for SessionDialect {
+    fn dialect(&self) -> std::any::TypeId {
+        std::any::TypeId::of::<MySqlDialect>()
+    }
+    fn is_delimited_identifier_start(&self, ch: char) -> bool {
+        ch == '`' || (ch == '"' && self.0.ansi_quotes)
+    }
+    fn supports_string_literal_backslash_escape(&self) -> bool {
+        self.0.backslash_escapes
+    }
+    // The rest is `MySqlDialect`'s (sqlparser 0.63): every method it overrides, delegated.
+    fn is_identifier_start(&self, ch: char) -> bool {
+        MySqlDialect {}.is_identifier_start(ch)
+    }
+    fn is_identifier_part(&self, ch: char) -> bool {
+        MySqlDialect {}.is_identifier_part(ch)
+    }
+    fn identifier_quote_style(&self, identifier: &str) -> Option<char> {
+        MySqlDialect {}.identifier_quote_style(identifier)
+    }
+    fn supports_string_literal_concatenation(&self) -> bool {
+        MySqlDialect {}.supports_string_literal_concatenation()
+    }
+    fn ignores_wildcard_escapes(&self) -> bool {
+        MySqlDialect {}.ignores_wildcard_escapes()
+    }
+    fn supports_numeric_prefix(&self) -> bool {
+        MySqlDialect {}.supports_numeric_prefix()
+    }
+    fn supports_bitwise_shift_operators(&self) -> bool {
+        MySqlDialect {}.supports_bitwise_shift_operators()
+    }
+    fn supports_multiline_comment_hints(&self) -> bool {
+        MySqlDialect {}.supports_multiline_comment_hints()
+    }
+    fn parse_infix(&self, parser: &mut Parser, expr: &Expr, precedence: u8) -> Option<Result<Expr, sqlparser::parser::ParserError>> {
+        MySqlDialect {}.parse_infix(parser, expr, precedence)
+    }
+    fn parse_statement(&self, parser: &mut Parser) -> Option<Result<Statement, sqlparser::parser::ParserError>> {
+        MySqlDialect {}.parse_statement(parser)
+    }
+    fn require_interval_qualifier(&self) -> bool {
+        MySqlDialect {}.require_interval_qualifier()
+    }
+    fn supports_limit_comma(&self) -> bool {
+        MySqlDialect {}.supports_limit_comma()
+    }
+    fn supports_create_table_select(&self) -> bool {
+        MySqlDialect {}.supports_create_table_select()
+    }
+    fn supports_insert_set(&self) -> bool {
+        MySqlDialect {}.supports_insert_set()
+    }
+    fn supports_user_host_grantee(&self) -> bool {
+        MySqlDialect {}.supports_user_host_grantee()
+    }
+    fn is_table_factor_alias(&self, explicit: bool, kw: &sqlparser::keywords::Keyword, parser: &mut Parser) -> bool {
+        MySqlDialect {}.is_table_factor_alias(explicit, kw, parser)
+    }
+    fn supports_table_hints(&self) -> bool {
+        MySqlDialect {}.supports_table_hints()
+    }
+    fn requires_single_line_comment_whitespace(&self) -> bool {
+        MySqlDialect {}.requires_single_line_comment_whitespace()
+    }
+    fn supports_match_against(&self) -> bool {
+        MySqlDialect {}.supports_match_against()
+    }
+    fn supports_select_modifiers(&self) -> bool {
+        MySqlDialect {}.supports_select_modifiers()
+    }
+    fn supports_set_names(&self) -> bool {
+        MySqlDialect {}.supports_set_names()
+    }
+    fn supports_comma_separated_set_assignments(&self) -> bool {
+        MySqlDialect {}.supports_comma_separated_set_assignments()
+    }
+    fn supports_update_order_by(&self) -> bool {
+        MySqlDialect {}.supports_update_order_by()
+    }
+    fn supports_data_type_signed_suffix(&self) -> bool {
+        MySqlDialect {}.supports_data_type_signed_suffix()
+    }
+    fn supports_cross_join_constraint(&self) -> bool {
+        MySqlDialect {}.supports_cross_join_constraint()
+    }
+    fn supports_double_ampersand_operator(&self) -> bool {
+        MySqlDialect {}.supports_double_ampersand_operator()
+    }
+    fn supports_binary_kw_as_cast(&self) -> bool {
+        MySqlDialect {}.supports_binary_kw_as_cast()
+    }
+    fn supports_comment_optimizer_hint(&self) -> bool {
+        MySqlDialect {}.supports_comment_optimizer_hint()
+    }
+    fn supports_constraint_keyword_without_name(&self) -> bool {
+        MySqlDialect {}.supports_constraint_keyword_without_name()
+    }
+    fn supports_key_column_option(&self) -> bool {
+        MySqlDialect {}.supports_key_column_option()
+    }
+    fn supports_group_by_with_modifier(&self) -> bool {
+        MySqlDialect {}.supports_group_by_with_modifier()
+    }
+    fn supports_left_associative_joins_without_parens(&self) -> bool {
+        MySqlDialect {}.supports_left_associative_joins_without_parens()
+    }
+}
+
+/// `text` is how the session reads its strings, `None` where it would not say and the statement
+/// turns on it.
+pub fn analyze(sql: &str, lexed: &Lexed, text: Option<MysqlText>, host: &Host) -> Lazy<Analysis> {
+    let dialect = SessionDialect(text.unwrap_or_default());
     if let Err(message) = lex::one_statement(sql, lexed, KINDS) {
         return Some(crate::postgres::bare(sql, lexed, Dialect::Mysql, vec![Diagnostic { message, start: 0, length: sql.trim_end().len().max(1), code: 10 }]));
     }
+    // The server runs the text of a `/*! … */` comment where its version allows, and the lexer
+    // took it for a comment: what the statement is, and whether it is one of the typed kinds, is
+    // then not what was checked above.
+    if let Some(&(start, end)) = lexed.opaque.iter().find(|&&(start, end)| sql[start..end].starts_with("/*!")) {
+        let message = "MySQL runs the text of a /*! … */ comment as SQL where the server's version allows it, so the statement is not the one written outside it: write it as plain SQL".to_string();
+        return Some(crate::postgres::bare(sql, lexed, Dialect::Mysql, vec![Diagnostic { message, start, length: end - start, code: 10 }]));
+    }
     let rewritten = lex::rewrite(sql, lexed, Target::Question);
-    let raw = host.describe_mysql(&rewritten.sql)?;
+    // Both asked in one round.
+    let raw = host.describe_mysql(&rewritten.sql);
+    let misread = match text {
+        Some(_) => misread(sql, lexed, host),
+        None => Some(Some("the server did not say its sql_mode, which decides how it reads this statement's strings and double quotes, so nothing bounds its rows".into())),
+    };
+    let (raw, misread) = (raw?, misread?);
     let raw = match raw {
         Ok(r) => r,
         Err(e) => {
@@ -49,8 +238,21 @@ pub fn analyze(sql: &str, lexed: &Lexed, host: &Host) -> Lazy<Analysis> {
             return Some(crate::postgres::bare(sql, lexed, Dialect::Mysql, vec![Diagnostic { message, start: 0, length: sql.trim_end().len().max(1), code: 6 }]));
         }
     };
+    // Where the engine's lexer and the server part text from code differently, a placeholder of
+    // the one is text to the other: the statement would be typed with a parameter the server
+    // does not take, and fail when it runs.
+    if raw.params.len() != rewritten.order.len() {
+        let message = format!(
+            "the server finds {} placeholder(s) in this statement and the engine {}, so the engine does not read its strings and comments as the server does",
+            raw.params.len(),
+            rewritten.order.len()
+        );
+        return Some(crate::postgres::bare(sql, lexed, Dialect::Mysql, vec![Diagnostic { message, start: 0, length: sql.trim_end().len().max(1), code: 1 }]));
+    }
     let diagnostics = Vec::new();
-    let parsed = Parser::parse_sql(&MySqlDialect {}, &rewritten.sql).ok().and_then(|mut v| if v.len() == 1 { v.pop() } else { None });
+    // A tree the server would read otherwise still says what kind of statement it is, and nothing more.
+    let read = parse(&dialect, &rewritten.sql).ok().and_then(|mut v| if v.len() == 1 { v.pop() } else { None });
+    let parsed = if misread.is_some() { None } else { read.clone() };
     // JSON shapes: the constructors' value expressions, prepared as columns of their own statements.
     let mut shaped: Vec<(String, Type, bool)> = Vec::new();
     let mut outer_not_null: Vec<usize> = Vec::new();
@@ -98,11 +300,19 @@ pub fn analyze(sql: &str, lexed: &Lexed, host: &Host) -> Lazy<Analysis> {
         if pending {
             return None;
         }
+        // What may reach each leaf: a placeholder in a document is the value it is given too.
+        let flows: Vec<Vec<u8>> = plan.probes.iter().zip(&outcomes).map(|(probe, outcome)| outcome.as_ref().map(|d| probe_flow(&probe.sql, d, &dialect)).unwrap_or_default()).collect();
         for (name, shape) in &plan.columns {
-            let (ty, non_null) = resolve(shape, &outcomes, &plan.booleans);
+            let (ty, non_null) = resolve(shape, &outcomes, &plan, &flows);
             shaped.push((name.clone(), ty, non_null));
         }
     }
+    // A column of a view may be an expression, which the prepare does not tell from a table's.
+    let views: Option<HashSet<String>> = match raw.columns.iter().any(|c| other_width(c).is_some() && c.org_table.as_ref().is_some_and(|t| !t.is_empty())) {
+        true => host.query(VIEWS_QUERY, Vec::new(), Scope::Session)?.ok().map(|rows| rows.iter().filter_map(|row| row.first().and_then(as_str)).map(str::to_ascii_lowercase).collect()),
+        false => Some(HashSet::new()),
+    };
+    let settled = settle(sql, lexed, &rewritten, parsed.as_ref(), &raw, views.as_ref());
     let mut shapes_used: Vec<bool> = vec![false; shaped.len()];
     let columns = raw
         .columns
@@ -110,6 +320,7 @@ pub fn analyze(sql: &str, lexed: &Lexed, host: &Host) -> Lazy<Analysis> {
         .enumerate()
         .map(|(position, c)| {
             let (ty, name) = column_type(c.r#type, c.charset);
+            let ty = settled.get(position).cloned().flatten().unwrap_or(ty);
             let not_null = c.flags & 1 != 0 || outer_not_null.contains(&position);
             let shape = shaped.iter().enumerate().find(|(i, (n, _, _))| n == &c.name && !shapes_used[*i]);
             match shape {
@@ -139,7 +350,7 @@ pub fn analyze(sql: &str, lexed: &Lexed, host: &Host) -> Lazy<Analysis> {
             Param { name: name.clone(), ty, type_name: type_name.to_string(), nullable: false }
         })
         .collect();
-    let kind = match &parsed {
+    let kind = match &read {
         Some(Statement::Query(_)) => "select",
         Some(Statement::Insert(_)) => "insert",
         Some(Statement::Update(_)) => "update",
@@ -154,7 +365,9 @@ pub fn analyze(sql: &str, lexed: &Lexed, host: &Host) -> Lazy<Analysis> {
         }
         Some(Statement::Insert(_)) | Some(Statement::Update(_)) | Some(Statement::Delete(_)) => ("none".to_string(), None),
         Some(_) => ("many".to_string(), Some("only a SELECT is proven".into())),
-        None => ("many".to_string(), Some("the engine could not parse the statement, so nothing bounds its rows".into())),
+        // MySQL has no RETURNING: a write returns no rows however the server reads it.
+        None if matches!(read, Some(Statement::Insert(_) | Statement::Update(_) | Statement::Delete(_))) => ("none".to_string(), None),
+        None => ("many".to_string(), Some(misread.unwrap_or_else(|| "the engine could not parse the statement, so nothing bounds its rows".into()))),
     };
     Some(Analysis {
         kind: kind.to_string(),
@@ -167,6 +380,475 @@ pub fn analyze(sql: &str, lexed: &Lexed, host: &Host) -> Lazy<Analysis> {
         diagnostics,
         unresolved: Vec::new(),
     })
+}
+
+/// The functions MySQL reads as built-ins only where the parenthesis follows the name at once
+/// (unless `sql_mode` has IGNORE_SPACE): after a space the name is a stored function's.
+const SPACE_SENSITIVE: &[&str] = &[
+    "adddate", "bit_and", "bit_or", "bit_xor", "cast", "count", "curdate", "curtime", "date_add", "date_sub", "extract", "group_concat", "max", "mid", "min", "now",
+    "position", "session_user", "std", "stddev", "stddev_pop", "stddev_samp", "subdate", "substr", "substring", "sum", "sysdate", "system_user", "trim", "variance",
+    "var_pop", "var_samp",
+];
+
+/// Why the engine's parser does not read the statement as this server does, if it does not.
+/// `sqlparser` reads `||` as a concatenation that binds tighter than `=`, `count (x)` as the
+/// aggregate and NOT as MySQL ranks it by default; the server reads each by the session's
+/// `sql_mode`, where `a = b || c` is `(a = b) OR c` unless PIPES_AS_CONCAT is set, `count (x)`
+/// calls a stored function `count` unless IGNORE_SPACE is set, and HIGH_NOT_PRECEDENCE moves NOT.
+/// (Strings and double quotes the parser reads by the mode itself: [`SessionDialect`].) The mode
+/// is asked for only when the text has one of these; an optimizer hint that sets a variable for
+/// the statement leaves no mode to ask for.
+fn misread(sql: &str, lexed: &Lexed, host: &Host) -> Lazy<Option<String>> {
+    let text = |&(start, end): &(usize, usize)| &sql[start..end];
+    let is_comment = |span: &str| span.starts_with("--") || span.starts_with("/*") || span.starts_with('#');
+    if lexed.opaque.iter().map(text).any(|span| span.starts_with("/*+") && span.to_ascii_lowercase().contains("set_var")) {
+        return Some(Some("an optimizer hint sets a variable for this statement (SET_VAR), which may change how the server reads it, so nothing bounds its rows".into()));
+    }
+    // The text outside strings, quoted names and comments, a comment as `\u{2}` and any other
+    // of those as `\u{1}`.
+    let mut code = String::with_capacity(sql.len());
+    let mut at = 0;
+    for &(start, end) in &lexed.opaque {
+        code.push_str(&sql[at..start]);
+        code.push_str(if is_comment(&sql[start..end]) { "\u{2}" } else { "\u{1}" });
+        at = end;
+    }
+    code.push_str(&sql[at..]);
+    let lower = code.to_ascii_lowercase();
+    let word = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '$';
+    // Each word of the code with what stands before and after it.
+    let mut words: Vec<(&str, Option<char>, &str)> = Vec::new();
+    let mut i = 0;
+    while let Some(c) = lower[i..].chars().next() {
+        if !word(c) {
+            i += c.len_utf8();
+            continue;
+        }
+        let end = lower[i..].find(|c: char| !word(c)).map_or(lower.len(), |n| i + n);
+        words.push((&lower[i..end], lower[..i].chars().next_back(), &lower[end..]));
+        i = end;
+    }
+    let mut readings: Vec<(&str, bool, &str)> = Vec::new();
+    if code.contains("||") {
+        readings.push(("PIPES_AS_CONCAT", false, "`||` is OR, and binds looser than a comparison"));
+    }
+    // A built-in's name, then a space or a comment, then its parenthesis.
+    let parted = |commented: bool| {
+        words.iter().any(|(name, before, after)| {
+            let gap: String = after.chars().take_while(|c| c.is_whitespace() || *c == '\u{2}').collect();
+            SPACE_SENSITIVE.contains(name) && *before != Some('.') && !gap.is_empty() && gap.contains('\u{2}') == commented && after[gap.len()..].starts_with('(')
+        })
+    };
+    // Under IGNORE_SPACE too (measured on 8.4): the mode skips spaces, and a comment is none.
+    if parted(true) {
+        return Some(Some("a comment between a built-in's name and its parenthesis makes the name a stored function's, which is not how the engine's parser reads the statement, so nothing bounds its rows".into()));
+    }
+    if parted(false) {
+        readings.push(("IGNORE_SPACE", false, "a name with a space before its parenthesis is a stored function's, not the built-in's"));
+    }
+    // `is not` and `not in`, `not like`, `not between`, `not regexp` are operators of their own.
+    let negates = |i: usize| {
+        let follows = words.get(i + 1).map(|w| w.0);
+        words[i].0 == "not" && !(i > 0 && words[i - 1].0 == "is") && !matches!(follows, Some("in" | "like" | "between" | "regexp" | "rlike"))
+    };
+    if (0..words.len()).any(negates) || code.replace("!=", "").contains('!') {
+        readings.push(("HIGH_NOT_PRECEDENCE", true, "NOT binds tighter than a comparison"));
+    }
+    if readings.is_empty() {
+        return Some(None);
+    }
+    let rows = host.query(SQL_MODE_QUERY, Vec::new(), Scope::Session)?;
+    let mode = rows.ok().and_then(|rows| rows.first().and_then(|row| row.first()).and_then(as_str).map(str::to_ascii_uppercase));
+    let Some(mode) = mode else {
+        return Some(Some("the server did not say its sql_mode, which decides how it reads this statement, so nothing bounds its rows".into()));
+    };
+    let set = |name: &str| mode.split(',').any(|m| m.trim() == name);
+    Some(readings.iter().find(|(name, when_set, _)| set(name) == *when_set).map(|(name, when_set, what)| {
+        format!("under this server's sql_mode ({} {name}) {what}, which is not how the engine's parser reads the statement, so nothing bounds its rows", if *when_set { "with" } else { "without" })
+    }))
+}
+
+// ---- the types an execution may answer with ---------------------------------------------------
+
+/// What a placeholder's value may change in a column's type, by the kind of placeholder. The
+/// server types a `?` at the prepare (an integer beside an integer column), and the statement
+/// that runs has the type of the value in its place, which each driver gives it its own way.
+///
+/// A driver that binds (mysql2's `execute()`) sends a number that is no integer as a DOUBLE, which
+/// makes `? + 1` a DOUBLE, and a `Date` as a DATETIME, which makes `? + interval 1 day` one where
+/// the prepare said DATE. A driver that binds nothing (mariadb's `query()`, PlanetScale's
+/// `execute()`) writes the value into the text, and the server types the statement by the
+/// literal: `1.5 + 1` is a DECIMAL, `-5` a BIGINT where the prepare typed `-?` a DOUBLE,
+/// `price * '2'` a DOUBLE where the prepare said DECIMAL, `'2026-01-01' + interval 1 day` a
+/// string, and `coalesce('2', price)` a string.
+///
+/// A placeholder the server typed as an integer or as a float takes a number.
+const INTEGER: u8 = 1;
+const FLOAT: u8 = 2;
+/// One typed as a DECIMAL takes a string of digits.
+const DECIMAL: u8 = 4;
+/// One typed as a date or a time takes a `Date` or a string.
+const TEMPORAL: u8 = 8;
+/// A string, bytes or JSON: `coalesce(doc, ?)` is JSON at the prepare and a string of bytes at
+/// the execution.
+const OTHER: u8 = 16;
+/// Anything: a user variable (`@x`) holds whatever the session gave it, a bit operation is a
+/// number or a string of bytes by what it is given, and an expression the walk does not read
+/// may be either of those.
+const ANY: u8 = 32;
+/// The value may be the column's value as it is (a bare placeholder, an argument of COALESCE or
+/// IF, a CASE result), where arithmetic and any other function compute a value from it.
+const PASSED: u8 = 64;
+/// Every kind of placeholder.
+const PLACEHOLDERS: u8 = INTEGER | FLOAT | DECIMAL | TEMPORAL | OTHER;
+
+/// Whether an expression is a user variable. `sqlparser` reads `@x` as a name and `` @`x` `` as a
+/// placeholder; `@@x` is a system variable, of one type.
+fn is_variable(e: &Expr) -> bool {
+    match e {
+        Expr::Identifier(i) => i.quote_style.is_none() && i.value.starts_with('@') && !i.value.starts_with("@@"),
+        Expr::Value(v) => matches!(&v.value, ast::Value::Placeholder(p) if p.starts_with('@')),
+        _ => false,
+    }
+}
+
+/// The select-list items of a query, in order: what may reach each one's type, and for a
+/// wildcard what may reach any of its columns.
+enum Item {
+    One(u8),
+    Star(u8),
+}
+
+struct Flow<'a> {
+    /// The kind of each placeholder by where its `?` stands: line and column, as `sqlparser` counts.
+    kinds: &'a HashMap<(u64, u64), u8>,
+    /// Every kind the statement has, for a placeholder or an expression the walk cannot place.
+    all: u8,
+}
+
+impl Flow<'_> {
+    /// What may reach each item of a query's select list. A column of a derived table or of a
+    /// WITH query carries what reached that query's own items, so every column a query reads
+    /// carries `inherited`, plus whatever its own WITH queries and derived tables carry.
+    fn query(&self, q: &Query, inherited: u8) -> Vec<Item> {
+        let any = |items: Vec<Item>| items.iter().fold(0, |all, item| all | match item { Item::One(k) | Item::Star(k) => *k });
+        let mut carried = inherited;
+        for cte in q.with.iter().flat_map(|w| &w.cte_tables) {
+            carried |= any(self.query(&cte.query, carried));
+        }
+        self.body(&q.body, carried)
+    }
+
+    fn body(&self, body: &SetExpr, mut carried: u8) -> Vec<Item> {
+        let any = |items: &[Item]| items.iter().fold(0, |all, item| all | match item { Item::One(k) | Item::Star(k) => *k });
+        match body {
+            SetExpr::Select(select) => {
+                for factor in select.from.iter().flat_map(|t| std::iter::once(&t.relation).chain(t.joins.iter().map(|j| &j.relation))) {
+                    carried |= self.factor(factor, carried);
+                }
+                select
+                    .projection
+                    .iter()
+                    .map(|item| match item {
+                        SelectItem::UnnamedExpr(e) | SelectItem::ExprWithAlias { expr: e, .. } => Item::One(self.expr(e, carried)),
+                        _ => Item::Star(carried),
+                    })
+                    .collect()
+            }
+            SetExpr::Query(q) => self.query(q, carried),
+            // A column of a set operation has the type its arms agree on.
+            SetExpr::SetOperation { left, right, .. } => {
+                let (left, right) = (self.body(left, carried), self.body(right, carried));
+                let star = left.iter().chain(&right).any(|item| matches!(item, Item::Star(_)));
+                if star || left.len() != right.len() {
+                    let all = any(&left) | any(&right);
+                    return left.iter().map(|_| Item::Star(all)).collect();
+                }
+                left.iter().zip(&right).map(|(l, r)| Item::One(any(std::slice::from_ref(l)) | any(std::slice::from_ref(r)))).collect()
+            }
+            SetExpr::Values(values) => {
+                let width = values.rows.iter().map(|row| row.content.len()).max().unwrap_or(0);
+                (0..width).map(|i| Item::One(values.rows.iter().filter_map(|row| row.content.get(i)).fold(0, |all, e| all | self.expr(e, carried)))).collect()
+            }
+            // TABLE reads a table's own columns; anything else is not walked.
+            SetExpr::Table(_) => vec![Item::Star(0)],
+            _ => vec![Item::Star(self.all)],
+        }
+    }
+
+    /// What the columns of one FROM item carry.
+    fn factor(&self, factor: &TableFactor, carried: u8) -> u8 {
+        let any = |items: Vec<Item>| items.iter().fold(0, |all, item| all | match item { Item::One(k) | Item::Star(k) => *k });
+        match factor {
+            TableFactor::Table { .. } => 0,
+            TableFactor::Derived { subquery, .. } => any(self.query(subquery, carried)),
+            TableFactor::NestedJoin { table_with_joins, .. } => {
+                std::iter::once(&table_with_joins.relation).chain(table_with_joins.joins.iter().map(|j| &j.relation)).fold(0, |all, f| all | self.factor(f, carried))
+            }
+            // A table function's columns are typed by its own declaration (JSON_TABLE's COLUMNS).
+            TableFactor::JsonTable { .. } => 0,
+            _ => self.all,
+        }
+    }
+
+    /// What may reach an expression's type: a placeholder it computes with, a column that carries
+    /// one. A comparison is a truth value whatever it compares, and a CAST is the type it names.
+    fn expr(&self, e: &Expr, carried: u8) -> u8 {
+        use ast::BinaryOperator as B;
+        let arg = |a: &FunctionArg| match a {
+            FunctionArg::Unnamed(FunctionArgExpr::Expr(x)) | FunctionArg::Named { arg: FunctionArgExpr::Expr(x), .. } | FunctionArg::ExprNamed { arg: FunctionArgExpr::Expr(x), .. } => self.expr(x, carried),
+            _ => 0,
+        };
+        match e {
+            _ if is_variable(e) => ANY,
+            Expr::Value(v) => match &v.value {
+                ast::Value::Placeholder(_) => self.kinds.get(&(v.span.start.line, v.span.start.column)).copied().unwrap_or(self.all) | PASSED,
+                _ => 0,
+            },
+            Expr::Identifier(i) if i.value.starts_with("@@") => 0,
+            Expr::Identifier(_) | Expr::CompoundIdentifier(_) => carried,
+            Expr::Nested(inner) => self.expr(inner, carried),
+            // A unary plus is not there for the server.
+            Expr::UnaryOp { op: ast::UnaryOperator::Plus, expr } => self.expr(expr, carried),
+            Expr::UnaryOp { op: ast::UnaryOperator::Minus, expr } => self.expr(expr, carried) & !PASSED,
+            Expr::UnaryOp { op: ast::UnaryOperator::Not, .. } => 0,
+            Expr::BinaryOp { left, op, right } => match op {
+                B::Eq | B::NotEq | B::Lt | B::LtEq | B::Gt | B::GtEq | B::Spaceship | B::And | B::Or | B::Xor => 0,
+                B::Plus | B::Minus | B::Multiply | B::Divide | B::Modulo | B::MyIntegerDivide => (self.expr(left, carried) | self.expr(right, carried)) & !PASSED,
+                // A bit operation, and any operator the walk does not know.
+                _ => match self.expr(left, carried) | self.expr(right, carried) {
+                    0 => 0,
+                    reached => reached | ANY,
+                },
+            },
+            Expr::Cast { .. } | Expr::Convert { .. } | Expr::TypedString { .. } | Expr::Interval(_) => 0,
+            // An integer and a string whatever they are given.
+            Expr::Position { .. } | Expr::Extract { .. } | Expr::Substring { .. } | Expr::Trim { .. } | Expr::Overlay { .. } | Expr::MatchAgainst { .. } => 0,
+            Expr::Ceil { expr, .. } | Expr::Floor { expr, .. } => self.expr(expr, carried) & !PASSED,
+            Expr::Collate { expr, .. } => self.expr(expr, carried),
+            Expr::IsNull(_) | Expr::IsNotNull(_) | Expr::IsTrue(_) | Expr::IsNotTrue(_) | Expr::IsFalse(_) | Expr::IsNotFalse(_) | Expr::IsUnknown(_) | Expr::IsNotUnknown(_) => 0,
+            Expr::InList { .. } | Expr::InSubquery { .. } | Expr::Between { .. } | Expr::Like { .. } | Expr::RLike { .. } | Expr::Exists { .. } => 0,
+            // A JSON function's type is its own, whatever it is given.
+            Expr::Function(f) if builtin(f).starts_with("json_") => 0,
+            Expr::Function(f) => {
+                let reached = match &f.args {
+                    ast::FunctionArguments::None => 0,
+                    ast::FunctionArguments::List(list) => list.args.iter().fold(0, |all, a| all | arg(a)),
+                    ast::FunctionArguments::Subquery(q) => self.query(q, carried).iter().fold(0, |all, item| all | match item { Item::One(k) | Item::Star(k) => *k }),
+                };
+                // These hand one of their arguments back as it is; any other built-in computes a
+                // value from them.
+                const PASSING: &[&str] = &["coalesce", "ifnull", "if", "nullif", "greatest", "least", "any_value", "min", "max", "lag", "lead", "first_value", "last_value", "nth_value", "name_const"];
+                // These are an integer whatever they are given (`unix_timestamp` is not: a
+                // BIGINT for a date and a DECIMAL for a time with a fraction).
+                const INTEGERS: &[&str] = &[
+                    "length", "char_length", "character_length", "octet_length", "bit_length", "ascii", "ord", "locate", "instr", "find_in_set", "field", "strcmp", "year",
+                    "month", "day", "dayofmonth", "dayofweek", "dayofyear", "quarter", "week", "weekday", "yearweek", "hour", "minute", "second", "microsecond", "datediff",
+                    "to_days", "to_seconds", "crc32", "count", "sign", "isnull", "period_diff", "timestampdiff",
+                ];
+                // A bit function is a number or a string of bytes by what it is given.
+                const BITS: &[&str] = &["bit_and", "bit_or", "bit_xor", "bit_count"];
+                match builtin(f).as_str() {
+                    // A stored function, by its schema: it returns the type it declares.
+                    "" => 0,
+                    name if INTEGERS.contains(&name) => 0,
+                    name if PASSING.contains(&name) => reached,
+                    name if BITS.contains(&name) && reached != 0 => reached | ANY,
+                    _ => reached & !PASSED,
+                }
+            }
+            Expr::Case { conditions, else_result, .. } => conditions.iter().fold(else_result.as_deref().map_or(0, |e| self.expr(e, carried)), |all, when| all | self.expr(&when.result, carried)),
+            Expr::Subquery(q) => self.query(q, carried).iter().fold(0, |all, item| all | match item { Item::One(k) | Item::Star(k) => *k }),
+            // An operator or a form the walk does not read: any placeholder may be in it.
+            _ => match self.all | carried {
+                0 => 0,
+                reached => reached | ANY,
+            },
+        }
+    }
+}
+
+/// The type of each result column an execution may answer with another type than the prepare's,
+/// by position; `None` where the prepare's stands. Such a column is typed as either: a scalar
+/// whose name lists both (`int8|float8`), which the renderer writes as a union.
+///
+/// A column a placeholder may reach ([`Flow`]): a number may come back a BIGINT, a DOUBLE or a
+/// DECIMAL, a date as a DATE, a DATETIME, a TIME or a string, and a TIME or a JSON value is
+/// unknown, as is any column a user variable or a bit operation over a placeholder may reach.
+///
+/// And an integer the statement computes, where the plan passes it through a temporary table (a
+/// GROUP BY or an ORDER BY the server has no index for, DISTINCT, a window, SQL_BUFFER_RESULT):
+/// the table's column is an INT where the expression's display length is under ten digits and a
+/// BIGINT from there on, whatever the prepare typed it as. Measured on 8.4, `quarter(day)` and
+/// `n > 1` prepare as BIGINT and answer INT, and `coalesce(n, 0)` and `lag(n) over (…)` prepare
+/// as INT and answer BIGINT. Only a table's own column keeps its type: the prepare names the
+/// table, and `views` says which names are no table's (none known: every one may be). A column
+/// under WITH ROLLUP names no table.
+fn settle(sql: &str, lexed: &Lexed, rewritten: &lex::Rewritten, parsed: Option<&Statement>, raw: &MysqlDescribe, views: Option<&HashSet<String>>) -> Vec<Option<Type>> {
+    let kind = placeholder_kind;
+    // The text outside strings, names and comments.
+    let mut code = String::with_capacity(sql.len());
+    let mut at = 0;
+    for &(start, end) in &lexed.opaque {
+        code.push_str(&sql[at..start]);
+        code.push(' ');
+        at = end;
+    }
+    code.push_str(&sql[at..]);
+    let variables = code.replace("@@", "").contains('@');
+    let all = raw.params.iter().fold(if variables { ANY } else { 0 }, |all, p| all | kind(p.r#type));
+    // Where each `?` of the rewritten text stands, as the parser counts: lines and characters from 1.
+    let mut kinds: HashMap<(u64, u64), u8> = HashMap::new();
+    for (i, &(_, _, start, _)) in rewritten.spans.iter().enumerate() {
+        let before = &rewritten.sql[..start.min(rewritten.sql.len())];
+        let line = before.matches('\n').count() as u64 + 1;
+        let column = before.rsplit('\n').next().map_or(0, |l| l.chars().count()) as u64 + 1;
+        kinds.insert((line, column), raw.params.get(i).map_or(all, |p| kind(p.r#type)));
+    }
+    let flow = Flow { kinds: &kinds, all };
+    // What may reach each column, by position: the items before a wildcard count from the
+    // start, those after the last one from the end, and the rest share what is between.
+    let width = raw.columns.len();
+    let reached: Vec<u8> = match (all, parsed) {
+        (0, _) => vec![0; width],
+        (_, Some(Statement::Query(q))) => {
+            let items = flow.query(q, 0);
+            let one = |item: &Item| match item {
+                Item::One(k) | Item::Star(k) => *k,
+            };
+            let head: Vec<u8> = items.iter().take_while(|i| matches!(i, Item::One(_))).map(one).collect();
+            let tail: Vec<u8> = if head.len() == items.len() { Vec::new() } else { items.iter().rev().take_while(|i| matches!(i, Item::One(_))).map(one).collect::<Vec<_>>().into_iter().rev().collect() };
+            let middle = items[head.len()..items.len() - tail.len()].iter().fold(0, |all, i| all | one(i));
+            if head.len() + tail.len() > width || (head.len() == items.len() && head.len() != width) {
+                vec![all; width]
+            } else {
+                (0..width).map(|i| if i < head.len() { head[i] } else if i >= width - tail.len() { tail[i - (width - tail.len())] } else { middle }).collect()
+            }
+        }
+        // A statement the engine does not read: any placeholder may reach any column.
+        _ => vec![all; width],
+    };
+    let own = |c: &crate::api::MysqlColumn| c.org_table.as_ref().is_some_and(|table| !table.is_empty() && views.is_some_and(|views| !views.contains(&table.to_ascii_lowercase())));
+    raw.columns
+        .iter()
+        .zip(&reached)
+        .map(|(c, reached)| {
+            // A table's own column is of its type whatever is bound and whatever the plan.
+            if own(c) {
+                return None;
+            }
+            let ty = column_type(c.r#type, c.charset).0;
+            match (widened(&ty, *reached), other_width(c)) {
+                (Some(Type::Scalar { name }), Some(other)) if !name.split('|').any(|n| n == other) => Some(Type::Scalar { name: format!("{name}|{other}") }),
+                (None, Some(other)) => match ty {
+                    Type::Scalar { name } => Some(Type::Scalar { name: format!("{name}|{other}") }),
+                    _ => None,
+                },
+                (widened, _) => widened,
+            }
+        })
+        .collect()
+}
+
+/// The type a value of type `ty` may have where `reached` may reach it ([`Flow`]), if another.
+/// A value the statement computes from a placeholder is of its family, and which member is the
+/// value's to say: a number is a BIGINT, a DOUBLE or a DECIMAL, and a date a DATE, a DATETIME, a
+/// TIME or, from a string written into the text, a string. Where a placeholder that takes a
+/// string may be handed back as it is, so is a number.
+fn widened(ty: &Type, reached: u8) -> Option<Type> {
+    if reached & ANY != 0 {
+        return Some(Type::Unknown);
+    }
+    let placeholders = reached & PLACEHOLDERS != 0;
+    let name = match ty {
+        Type::Scalar { name } => name,
+        Type::Json if placeholders => return Some(Type::Unknown),
+        _ => return None,
+    };
+    let string = reached & PASSED != 0 && reached & (DECIMAL | TEMPORAL | OTHER) != 0;
+    let mut names: Vec<&str> = vec![name.as_str()];
+    match name.as_str() {
+        "time" if placeholders => return Some(Type::Unknown),
+        "date" | "timestamp" if placeholders => names.extend(["date", "timestamp", "time", "text"]),
+        "int2" | "int4" | "int8" | "numeric" | "float4" | "float8" if placeholders => {
+            names.extend(["int8", "float8", "numeric"]);
+            if string {
+                names.push("text");
+            }
+        }
+        _ => {}
+    }
+    let mut distinct: Vec<&str> = Vec::new();
+    for name in names {
+        if !distinct.contains(&name) {
+            distinct.push(name);
+        }
+    }
+    (distinct.len() > 1).then(|| Type::Scalar { name: distinct.join("|") })
+}
+
+/// Parse with the depth bound the Postgres parser has ([`crate::stack::MAX_DEPTH`] messages, about
+/// 500 levels of expression) in place of sqlparser's default of 50, so a statement nests as deeply
+/// on MySQL as on Postgres before only the server's describe is left. sqlparser's bound counts
+/// only its own recursion, and it reads a chain of operators (`a + b + …`, `x = 1 or x = 2 or …`)
+/// in a loop into a tree as deep as the chain, which every walk of the engine and the tree's drop
+/// then recurse through: so a statement with more operators than the bound is refused before it
+/// is read. That counts operators in separate expressions together, and only ever leaves a
+/// statement to the describe that a deeper bound would have read.
+fn parse(dialect: &dyn sqlparser::dialect::Dialect, sql: &str) -> Result<Vec<Statement>, sqlparser::parser::ParserError> {
+    use sqlparser::keywords::Keyword;
+    use sqlparser::tokenizer::Token;
+    let bound = crate::stack::MAX_DEPTH / 2;
+    let tokens = sqlparser::tokenizer::Tokenizer::new(dialect, sql).tokenize_with_location()?;
+    let operators = tokens
+        .iter()
+        .filter(|t| match &t.token {
+            Token::Word(w) => matches!(
+                w.keyword,
+                Keyword::AND | Keyword::OR | Keyword::XOR | Keyword::DIV | Keyword::MOD | Keyword::NOT | Keyword::IS | Keyword::IN | Keyword::LIKE | Keyword::RLIKE | Keyword::REGEXP | Keyword::BETWEEN | Keyword::COLLATE | Keyword::MEMBER | Keyword::ESCAPE
+            ) && w.quote_style.is_none(),
+            Token::Whitespace(_) | Token::Comma | Token::LParen | Token::RParen | Token::Period | Token::SemiColon | Token::Placeholder(_) | Token::Number(..) | Token::EOF => false,
+            t => !matches!(t.to_string().chars().next(), Some('\'' | '"' | '`' | 'X' | 'x' | 'N' | 'B' | 'b')),
+        })
+        .count();
+    if operators > bound {
+        return Err(sqlparser::parser::ParserError::RecursionLimitExceeded);
+    }
+    Parser::new(dialect).with_recursion_limit(bound).with_tokens_with_locations(tokens).parse_statements()
+}
+
+/// What may reach each item of a probe's select list. A probe is the engine's own text, where a
+/// `?` is not where the statement's was, so any of the probe's placeholders may stand anywhere.
+fn probe_flow(sql: &str, described: &MysqlDescribe, dialect: &SessionDialect) -> Vec<u8> {
+    let all = described.params.iter().fold(0, |all, p| all | placeholder_kind(p.r#type));
+    let unread = vec![if all == 0 { 0 } else { all | ANY }; described.columns.len()];
+    let Ok(mut statements) = parse(dialect, sql) else { return unread };
+    let (Some(Statement::Query(q)), None) = (statements.pop(), statements.pop()) else { return unread };
+    let kinds = HashMap::new();
+    let flow = Flow { kinds: &kinds, all };
+    flow.query(&q, 0).iter().map(|item| match item { Item::One(k) | Item::Star(k) => *k }).collect()
+}
+
+/// The kind of a placeholder the server typed with this protocol type.
+fn placeholder_kind(code: u32) -> u8 {
+    match code {
+        1 | 2 | 3 | 8 | 9 | 13 => INTEGER,
+        4 | 5 => FLOAT,
+        0 | 246 => DECIMAL,
+        7 | 10 | 11 | 12 | 14 => TEMPORAL,
+        _ => OTHER,
+    }
+}
+
+/// The integer type a temporary table gives an expression the prepare typed as the other one:
+/// an INT under ten digits of display length, a BIGINT from ten on. A length the host did not
+/// send may be either.
+fn other_width(c: &crate::api::MysqlColumn) -> Option<&'static str> {
+    match c.r#type {
+        1 | 2 | 3 | 9 | 13 if c.length.is_none_or(|l| l > 9) => Some("int8"),
+        8 if c.length.is_none_or(|l| l <= 9) => Some("int4"),
+        _ => None,
+    }
 }
 
 /// A result column's protocol type code as the type model, with the MySQL name for messages.
@@ -207,25 +889,33 @@ fn param_type(code: u32, charset: u32) -> (Type, &'static str) {
 }
 
 /// One shape plus its probes' prepares as the column's type and whether it is never NULL.
-fn resolve(shape: &Shape, outcomes: &[Option<MysqlDescribe>], booleans: &[(usize, usize)]) -> (Type, bool) {
+fn resolve(shape: &Shape, outcomes: &[Option<MysqlDescribe>], plan: &crate::mysql_shape::Plan, flows: &[Vec<u8>]) -> (Type, bool) {
     match shape {
         Shape::Object { fields, non_null } => {
             let fields = fields
                 .iter()
                 .map(|(k, s)| {
-                    let (ty, nn) = resolve(s, outcomes, booleans);
+                    let (ty, nn) = resolve(s, outcomes, plan, flows);
                     Field { name: k.clone(), ty, nullable: !nn }
                 })
                 .collect();
             (Type::Object { fields }, *non_null)
         }
         Shape::Array { items, non_null } => {
-            let (ty, nn) = resolve(items, outcomes, booleans);
+            let (ty, nn) = resolve(items, outcomes, plan, flows);
             (Type::List { of: Box::new(ty), nullable_items: !nn }, *non_null)
         }
         Shape::Column { probe, index } => match outcomes.get(*probe).and_then(|o| o.as_ref()).and_then(|o| o.columns.get(*index)) {
-            Some(c) if booleans.contains(&(*probe, *index)) => (Type::Scalar { name: "bool".into() }, c.flags & 1 != 0),
-            Some(c) => (column_type(c.r#type, c.charset).0, c.flags & 1 != 0),
+            Some(c) if plan.booleans.contains(&(*probe, *index)) => (Type::Scalar { name: "bool".into() }, c.flags & 1 != 0),
+            // A truth value is an integer to the server, so no other type is in doubt.
+            Some(c) => {
+                let ty = column_type(c.r#type, c.charset).0;
+                let ty = flows.get(*probe).and_then(|f| f.get(*index)).and_then(|reached| widened(&ty, *reached)).unwrap_or(ty);
+                match ty {
+                    Type::Scalar { name } if plan.either.contains(&(*probe, *index)) && name.split('|').any(|n| matches!(n, "int2" | "int4" | "int8")) => (Type::Scalar { name: format!("bool|{name}") }, c.flags & 1 != 0),
+                    ty => (ty, c.flags & 1 != 0),
+                }
+            }
             None => (Type::Unknown, false),
         },
         _ => (Type::Unknown, false),
@@ -251,6 +941,11 @@ enum Class {
     Number,
     /// A date or time, which a constant is converted to, or anything else.
     Other,
+    /// A TIMESTAMP, which a session shows as its own zone's wall-clock time. Where the clocks go
+    /// back an hour two instants show as one time, and the server compares a constant with the
+    /// column by that time unless it looks the constant up in the index (it does not under
+    /// IGNORE INDEX, or for an invisible index): no comparison is known to bound the rows.
+    Instant,
 }
 
 /// The columns of `tables`, each table by its name as given: a table the server has under
@@ -280,10 +975,10 @@ fn keys_of(rows: Vec<Vec<Value>>) -> Keys {
         let (Some(table), Some(index)) = (row.first().and_then(as_str), row.get(1).and_then(as_str)) else { continue };
         let column = row.get(2).and_then(as_str).map(str::to_ascii_lowercase);
         if let (Some(column), Some(ty)) = (&column, row.get(3).and_then(as_str)) {
-            keys.class.entry(table.to_ascii_lowercase()).or_default().insert(column.clone(), class_of(ty));
+            keys.class.entry(table.to_string()).or_default().insert(column.clone(), class_of(ty));
         }
         match by_index.last_mut() {
-            Some((t, i, cols)) if t.eq_ignore_ascii_case(table) && i.eq_ignore_ascii_case(index) => match (cols.as_mut(), column) {
+            Some((t, i, cols)) if t == table && i.eq_ignore_ascii_case(index) => match (cols.as_mut(), column) {
                 (Some(cols), Some(column)) => cols.push(column),
                 _ => *cols = None,
             },
@@ -291,11 +986,38 @@ fn keys_of(rows: Vec<Vec<Value>>) -> Keys {
         }
     }
     for (table, _, cols) in by_index {
+        // A table with no key left still answers to its name.
+        let of = keys.of.entry(table).or_default();
         if let Some(cols) = cols {
-            keys.of.entry(table.to_ascii_lowercase()).or_default().push(cols);
+            of.push(cols);
         }
     }
     keys
+}
+
+impl Keys {
+    /// The server's name for the table a statement names. The catalog query compares names as
+    /// the server does, so a row under another case than the statement's came back because the
+    /// server holds the two for one table (`lower_case_table_names` 1 or 2); where it tells them
+    /// apart (0) only the exact name comes back, and `Users` never takes the keys of `users`.
+    fn name(&self, table: &str) -> Option<&str> {
+        if let Some((name, _)) = self.of.get_key_value(table) {
+            return Some(name);
+        }
+        let mut same = self.of.keys().filter(|name| name.eq_ignore_ascii_case(table));
+        match (same.next(), same.next()) {
+            (Some(name), None) => Some(name),
+            _ => None,
+        }
+    }
+
+    fn keys(&self, table: &str) -> Option<&Vec<Vec<String>>> {
+        self.of.get(self.name(table)?).filter(|keys| !keys.is_empty())
+    }
+
+    fn classes(&self, table: &str) -> Option<&HashMap<String, Class>> {
+        self.class.get(self.name(table)?)
+    }
 }
 
 /// What a column of this `information_schema` data type compares as.
@@ -303,17 +1025,25 @@ fn class_of(data_type: &str) -> Class {
     match data_type.to_ascii_lowercase().as_str() {
         "char" | "varchar" | "tinytext" | "text" | "mediumtext" | "longtext" | "enum" | "set" | "binary" | "varbinary" | "tinyblob" | "blob" | "mediumblob" | "longblob" => Class::Text,
         "tinyint" | "smallint" | "mediumint" | "int" | "integer" | "bigint" | "decimal" | "numeric" | "float" | "double" | "real" | "bit" | "year" => Class::Number,
+        "timestamp" => Class::Instant,
         _ => Class::Other,
     }
 }
 
-/// A relation the top-level FROM reads: its table name and the name the statement uses for it.
+/// A relation the top-level FROM reads: its table name as the statement writes it, and the name
+/// the statement uses for it, in lower case.
 struct Relation {
     table: String,
     alias: String,
 }
 
-fn relations(select: &Select) -> Option<Vec<Relation>> {
+/// The names of a query's WITH queries, in lower case: in its FROM such a name is that query,
+/// whatever table shares it.
+fn with_names(q: &Query) -> Vec<String> {
+    q.with.iter().flat_map(|w| w.cte_tables.iter().map(|c| c.alias.name.value.to_ascii_lowercase())).collect()
+}
+
+fn relations(select: &Select, with: &[String]) -> Option<Vec<Relation>> {
     let mut out = Vec::new();
     for twj in &select.from {
         for factor in std::iter::once(&twj.relation).chain(twj.joins.iter().map(|j| &j.relation)) {
@@ -321,10 +1051,13 @@ fn relations(select: &Select) -> Option<Vec<Relation>> {
                 TableFactor::Table { name, alias, .. } => {
                     // A table of another schema has keys the query for this one's does not read.
                     let table = match name.0.as_slice() {
-                        [ast::ObjectNamePart::Identifier(i)] => Some(i.value.to_ascii_lowercase()),
+                        [ast::ObjectNamePart::Identifier(i)] => Some(i.value.clone()),
                         _ => None,
                     }?;
-                    let alias = alias.as_ref().map(|a| a.name.value.to_ascii_lowercase()).unwrap_or_else(|| table.clone());
+                    if with.contains(&table.to_ascii_lowercase()) {
+                        return None;
+                    }
+                    let alias = alias.as_ref().map(|a| a.name.value.to_ascii_lowercase()).unwrap_or_else(|| table.to_ascii_lowercase());
                     out.push(Relation { table, alias });
                 }
                 _ => return None,
@@ -336,7 +1069,7 @@ fn relations(select: &Select) -> Option<Vec<Relation>> {
 
 fn tables_of(q: &Query) -> Vec<String> {
     match q.body.as_ref() {
-        SetExpr::Select(s) => relations(s).map(|r| r.into_iter().map(|r| r.table).collect()).unwrap_or_default(),
+        SetExpr::Select(s) => relations(s, &with_names(q)).map(|r| r.into_iter().map(|r| r.table).collect()).unwrap_or_default(),
         _ => Vec::new(),
     }
 }
@@ -394,7 +1127,7 @@ fn one_before_limit(q: &Query) -> Result<(), String> {
         return if v.rows.len() == 1 { Ok(()) } else { Err("a VALUES list returns a row per row it lists".into()) };
     }
     let s = select_of(q)?;
-    if !matches!(s.group_by, GroupByExpr::Expressions(ref e, _) if e.is_empty()) {
+    if !matches!(s.group_by, GroupByExpr::Expressions(ref e, ref modifiers) if e.is_empty() && modifiers.is_empty()) {
         return Err("GROUP BY returns one row per group, and none when nothing matches".into());
     }
     if s.having.is_some() {
@@ -422,12 +1155,12 @@ fn at_most_one(q: &Query, keys: &Keys) -> Result<(), String> {
         return Ok(());
     }
     let s = select_of(q)?;
-    let Some(relations) = relations(s) else { return Err("only plain tables in the FROM are matched against a unique key".into()) };
+    let Some(relations) = relations(s, &with_names(q)) else { return Err("only plain tables in the FROM are matched against a unique key, and a WITH query is none".into()) };
     let single = relations.len() == 1;
     let equated = equated_columns(s.selection.as_ref());
     let pinned = |r: &Relation| -> bool {
-        let Some(table_keys) = keys.of.get(&r.table) else { return false };
-        let classes = keys.class.get(&r.table);
+        let Some(table_keys) = keys.keys(&r.table) else { return false };
+        let classes = keys.classes(&r.table);
         table_keys.iter().any(|key| {
             !key.is_empty()
                 && key.iter().all(|c| {
@@ -437,6 +1170,7 @@ fn at_most_one(q: &Query, keys: &Keys) -> Result<(), String> {
         })
     };
     let grouped: Option<&[Expr]> = match &s.group_by {
+        GroupByExpr::Expressions(_, modifiers) if !modifiers.is_empty() => return Err("GROUP BY … WITH ROLLUP adds a row for every level of the grouping".into()),
         GroupByExpr::Expressions(e, _) if !e.is_empty() => Some(e),
         GroupByExpr::All(_) => return Err("GROUP BY ALL returns one row per group".into()),
         _ => None,
@@ -446,7 +1180,7 @@ fn at_most_one(q: &Query, keys: &Keys) -> Result<(), String> {
             if !pinned(r) {
                 continue;
             }
-            let table_keys = keys.of.get(&r.table).cloned().unwrap_or_default();
+            let table_keys = keys.keys(&r.table).cloned().unwrap_or_default();
             let own = group.iter().all(|g| match column_ref(g) {
                 Some((alias, col)) => owns(alias.as_deref(), &col, r, single, &table_keys) && (alias.is_some() || single || table_keys.iter().flatten().any(|k| *k == col)),
                 None => false,
@@ -469,7 +1203,7 @@ fn at_most_one(q: &Query, keys: &Keys) -> Result<(), String> {
     if pinned(only) {
         return Ok(());
     }
-    match keys.of.get(&only.table) {
+    match keys.keys(&only.table) {
         None => Err(format!("`{}` has no unique index the engine can read, so nothing bounds the rows a WHERE matches", only.table)),
         Some(table_keys) => {
             let shown: Vec<String> = table_keys.iter().map(|k| format!("({})", k.join(", "))).collect();
@@ -530,6 +1264,7 @@ fn equated_columns(selection: Option<&Expr>) -> HashSet<(Option<String>, String,
 /// class. A date or time column converts a constant to its own type.
 fn compares_as_is(key: Option<Class>, value: Option<Class>) -> bool {
     match (key, value) {
+        (Some(Class::Instant), _) => false,
         (_, None) | (None | Some(Class::Other), _) => true,
         (Some(k), Some(v)) => k == v,
     }
@@ -537,9 +1272,11 @@ fn compares_as_is(key: Option<Class>, value: Option<Class>) -> bool {
 
 /// What a compared value compares as, where the build can tell; `None` for a placeholder.
 fn value_class(e: &Expr) -> Option<Class> {
+    // `md5` and `sha1` are not here: MySQL 9.7 and 26.7 have neither, and there a stored function
+    // of the name answers the call. The same holds in `deterministic`.
     const TEXT: &[&str] = &[
-        "lower", "upper", "lcase", "ucase", "trim", "ltrim", "rtrim", "concat", "concat_ws", "substring", "substr", "replace", "left", "right", "lpad", "rpad", "md5",
-        "sha1", "sha2", "hex", "to_base64", "from_base64", "date_format", "bin_to_uuid",
+        "lower", "upper", "lcase", "ucase", "trim", "ltrim", "rtrim", "concat", "concat_ws", "substring", "substr", "replace", "left", "right", "lpad", "rpad",
+        "sha2", "hex", "to_base64", "from_base64", "date_format", "bin_to_uuid",
     ];
     const NUMBER: &[&str] = &["abs", "round", "floor", "ceil", "ceiling", "length", "char_length", "character_length"];
     Some(match e {
@@ -553,6 +1290,8 @@ fn value_class(e: &Expr) -> Option<Class> {
         // `-x`, `+x`, `NOT x` and `~x` are numbers.
         Expr::UnaryOp { .. } => Class::Number,
         Expr::BinaryOp { op: ast::BinaryOperator::Plus | ast::BinaryOperator::Minus | ast::BinaryOperator::Multiply | ast::BinaryOperator::Divide | ast::BinaryOperator::Modulo | ast::BinaryOperator::MyIntegerDivide, .. } => Class::Number,
+        // `a || b` where it joins strings (PIPES_AS_CONCAT; elsewhere the tree is not read).
+        Expr::BinaryOp { op: ast::BinaryOperator::StringConcat, .. } => Class::Text,
         Expr::Function(f) => {
             let name = builtin(f);
             if TEXT.contains(&name.as_str()) {
@@ -584,8 +1323,8 @@ fn value_class(e: &Expr) -> Option<Class> {
 fn deterministic(e: &Expr) -> bool {
     const KNOWN: &[&str] = &[
         "lower", "upper", "lcase", "ucase", "trim", "ltrim", "rtrim", "concat", "concat_ws", "abs", "round", "floor", "ceil", "ceiling", "length",
-        "char_length", "character_length", "substring", "substr", "replace", "left", "right", "lpad", "rpad", "coalesce", "ifnull", "nullif", "if", "md5",
-        "sha1", "sha2", "hex", "unhex", "to_base64", "from_base64", "date_format", "str_to_date", "from_unixtime", "uuid_to_bin", "bin_to_uuid",
+        "char_length", "character_length", "substring", "substr", "replace", "left", "right", "lpad", "rpad", "coalesce", "ifnull", "nullif", "if",
+        "sha2", "hex", "unhex", "to_base64", "from_base64", "date_format", "str_to_date", "from_unixtime", "uuid_to_bin", "bin_to_uuid",
     ];
     match e {
         Expr::Value(_) | Expr::TypedString { .. } => true,
@@ -610,6 +1349,8 @@ fn deterministic(e: &Expr) -> bool {
 /// Whether an expression reads a column anywhere; anything the walk does not know counts as reading one.
 fn reads_column(e: &Expr) -> bool {
     match e {
+        // A user variable is no value the build knows the type of, and may change from row to row.
+        _ if is_variable(e) => true,
         Expr::Identifier(_) | Expr::CompoundIdentifier(_) => true,
         Expr::Value(_) | Expr::TypedString { .. } => false,
         Expr::Nested(inner) | Expr::UnaryOp { expr: inner, .. } | Expr::Cast { expr: inner, .. } | Expr::IsNull(inner) | Expr::IsNotNull(inner) => reads_column(inner),
@@ -626,14 +1367,15 @@ fn reads_column(e: &Expr) -> bool {
     }
 }
 
-const AGGREGATES: &[&str] = &["count", "sum", "avg", "min", "max", "group_concat", "json_arrayagg", "json_objectagg", "bit_and", "bit_or", "bit_xor", "std", "stddev", "stddev_pop", "stddev_samp", "var_pop", "var_samp", "variance"];
+pub(crate) const AGGREGATES: &[&str] = &["count", "sum", "avg", "min", "max", "group_concat", "json_arrayagg", "json_objectagg", "bit_and", "bit_or", "bit_xor", "std", "stddev", "stddev_pop", "stddev_samp", "var_pop", "var_samp", "variance"];
 
 /// The name of the built-in function a call names, in lower case, or nothing for a name qualified
-/// with a schema: that is a stored function, whatever built-in shares its name, and an unqualified
-/// name is the built-in's wherever there is one.
+/// with a schema or written in backticks: the first is a stored function, whatever built-in shares
+/// its name, and so is the second where the built-in is one the grammar names (`` `count`(x) ``,
+/// `` `coalesce`(x) ``). A plain unqualified name is the built-in's wherever there is one.
 pub(crate) fn builtin(f: &ast::Function) -> String {
     match f.name.0.as_slice() {
-        [only] => only.to_string().to_ascii_lowercase(),
+        [ast::ObjectNamePart::Identifier(only)] if only.quote_style.is_none() => only.value.to_ascii_lowercase(),
         _ => String::new(),
     }
 }
@@ -671,7 +1413,7 @@ mod tests {
 
     fn keys() -> Keys {
         keys_of(
-            [("users", "PRIMARY", "id", "int"), ("users", "email", "email", "varchar"), ("posts", "PRIMARY", "id", "bigint"), ("events", "at", "at", "datetime")]
+            [("users", "PRIMARY", "id", "int"), ("users", "email", "email", "varchar"), ("posts", "PRIMARY", "id", "bigint"), ("events", "at", "at", "datetime"), ("stamps", "at", "at", "timestamp")]
                 .into_iter()
                 .map(|(t, i, c, ty)| vec![json!(t), json!(i), json!(c), json!(ty)])
                 .collect(),
@@ -732,6 +1474,259 @@ mod tests {
         assert_eq!(card("select id from users where id = cast(? as signed)"), "maybeOne");
         // A key part over an expression has no column: the index is no key of its columns.
         let functional = keys_of(vec![vec![json!("users"), json!("u"), json!("email"), json!("varchar")], vec![json!("users"), json!("u"), Value::Null, Value::Null]]);
-        assert!(functional.of.is_empty());
+        assert!(functional.keys("users").is_none());
+    }
+
+    #[test]
+    fn a_key_bounds_nothing_where_the_server_may_not_use_it() {
+        // A TIMESTAMP shows two instants as one wall-clock time where the clocks go back, and a
+        // scan compares by that time.
+        assert_eq!(card("select id from stamps where at = ?"), "many");
+        assert_eq!(card("select id from stamps where at = '2026-11-01 01:30:00'"), "many");
+        // WITH ROLLUP adds a row to the one group, and to the one row of an aggregate.
+        assert_eq!(card("select id, count(*) as n from users where id = ? group by id with rollup"), "many");
+        assert_eq!(card("select count(*) as n from users group by id with rollup limit 1"), "maybeOne");
+        // A WITH query hides the table of its name, and has no key.
+        assert_eq!(card("with users as (select 1 as id union all select 1) select id from users where id = 1"), "many");
+        // A name in backticks is a stored function's where the grammar names the built-in.
+        assert_eq!(card("select `count`(id) as n from users"), "many");
+        assert_eq!(card("select id from users where email = `lower`(?)"), "many");
+        // A user variable holds a value of any type: a number beside a string key compares as two doubles.
+        assert_eq!(card("select id from users where email = @n"), "many");
+        assert_eq!(card("select id from users where email = @`n`"), "many");
+        assert_eq!(card("select id from users where email = concat(@`n`, '')"), "many");
+    }
+
+    #[test]
+    fn a_table_takes_the_keys_the_server_holds_under_its_name() {
+        let row = |t: &str, c: &str| vec![json!(t), json!("PRIMARY"), json!(c), json!("int")];
+        // The server holds `Users` and `users` for two tables (lower_case_table_names 0) and
+        // answers with the one named; where it holds them for one it answers with its own name.
+        let exact = keys_of(vec![row("Users", "id")]);
+        assert_eq!(exact.keys("Users"), Some(&vec![vec!["id".to_string()]]));
+        assert_eq!(exact.keys("users"), Some(&vec![vec!["id".to_string()]]));
+        let both = keys_of(vec![row("Users", "id"), row("users", "other")]);
+        assert_eq!(both.keys("users"), Some(&vec![vec!["other".to_string()]]));
+        assert_eq!(both.keys("Users"), Some(&vec![vec!["id".to_string()]]));
+        assert!(both.keys("USERS").is_none());
+    }
+
+    /// Analyzes with a host that answers every prepare with `described`, the mode query with
+    /// `mode` and any other query with no rows; says whether the mode was asked for.
+    fn analyzed(sql: &str, described: Value, mode: &str) -> (Analysis, bool) {
+        let mut answers: HashMap<String, crate::api::Answer> = HashMap::new();
+        let mut asked = false;
+        for _ in 0..8 {
+            let host = Host::new(&answers);
+            if let Some(analysis) = analyze_text(sql, &host) {
+                return (analysis, asked);
+            }
+            for need in host.needs() {
+                let (id, answer) = match need {
+                    crate::api::Need::Describe { id, .. } => (id, json!({ "mysql": described })),
+                    crate::api::Need::Query { id, sql, .. } if sql == SQL_MODE_QUERY => {
+                        asked = true;
+                        (id, json!({ "rows": [[mode]] }))
+                    }
+                    crate::api::Need::Query { id, sql, .. } if sql == VIEWS_QUERY => (id, json!({ "rows": [] })),
+                    crate::api::Need::Query { id, .. } => (id, json!({ "rows": [["users", "PRIMARY", "id", "int"], ["users", "email", "email", "varchar"]] })),
+                };
+                answers.insert(id, serde_json::from_value(answer).unwrap());
+            }
+        }
+        panic!("the analysis never settled")
+    }
+
+    #[test]
+    fn a_statement_the_server_reads_by_its_mode_is_read_by_it() {
+        let one = json!({ "columns": [{ "name": "id", "type": 3, "flags": 1 }], "params": [] });
+        let rows = |sql: &str, mode: &str| analyzed(sql, one.clone(), mode).0.cardinality;
+        let default = "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION";
+        // `||` is OR unless PIPES_AS_CONCAT: `id = 1 || 1` is every row.
+        assert_eq!(rows("select id from users where id = 1 || 1", default), "many");
+        assert_eq!(rows("select id from users where id = 1 and name = 'a' || 'b'", default), "many");
+        assert_eq!(rows("select id from users where id = 1 and name = 'a' || 'b'", "PIPES_AS_CONCAT"), "maybeOne");
+        // A space before the parenthesis calls a stored function unless IGNORE_SPACE.
+        assert_eq!(rows("select count (id) as id from users", default), "many");
+        assert_eq!(rows("select count/* all */(id) as id from users", default), "many");
+        assert_eq!(rows("select count /* all */ (id) as id from users", "IGNORE_SPACE"), "many");
+        assert_eq!(rows("select count\n(id) as id from users", "IGNORE_SPACE"), "one");
+        assert_eq!(rows("select count (id) as id from users", "ignore_space"), "one");
+        assert_eq!(rows("select app.count (id) as id from users", default), "many");
+        // A double-quoted word is a column under ANSI_QUOTES, a backslash a character under
+        // NO_BACKSLASH_ESCAPES, and the parser reads both as the session does.
+        assert_eq!(rows("select id from users where email = \"email\"", default), "maybeOne");
+        assert_eq!(rows("select id from users where email = \"email\"", "ANSI_QUOTES"), "many");
+        assert_eq!(rows("select \"id\" from \"users\" where \"id\" = 1", "ANSI_QUOTES"), "maybeOne");
+        assert_eq!(rows("select id from users where email = 'a\\'' or 1 = 1 -- '", default), "many");
+        // There the whole tail is one string: `'a\'' or 1 = 1 -- '`.
+        assert_eq!(rows("select id from users where email = 'a\\'' or 1 = 1 -- '", "NO_BACKSLASH_ESCAPES"), "maybeOne");
+        assert_eq!(rows("select id from users where email = 'a\\\\'", default), "maybeOne");
+        assert_eq!(rows("select id from users where email = 'a\\\\'", "NO_BACKSLASH_ESCAPES"), "maybeOne");
+        assert_eq!(rows("select id from users where email = 'C:\\' and id = 1", "NO_BACKSLASH_ESCAPES"), "maybeOne");
+        // NOT binds tighter than a comparison under HIGH_NOT_PRECEDENCE.
+        assert_eq!(rows("select id from users where id = 1 and not name = 'x'", default), "maybeOne");
+        assert_eq!(rows("select id from users where id = 1 and not name = 'x'", "HIGH_NOT_PRECEDENCE"), "many");
+        // A write returns no rows however it is read.
+        let (write, _) = analyzed("update users set name = 'a' || 'b' where id = 1", json!({ "columns": [], "params": [] }), default);
+        assert_eq!((write.kind.as_str(), write.cardinality.as_str()), ("update", "none"));
+        assert_eq!(analyzed("select id from users where id = 1 || 1", one.clone(), default).0.kind, "select");
+        // A hint may set the mode for the statement alone.
+        assert_eq!(rows("select /*+ SET_VAR(sql_mode = 'PIPES_AS_CONCAT') */ id from users where id = 1", default), "many");
+        // The mode is asked for only where the text turns on it.
+        for sql in ["select id from users where id = 1 and name is not null", "select id from users where id = 1 and id not in (2) and name not like '||' and id != 3", "select count(id) as id from users"] {
+            let (analysis, asked) = analyzed(sql, one.clone(), "HIGH_NOT_PRECEDENCE,ANSI_QUOTES");
+            assert!(!asked, "{sql}");
+            assert_ne!(analysis.cardinality, "many", "{sql}");
+        }
+        // A placeholder count the server does not share: the engine read the text otherwise.
+        let miscounted = analyzed("select id from users where id = :id", json!({ "columns": [{ "name": "id", "type": 3, "flags": 1 }], "params": [{ "type": 8 }, { "type": 8 }] }), default).0;
+        assert_eq!(miscounted.diagnostics.iter().map(|d| d.code).collect::<Vec<_>>(), vec![1]);
+        // The server runs what a version comment holds.
+        let (analysis, _) = analyzed("select id from users /*!80000 where id = 1 */", one.clone(), default);
+        assert_eq!(analysis.diagnostics.iter().map(|d| (d.code, d.start, d.length)).collect::<Vec<_>>(), vec![(10, 21, 24)]);
+    }
+
+    #[test]
+    fn statements_nest_as_deeply_as_on_postgres() {
+        // sqlparser's own bound is 50; the engine's is the Postgres parser's. A chain of operators
+        // counts every operator (`id = 0 or (…)` is two a level), and a statement past the bound is
+        // an error to parse, left to the server's describe, never an overflow of the stack.
+        let deepest = |shape: &str| crate::stack::run(|| (1..1_000).take_while(|&n| parse(&MySqlDialect {}, &crate::stack::nested(shape, n)).is_ok()).last().unwrap_or(0));
+        let found: Vec<(&str, usize)> = ["sum", "and_or", "case", "coalesce", "subquery"].into_iter().map(|shape| (shape, deepest(shape))).collect();
+        assert_eq!(found, vec![("sum", 501), ("and_or", 248), ("case", 495), ("coalesce", 496), ("subquery", 247)]);
+        for shape in ["sum", "case", "or", "and_or"] {
+            assert!(crate::stack::run(|| parse(&MySqlDialect {}, &crate::stack::nested(shape, 100_000)).is_err()), "{shape}");
+        }
+        // A whole analysis at the bound and far past it, which used to overflow the stack.
+        let described = json!({ "columns": [{ "name": "x", "type": 8, "flags": 1 }], "params": [] });
+        for n in [501, 100_000] {
+            let (analysis, _) = crate::stack::run(|| analyzed(&crate::stack::nested("sum", n), described.clone(), "STRICT_TRANS_TABLES"));
+            assert_eq!(analysis.columns.len(), 1, "{n}");
+        }
+    }
+
+    #[test]
+    fn the_session_dialect_is_mysqls_but_for_strings_and_double_quotes() {
+        // In the default reading the tree is `MySqlDialect`'s, statement for statement.
+        for sql in [
+            "select a.id, count(*) div 2, x << 1 from t a straight_join u b on a.id = b.id where a.n && 1 group by a.id with rollup limit 1, 2",
+            "select 'it\\'s', \"say \\\"hi\\\"\", `n`, binary name, _utf8mb4'x', 0x1f, x'1f', b'1', date '2026-01-01' + interval 1 day from t use index (k) for update",
+            "insert into t set a = 1, b = 'x' on duplicate key update b = values(b)",
+            "update t set a = a + 1 where id = ? order by id limit 1",
+            "select /*+ max_execution_time(10) */ id from t where match (name) against ('x' in boolean mode) -- c",
+            "select json_object('k', json_arrayagg(id)) from t # c",
+        ] {
+            let mysql = Parser::parse_sql(&MySqlDialect {}, sql).map(|v| format!("{v:?}"));
+            assert_eq!(Parser::parse_sql(&SessionDialect(MysqlText::default()), sql).map(|v| format!("{v:?}")), mysql, "{sql}");
+        }
+        let one = |sql: &str, text: MysqlText| Parser::parse_sql(&SessionDialect(text), sql).unwrap().pop().unwrap().to_string();
+        let plain = MysqlText { backslash_escapes: false, ansi_quotes: false };
+        let ansi = MysqlText { backslash_escapes: true, ansi_quotes: true };
+        assert_eq!(one(r"select 'C:\' as p, id from t where id = ?", plain), r"SELECT 'C:\' AS p, id FROM t WHERE id = ?");
+        assert!(Parser::parse_sql(&SessionDialect(MysqlText::default()), r"select 'C:\' as p, id from t where id = ?").is_err());
+        assert_eq!(one(r#"select "id" from "t" where "id" = 1"#, ansi), r#"SELECT "id" FROM "t" WHERE "id" = 1"#);
+    }
+
+    #[test]
+    fn placeholders_are_read_as_the_session_reads_strings() {
+        let by_id = json!({ "columns": [{ "name": "id", "type": 3, "flags": 1 }], "params": [{ "type": 3 }] });
+        let default = "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION";
+        let read = |sql: &str, mode: &str| {
+            let (analysis, asked) = analyzed(sql, by_id.clone(), mode);
+            (analysis.params.iter().map(|p| p.name.clone()).collect::<Vec<_>>(), analysis.diagnostics.iter().map(|d| (d.code, d.message.clone())).collect::<Vec<_>>(), asked)
+        };
+        // An escaped quote leaves the placeholder after it in the string; `'\\'` ends where it seems to.
+        assert_eq!(read(r"select id from users where name = 'it\'s :not' and id = :id", default), (vec!["id".to_string()], vec![], true));
+        assert_eq!(read(r"select id from users where name = '\\' and id = :id", default), (vec!["id".to_string()], vec![], true));
+        // Without escapes `'C:\'` ends at its second quote; with them it runs on to the end.
+        assert_eq!(read(r"select id from users where name = 'C:\' and id = :id", "STRICT_TRANS_TABLES,NO_BACKSLASH_ESCAPES"), (vec!["id".to_string()], vec![], true));
+        assert_eq!(read(r"select id from users where name = 'C:\' and id = :id", default), (vec![], vec![(1, "unterminated string literal".to_string())], true));
+        // Text every mode reads alike asks for no mode: a `#` comment, `--` before a non-space.
+        assert_eq!(read("select id from users where id = :id # and :no", default), (vec!["id".to_string()], vec![], false));
+        assert_eq!(read("select id from users where id = 1 --:id", default), (vec!["id".to_string()], vec![], false));
+        // A mode the server does not say leaves the placeholders unread.
+        let mut answers: HashMap<String, crate::api::Answer> = HashMap::new();
+        let sql = r"select id from users where name = 'C:\' and id = :id";
+        let host = Host::new(&answers);
+        assert!(analyze_text(sql, &host).is_none());
+        for need in host.needs() {
+            if let crate::api::Need::Query { id, .. } = need {
+                answers.insert(id, serde_json::from_value(json!({ "rows": [] })).unwrap());
+            }
+        }
+        let analysis = analyze_text(sql, &Host::new(&answers)).expect("the mode was answered");
+        assert_eq!(analysis.diagnostics.iter().map(|d| d.code).collect::<Vec<_>>(), vec![1]);
+    }
+
+    #[test]
+    fn a_column_an_execution_may_type_otherwise_is_typed_as_either() {
+        // A BIGINT expression of twelve digits, and an INT column of the table `users`.
+        let column = |ty: u32| json!({ "name": "c", "type": ty, "flags": 0, "length": 12, "org_table": if ty == 3 { "users" } else { "" } });
+        let types = |sql: &str, columns: &[u32], params: &[u32]| {
+            let described = json!({ "columns": columns.iter().map(|&c| column(c)).collect::<Vec<_>>(), "params": params.iter().map(|&p| json!({ "type": p })).collect::<Vec<_>>() });
+            let shown = |ty: &Type| match ty {
+                Type::Scalar { name } => name.clone(),
+                other => format!("{other:?}"),
+            };
+            analyzed(sql, described, "").0.columns.iter().map(|c| shown(&c.ty)).collect::<Vec<_>>().join(" ")
+        };
+        // A number for a `?` the server typed as an integer may be no integer: a DOUBLE where it
+        // is bound, a DECIMAL where it is written into the text.
+        assert_eq!(types("select :n + 1 as c, id, name from users where id = :id", &[8, 3, 253], &[8, 8]), "int8|float8|numeric int4 text");
+        assert_eq!(types("select id,\n  coalesce(:n, id) as c from users", &[3, 8], &[8]), "int4 int8|float8|numeric");
+        assert_eq!(types("select u.*, :n * 2 as c from users u", &[3, 253, 8], &[8]), "int4 text int8|float8|numeric");
+        assert_eq!(types("select :n * 2 as c, u.* from users u", &[8, 3, 253], &[8]), "int8|float8|numeric int4 text");
+        // `-5` is a BIGINT where the prepare typed `-?` a DOUBLE.
+        assert_eq!(types("select -:x as c, abs(:x) as d", &[5, 5], &[5, 5]), "float8|int8|numeric float8|int8|numeric");
+        // A string for a DECIMAL makes the product a DOUBLE where it is written into the text,
+        // and is the value itself where nothing computes with it.
+        assert_eq!(types("select id * :rate as c, coalesce(:rate, price) as d, +:rate as e, round(:rate) as f from users", &[246, 246, 246, 246], &[246, 246, 246, 246]), "numeric|int8|float8 numeric|int8|float8|text numeric|int8|float8|text numeric|int8|float8");
+        assert_eq!(types("select length(:s) as c, year(:d) as d, app.pick(:s) as e", &[8, 8, 8], &[253, 10, 253]), "int8 int8 int8");
+        // A comparison and a cast are their own types whatever the value is, and so is a column
+        // beside the placeholder.
+        assert_eq!(types("select id = :n as c, cast(:n as signed) as d, id from users", &[8, 8, 3], &[8, 8]), "int8 int8 int4");
+        // A column of a derived table or a WITH query carries what reached it.
+        assert_eq!(types("select d.c from (select :n + 1 as c from users) d", &[8], &[8]), "int8|float8|numeric");
+        assert_eq!(types("with d as (select :n + 1 as c) select sum(c) as c from d", &[246], &[8]), "numeric|int8|float8");
+        assert_eq!(types("select (select max(:n + p.id) from posts p) as c from users", &[8], &[8]), "int8|float8|numeric");
+        assert_eq!(types("select id from users where id = :n union all select :n + 1", &[8], &[8, 8]), "int8|float8|numeric");
+        // A `Date` bound for a DATE makes the sum a DATETIME, and a string written into the text a string.
+        assert_eq!(types("select :day + interval 1 day as c, addtime(:t, '1') as d", &[10, 11], &[10, 11]), "date|timestamp|time|text Unknown");
+        assert_eq!(types("select created + interval :n day as c from users", &[10], &[8]), "date");
+        assert_eq!(types("select adddate(created, :n) as c, addtime(:t, '1') as d from users", &[10, 11], &[8, 11]), "date|timestamp|time|text Unknown");
+        // A bit operation is a number or a string of bytes by what it is given, and a form the
+        // walk does not read may be anything.
+        assert_eq!(types("select ~:a as c, :b | 1 as d, bit_count(:c) as e, id | 1 as f from users", &[253, 8, 8, 8], &[253, 8, 253]), "Unknown Unknown Unknown int8");
+        assert_eq!(types("select :a member of ('[1]') as c, substring(name, 1, :n) as d, ceil(:x) as e from users", &[8, 253, 8], &[8, 8, 5]), "Unknown text int8|float8|numeric");
+        // A user variable holds a value of any type.
+        assert_eq!(types("select @n := coalesce(@n, 0) + 1 as c, id, @@max_join_size as d, @`q` as e from users", &[8, 3, 8, 251], &[]), "Unknown int4 int8 Unknown");
+        assert_eq!(types("select d.c, 'a@b' as e from (select @n as c) d", &[8, 253], &[]), "Unknown text");
+        // A string bound beside a JSON value makes the result a string of bytes.
+        assert_eq!(types("select coalesce(doc, :fallback) as c, json_extract(doc, :path) as d from users", &[245, 245], &[245, 253]), "Unknown Json");
+    }
+
+    #[test]
+    fn an_integer_the_statement_computes_is_as_wide_as_the_plan_makes_it() {
+        let types = |columns: Value, views: &[&str]| {
+            let lexed = lex::lex("select 1", Dialect::Mysql).unwrap();
+            let raw: MysqlDescribe = serde_json::from_value(json!({ "columns": columns, "params": [] })).unwrap();
+            let views: HashSet<String> = views.iter().map(|v| v.to_string()).collect();
+            let settled = settle("select 1", &lexed, &lex::rewrite("select 1", &lexed, Target::Question), None, &raw, Some(&views));
+            settled.iter().map(|ty| match ty { Some(Type::Scalar { name }) => name.clone(), other => format!("{other:?}") }).collect::<Vec<_>>().join(" ")
+        };
+        let column = |ty: u32, length: u32, table: &str| json!({ "name": "c", "type": ty, "flags": 0, "length": length, "org_table": table });
+        // A table's own column keeps its type; a view's may be an expression.
+        assert_eq!(types(json!([column(3, 11, "users"), column(8, 20, "users"), column(1, 4, "users")]), &[]), "None None None");
+        assert_eq!(types(json!([column(3, 11, "Recent"), column(8, 2, "recent")]), &["recent"]), "int4|int8 int8|int4");
+        // An expression: under ten digits an INT, from ten on a BIGINT.
+        assert_eq!(types(json!([column(8, 1, ""), column(8, 9, ""), column(8, 10, ""), column(8, 21, "")]), &[]), "int8|int4 int8|int4 None None");
+        assert_eq!(types(json!([column(3, 11, ""), column(3, 9, ""), column(1, 4, ""), column(13, 4, ""), column(9, 10, "")]), &[]), "int4|int8 None None None int4|int8");
+        // A host that sends neither the length nor the table.
+        assert_eq!(types(json!([{ "name": "c", "type": 3, "flags": 0 }, { "name": "c", "type": 8, "flags": 0 }, { "name": "c", "type": 253, "flags": 0 }]), &[]), "int4|int8 int8|int4 None");
+        // Without the views, every name may be one.
+        let raw: MysqlDescribe = serde_json::from_value(json!({ "columns": [column(3, 11, "users")], "params": [] })).unwrap();
+        let lexed = lex::lex("select 1", Dialect::Mysql).unwrap();
+        assert_eq!(settle("select 1", &lexed, &lex::rewrite("select 1", &lexed, Target::Question), None, &raw, None), vec![Some(Type::Scalar { name: "int4|int8".into() })]);
     }
 }

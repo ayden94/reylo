@@ -3,7 +3,7 @@ import query from "./query.sql";
 import nested from "./nested.sql";
 import count from "./count.sql";
 import grouped from "./grouped.sql";
-const sql = postgres("postgres://localhost:5432/postgres");
+const sql = postgres(process.env["DATABASE_URL"] ?? "postgres://localhost:5432/postgres");
 const ada = await query.run(sql, { id: 1, name: "ada" });
 const nobody = await query.run(sql, { id: 999, name: "x" });
 const curried = await query.with(sql)({ id: 1, name: "ada" });

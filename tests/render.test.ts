@@ -59,6 +59,21 @@ test("the representation options still apply beside a composite on the wire", ()
   assert.deepEqual(row({ ...defaultRepr, dates: "temporal", bigint: "bigint" }), ["bigint", "Temporal.Instant", "string"]);
 });
 
+test("a scalar that names two types is either", () => {
+  const mysql: Repr = { dates: "Date", bigint: "number", decimal: "string", json: "parsed", binary: "Uint8Array" };
+  // What MySQL answers with by what is bound for a placeholder: mysql2 hands both integers back as numbers.
+  assert.equal(renderType(scalar("int8|float8"), false, "mysql", mysql), "number");
+  assert.equal(renderType(scalar("int8|float8"), false, "mysql", { ...mysql, bigint: "bigint" }), "bigint | number");
+  assert.equal(renderType(scalar("numeric|float8"), false, "mysql", mysql), "string | number");
+  assert.equal(renderType(scalar("date|timestamp"), false, "mysql", mysql), "Date");
+  assert.equal(renderType({ kind: "array", of: scalar("numeric|float8") }, false, "mysql", mysql), "(string | number)[]");
+  // A truth value a document may hold as `true` or as 1.
+  assert.equal(renderType(scalar("bool|int8"), true, "mysql", mysql), "boolean | number");
+  assert.equal(renderType({ kind: "list", of: scalar("bool|int8"), nullable_items: true }, false, "mysql", mysql), "(boolean | number | null)[]");
+  // A part no table spells leaves nothing known.
+  assert.equal(renderType(scalar("int8|mystery"), false, "mysql", mysql), "unknown");
+});
+
 test("a composite with no columns inside a document is an empty object", () => {
   assert.equal(renderType({ kind: "composite", name: "empty", fields: [] }, true), "Record<never, never>");
   assert.equal(renderType({ kind: "composite", name: "empty", fields: [] }, false), "string");

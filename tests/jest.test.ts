@@ -11,7 +11,9 @@ const lab = fileURLToPath(new URL("../lab/jest", import.meta.url));
 const skip = !existsSync(`${lab}/node_modules/jest`) && "lab/jest is not installed";
 
 function run(bin: string, args: string[], nodeOptions = "") {
-  const r = spawnSync(process.execPath, [`${lab}/node_modules/${bin}`, ...args], { cwd: lab, encoding: "utf8", env: { ...process.env, NODE_OPTIONS: `--no-warnings ${nodeOptions}` } });
+  // NO_COLOR: Vitest colours its summary even into a pipe in some environments (one with no
+  // variables but HOME and PATH, for one), and the assertions read the plain text.
+  const r = spawnSync(process.execPath, [`${lab}/node_modules/${bin}`, ...args], { cwd: lab, encoding: "utf8", env: { ...process.env, NO_COLOR: "1", NODE_OPTIONS: `--no-warnings ${nodeOptions}` } });
   return { status: r.status, output: r.stdout + r.stderr };
 }
 

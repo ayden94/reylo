@@ -47,6 +47,7 @@ use crate::types::DescribedColumn;
 use crate::jsonshape::{as_select, last_string, select_text, single_target, top_context};
 use crate::levels::{Columns, Level, Withs};
 use crate::pgtypes::oid;
+use crate::returning::Rows;
 use pg_query::protobuf::{self, node::Node as NodeEnum, Node, ParseResult, RawStmt, SelectStmt};
 use std::collections::{HashMap, HashSet};
 
@@ -71,9 +72,9 @@ pub const FUNCTIONS: &[&str] = &["count", "sum", "avg", "min", "max", "json_agg"
 /// against the routines that the PostgreSQL 18 sources let return NULL for non-null input
 /// (typedpg derives that list from them, `builtin_nullability.rs`).
 pub const POSTGRES_TOTAL: &[&str] = &[
-    "initcap", "length", "char_length", "character_length", "octet_length", "btrim", "ltrim", "rtrim", "md5",
+    "initcap", "casefold", "length", "char_length", "character_length", "octet_length", "btrim", "ltrim", "rtrim", "md5",
     "reverse", "repeat", "replace", "left", "right", "lpad", "rpad", "translate", "ascii", "chr", "split_part", "strpos", "starts_with",
-    "regexp_replace", "quote_ident", "quote_literal", "encode", "decode", "to_hex", "to_timestamp", "to_date",
+    "regexp_replace", "quote_ident", "quote_literal", "encode", "decode", "to_hex", "to_timestamp", "to_date", "uuidv7",
     "abs", "round", "floor", "ceil", "ceiling", "trunc", "sign", "sqrt", "cbrt", "exp", "ln", "log", "power", "mod",
     "date_trunc", "age", "make_date", "make_timestamp", "make_timestamptz", "nextval",
     "cardinality", "array_to_string", "array_append", "array_prepend", "array_cat", "array_remove",
@@ -88,11 +89,23 @@ pub const POSTGRES_TOTAL_FOR: &[(&str, &[u32])] = &[("lower", TEXT_TYPES), ("upp
 const TEXT_TYPES: &[u32] = &[oid::TEXT, oid::VARCHAR, oid::BPCHAR, oid::NAME];
 /// The number types `to_char`'s number overloads take.
 const NUMBER_TYPES: &[u32] = &[oid::INT2, oid::INT4, oid::INT8, oid::NUMERIC, oid::FLOAT4, oid::FLOAT8];
+/// The [`POSTGRES_TOTAL`] functions that return `jsonb`, which the cast rule below asks about.
+const POSTGRES_JSONB: &[&str] = &["to_jsonb", "jsonb_strip_nulls"];
+/// The cast targets `jsonb` has a cast function to. Since PostgreSQL 18 each answers SQL NULL
+/// for a JSON null (`'null'::jsonb::int`), where 17 and earlier raised an error: on 18 a cast to
+/// one of them keeps its argument's nullability only where the argument is no `jsonb` value
+/// ([`Trust::jsonb_casts_raise`] says which server it is).
+const POSTGRES_JSONB_NULL_CASTS: &[&str] = &["bool", "numeric", "int2", "int4", "int8", "float4", "float8"];
+/// The first oid a database assigns to an object of its own (`FirstNormalObjectId`): a type from
+/// there on may be a domain over any type.
+const FIRST_USER_OID: u32 = 16384;
 /// Postgres built-ins that never answer NULL, whatever their arguments: the clock and random
 /// functions, and the constructors that turn a NULL argument into an empty string or a JSON null.
 /// A `VARIADIC` call is read as nothing, since `concat(VARIADIC NULL::text[])` is NULL.
+/// `uuidv4` is PostgreSQL 18's; `uuidv7` is NULL for a NULL shift, so it is in [`POSTGRES_TOTAL`],
+/// and never NULL without one.
 pub const POSTGRES_NEVER_NULL: &[&str] = &[
-    "now", "clock_timestamp", "statement_timestamp", "transaction_timestamp", "gen_random_uuid", "random",
+    "now", "clock_timestamp", "statement_timestamp", "transaction_timestamp", "gen_random_uuid", "uuidv4", "random",
     "concat", "quote_nullable", "num_nulls", "num_nonnulls",
     "json_build_object", "json_build_array", "jsonb_build_object", "jsonb_build_array",
 ];
@@ -108,7 +121,7 @@ pub const POSTGRES_STRICT_OPERATORS: &[&str] = &["=", "<>", "<", ">", "<=", ">="
 /// which is all a strict predicate asks of them, whatever they answer for other input: `lower` of
 /// an empty range is NULL too, and that only removes more rows.
 pub const POSTGRES_STRICT: &[&str] = &[
-    "lower", "upper", "initcap", "length", "char_length", "character_length", "octet_length", "bit_length", "btrim", "ltrim", "rtrim",
+    "lower", "upper", "initcap", "casefold", "length", "char_length", "character_length", "octet_length", "bit_length", "btrim", "ltrim", "rtrim",
     "md5", "reverse", "repeat", "replace", "left", "right", "lpad", "rpad", "translate", "ascii", "chr", "split_part", "strpos", "position",
     "starts_with", "substr", "substring", "regexp_replace", "quote_ident", "to_hex", "to_char", "to_date", "to_timestamp",
     "abs", "round", "floor", "ceil", "ceiling", "trunc", "sign", "sqrt", "cbrt", "exp", "ln", "log", "power", "mod",
@@ -206,6 +219,9 @@ pub enum Expr {
     /// The inner expression, which proves non-null only when its type is one of these: the first
     /// argument of a function that is total for some overloads ([`POSTGRES_TOTAL_FOR`]).
     Guarded(Box<Expr>, &'static [u32]),
+    /// The inner expression, which proves non-null only where it holds no `jsonb` value for
+    /// certain: the argument of a cast to a number or a boolean ([`POSTGRES_JSONB_NULL_CASTS`]).
+    NotJsonb(Box<Expr>),
     /// The inner expression, which cannot be NULL where it is read: a column inside a CASE arm
     /// that runs only where it is not NULL. Its type is the inner one's.
     Narrowed(Box<Expr>),
@@ -287,6 +303,10 @@ pub struct Trust {
     pub non_null_params: bool,
     /// The parameter numbers that may be null all the same.
     pub nullable_params: HashSet<i32>,
+    /// Whether the server's cast of a JSON null to a number or a boolean raises an error, which
+    /// is every PostgreSQL before 18 ([`POSTGRES_JSONB_NULL_CASTS`]). A host that did not ask
+    /// leaves it unset, and a cast of a `jsonb` value then proves nothing.
+    pub jsonb_casts_raise: bool,
 }
 
 impl Trust {
@@ -312,11 +332,15 @@ impl Trust {
 /// Read one rewritten statement's expression columns. SQLite's `?n` placeholders are read as
 /// `$n`, which is how libpg_query spells one; nothing runs against the database here.
 pub fn plan(sql: &str, dialect: Dialect, trust: &Trust, columns: &Columns) -> Plan {
+    crate::stack::run(|| plan_here(sql, dialect, trust, columns))
+}
+
+fn plan_here(sql: &str, dialect: Dialect, trust: &Trust, columns: &Columns) -> Plan {
     let text = match dialect {
         Dialect::Postgres => sql.to_string(),
         Dialect::Sqlite | Dialect::Mysql => dollar_placeholders(sql),
     };
-    let Ok(parsed) = pg_query::parse(&text) else { return Plan::default() };
+    let Ok(parsed) = crate::stack::parse(&text) else { return Plan::default() };
     let version = parsed.protobuf.version;
     let Some(top) = parsed.protobuf.stmts.first().and_then(|s| s.stmt.as_deref()).and_then(|n| n.node.as_ref()) else {
         return Plan::default();
@@ -343,7 +367,9 @@ pub fn plan(sql: &str, dialect: Dialect, trust: &Trust, columns: &Columns) -> Pl
     };
     let plain_group_by = matches!(top, NodeEnum::SelectStmt(s) if !grouped && !s.group_clause.is_empty());
     let withs = Withs::default().with(with.as_ref(), columns);
-    let mut reader = Reader { dialect, trust, columns, withs, leaves: (!grouped).then(Vec::new), grouped: plain_group_by, narrowed: Vec::new() };
+    // The old and the new row of a RETURNING, with the relations a bare name is a column of first.
+    let rows = Rows::of(top).map(|rows| (rows, Level::of(&from, &withs, columns)));
+    let mut reader = Reader { dialect, trust, columns, withs, rows: rows.as_ref(), leaves: (!grouped).then(Vec::new), grouped: plain_group_by, narrowed: Vec::new() };
     let mut plan = Plan::default();
     for target in &targets {
         let Some(NodeEnum::ResTarget(rt)) = target.node.as_ref() else { continue };
@@ -426,7 +452,28 @@ pub fn resolve(expr: &Expr, leaves: Option<&[DescribedColumn]>) -> Fact {
             Fact { non_null: fact.non_null && fact.type_oid.is_some_and(|t| types.contains(&t)), ..fact }
         }
         Expr::Array { non_null, .. } => Fact { non_null: *non_null, type_oid: None },
+        Expr::NotJsonb(inner) => {
+            let fact = resolve(inner, leaves);
+            Fact { non_null: fact.non_null && !may_be_jsonb(inner, leaves), ..fact }
+        }
         Expr::Narrowed(inner) => Fact { non_null: true, ..resolve(inner, leaves) },
+    }
+}
+
+/// Whether an expression may hold a `jsonb` value: its type is `jsonb`, or one a database
+/// defined, which may be a domain over it; or the rules name no type for it and one of the values
+/// it is made of may hold one. A parameter under a cast takes the cast's type, and a function
+/// the rules read without a type returns none that is `jsonb` ([`POSTGRES_JSONB`] names the ones
+/// that do).
+fn may_be_jsonb(expr: &Expr, leaves: Option<&[DescribedColumn]>) -> bool {
+    match resolve(expr, leaves).type_oid {
+        Some(ty) => ty == oid::JSONB || ty >= FIRST_USER_OID,
+        None => match expr {
+            Expr::NonNull(_) | Expr::Array { .. } => false,
+            Expr::Unknown | Expr::Unread | Expr::Leaf(_) | Expr::Row(..) => true,
+            Expr::Nullable(inner) | Expr::Guarded(inner, _) | Expr::NotJsonb(inner) | Expr::Narrowed(inner) => may_be_jsonb(inner, leaves),
+            Expr::Every(operands, _) | Expr::Any(operands, _) => operands.iter().any(|o| may_be_jsonb(o, leaves)),
+        },
     }
 }
 
@@ -453,7 +500,7 @@ pub fn items_nullable(expr: &Expr, leaves: Option<&[DescribedColumn]>, is_array:
                 }
             }
         })),
-        Expr::Nullable(inner) | Expr::Guarded(inner, _) | Expr::Narrowed(inner) => items_nullable(inner, leaves, is_array),
+        Expr::Nullable(inner) | Expr::Guarded(inner, _) | Expr::NotJsonb(inner) | Expr::Narrowed(inner) => items_nullable(inner, leaves, is_array),
         Expr::Every(operands, _) | Expr::Any(operands, _) => join_items(operands.iter().map(|o| items_nullable(o, leaves, is_array))),
         Expr::NonNull(_) | Expr::Unknown | Expr::Unread | Expr::Leaf(_) | Expr::Row(..) => None,
     }
@@ -463,7 +510,7 @@ pub fn items_nullable(expr: &Expr, leaves: Option<&[DescribedColumn]>, is_array:
 fn reads_unread(expr: &Expr) -> bool {
     match expr {
         Expr::Unread => true,
-        Expr::Nullable(inner) | Expr::Guarded(inner, _) | Expr::Narrowed(inner) => reads_unread(inner),
+        Expr::Nullable(inner) | Expr::Guarded(inner, _) | Expr::NotJsonb(inner) | Expr::Narrowed(inner) => reads_unread(inner),
         Expr::Every(operands, _) | Expr::Any(operands, _) => operands.iter().any(reads_unread),
         Expr::Array { items, .. } => items.iter().any(reads_unread),
         Expr::NonNull(_) | Expr::Unknown | Expr::Leaf(_) | Expr::Row(..) => false,
@@ -527,7 +574,7 @@ pub fn single_row(select: &SelectStmt) -> bool {
 /// where the SELECT stands inside another statement: an aggregate counts there only when it is
 /// that SELECT's own ([`Level::owns`]).
 pub fn aggregates(expr: &Node, dialect: Dialect, trust: &Trust, level: Option<&Level>) -> bool {
-    Reader { dialect, trust, columns: &Columns::default(), withs: Withs::default(), leaves: None, grouped: false, narrowed: Vec::new() }.aggregates(expr, true, level)
+    Reader { dialect, trust, columns: &Columns::default(), withs: Withs::default(), rows: None, leaves: None, grouped: false, narrowed: Vec::new() }.aggregates(expr, true, level)
 }
 
 impl Ty {
@@ -555,6 +602,9 @@ struct Reader<'a> {
     /// stands: what says whose an aggregate in a scalar subquery is ([`crate::levels`]).
     columns: &'a Columns,
     withs: Withs,
+    /// The old and the new row a RETURNING list can name ([`crate::returning`]), and the FROM its
+    /// leaf probe selects over; none in a SELECT, and none inside a subquery, which has no leaves.
+    rows: Option<&'a (Rows, Level)>,
     /// The column references read so far, in leaf order; `None` where a reference proves nothing.
     leaves: Option<Vec<Node>>,
     /// Whether the expressions belong to a SELECT with a plain `GROUP BY`, where no group is empty.
@@ -594,14 +644,21 @@ impl Reader<'_> {
                 })
             }
             Some(NodeEnum::ColumnRef(c)) => {
+                // A RETURNING's old or new row is the target relation's as far as the leaf probe
+                // can tell, and NULL in every column where the statement has no such row.
+                let (leaf, missing) = match self.rows.and_then(|(rows, from)| rows.read(c, &|name| from.lacks(name))) {
+                    Some((read, missing)) => (Node { node: Some(NodeEnum::ColumnRef(read)) }, missing),
+                    None => (expr.clone(), false),
+                };
                 let read = match self.leaves.as_mut() {
                     Some(leaves) if !is_star(expr) => {
-                        leaves.push(expr.clone());
+                        leaves.push(leaf);
                         Expr::Leaf(leaves.len() - 1)
                     }
                     Some(_) => Expr::Unknown,
                     None => Expr::Unread,
                 };
+                let read = if missing { Expr::Nullable(Box::new(read)) } else { read };
                 let fields: Option<Vec<String>> = c.fields.iter().map(|f| match f.node.as_ref() {
                     Some(NodeEnum::String(s)) => Some(s.sval.clone()),
                     _ => None,
@@ -623,7 +680,10 @@ impl Reader<'_> {
                 let Some(name) = builtin_name(&target.names) else { return Expr::Unknown };
                 let operand = self.read(arg);
                 match self.dialect {
-                    Dialect::Postgres if self.trust.cast(&name) => Expr::Every(vec![operand], POSTGRES_CASTS.iter().find(|(n, _)| *n == name).map_or(Ty::Unknown, |(_, o)| Ty::Is(*o))),
+                    Dialect::Postgres if self.trust.cast(&name) => {
+                        let operand = if POSTGRES_JSONB_NULL_CASTS.contains(&name.as_str()) && !self.trust.jsonb_casts_raise { Expr::NotJsonb(Box::new(operand)) } else { operand };
+                        Expr::Every(vec![operand], POSTGRES_CASTS.iter().find(|(n, _)| *n == name).map_or(Ty::Unknown, |(_, o)| Ty::Is(*o)))
+                    }
                     Dialect::Sqlite | Dialect::Mysql if SQLITE_TOTAL_CASTS.contains(&name.as_str()) => {
                         let ty = SQLITE_CASTS.iter().find(|(n, _)| *n == name).map_or(Ty::Unknown, |(_, o)| Ty::Is(*o));
                         Expr::Every(vec![operand], ty)
@@ -720,6 +780,8 @@ impl Reader<'_> {
             Some(NodeEnum::SubLink(s)) => self.sublink(s),
             // `current_timestamp`, `current_user` and the rest of the SQL value functions.
             Some(NodeEnum::SqlvalueFunction(_)) => Expr::NonNull(None),
+            // `merge_action()` names the action that produced the row a MERGE returns.
+            Some(NodeEnum::MergeSupportFunc(_)) if self.dialect == Dialect::Postgres => Expr::NonNull(Some(oid::TEXT)),
             // Where the host types its parameters without null, a parameter is a non-null value.
             Some(NodeEnum::ParamRef(p)) if self.trust.non_null_params && !self.trust.nullable_params.contains(&p.number) => Expr::NonNull(None),
             _ => Expr::Unknown,
@@ -784,6 +846,7 @@ impl Reader<'_> {
             // values of its argument.
             (Dialect::Postgres, "array_agg", 1) if self.trust.builtin("array_agg") => Expr::Array { non_null: false, items: f.args.iter().map(|a| self.read(a)).collect() },
             (Dialect::Postgres, n, _) if POSTGRES_NEVER_NULL.contains(&n) && self.trust.builtin(n) => Expr::NonNull(None),
+            (Dialect::Postgres, "uuidv7", 0) if self.trust.builtin("uuidv7") => Expr::NonNull(Some(oid::UUID)),
             (Dialect::Postgres, n, 1..) if POSTGRES_FIRST_ARG.contains(&n) && self.trust.builtin(n) => Expr::Every(f.args.iter().take(1).map(|a| self.read(a)).collect(), Ty::Is(oid::TEXT)),
             (Dialect::Postgres, n, 1..) if self.trust.builtin(n) && POSTGRES_TOTAL_FOR.iter().any(|(name, _)| *name == n) => {
                 let types = POSTGRES_TOTAL_FOR.iter().find(|(name, _)| *name == n).map(|(_, t)| *t).unwrap_or(&[]);
@@ -792,7 +855,10 @@ impl Reader<'_> {
                 Expr::Every(operands, Ty::Unknown)
             }
             (Dialect::Postgres, n, _) if POSTGRES_ANY.contains(&n) && self.trust.builtin(n) => Expr::Any(f.args.iter().map(|a| self.read(a)).collect(), Ty::Shared),
-            (Dialect::Postgres, n, _) if POSTGRES_TOTAL.contains(&n) && self.trust.builtin(n) => Expr::Every(f.args.iter().map(|a| self.read(a)).collect(), Ty::Unknown),
+            (Dialect::Postgres, n, _) if POSTGRES_TOTAL.contains(&n) && self.trust.builtin(n) => {
+                let ty = if POSTGRES_JSONB.contains(&n) { Ty::Is(oid::JSONB) } else { Ty::Unknown };
+                Expr::Every(f.args.iter().map(|a| self.read(a)).collect(), ty)
+            }
             _ => match self.trust.total.get(name.as_str()) {
                 Some(&ty) => Expr::Every(f.args.iter().map(|a| self.read(a)).collect(), Ty::Is(ty)),
                 None => Expr::Unknown,
@@ -817,7 +883,7 @@ impl Reader<'_> {
         // not read, so the inner expression is read without leaves.
         let withs = self.withs.with(select.with_clause.as_ref(), self.columns);
         let level = Level::of(&select.from_clause, &withs, self.columns);
-        let mut inner_reader = Reader { dialect: self.dialect, trust: self.trust, columns: self.columns, withs, leaves: None, grouped: false, narrowed: Vec::new() };
+        let mut inner_reader = Reader { dialect: self.dialect, trust: self.trust, columns: self.columns, withs, rows: None, leaves: None, grouped: false, narrowed: Vec::new() };
         let value = inner_reader.read(inner);
         if single_row(select) && self.aggregates(inner, false, Some(&level)) {
             value
@@ -911,7 +977,11 @@ pub struct ItemQuery {
 /// own, and those items. `None` when the statement is not a plain SELECT that reads one, or when
 /// a `(row).*` hides how many columns a target is.
 pub fn item_reads(sql: &str) -> Option<(Vec<ItemRead>, Vec<ItemQuery>)> {
-    let parsed = pg_query::parse(sql).ok()?;
+    crate::stack::run(|| item_reads_here(sql))
+}
+
+fn item_reads_here(sql: &str) -> Option<(Vec<ItemRead>, Vec<ItemQuery>)> {
+    let parsed = crate::stack::parse(sql).ok()?;
     let version = parsed.protobuf.version;
     let top = parsed.protobuf.stmts.first().and_then(|s| s.stmt.as_deref()).and_then(|n| n.node.as_ref())?;
     let NodeEnum::SelectStmt(select) = top else { return None };
@@ -1118,7 +1188,7 @@ fn value_text(version: i32, value: &Node, with: Option<&protobuf::WithClause>) -
             stmt_len: 0,
         }],
     };
-    pg_query::deparse(&result).ok()
+    crate::stack::deparse(&result).ok()
 }
 
 /// What a SELECT says about a plain column reference in its own target list.
@@ -1348,7 +1418,7 @@ fn nulls_with(node: &Node) -> Vec<Strict> {
 /// A bare `VALUES (…), (…)` arm: a column is non-null when it is in every row.
 fn values_plan(s: &SelectStmt, dialect: Dialect, trust: &Trust, columns: &Columns) -> Plan {
     let withs = Withs::default().with(s.with_clause.as_ref(), columns);
-    let mut reader = Reader { dialect, trust, columns, withs, leaves: None, grouped: false, narrowed: Vec::new() };
+    let mut reader = Reader { dialect, trust, columns, withs, rows: None, leaves: None, grouped: false, narrowed: Vec::new() };
     let mut rows: Vec<Vec<Expr>> = Vec::new();
     for row in &s.values_lists {
         let Some(NodeEnum::List(list)) = row.node.as_ref() else { return Plan::default() };
@@ -1386,7 +1456,7 @@ fn arm_text(version: i32, arm: &SelectStmt, with: Option<&protobuf::WithClause>)
             stmt_len: 0,
         }],
     };
-    pg_query::deparse(&result).ok()
+    crate::stack::deparse(&result).ok()
 }
 
 /// The unqualified name of an operator, function, or type the rules read, or `None` when it is
@@ -1414,7 +1484,7 @@ fn reads_leaf(expr: &Expr) -> bool {
         Expr::Leaf(_) | Expr::Row(..) => true,
         Expr::Nullable(inner) => reads_leaf(inner),
         Expr::Every(operands, _) | Expr::Any(operands, _) => operands.iter().any(reads_leaf),
-        Expr::Guarded(inner, _) | Expr::Narrowed(inner) => reads_leaf(inner),
+        Expr::Guarded(inner, _) | Expr::NotJsonb(inner) | Expr::Narrowed(inner) => reads_leaf(inner),
         Expr::Array { items, .. } => items.iter().any(reads_leaf),
         Expr::NonNull(_) | Expr::Unknown | Expr::Unread => false,
     }
@@ -1729,6 +1799,44 @@ mod tests {
     }
 
     #[test]
+    fn a_cast_of_a_jsonb_value_to_a_number_may_be_null() {
+        // PostgreSQL 18 casts a JSON null to an SQL NULL where 17 raised an error, so a cast that
+        // `jsonb` has a function for proves nothing over a value that may be `jsonb`.
+        let over = |sql: &str, leaf: u32| {
+            let p = pg(sql);
+            resolve(p.head[0].as_ref().unwrap(), Some(&[col(false, leaf)])).non_null
+        };
+        for target in ["int4", "int8", "int2", "numeric", "float4", "float8", "bool"] {
+            assert!(!over(&format!("SELECT j::{target} FROM docs"), oid::JSONB), "{target}");
+            assert!(over(&format!("SELECT j::{target} FROM docs"), oid::TEXT), "{target}");
+        }
+        assert!(over("SELECT j::text FROM docs", oid::JSONB), "a cast to text prints the JSON");
+        assert!(over("SELECT j::text::int4 FROM docs", oid::JSONB), "text 'null' is no integer, and raises");
+        // A value built from a jsonb one, and one of a type a database defined, which may be a
+        // domain over jsonb, or of a type the leaf probe did not name.
+        assert!(!over("SELECT coalesce(j, '1')::int4 FROM docs", oid::JSONB));
+        assert!(!over("SELECT to_jsonb(j)::int4 FROM docs", oid::JSON));
+        assert!(!over("SELECT jsonb_strip_nulls(j)::int4 FROM docs", oid::JSONB));
+        assert!(!over("SELECT CASE WHEN j IS NOT NULL THEN j::int4 ELSE 0 END FROM docs", oid::JSONB), "not NULL is not a JSON null");
+        assert!(over("SELECT CASE WHEN j IS NOT NULL THEN j::int4 ELSE 0 END FROM docs", oid::NUMERIC));
+        assert!(!over("SELECT j::int4 FROM docs", 16385));
+        assert!(!over("SELECT j::int4 FROM docs", oid::UNKNOWN));
+        // Everything else keeps what it proved: a number, an arithmetic over numbers, a parameter
+        // and a literal, which take the cast's own type, and a constructor, which raises.
+        assert!(over("SELECT (j * 2)::numeric FROM docs", oid::INT4));
+        assert!(over("SELECT length(j)::int8 FROM docs", oid::TEXT));
+        assert!(first(&pg("SELECT '5'::int4")).non_null);
+        assert!(first(&pg("SELECT now()::date::text::int4")).non_null);
+        let params = Trust { non_null_params: true, ..Default::default() };
+        assert!(first(&plan("SELECT $1::int4", Dialect::Postgres, &params)).non_null);
+        assert!(!first(&plan("SELECT $1::jsonb::int4", Dialect::Postgres, &params)).non_null);
+        // A server before 18 raises an error for a JSON null, so the cast keeps what it proved.
+        let before = Trust { jsonb_casts_raise: true, ..Default::default() };
+        let p = plan("SELECT j::int4 FROM docs", Dialect::Postgres, &before);
+        assert!(resolve(p.head[0].as_ref().unwrap(), Some(&[col(false, oid::JSONB)])).non_null);
+    }
+
+    #[test]
     fn a_shadowed_name_proves_nothing() {
         let trust = Trust { shadowed: ["count".to_string(), "=".to_string()].into_iter().collect(), cast_targets: None, ..Default::default() };
         assert!(!first(&plan("SELECT count(*) FROM t", Dialect::Postgres, &trust)).non_null);
@@ -1816,6 +1924,39 @@ mod tests {
         // RETURNING reads the written relation.
         let r = pg("UPDATE todos SET done = true WHERE id = $1 RETURNING title || '!' AS shout");
         assert_eq!(r.leaves.as_deref(), Some("SELECT title AS a0 FROM todos"));
+    }
+
+    #[test]
+    fn returning_reads_the_old_and_the_new_row_as_the_written_relations() {
+        let text = |nullable: bool| col(nullable, oid::TEXT);
+        let fact = |p: &Plan, i: usize, leaves: &[DescribedColumn]| resolve(p.head[i].as_ref().unwrap(), Some(leaves)).non_null;
+        // PostgreSQL 18: an UPDATE has both rows, by the names the clause gives them or by `old`
+        // and `new`, and the leaf probe reads each as the written relation's.
+        let u = pg("UPDATE todos t SET done = true WHERE id = $1 RETURNING WITH (OLD AS o) o.title || ' -> ' || new.title AS change, upper(new.title) AS up, o.title");
+        assert_eq!(u.leaves.as_deref(), Some("SELECT t.title AS a0, t.title AS a1, t.title AS a2 FROM todos t"));
+        assert!(fact(&u, 0, &[text(false), text(false), text(false)]) && fact(&u, 1, &[text(false), text(false), text(false)]));
+        assert_eq!(u.head[2], None, "a plain reference is the describe tier's");
+        // An INSERT has no old row, so what reads one is NULL unless the expression says otherwise.
+        let i = pg("INSERT INTO todos (title) VALUES ($1) ON CONFLICT (id) DO UPDATE SET title = excluded.title RETURNING old.title || '!' AS was, new.title || '!' AS now, old.id IS NULL AS inserted, coalesce(old.title, '') AS before, CASE WHEN old.title IS NOT NULL THEN old.title ELSE '' END AS tested");
+        assert_eq!(i.leaves.as_deref(), Some("SELECT todos.title AS a0, todos.title AS a1, todos.title AS a2, todos.title AS a3 FROM todos"));
+        let leaves = [text(false), text(false), text(false), text(false)];
+        assert_eq!((0..5).map(|n| fact(&i, n, &leaves)).collect::<Vec<_>>(), [false, true, true, true, true]);
+        // A DELETE has no new row.
+        let d = pg("DELETE FROM todos WHERE id = $1 RETURNING WITH (NEW AS n) n.title || '' AS now, coalesce(n.title, old.title) AS either");
+        assert_eq!((0..2).map(|n| fact(&d, n, &[text(false), text(false), text(false)])).collect::<Vec<_>>(), [false, true]);
+        // A relation of the name is the one read: the leaf stays as written.
+        let named = pg("DELETE FROM todos AS new WHERE id = $1 RETURNING new.title || '' AS title");
+        assert_eq!(named.leaves.as_deref(), Some("SELECT new.title AS a0 FROM todos new"));
+        assert!(fact(&named, 0, &[text(false)]));
+        // A MERGE names its action for every row, and reads its source through an outer join
+        // where it acts on target rows the source does not match.
+        let m = pg("MERGE INTO todos t USING drafts s ON t.id = s.id WHEN MATCHED THEN UPDATE SET title = s.title WHEN NOT MATCHED BY SOURCE THEN DELETE RETURNING merge_action() AS action, s.title || '' AS source, old.title || '' AS was, new.title || '' AS now");
+        assert_eq!(m.leaves.as_deref(), Some("SELECT s.title AS a0, t.title AS a1, t.title AS a2 FROM todos t LEFT JOIN drafts s ON true"));
+        assert_eq!(resolve(m.head[0].as_ref().unwrap(), None), Fact { non_null: true, type_oid: Some(oid::TEXT) });
+        // The source's leaf is nullable in the probe's own describe, by the join.
+        assert_eq!((1..4).map(|n| fact(&m, n, &[text(true), text(false), text(false)])).collect::<Vec<_>>(), [false, true, false]);
+        let matched = pg("MERGE INTO todos t USING drafts s ON t.id = s.id WHEN MATCHED THEN UPDATE SET title = s.title RETURNING s.title || '' AS source");
+        assert_eq!(matched.leaves.as_deref(), Some("SELECT s.title AS a0 FROM todos t, drafts s"));
     }
 
     #[test]

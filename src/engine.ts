@@ -8,6 +8,7 @@ import { WASI } from "node:wasi";
 export type Dialect = "postgres" | "sqlite" | "mysql";
 
 export type EngineType =
+  /** `name` lists two types or more (`int8|float8`) where the value is one or the other. */
   | { kind: "scalar"; name: string }
   | { kind: "enum"; name: string; labels: string[] }
   /** `nullable_items` only where the statement builds the array; any other array is `T[]` (docs/driver-decoding.md, 2026-10-03). */
@@ -46,8 +47,8 @@ export type Need =
   | { kind: "query"; id: string; sql: string; params: unknown[]; scope: "session" | "statement" };
 
 export type Described = { params: { oid: number }[]; columns: { name: string; oid: number; table: number; attnum: number }[] };
-/** MySQL's prepare metadata: the protocol type code, the flags (bit 1 is NOT NULL) and the charset (63 is binary). */
-export type MysqlDescribed = { kind: "mysql"; columns: { name: string; type: number; flags: number; charset: number }[]; params: { type: number; flags: number; charset: number }[] };
+/** MySQL's prepare metadata: the protocol type code, the flags (bit 1 is NOT NULL), the charset (63 is binary), the display length and the table the column is one of (empty for an expression). */
+export type MysqlDescribed = { kind: "mysql"; columns: { name: string; type: number; flags: number; charset: number; length: number; org_table: string }[]; params: { type: number; flags: number; charset: number }[] };
 export type DbError = { message: string; code?: string; position?: number };
 export type Answer =
   | { describe: { params: number[]; columns: Described["columns"] } }

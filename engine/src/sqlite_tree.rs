@@ -263,5 +263,10 @@ pub fn analyze(ddl: &[String], sql: &str, functions: &[(&str, i32)], host: Optio
         reylo_sqlite_free(p);
         text
     };
-    serde_json::from_str(&json).map_err(|e| format!("the embedded SQLite's answer did not parse: {e}"))
+    // The tree nests as deeply as the statement, which SQLite bounds at 1,000 levels of an
+    // expression (SQLITE_MAX_EXPR_DEPTH), past serde_json's default limit of 128; the engine's
+    // stack has the room for SQLite's own bound (`crate::stack`).
+    let mut reader = serde_json::Deserializer::from_str(&json);
+    reader.disable_recursion_limit();
+    serde::Deserialize::deserialize(&mut reader).map_err(|e| format!("the embedded SQLite's answer did not parse: {e}"))
 }

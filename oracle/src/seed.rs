@@ -54,15 +54,15 @@ pub struct Report {
 /// A seeded state: the edge state holds every pool whole, the plain state leaves out the values of
 /// extreme magnitude.
 #[derive(Clone, Copy, PartialEq, Debug)]
-enum Scenario {
+pub(crate) enum Scenario {
     Edges,
     Plain,
 }
 
-const SCENARIOS: [Scenario; 2] = [Scenario::Edges, Scenario::Plain];
+pub(crate) const SCENARIOS: [Scenario; 2] = [Scenario::Edges, Scenario::Plain];
 
 impl Scenario {
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Scenario::Edges => "edge values",
             Scenario::Plain => "plain values",
@@ -75,7 +75,7 @@ const EXTREMES: [&str; 3] = ["'NaN'", "'infinity'", "'-infinity'"];
 
 /// What the seeded note says of a table that refused every row and holds none: a statement over
 /// it alone runs, and is checked against nothing.
-const EMPTY: &str = " (no row at all)";
+pub(crate) const EMPTY: &str = " (no row at all)";
 
 /// The least time a seeding insert may take, whatever the timeout of the runs: a short timeout
 /// must not thin the seeded rows out.
@@ -83,18 +83,18 @@ const SEEDING_TIMEOUT_MS: u64 = 5000;
 
 /// How one statement's runs went, over every state and assignment.
 #[derive(Default)]
-struct Tally {
-    ran: usize,
-    timed_out: usize,
-    failed: usize,
+pub(crate) struct Tally {
+    pub(crate) ran: usize,
+    pub(crate) timed_out: usize,
+    pub(crate) failed: usize,
     /// The error of the first run that failed.
-    first_error: Option<String>,
+    pub(crate) first_error: Option<String>,
     /// Why the statement was not run at all.
-    refused: Option<String>,
+    pub(crate) refused: Option<String>,
 }
 
 impl Tally {
-    fn fail(&mut self, error: String) {
+    pub(crate) fn fail(&mut self, error: String) {
         self.failed += 1;
         self.first_error.get_or_insert(error.split_whitespace().collect::<Vec<_>>().join(" "));
     }
@@ -102,7 +102,7 @@ impl Tally {
 
 /// The report of a case: a statement without one run that succeeded is unchecked, by its first
 /// error, and a run the timeout stopped is named wherever other runs went on.
-fn report(statements: &[(String, String, Value)], tallies: &[Tally], timeout_ms: u64, mut problems: Vec<String>, mut notes: Vec<String>) -> Report {
+pub(crate) fn report(statements: &[(String, String, Value)], tallies: &[Tally], timeout_ms: u64, mut problems: Vec<String>, mut notes: Vec<String>) -> Report {
     let mut unchecked = Vec::new();
     for ((file, _, _), tally) in statements.iter().zip(tallies) {
         let runs = tally.ran + tally.timed_out + tally.failed;

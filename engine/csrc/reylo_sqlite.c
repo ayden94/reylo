@@ -710,6 +710,9 @@ static char *missingSchema(const char *zSql, const char *zMsg, int *piOfst, int 
   return 0;
 }
 
+/* How deep the user's statement may nest: see reylo_sqlite_analyze. */
+#define REYLO_SQLITE_EXPR_DEPTH 500
+
 /*
 ** Analyzes one statement against the schema DDL, with the host's scalar functions (azFn[i] taking
 ** aFnArg[i] arguments, -1 for any number) registered on the replay, and the functions of the
@@ -726,7 +729,7 @@ char *reylo_sqlite_analyze(
   sqlite3_str *schemaErrors = sqlite3_str_new(0);
   sqlite3_stmt *pStmt = 0;
   const char *zTail = 0;
-  int rc, i, n;
+  int rc, i, n, nDepth;
   sqlite3_str_appendchar(schemaErrors, 1, '[');
   rc = openSchema(azDdl, nDdl, azFn, aFnArg, nFn, azHost, aHostArg, zHostType, nHost, schemaErrors);
   closeArr(schemaErrors);
@@ -742,7 +745,13 @@ char *reylo_sqlite_analyze(
   gHost = azHost; gnHost = nHost; gExtra = azFn; gnExtra = nFn; gnDenied = 0; gDeniedView = 0;
   if( nHost>=0 ) sqlite3_set_authorizer(gDb, functionAuth, 0);
   installHooks(1);
+  /* The statement's expressions nest at most REYLO_SQLITE_EXPR_DEPTH deep, half SQLite's own
+  ** bound: the analysis of a tree that deep is what the WebAssembly engine can afford on the
+  ** JavaScript engine's stack, as libpg_query's bound is for Postgres (src/stack.rs). The schema's
+  ** own statements keep SQLite's bound. */
+  nDepth = sqlite3_limit(gDb, SQLITE_LIMIT_EXPR_DEPTH, REYLO_SQLITE_EXPR_DEPTH);
   rc = sqlite3_prepare_v2(gDb, zSql, -1, &pStmt, &zTail);
+  sqlite3_limit(gDb, SQLITE_LIMIT_EXPR_DEPTH, nDepth);
   installHooks(0);
   if( nHost>=0 ) sqlite3_set_authorizer(gDb, 0, 0);
   gInsertSelect = 0;

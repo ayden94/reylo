@@ -82,7 +82,13 @@ export function scalarType(name: string, repr: Repr): string {
 
 export function renderType(t: EngineType, inJson = false, dialect: "postgres" | "sqlite" | "mysql" = "postgres", repr: Repr = defaultRepr): string {
   switch (t.kind) {
-    case "scalar": return dialect === "sqlite" ? sqliteScalar(t.name, repr) : inJson ? json[t.name] ?? "unknown" : scalarType(t.name, repr);
+    case "scalar": {
+      if (dialect === "sqlite") return sqliteScalar(t.name, repr);
+      // `a|b` is either: a MySQL column whose type the execution decides (`:n + 1` is a BIGINT
+      // or a DOUBLE by what is bound), or a truth value a document holds as `true` or as 1.
+      const parts = t.name.split("|").map((name) => (inJson ? json[name] ?? "unknown" : scalarType(name, repr)));
+      return parts.includes("unknown") ? "unknown" : [...new Set(parts.flatMap((part) => part.split(" | ")))].join(" | ");
+    }
     case "enum": return t.labels.length ? t.labels.map((l) => JSON.stringify(l)).join(" | ") : "string";
     case "array": {
       if (((t.of.kind === "scalar" && t.of.name === "record") || t.of.kind === "composite") && !inJson) return "string";

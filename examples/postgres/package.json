@@ -5,7 +5,7 @@
   "scripts": {
     "setup": "psql \"$DATABASE_URL\" -f setup.sql",
     "typecheck": "tsc --noEmit --runExternalCode",
-    "start": "node --import reylo/register src/main.ts"
+    "start": "node --env-file-if-exists=.env --import reylo/register src/main.ts"
   },
   "dependencies": {
     "reylo": "link:../..",

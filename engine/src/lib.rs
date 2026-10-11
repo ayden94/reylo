@@ -17,9 +17,11 @@ pub mod mysql;
 pub mod mysql_shape;
 pub mod pgtypes;
 pub mod postgres;
+pub mod returning;
 pub mod schema;
 pub mod sqlite;
 pub mod sqlite_tree;
+pub mod stack;
 pub mod types;
 
 /// A fingerprint of the sources this engine was built from (`build.rs`). Two engines with the

@@ -21,6 +21,21 @@ impl<'a> Host<'a> {
         Host { answers, needs: RefCell::new(Vec::new()) }
     }
 
+    /// Run `f` over these answers on the engine's stack ([`crate::stack`]), with the needs it
+    /// records recorded here.
+    pub fn on_engine_stack<T: Send>(&self, f: impl FnOnce(&Host) -> T + Send) -> T {
+        let answers = self.answers;
+        let (value, needs) = crate::stack::run(move || {
+            let host = Host::new(answers);
+            let value = f(&host);
+            (value, host.needs.into_inner())
+        });
+        for need in needs {
+            self.record(need);
+        }
+        value
+    }
+
     pub fn needs(&self) -> Vec<Need> {
         self.needs.borrow().clone()
     }

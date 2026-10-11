@@ -4,7 +4,7 @@ import query from "./query.sql";
 // `.reylo.yaml` names: Temporal for timestamptz, timestamp and date (and their arrays, which
 // postgres parses element by element), and a BigInt for int8.
 const temporal = (oid: number, from: (text: string) => unknown) => ({ to: oid, from: [oid], serialize: String, parse: from });
-const sql = postgres("postgres://localhost:5432/postgres", {
+const sql = postgres(process.env["DATABASE_URL"] ?? "postgres://localhost:5432/postgres", {
   types: {
     bigint: postgres.BigInt,
     instant: temporal(1184, (t) => Temporal.Instant.from(t.replace(" ", "T").replace(/([+-]\d\d)$/, "$1:00"))),

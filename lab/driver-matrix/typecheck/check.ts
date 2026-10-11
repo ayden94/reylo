@@ -6,7 +6,7 @@
 //
 // Usage: node typecheck/check.ts
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 type Dialect = "postgres" | "mysql" | "sqlite";
@@ -185,6 +185,7 @@ const tscBin = join(repo, "node_modules/.bin/tsc");
 const version = spawnSync(tscBin, ["--version"], { encoding: "utf8" }).stdout.trim();
 const run = spawnSync(tscBin, ["-p", join(here, "tsconfig.json"), "--pretty", "false"], { encoding: "utf8", cwd: here });
 const output = (run.stdout ?? "") + (run.stderr ?? "");
+mkdirSync(join(here, "../.out"), { recursive: true });
 writeFileSync(join(here, "../.out/tsc.log"), output);
 const diags: { file: string; line: number; message: string }[] = [];
 for (const raw of output.split("\n")) {

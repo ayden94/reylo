@@ -3,8 +3,8 @@
 // its WebSocket proxy, and PGlite. Each driver runs the same statement through reylo's `run` and
 // directly (the control, which shows the driver's own shapes), then checks that a parser the
 // user registered still applies and that the user's own queries are unchanged.
-// Needs the local Postgres (DECODE_URL, default postgres://localhost:5432/porg_decode, created
-// and dropped here): nub decode.mjs
+// Needs a Postgres server (DECODE_SERVER, default postgres://localhost:5432; the database
+// porg_decode is created and dropped there): DECODE_SERVER=postgres://localhost:5432 nub decode.mjs
 import net from "node:net";
 import { createRequire } from "node:module";
 import { isDeepStrictEqual, inspect } from "node:util";
@@ -16,6 +16,8 @@ import { defineQuery } from "../../src/index.ts";
 const require = createRequire(import.meta.url);
 const server = process.env.DECODE_SERVER ?? "postgres://localhost:5432";
 const URL = `${server}/porg_decode`;
+// Where the Neon stand-in below forwards its WebSocket traffic: the same server.
+const { hostname: serverHost, port: serverPort, username: serverUser } = new globalThis.URL(server);
 
 const schema = `
   create type role as enum ('admin', 'member');
@@ -146,7 +148,7 @@ try {
     const { WebSocketServer } = require("./node_modules/.store/ws@8.22.0/node_modules/ws");
     const wss = new WebSocketServer({ port: 18433 });
     wss.on("connection", (ws) => {
-      const sock = net.connect(5432, "localhost");
+      const sock = net.connect(Number(serverPort || 5432), serverHost);
       ws.on("message", (d) => sock.write(d));
       sock.on("data", (d) => ws.send(d));
       ws.on("close", () => sock.end());
@@ -158,7 +160,7 @@ try {
     neon.neonConfig.useSecureWebSocket = false;
     neon.neonConfig.pipelineConnect = false;
     neon.neonConfig.webSocketConstructor = globalThis.WebSocket;
-    const neonUrl = `postgres://${process.env.USER}@localhost:5432/porg_decode`;
+    const neonUrl = `postgres://${serverUser || process.env.USER}@${serverHost}:${serverPort || 5432}/porg_decode`;
     const pool = new neon.Pool({ connectionString: neonUrl });
     control("Neon Pool", (await pool.query(direct, [1])).rows[0]);
     same("Neon Pool through run", await q.run(pool, { id: 1 }), declared);

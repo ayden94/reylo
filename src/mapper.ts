@@ -105,6 +105,12 @@ serve({
     }
     const { analysis } = outcome;
     const dialect = project.dialect;
+    // A MySQL session reads its strings by its sql_mode, which the analysis asked for and the
+    // lexer alone does not know: the placeholders are the ones the analysis read.
+    if (dialect === "mysql") {
+      names = analysis.params.map((q) => q.name);
+      placeholders = analysis.rewritten.spans.map(([start, end], k) => ({ name: analysis.rewritten.order[k]!, start, end }));
+    }
     diagnostics.push(...analysis.diagnostics.map((d) => diag(d.message, d.start, d.length, d.code)));
     strict(analysis);
     const inferred = analysis.cardinality;

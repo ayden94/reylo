@@ -146,6 +146,10 @@ pub fn analyze(sql: &str, lexed: &Lexed, host: &Host) -> Lazy<Analysis> {
 /// error, a prepare error (SQLite's own message, at its offset) and a replay failure come back as
 /// diagnostics, as on the replayed path.
 pub fn analyze_ddl(sql: &str, ddl: &[String], extras: &Extras) -> SqliteAnalysis {
+    crate::stack::run(|| analyze_ddl_here(sql, ddl, extras))
+}
+
+fn analyze_ddl_here(sql: &str, ddl: &[String], extras: &Extras) -> SqliteAnalysis {
     match crate::postgres::lexed(sql, Dialect::Sqlite) {
         Ok(lexed) => run(sql, &lexed, ddl, extras),
         Err(analysis) => SqliteAnalysis { analysis, declared: Vec::new(), readonly: false, unique_keys: HashMap::new(), booleans: Vec::new() },
@@ -1636,6 +1640,24 @@ mod tests {
 
     fn analysis(sql: &str) -> Analysis {
         analyze_ddl(sql, &ddl(), &Extras::default()).analysis
+    }
+
+    #[test]
+    fn a_statement_as_deep_as_the_engine_reads_is_typed_and_one_level_past_it_is_an_error_at_the_bound() {
+        // From a thread with a small stack, as a host may call from: the embedded SQLite's
+        // recursion, the reading of its tree and the walks over it run on the engine's stack.
+        let ddl = vec!["create table users (id integer primary key, name text not null, nick text)".to_string()];
+        let small = |sql: String| std::thread::scope(|s| std::thread::Builder::new().stack_size(256 << 10).spawn_scoped(s, || analyze_ddl(&sql, &ddl, &Extras::default()).analysis).unwrap().join().unwrap());
+        // SQLite's own bound is 1,000; the engine's SQLite takes half of it (`csrc/reylo_sqlite.c`).
+        for (shape, n) in [("sum", 500), ("and_or", 498), ("case", 498), ("coalesce", 499), ("subquery", 29)] {
+            let at = small(crate::stack::nested(shape, n));
+            assert!(at.diagnostics.is_empty() && at.kind == "select", "{shape} at {n}: {:?}", at.diagnostics);
+            let past = small(crate::stack::nested(shape, n + 1));
+            assert_eq!(past.diagnostics.iter().map(|d| d.message.as_str()).collect::<Vec<_>>(), ["Expression tree is too large (maximum depth 500)"], "{shape} at {}", n + 1);
+        }
+        // A list does not nest: SQLite's OR is a tree, which its bound counts; an IN list is not.
+        let list = (0..5_000).map(|i| i.to_string()).collect::<Vec<_>>().join(", ");
+        assert!(small(format!("select id from users where id in ({list})")).diagnostics.is_empty());
     }
 
     fn col(a: &Analysis, name: &str) -> (String, bool) {

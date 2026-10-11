@@ -1,6 +1,7 @@
 // MySQL describe through the project's mysql2: a server-side prepare reports
-// result columns with type codes, NOT NULL flags and charsets, and the server's
-// type guess per `?` parameter, without executing anything. The engine reads
+// result columns with type codes, NOT NULL flags, charsets, display lengths and
+// the table each is a column of, and the server's type guess per `?` parameter,
+// without executing anything. The engine reads
 // those as they are (docs/mysql-sources.md); this side only carries them, and
 // runs the engine's catalog queries.
 import { createRequire } from "node:module";
@@ -41,7 +42,7 @@ export async function openMysqlDescriber(projectDir: string, url: string): Promi
       try {
         return {
           kind: "mysql",
-          columns: (info.columns as any[]).map((c) => ({ name: c.name, type: c.columnType, flags: c.flags, charset: c.characterSet ?? 0 })),
+          columns: (info.columns as any[]).map((c) => ({ name: c.name, type: c.columnType, flags: c.flags, charset: c.characterSet ?? 0, length: c.columnLength ?? 0, org_table: c.orgTable ?? "" })),
           params: (info.parameters as any[]).map((p) => ({ type: p.columnType, flags: p.flags ?? 0, charset: p.characterSet ?? 0 })),
         };
       } finally {

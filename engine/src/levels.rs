@@ -55,6 +55,10 @@ impl<R: Into<String>, C: Into<String>> FromIterator<(R, Vec<C>)> for Columns {
 /// Whether a statement holds a scalar subquery, the one place a rule asks whose an aggregate is:
 /// a statement without one needs no [`Columns`] for that.
 pub fn needed(sql: &str) -> bool {
+    crate::stack::run(|| needed_here(sql))
+}
+
+fn needed_here(sql: &str) -> bool {
     fn walk(v: &Value) -> bool {
         match v {
             Value::Object(map) => map.iter().any(|(key, child)| (key == "SubLink" && child.get("sub_link_type").and_then(Value::as_i64) == Some(protobuf::SubLinkType::ExprSublink as i64)) || walk(child)),
@@ -66,7 +70,7 @@ pub fn needed(sql: &str) -> bool {
     if sql.to_ascii_lowercase().matches("select").count() < 2 {
         return false;
     }
-    pg_query::parse(sql).ok().and_then(|parsed| serde_json::to_value(&parsed.protobuf).ok()).is_some_and(|tree| walk(&tree))
+    crate::stack::parse(sql).ok().and_then(|parsed| serde_json::to_value(&parsed.protobuf).ok()).is_some_and(|tree| walk(&tree))
 }
 
 /// The columns a FROM item or a query shows. A name that is `None` is a column whose name is not
@@ -253,6 +257,15 @@ impl Level {
         !SYSTEM_COLUMNS.contains(&column) && self.items.iter().all(|i| i.shown.names.iter().all(|n| n.as_deref().is_some_and(|n| n != column)))
     }
 
+    /// Whether an item of this FROM goes by this name: `None` where none of the names read is it
+    /// and an item's name is not known.
+    pub fn names(&self, name: &str) -> Option<bool> {
+        if self.items.iter().any(|i| i.name.as_deref() == Some(name)) {
+            return Some(true);
+        }
+        self.items.iter().all(|i| i.name.is_some()).then_some(false)
+    }
+
     /// Every column of the FROM, as `*` shows them.
     fn all(&self) -> Shown {
         Shown { names: self.items.iter().flat_map(|i| i.shown.names.iter().cloned()).collect(), exact: !self.merged && self.items.iter().all(|i| i.shown.exact) }
@@ -362,7 +375,7 @@ mod tests {
     /// Whether the scalar subquery that is the first column of `sql` owns the aggregate call that
     /// is its own first column.
     fn owns(sql: &str, columns: &Columns) -> bool {
-        let parsed = pg_query::parse(sql).unwrap();
+        let parsed = crate::stack::parse(sql).unwrap();
         let Some(NodeEnum::SelectStmt(top)) = parsed.protobuf.stmts[0].stmt.as_deref().and_then(|n| n.node.as_ref()) else { panic!("a SELECT") };
         let target = |s: &SelectStmt| match s.target_list[0].node.as_ref() {
             Some(NodeEnum::ResTarget(rt)) => rt.val.as_deref().and_then(|v| v.node.clone()),

@@ -19,10 +19,18 @@ export async function sqlModule(path: string, sql: string): Promise<SqlModule> {
   if (!outcome.ok) throw new Error(`${path}: ${outcome.message}`);
   const { analysis } = outcome;
   let params: string[];
-  try {
-    params = session.lex(sql).params;
-  } catch (e) {
-    throw new Error(`${path}: ${(e as Error).message}`);
+  if (session.project.dialect === "mysql") {
+    // A MySQL session reads its strings by its sql_mode, which the analysis asked for: its
+    // placeholders are the ones the server finds, and a statement it could not read them in fails.
+    const unread = analysis.diagnostics.find((d) => d.code === 1 || d.code === 2);
+    if (unread) throw new Error(`${path}: ${unread.message}`);
+    params = analysis.params.map((p) => p.name);
+  } else {
+    try {
+      params = session.lex(sql).params;
+    } catch (e) {
+      throw new Error(`${path}: ${(e as Error).message}`);
+    }
   }
   const code = [
     `import { defineQuery } from "reylo";`,

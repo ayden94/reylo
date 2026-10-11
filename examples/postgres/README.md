@@ -8,7 +8,7 @@ A sample project that imports `.sql` files as typed queries, checked by TypeScri
 psql postgres://localhost:5432/postgres -f setup.sql   # a local Postgres, or point .env at yours
 nub install                                             # or npm install
 nub run typecheck                                       # tsc --noEmit --runExternalCode
-nub run start                                           # node --import reylo/register src/main.ts
+nub run start                                           # node --env-file-if-exists=.env --import reylo/register src/main.ts
 ```
 
 Edit `queries/get_user.sql` (rename a column, add a parameter) and run `nub run typecheck` again: the types in `src/main.ts` follow the database.

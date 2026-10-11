@@ -2,9 +2,12 @@
 // the dialect's own positional form (`$1` on Postgres, `?` on MySQL, `?` and `?NNN` on SQLite),
 // outside strings and comments, and
 // returns the binding order. A name may be dotted
-// (`:auth.user_id`); each segment starts like a name, so `arr[1:2]` is a slice. This is the
-// provisional JavaScript version of the engine's lexer; the Rust engine owns the
-// authoritative one (dollar quoting, E'' strings, nested comments, array slices).
+// (`:auth.user_id`); each segment starts like a name, so `arr[1:2]` is a slice. MySQL text is read
+// as a session in the default `sql_mode` reads it: a backslash in a string escapes the character
+// after it, `"` quotes a string, `#` starts a line comment, and `--` does only before a space or
+// a control character. This is the provisional JavaScript version of the engine's lexer; the Rust
+// engine owns the authoritative one (dollar quoting, E'' strings, nested comments, array slices,
+// MySQL's other modes).
 export type Placeholder = { name: string; start: number; end: number };
 
 // A name drops its prefix (`:id` is `id`); a positional placeholder is named by its number
@@ -23,12 +26,15 @@ export function lexPlaceholders(sql: string, dialect: "postgres" | "mysql" | "sq
     largest = Math.max(largest, Number(n));
     return n;
   };
+  const mysql = dialect === "mysql";
   while (i < sql.length) {
     const ch = sql[i]!;
     const next = sql[i + 1];
-    if (ch === "'" ) { i = skipQuoted(sql, i, "'"); continue; }
-    if (ch === '"') { i = skipQuoted(sql, i, '"'); continue; }
-    if (ch === "-" && next === "-") { i = sql.indexOf("\n", i); if (i === -1) break; continue; }
+    if (ch === "'" || ch === '"') { i = skipQuoted(sql, i, ch, mysql); continue; }
+    if (ch === "`") { i = skipQuoted(sql, i, ch, false); continue; }
+    // MySQL's `--` is two minus signs before anything but a space or a control character.
+    const comment = ch === "#" ? mysql : ch === "-" && next === "-" && !(mysql && i + 2 < sql.length && sql.charCodeAt(i + 2) > 32 && sql.charCodeAt(i + 2) !== 127);
+    if (comment) { i = sql.indexOf("\n", i); if (i === -1) break; continue; }
     if (ch === "/" && next === "*") { const end = sql.indexOf("*/", i + 2); i = end === -1 ? sql.length : end + 2; continue; }
     if (ch === ":" && next === ":") { i += 2; continue; }
     // `arr[lo:hi]` is a slice: a name character before the colon means it opens nothing. SQLite's
@@ -59,9 +65,11 @@ export function isPositional(name: string): boolean {
   return /^\d+$/.test(name);
 }
 
-function skipQuoted(sql: string, start: number, quote: string): number {
+// A doubled quote is one character, and so, where `escapes`, is a backslash and what follows it.
+function skipQuoted(sql: string, start: number, quote: string, escapes: boolean): number {
   let i = start + 1;
   while (i < sql.length) {
+    if (escapes && sql[i] === "\\") { i += 2; continue; }
     if (sql[i] === quote) { if (sql[i + 1] === quote) { i += 2; continue; } return i + 1; }
     i += 1;
   }

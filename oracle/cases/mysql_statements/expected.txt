@@ -1,0 +1,75 @@
+alter_table.sql: many () -> {  } !! reylo10: only SELECT, TABLE, VALUES, INSERT, REPLACE, UPDATE and DELETE statements are typed
+ambiguous.sql: many () -> {  } !! reylo6: Column 'id' in field list is ambiguous (ER_NON_UNIQ_ERROR)
+backslash_quote.sql: maybeOne (id: int4) -> { id: int4, said: text }
+backslash_quote_filter.sql: maybeOne (id: int4) -> { id: int4 }
+backticks.sql: maybeOne (id: int4) -> { id: int4, the name: text }
+begin.sql: many () -> {  } !! reylo10: only SELECT, TABLE, VALUES, INSERT, REPLACE, UPDATE and DELETE statements are typed
+block_comment.sql: maybeOne (id: int4) -> { id: int4 }
+call_procedure.sql: many () -> {  } !! reylo10: only SELECT, TABLE, VALUES, INSERT, REPLACE, UPDATE and DELETE statements are typed
+create_table.sql: many () -> {  } !! reylo10: only SELECT, TABLE, VALUES, INSERT, REPLACE, UPDATE and DELETE statements are typed
+delete_all.sql: none () -> {  }
+describe.sql: many () -> {  } !! reylo10: only SELECT, TABLE, VALUES, INSERT, REPLACE, UPDATE and DELETE statements are typed
+do_statement.sql: many () -> {  } !! reylo10: only SELECT, TABLE, VALUES, INSERT, REPLACE, UPDATE and DELETE statements are typed
+double_quoted_key.sql: many () -> { o: { id: int4, name: text } }
+double_quoted_string.sql: maybeOne () -> { id: int4 }
+drop_table.sql: many () -> {  } !! reylo10: only SELECT, TABLE, VALUES, INSERT, REPLACE, UPDATE and DELETE statements are typed
+empty_second.sql: maybeOne (id: int4) -> { id: int4 }
+executable_comment_ddl.sql: many () -> {  } !! reylo10: MySQL runs the text of a /*! … */ comment as SQL where the server's version allows it, so the statement is not the one written outside it: write it as plain SQL
+executable_comment_filter.sql: many (id: unknown) -> {  } !! reylo10: MySQL runs the text of a /*! … */ comment as SQL where the server's version allows it, so the statement is not the one written outside it: write it as plain SQL
+executable_comment_future.sql: many () -> {  } !! reylo10: MySQL runs the text of a /*! … */ comment as SQL where the server's version allows it, so the statement is not the one written outside it: write it as plain SQL
+executable_comment_versioned.sql: many (id: unknown) -> {  } !! reylo10: MySQL runs the text of a /*! … */ comment as SQL where the server's version allows it, so the statement is not the one written outside it: write it as plain SQL
+executable_comment_whole.sql: many () -> {  } !! reylo10: MySQL runs the text of a /*! … */ comment as SQL where the server's version allows it, so the statement is not the one written outside it: write it as plain SQL
+explain.sql: many () -> {  } !! reylo10: only SELECT, TABLE, VALUES, INSERT, REPLACE, UPDATE and DELETE statements are typed
+hash_comment.sql: maybeOne (id: int4) -> { id: int4 }
+insert_fires_trigger.sql: none (id: int4, name: text) -> {  }
+insert_select_same_table.sql: none () -> {  }
+interval_syntax.sql: maybeOne (n: int4, id: int4) -> { id: int4, later: timestamp? }
+json_table_statement.sql: many () -> { a: int4? }
+leading_comment.sql: maybeOne (id: int4) -> { id: int4 }
+lock_tables.sql: many () -> {  } !! reylo10: only SELECT, TABLE, VALUES, INSERT, REPLACE, UPDATE and DELETE statements are typed
+match_against.sql: many (q: text) -> { id: int4 }
+match_against_score.sql: many (q: text) -> { id: int4, score: float8? }
+member_of.sql: many () -> { id: int4 }
+optimizer_hint.sql: maybeOne (id: int4) -> { id: int4 }
+optimizer_hint_set_var.sql: many () -> { id: int4 }
+parenthesized.sql: many (id: int4) -> { id: int4 }
+partition_and_hint.sql: maybeOne (id: int4) -> { id: int4 }
+placeholder_at.sql: many () -> { name: text }
+placeholder_cast_like.sql: maybeOne (id: int4, name: text) -> { id: int4 }
+placeholder_colon_equals.sql: maybeOne (id: int4) -> { n: unknown }
+placeholder_dollar.sql: many () -> {  } !! reylo6: Unknown column '$1' in 'where clause' (ER_BAD_FIELD_ERROR)
+placeholder_in_limit.sql: many (n: int4) -> { id: int4 }
+placeholder_in_string.sql: maybeOne (id: int4) -> { text: text, mark: text, id: int4 }
+placeholder_mixed.sql: many (1: unknown, name: unknown) -> {  } !! reylo2: Named and positional parameters cannot be mixed in one statement.
+placeholder_numbered.sql: many () -> {  } !! reylo1: MySQL has no numbered placeholder ?1; write ? for each value, or :name
+placeholder_question.sql: maybeOne (1: int4, 2: text) -> { name: text }
+replace_statement.sql: none (id: int4, name: text) -> {  }
+select_distinctrow.sql: many () -> { name: text }
+select_for_share.sql: maybeOne (id: int4) -> { id: int4 }
+select_function_writes.sql: maybeOne (id: int4) -> { id: int4, n: int4|int8? }
+select_high_priority.sql: maybeOne (id: int4) -> { id: int4 }
+select_into_outfile.sql: many () -> {  }
+select_into_variable.sql: many (id: int4) -> {  }
+select_one.sql: maybeOne (id: int4) -> { id: int4, name: text }
+select_sql_calc.sql: maybeOne () -> { id: int4 }
+select_stored_function.sql: one () -> { n: int4|int8? }
+set_variable.sql: many () -> {  } !! reylo10: only SELECT, TABLE, VALUES, INSERT, REPLACE, UPDATE and DELETE statements are typed
+show_tables.sql: many () -> {  } !! reylo10: only SELECT, TABLE, VALUES, INSERT, REPLACE, UPDATE and DELETE statements are typed
+syntax_error.sql: many () -> {  } !! reylo6: You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '' at line 1 (ER_PARSE_ERROR)
+table_statement.sql: many () -> { id: int4, name: text, email: text?, doc: json? }
+trailing_comment.sql: maybeOne (id: int4) -> { id: int4 }
+trailing_semicolon.sql: maybeOne (id: int4) -> { id: int4 }
+truncate.sql: many () -> {  } !! reylo10: only SELECT, TABLE, VALUES, INSERT, REPLACE, UPDATE and DELETE statements are typed
+two_statements.sql: many () -> {  } !! reylo10: expected exactly one statement
+unknown_column.sql: many () -> {  } !! reylo6: Unknown column 'nope' in 'field list' (ER_BAD_FIELD_ERROR)
+unknown_function.sql: many () -> {  } !! reylo6: FUNCTION reylo_oracle_mysql_statements.nope does not exist (ER_SP_DOES_NOT_EXIST)
+unknown_keyword.sql: many () -> {  } !! reylo6: You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec id from users' at line 1 (ER_PARSE_ERROR)
+unknown_table.sql: many () -> {  } !! reylo6: Table 'reylo_oracle_mysql_statements.nowhere' doesn't exist (ER_NO_SUCH_TABLE)
+update_all.sql: none () -> {  }
+use_database.sql: many () -> {  } !! reylo10: only SELECT, TABLE, VALUES, INSERT, REPLACE, UPDATE and DELETE statements are typed
+user_variable_read.sql: maybeOne (id: int4) -> { x: unknown?, id: int4 }
+values_statement.sql: many () -> { column_0: int8|int4, column_1: text }
+window_named.sql: many () -> { id: int4, r: int8 }
+with_recursive_cte.sql: many () -> { i: int8|int4? }
+with_statement.sql: many () -> { id: int4 }
+wrong_group.sql: many () -> {  } !! reylo6: In aggregated query without GROUP BY, expression #1 of SELECT list contains nonaggregated column 'reylo_oracle_mysql_statements.users.id'; this is incompatible with sql_mode=only_full_group_by (ER_MIX_OF_GROUP_FUNC_AND_FIELDS)

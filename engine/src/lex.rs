@@ -18,9 +18,12 @@
 //!
 //! The pass knows what the parser knows about text: single-quoted literals (with `''`), `E''`
 //! escape strings (with backslashes), dollar quoting, double-quoted identifiers, line comments,
-//! nested block comments, and `::` casts. The spans it skipped as text are returned as
-//! [`Lexed::opaque`], so a caller that looks for its own construct in the statement does not need
-//! a scanner of its own.
+//! nested block comments, and `::` casts. MySQL reads text its own way, by the session's
+//! `sql_mode` ([`MysqlText`]): a backslash in a string escapes the character after it, a
+//! double-quoted word is a string, `#` starts a line comment as `-- ` does (`--` followed by
+//! anything else is two minus signs), a block comment ends at its first `*/`, and backquotes quote
+//! a name. The spans it skipped as text are returned as [`Lexed::opaque`], so a caller that looks
+//! for its own construct in the statement does not need a scanner of its own.
 
 use crate::dialect::Dialect;
 use serde::Serialize;
@@ -170,6 +173,56 @@ fn find_bytes(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
     hay[from..].windows(needle.len()).position(|w| w == needle).map(|p| p + from)
 }
 
+/// How a MySQL session reads strings, by its `sql_mode`. The default is the server's default
+/// mode, which is also how `sqlparser`'s MySQL dialect reads them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MysqlText {
+    /// A backslash in a string escapes the character after it (`'it\'s'`), unless the mode has
+    /// NO_BACKSLASH_ESCAPES.
+    pub backslash_escapes: bool,
+    /// A double-quoted word is a name, not a string, where the mode has ANSI_QUOTES. A name
+    /// escapes nothing with a backslash.
+    pub ansi_quotes: bool,
+}
+
+impl Default for MysqlText {
+    fn default() -> Self {
+        MysqlText { backslash_escapes: true, ansi_quotes: false }
+    }
+}
+
+impl MysqlText {
+    /// Every reading a session may have.
+    pub const ALL: [MysqlText; 4] = [
+        MysqlText { backslash_escapes: true, ansi_quotes: false },
+        MysqlText { backslash_escapes: false, ansi_quotes: false },
+        MysqlText { backslash_escapes: true, ansi_quotes: true },
+        MysqlText { backslash_escapes: false, ansi_quotes: true },
+    ];
+
+    /// The reading of a session whose `@@sql_mode` is `mode`. ANSI (and the modes that imply it)
+    /// is expanded by the server when it is set, so the two flags are read as they are listed.
+    pub fn of_mode(mode: &str) -> MysqlText {
+        let set = |name: &str| mode.split(',').any(|m| m.trim().eq_ignore_ascii_case(name));
+        MysqlText { backslash_escapes: !set("NO_BACKSLASH_ESCAPES"), ansi_quotes: set("ANSI_QUOTES") }
+    }
+}
+
+/// From the quote at `i`, the offset one past the closing one, or `None` if the text ends first.
+/// A doubled quote is one character; where `escapes`, so is a backslash and what follows it.
+fn quoted_end(b: &[u8], i: usize, escapes: bool) -> Option<usize> {
+    let quote = b[i];
+    let mut j = i + 1;
+    loop {
+        match b.get(j)? {
+            b'\\' if escapes => j += 2,
+            &q if q == quote && b.get(j + 1) == Some(&quote) => j += 2,
+            &q if q == quote => return Some(j + 1),
+            _ => j += 1,
+        }
+    }
+}
+
 /// Which named placeholders a statement may use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Named {
@@ -183,8 +236,19 @@ pub fn lex(sql: &str, dialect: Dialect) -> Result<Lexed, LexError> {
     lex_with(sql, dialect, Named::Dialect)
 }
 
+/// MySQL reads its text by the session's mode; [`lex_with`] reads it as the default mode does.
 pub fn lex_with(sql: &str, dialect: Dialect, named: Named) -> Result<Lexed, LexError> {
+    lex_text(sql, dialect, named, MysqlText::default())
+}
+
+/// A MySQL statement as a session of this reading reads it.
+pub fn lex_mysql(sql: &str, named: Named, text: MysqlText) -> Result<Lexed, LexError> {
+    lex_text(sql, Dialect::Mysql, named, text)
+}
+
+fn lex_text(sql: &str, dialect: Dialect, named: Named, text: MysqlText) -> Result<Lexed, LexError> {
     let sqlite_named = dialect == Dialect::Sqlite && named == Named::Dialect;
+    let mysql = dialect == Dialect::Mysql;
     let b = sql.as_bytes();
     let mut i = 0usize;
     let mut params: Vec<String> = Vec::new();
@@ -209,23 +273,15 @@ pub fn lex_with(sql: &str, dialect: Dialect, named: Named) -> Result<Lexed, LexE
     while i < b.len() {
         let c = b[i];
         match c {
-            b'\'' => {
-                let start = i;
-                i += 1;
-                loop {
-                    match b.get(i) {
-                        None => return Err(LexError { message: "unterminated string literal".into(), offset: i }),
-                        Some(b'\'') if b.get(i + 1) == Some(&b'\'') => i += 2,
-                        Some(b'\'') => {
-                            i += 1;
-                            break;
-                        }
-                        Some(_) => i += 1,
-                    }
-                }
-                opaque.push((start, i));
+            // A MySQL string, unless ANSI_QUOTES makes `"` a name's quote.
+            b'\'' | b'"' if c == b'\'' || (mysql && !text.ansi_quotes) => {
+                let Some(end) = quoted_end(b, i, mysql && text.backslash_escapes) else {
+                    return Err(LexError { message: "unterminated string literal".into(), offset: b.len() });
+                };
+                opaque.push((i, end));
+                i = end;
             }
-            b'E' | b'e' if b.get(i + 1) == Some(&b'\'') && !prev_is_name_char(b, i) => {
+            b'E' | b'e' if b.get(i + 1) == Some(&b'\'') && !prev_is_name_char(b, i) && !mysql => {
                 let start = i;
                 i += 2;
                 loop {
@@ -243,28 +299,35 @@ pub fn lex_with(sql: &str, dialect: Dialect, named: Named) -> Result<Lexed, LexE
                 opaque.push((start, i));
             }
             b'"' | b'`' => {
-                let quote = c;
-                let start = i;
-                i += 1;
-                loop {
-                    match b.get(i) {
-                        None => return Err(LexError { message: "unterminated quoted identifier".into(), offset: i }),
-                        Some(&q) if q == quote && b.get(i + 1) == Some(&quote) => i += 2,
-                        Some(&q) if q == quote => {
-                            i += 1;
-                            break;
-                        }
-                        Some(_) => i += 1,
-                    }
-                }
-                opaque.push((start, i));
+                let Some(end) = quoted_end(b, i, false) else {
+                    return Err(LexError { message: "unterminated quoted identifier".into(), offset: b.len() });
+                };
+                opaque.push((i, end));
+                i = end;
             }
-            b'-' if b.get(i + 1) == Some(&b'-') => {
+            // MySQL's `--` starts a comment only before a space or a control character, or at the
+            // end of the text: `:a --:b` is `:a - (-:b)`.
+            b'-' if b.get(i + 1) == Some(&b'-') && !(mysql && b.get(i + 2).is_some_and(|&n| n > b' ' && n != 0x7f)) => {
                 let start = i;
                 while i < b.len() && b[i] != b'\n' {
                     i += 1;
                 }
                 opaque.push((start, i));
+            }
+            b'#' if mysql => {
+                let start = i;
+                while i < b.len() && b[i] != b'\n' {
+                    i += 1;
+                }
+                opaque.push((start, i));
+            }
+            // A MySQL block comment does not nest: it ends at the first `*/`.
+            b'/' if b.get(i + 1) == Some(&b'*') && mysql => {
+                let Some(close) = find_bytes(b, b"*/", i + 2) else {
+                    return Err(LexError { message: "unterminated block comment".into(), offset: b.len() });
+                };
+                opaque.push((i, close + 2));
+                i = close + 2;
             }
             b'/' if b.get(i + 1) == Some(&b'*') => {
                 let start = i;
@@ -491,7 +554,7 @@ const NOT_QUERIES: &[&str] = &[
 /// typed; Postgres's parse refuses both (`AnalyzeError` in `analyze.rs`).
 pub fn one_statement(sql: &str, lexed: &Lexed, kinds: &[&str]) -> Result<(), String> {
     let bytes = sql.as_bytes();
-    let is_comment = |start: usize| sql[start..].starts_with("--") || sql[start..].starts_with("/*");
+    let is_comment = |start: usize| sql[start..].starts_with("--") || sql[start..].starts_with("/*") || sql[start..].starts_with('#');
     let past_comments = |mut i: usize| loop {
         while i < bytes.len() && bytes[i].is_ascii_whitespace() {
             i += 1;
@@ -718,6 +781,48 @@ mod tests {
         let sql = "select ?, ?";
         let l = lex(sql, Dialect::Mysql).unwrap();
         assert_eq!(rewrite(sql, &l, Target::Question).order, ["1", "2"]);
+    }
+
+    #[test]
+    fn mysql_text() {
+        // By default a backslash escapes the character after it, in either quote, and a
+        // double-quoted word is a string; a placeholder inside one is text.
+        let sql = r#"select 'it\'s :not', 'a\\' as b, :x, "say \":no", 'a\nb' from t where id = :id"#;
+        assert_eq!(names(sql, Dialect::Mysql), ["x", "id"]);
+        // Postgres and SQLite read a backslash as a character, so there `'a\'` ends at its quote.
+        assert_eq!(names(r"select 'C:\', :x", Dialect::Postgres), ["x"]);
+        assert_eq!(names(r"select 'C:\', :x", Dialect::Sqlite), ["x"]);
+        assert_eq!(lex(r"select 'C:\', :x", Dialect::Mysql).unwrap_err().message, "unterminated string literal");
+        // NO_BACKSLASH_ESCAPES makes the backslash a character there too.
+        let plain = MysqlText { backslash_escapes: false, ansi_quotes: false };
+        assert_eq!(lex_mysql(r"select 'C:\', :x", Named::Dialect, plain).unwrap().params, ["x"]);
+        assert_eq!(lex_mysql(r"select 'a\' as b, :x, 'it''s :not'", Named::Dialect, plain).unwrap().params, ["x"]);
+        // Under ANSI_QUOTES a double-quoted word is a name, which escapes nothing.
+        let ansi = MysqlText { backslash_escapes: true, ansi_quotes: true };
+        assert_eq!(lex_mysql(r#"select "a\" from t where id = :id"#, Named::Dialect, ansi).unwrap().params, ["id"]);
+        assert!(lex(r#"select "a\" from t where id = :id"#, Dialect::Mysql).is_err());
+        // `#` starts a line comment; `--` does only before a space or a control character, or at the end.
+        assert_eq!(names("select :a # :b\n, :c", Dialect::Mysql), ["a", "c"]);
+        assert_eq!(names("select :a --:b", Dialect::Mysql), ["a", "b"]);
+        assert_eq!(names("select :a -- :b\n, :c --\t:d\n, 1--", Dialect::Mysql), ["a", "c"]);
+        assert_eq!(names("select :a --:b", Dialect::Postgres), ["a"]);
+        assert_eq!(names("select 1 # :b", Dialect::Postgres), ["b"]);
+        // A block comment ends at its first `*/`; backquotes quote a name and escape nothing.
+        assert_eq!(names("select /* a /* b */ :x", Dialect::Mysql), ["x"]);
+        assert_eq!(names(r"select `a\`, :x", Dialect::Mysql), ["x"]);
+        // MySQL has no `E''` string: `e'\''` is an escaped quote by the default reading alone.
+        assert_eq!(lex_mysql(r"select e'\', :x", Named::Dialect, plain).unwrap().params, ["x"]);
+        // The spans are listed as the reading has them.
+        let sql = "select 'a\\'b'':c', \"c\\\"\", `d`, :e # f\n/* g /* */";
+        let l = lex(sql, Dialect::Mysql).unwrap();
+        let text: Vec<&str> = l.opaque.iter().map(|&(s, e)| &sql[s..e]).collect();
+        assert_eq!(text, ["'a\\'b'':c'", "\"c\\\"\"", "`d`", "# f", "/* g /* */"]);
+        assert_eq!(l.params, ["e"]);
+        // A comment that starts with `#` is a comment to the statement check too.
+        assert_eq!(one_statement("select 1; # done", &lex("select 1; # done", Dialect::Mysql).unwrap(), &["select"]), Ok(()));
+        assert_eq!(MysqlText::of_mode("STRICT_TRANS_TABLES,NO_BACKSLASH_ESCAPES"), plain);
+        assert_eq!(MysqlText::of_mode("REAL_AS_FLOAT,PIPES_AS_CONCAT,ANSI_QUOTES,IGNORE_SPACE,ONLY_FULL_GROUP_BY,ANSI"), ansi);
+        assert_eq!(MysqlText::of_mode(""), MysqlText::default());
     }
 
     #[test]
