@@ -1083,7 +1083,7 @@ impl Analyzer<'_> {
         if n.op == "variable" {
             let fact = match ctx {
                 Ctx::Typed(Some(f)) => f,
-                Ctx::Typed(None) | Ctx::None => Fact::unknown(),
+                Ctx::Typed(None) | Ctx::Row(_) | Ctx::None => Fact::unknown(),
                 Ctx::Bool => Fact::new("integer", false),
             };
             found.push((n.name.clone().unwrap_or_default(), fact));
@@ -1092,21 +1092,51 @@ impl Analyzer<'_> {
         let sibling = |other: &Option<Box<Node>>| other.as_deref().map(|o| self.type_of(o, scope));
         let child_ctx = |slot: Slot| -> Ctx {
             match n.op.as_str() {
-                "=" | "!=" | "<" | "<=" | ">" | ">=" | "is" | "is not" => Ctx::Typed(match slot {
-                    Slot::Left => sibling(&n.right),
-                    Slot::Right => sibling(&n.left),
-                    _ => None,
-                }),
-                "in" => Ctx::Typed(match slot {
-                    Slot::Left => n.list.first().map(|x| self.type_of(x, scope)).or_else(|| n.select.as_deref().map(|s| self.select_column(s, 0, scope))),
-                    Slot::List(_) => sibling(&n.left),
-                    _ => None,
-                }),
-                "between" => Ctx::Typed(match slot {
-                    Slot::Left => n.list.first().map(|x| self.type_of(x, scope)),
-                    Slot::List(_) => sibling(&n.left),
-                    _ => None,
-                }),
+                "=" | "!=" | "<" | "<=" | ">" | ">=" | "is" | "is not" => {
+                    let (this, other) = match slot {
+                        Slot::Left => (&n.left, &n.right),
+                        Slot::Right => (&n.right, &n.left),
+                        _ => return Ctx::None,
+                    };
+                    // Row values compare element by element, so each element takes the type of
+                    // the one it is compared with: `(created_at, id) < (:created_at, :id)`, and a
+                    // subquery's columns: `(created_at, id) = (SELECT :at, :id)`.
+                    match (this.as_deref(), other.as_deref().and_then(|o| self.row(o, scope))) {
+                        (Some(t), Some(row)) if matches!(t.op.as_str(), "vector" | "select") => Ctx::Row(row),
+                        _ => Ctx::Typed(sibling(other)),
+                    }
+                }
+                "in" => match slot {
+                    // `(created_at, id) IN (SELECT …)`: SQLite writes a list of row values as
+                    // a VALUES subquery, which the left side types (see the select walk below).
+                    Slot::Left if is_vector(&n.left) => n.select.as_deref().map_or(Ctx::None, |s| Ctx::Row(self.select_columns(s, scope))),
+                    Slot::Left => Ctx::Typed(n.list.first().map(|x| self.type_of(x, scope)).or_else(|| n.select.as_deref().map(|s| self.select_column(s, 0, scope)))),
+                    Slot::List(_) => Ctx::Typed(sibling(&n.left)),
+                    _ => Ctx::None,
+                },
+                "between" => match slot {
+                    Slot::Left if is_vector(&n.left) => Ctx::Row(self.rows(&n.list.iter().collect::<Vec<_>>(), scope)),
+                    Slot::Left => Ctx::Typed(n.list.first().map(|x| self.type_of(x, scope))),
+                    Slot::List(_) => match n.left.as_deref().and_then(|l| self.row(l, scope)) {
+                        Some(row) if is_vector(&n.left) => Ctx::Row(row),
+                        _ => Ctx::Typed(sibling(&n.left)),
+                    },
+                    _ => Ctx::None,
+                },
+                // An element of a row value takes its place's type.
+                "vector" => match (slot, &ctx) {
+                    (Slot::List(i), Ctx::Row(row)) => Ctx::Typed(row.get(i).cloned().flatten()),
+                    _ => Ctx::None,
+                },
+                // One column of a row subquery, as `UPDATE … SET (a, b) = (SELECT …)` writes it.
+                "select_column" => match (slot, &ctx) {
+                    (Slot::Left, Ctx::Typed(Some(f))) => {
+                        let mut row = vec![None; n.index.max(0) as usize + 1];
+                        row[n.index.max(0) as usize] = Some(f.clone());
+                        Ctx::Row(row)
+                    }
+                    _ => Ctx::None,
+                },
                 "cast" => Ctx::Typed(Some(Fact::new(n.affinity.as_deref().unwrap_or("none"), true))),
                 "+" | "-" | "*" | "/" | "%" => {
                     let other = match slot {
@@ -1129,6 +1159,7 @@ impl Analyzer<'_> {
                     // THEN or ELSE shares the other results' type, or failing that the type the
                     // CASE stands in (`name = CASE WHEN … THEN :a ELSE :b END`).
                     Slot::List(i) if i % 2 == 0 && i + 1 < n.list.len() => match &n.left {
+                        Some(base) if base.op == "vector" => self.row(base, scope).map_or(Ctx::None, Ctx::Row),
                         Some(base) => Ctx::Typed(Some(self.type_of(base, scope))),
                         None => Ctx::Bool,
                     },
@@ -1140,6 +1171,12 @@ impl Analyzer<'_> {
                             Type::Unknown => outer_type(&ctx),
                             ty => Ctx::Typed(Some(Fact { ty, non_null: true })),
                         }
+                    }
+                    // A base compares with each WHEN value (`CASE :kind WHEN 'a' THEN …`), a row
+                    // value element by element.
+                    Slot::Left if is_vector(&n.left) => {
+                        let values: Vec<&Node> = n.list.iter().enumerate().filter(|(j, _)| j % 2 == 0 && j + 1 < n.list.len()).map(|(_, x)| x).collect();
+                        Ctx::Row(self.rows(&values, scope))
                     }
                     // A base compares with each WHEN value (`CASE :kind WHEN 'a' THEN …`).
                     Slot::Left => {
@@ -1176,8 +1213,50 @@ impl Analyzer<'_> {
             self.walk(x, child_ctx(Slot::Arg(i)), scope, found);
         }
         if let Some(s) = &n.select {
-            self.walk_select(s, scope, &[], found);
+            // A subquery's columns take the types they are compared with or stand in: `id IN
+            // (SELECT :p)`, `id = (SELECT :p)`, `(created_at, id) IN (VALUES (:at, :id))`.
+            let targets: Vec<Option<Fact>> = match (n.op.as_str(), &ctx) {
+                ("select", Ctx::Row(row)) => row.clone(),
+                ("select", Ctx::Typed(Some(f))) => vec![Some(f.clone())],
+                ("in", _) => match n.left.as_deref() {
+                    Some(l) if l.op == "vector" => self.row(l, scope).unwrap_or_default(),
+                    Some(l) => vec![Some(self.type_of(l, scope))],
+                    None => Vec::new(),
+                },
+                _ => Vec::new(),
+            };
+            self.walk_select(s, scope, &targets, found);
         }
+    }
+
+    /// A row value's elements, one fact per place: a vector's elements, or a subquery's columns.
+    fn row(&self, n: &Node, scope: &ScopeStack) -> Option<Vec<Option<Fact>>> {
+        match n.op.as_str() {
+            "vector" => Some(n.list.iter().map(|x| Some(self.type_of(x, scope))).collect()),
+            "select" => n.select.as_deref().map(|s| self.select_columns(s, scope)),
+            _ => None,
+        }
+    }
+
+    fn select_columns(&self, sel: &Sel, scope: &ScopeStack) -> Vec<Option<Fact>> {
+        (0..sel.columns.len()).map(|i| Some(self.select_column(sel, i, scope))).collect()
+    }
+
+    /// The type at each place of several row values (BETWEEN's bounds, a CASE's WHEN values):
+    /// the first that has one there.
+    fn rows(&self, values: &[&Node], scope: &ScopeStack) -> Vec<Option<Fact>> {
+        let mut out: Vec<Option<Fact>> = Vec::new();
+        for row in values.iter().filter_map(|v| self.row(v, scope)) {
+            for (i, f) in row.into_iter().enumerate() {
+                if i >= out.len() {
+                    out.push(None);
+                }
+                if out[i].as_ref().is_none_or(|known| matches!(known.ty, Type::Unknown)) {
+                    out[i] = f;
+                }
+            }
+        }
+        out
     }
 
     /// The type a built-in function gives its argument `i`, for a parameter written there.
@@ -1629,6 +1708,10 @@ fn reads_column(n: &Node) -> bool {
 }
 
 /// The type the context an expression stands in gives its operand, when it gives one.
+fn is_vector(n: &Option<Box<Node>>) -> bool {
+    n.as_deref().is_some_and(|n| n.op == "vector")
+}
+
 fn outer_type(ctx: &Ctx) -> Ctx {
     match ctx {
         Ctx::Typed(Some(f)) => Ctx::Typed(Some(f.clone())),
@@ -1664,6 +1747,8 @@ pub fn affinity(declared: &str) -> &'static str {
 #[derive(Clone)]
 enum Ctx {
     Typed(Option<Fact>),
+    /// A row value's place: element i takes fact i (`(created_at, id) < (:created_at, :id)`).
+    Row(Vec<Option<Fact>>),
     Bool,
     None,
 }
@@ -1936,6 +2021,37 @@ mod tests {
     }
 
     #[test]
+    fn a_row_value_types_each_parameter_by_the_element_it_is_compared_with() {
+        // A keyset page: each element of a row value takes the type of its partner, in every
+        // comparison SQLite takes a row value in, a subquery's columns and a VALUES list too.
+        let ddl = vec!["create table users (id integer primary key, name text not null, created_at text not null) strict".to_string()];
+        let types = |sql: &str| {
+            let a = analyze_ddl(sql, &ddl, &Extras::default()).analysis;
+            assert!(a.diagnostics.is_empty(), "{sql}: {:?}", a.diagnostics);
+            a.params.iter().map(|p| format!("{}: {}{}", p.name, scalar_name(&p.ty).unwrap_or("unknown"), if p.nullable { " | null" } else { "" })).collect::<Vec<_>>().join(", ")
+        };
+        let page = "select id, name, created_at from users where (created_at, id) < (:created_at, :id) order by created_at desc, id desc limit 20";
+        assert_eq!(types(page), "created_at: text, id: integer");
+        for op in ["=", "<>", "!=", "<", "<=", ">", ">=", "is", "is not"] {
+            assert_eq!(types(&format!("select id from users where (created_at, id) {op} (:at, :id)")), "at: text, id: integer", "{op}");
+            assert_eq!(types(&format!("select id from users where (:at, :id) {op} (created_at, id)")), "at: text, id: integer", "{op} reversed");
+        }
+        assert_eq!(types("select id from users where (created_at, :id) < (:at, id)"), "id: integer, at: text");
+        assert_eq!(types("select id from users where (created_at, id) between (:lo_at, :lo_id) and (:hi_at, :hi_id)"), "lo_at: text, lo_id: integer, hi_at: text, hi_id: integer");
+        assert_eq!(types("select id from users where (:at, :id) between (created_at, id) and ('9999', 0)"), "at: text, id: integer");
+        assert_eq!(types("select id from users where (created_at, id) in (select :at, :id)"), "at: text, id: integer");
+        assert_eq!(types("select id from users where (:at, :id) in (select created_at, id from users)"), "at: text, id: integer");
+        assert_eq!(types("select id from users where (created_at, id) in ((:a1, :i1), (:a2, :i2))"), "a1: text, i1: integer, a2: text, i2: integer");
+        assert_eq!(types("select id from users where (created_at, id) = (select :at, :id)"), "at: text, id: integer");
+        assert_eq!(types("select case (created_at, id) when (:at, :id) then 1 else 0 end as hit from users"), "at: text, id: integer");
+        assert_eq!(types("select case (:at, :id) when (created_at, id) then 1 else 0 end as hit from users"), "at: text, id: integer");
+        assert_eq!(types("update users set (name, created_at) = (select :name, :at) where id = :id"), "name: text, at: text, id: integer");
+        // One column of a subquery takes the type it is compared with, as a row's columns do.
+        assert_eq!(types("select id from users where id = (select :p)"), "p: integer");
+        assert_eq!(types("select id from users where id in (select :p union all select 1)"), "p: integer");
+    }
+
+    #[test]
     fn json_each_reads_text() {
         // A list of values in one parameter: the JSON text and the path are text, as written or cast.
         let a = analysis("select id from users where id in (select value from json_each(:ids))");
@@ -2185,9 +2301,12 @@ mod tests {
         assert_eq!(params(&a("insert into foo (name, k) select name, :a from bar union all select :b, n from bar")), typed(&["integer", "text"]));
         let returning = a("insert into foo (name, meta) select name, :m from bar where n > :n returning name, meta");
         assert_eq!((params(&returning), returning.cardinality.as_str()), (typed(&["text", "integer"]), "many"));
-        // A subquery elsewhere in the statement is not the INSERT's source.
+        // A subquery elsewhere in the statement is not the INSERT's source: one in RETURNING
+        // stands in no typed place, and one in a VALUES row is the value written to its own
+        // column (k, not the first target column name), as any scalar subquery takes the type of
+        // the place it stands in.
         assert_eq!(params(&a("insert into foo (name, meta) select name, 'x' from bar returning (select :p) as p")), typed(&["unknown"]));
-        assert_eq!(params(&a("insert into foo (name, k) values ('a', (select :p))")), typed(&["unknown"]));
+        assert_eq!(params(&a("insert into foo (name, k) values ('a', (select :p))")), typed(&["integer"]));
         // A whole-table copy, which SQLite runs without a SELECT, is still an INSERT.
         let copy = a("insert into foo2 select * from foo");
         assert_eq!((copy.kind.as_str(), copy.cardinality.as_str()), ("insert", "none"));

@@ -38,7 +38,7 @@ const s1: { id: number; name: string; title: string | null; min_score: number }[
 const s2: Awaited<ReturnType<typeof search.run>> = null! as { id: number; name: string; title: string | null; min_score: number }[];
 const s3: { min: number; q: string; n: number; o: number } = null! as Exclude<Parameters<typeof search.run>[1], readonly unknown[]>;
 const s4: Exclude<Parameters<typeof search.run>[1], readonly unknown[]> = null! as { min: number; q: string; n: number; o: number };
-// The array form names each parameter once, in order of first use, though :min appears twice.
+// The array form names each parameter in order of use: :min first, in the `with` that selects it.
 const s5: readonly [min: number, q: string, n: number, o: number] = null! as Extract<Parameters<typeof search.run>[1], readonly unknown[]>;
 const s6: Extract<Parameters<typeof search.run>[1], readonly unknown[]> = null! as readonly [min: number, q: string, n: number, o: number];
 const cards: ["one", "maybeOne", "many"] = [insert.cardinality, byEmail.cardinality, search.cardinality];
@@ -75,3 +75,9 @@ import inList from "./in_list.sql";
 const l1: { ids: string } = null! as Exclude<Parameters<typeof inList.run>[1], readonly unknown[]>;
 const l2: Exclude<Parameters<typeof inList.run>[1], readonly unknown[]> = null! as { ids: string };
 const l3: { id: number; name: string }[] = null! as Awaited<ReturnType<typeof inList.run>>;
+// A keyset page: each element of a row value takes the type of the element it is compared with.
+import keyset from "./keyset.sql";
+const k1: { created_at: string; id: number } = null! as Exclude<Parameters<typeof keyset.run>[1], readonly unknown[]>;
+const k2: Exclude<Parameters<typeof keyset.run>[1], readonly unknown[]> = null! as { created_at: string; id: number };
+const k3: { id: number; name: string; created_at: string }[] = null! as Awaited<ReturnType<typeof keyset.run>>;
+const k4: Awaited<ReturnType<typeof keyset.run>> = null! as { id: number; name: string; created_at: string }[];
