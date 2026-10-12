@@ -14,6 +14,7 @@ pub mod jsonshape;
 pub mod levels;
 pub mod lex;
 pub mod mysql;
+pub mod mysql_params;
 pub mod mysql_shape;
 pub mod pgtypes;
 pub mod postgres;

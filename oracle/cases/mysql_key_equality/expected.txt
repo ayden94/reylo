@@ -82,7 +82,7 @@ int_arithmetic.sql: maybeOne (id: int4) -> { id: int4 }
 int_between.sql: many (lo: int4, hi: int4) -> { id: int4 }
 int_cast_char.sql: many (id: text) -> { id: int4 }
 int_cast_signed.sql: maybeOne (id: int4) -> { id: int4 }
-int_coalesce.sql: many (a: int4, b: int4) -> { id: int4 }
+int_coalesce.sql: many (a: int4?, b: int4) -> { id: int4 }
 int_date_literal.sql: many () -> { id: int4 }
 int_decimal_literal.sql: maybeOne () -> { id: int4 }
 int_distinct.sql: maybeOne (id: int4) -> { name: text }
@@ -102,7 +102,7 @@ int_lower.sql: many (s: text) -> { id: int4 }
 int_negated.sql: maybeOne (id: int4) -> { id: int4 }
 int_nested.sql: maybeOne (id: int4) -> { id: int4 }
 int_not.sql: many (id: int4) -> { id: int4 }
-int_null_safe.sql: many (id: int4) -> { id: int4 }
+int_null_safe.sql: many (id: int4?) -> { id: int4 }
 int_or.sql: many (id: int4, name: text) -> { id: int4 }
 int_param.sql: maybeOne (id: int4) -> { id: int4, name: text }
 int_param_reversed.sql: maybeOne (id: int4) -> { id: int4, name: text }
@@ -136,7 +136,7 @@ text_lower.sql: maybeOne (e: text) -> { id: int4 }
 text_md5.sql: many (e: text) -> { id: int4 }
 text_nullable_key.sql: maybeOne (nick: text) -> { id: int4 }
 text_nullable_key_is_null.sql: many () -> { id: int4 }
-text_nullable_key_null_safe.sql: many (nick: text) -> { id: int4 }
+text_nullable_key_null_safe.sql: many (nick: text?) -> { id: int4 }
 text_number_literal.sql: many () -> { id: int4 }
 text_param.sql: maybeOne (email: text) -> { id: int4 }
 text_param_scan.sql: maybeOne (email: text) -> { id: int4 }

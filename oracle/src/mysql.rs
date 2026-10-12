@@ -1004,8 +1004,18 @@ async fn check(server: &mut Server, state: &mut State<'_>, statements: &[(String
                             break;
                         }
                         let hints: Vec<(u8, bool)> = statement.params().iter().map(|p| (p.column_type() as u8, p.flags().contains(mysql_async::consts::ColumnFlags::UNSIGNED_FLAG))).collect();
-                        // The first `?` a name binds carries the definition mysql2 reads for it.
-                        let pools = params.iter().map(|p| bindings(&p["type"], order.iter().position(|n| Some(n.as_str()) == p["name"].as_str()).and_then(|i| hints.get(i).copied()))).collect();
+                        // The first `?` a name binds carries the definition mysql2 reads for it. A
+                        // parameter typed nullable is bound as NULL too, last, as the caller may.
+                        let pools = params
+                            .iter()
+                            .map(|p| {
+                                let mut pool = bindings(&p["type"], order.iter().position(|n| Some(n.as_str()) == p["name"].as_str()).and_then(|i| hints.get(i).copied()));
+                                if p["nullable"].as_bool().unwrap_or(false) {
+                                    pool.push(Bound { value: My::NULL, literal: "NULL".into(), shown: "NULL".into() });
+                                }
+                                pool
+                            })
+                            .collect();
                         prepared = Some((Some(statement), pools));
                     }
                     let (statement, pools) = prepared.as_ref().expect("prepared above");

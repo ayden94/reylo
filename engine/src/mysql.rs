@@ -225,12 +225,19 @@ pub fn analyze(sql: &str, lexed: &Lexed, text: Option<MysqlText>, host: &Host) -
         return Some(crate::postgres::bare(sql, lexed, Dialect::Mysql, vec![Diagnostic { message, start, length: end - start, code: 10 }]));
     }
     let rewritten = lex::rewrite(sql, lexed, Target::Question);
-    // Both asked in one round.
+    // Asked in one round: the prepare, the mode where it decides the reading, and the columns of
+    // the tables a parameter is written to.
     let raw = host.describe_mysql(&rewritten.sql);
     let misread = match text {
         Some(_) => misread(sql, lexed, host),
         None => Some(Some("the server did not say its sql_mode, which decides how it reads this statement's strings and double quotes, so nothing bounds its rows".into())),
     };
+    // A tree the server would read otherwise still says what kind of statement it is, and nothing more.
+    let read = parse(&dialect, &rewritten.sql).ok().and_then(|mut v| if v.len() == 1 { v.pop() } else { None });
+    let names = crate::mysql_params::names(&rewritten);
+    if let Some(statement) = &read {
+        crate::mysql_params::prefetch(statement, &names, host);
+    }
     let (raw, misread) = (raw?, misread?);
     let raw = match raw {
         Ok(r) => r,
@@ -254,9 +261,13 @@ pub fn analyze(sql: &str, lexed: &Lexed, text: Option<MysqlText>, host: &Host) -
         return Some(crate::postgres::bare(sql, lexed, Dialect::Mysql, vec![Diagnostic { message, start: 0, length: sql.trim_end().len().max(1), code: 1 }]));
     }
     let diagnostics = Vec::new();
-    // A tree the server would read otherwise still says what kind of statement it is, and nothing more.
-    let read = parse(&dialect, &rewritten.sql).ok().and_then(|mut v| if v.len() == 1 { v.pop() } else { None });
     let parsed = if misread.is_some() { None } else { read.clone() };
+    // The parameters the caller may pass null for, which the prepare does not say: by the rules
+    // of Postgres and SQLite, read off the tree (`mysql_params`).
+    let nullable = match &parsed {
+        Some(statement) => crate::mysql_params::nullable(statement, &names, host)?,
+        None => HashSet::new(),
+    };
     // JSON shapes: the constructors' value expressions, prepared as columns of their own statements.
     let mut shaped: Vec<(String, Type, bool)> = Vec::new();
     let mut outer_not_null: Vec<usize> = Vec::new();
@@ -350,8 +361,7 @@ pub fn analyze(sql: &str, lexed: &Lexed, text: Option<MysqlText>, host: &Host) -
                 Some(p) => param_type(p.r#type, p.charset),
                 None => (Type::Unknown, ""),
             };
-            // MySQL reports no nullability for a parameter; every one is typed without null.
-            Param { name: name.clone(), ty, type_name: type_name.to_string(), nullable: false }
+            Param { name: name.clone(), ty, type_name: type_name.to_string(), nullable: nullable.contains(name) }
         })
         .collect();
     let kind = match &read {

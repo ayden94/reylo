@@ -33,9 +33,11 @@ const h: CountRow = null! as { n: number; latest: Date | null };
 const i: { pattern: string } = null! as CountParams;
 const j: { n: number; latest: Date | null } = await count.run(conn, { pattern: "a%" });
 // MySQL has no RETURNING, so a data-modifying statement returns nothing; the `?` in a VALUES
-// list is typed by the column it fills.
-const k: { name: string; email: string } = null! as InsertParams;
+// list is typed by the column it fills, and :email, written whole to a nullable column, may be null.
+const k: { name: string; email: string | null } = null! as InsertParams;
+const k2: InsertParams = null! as { name: string; email: string | null };
 const l: void = await insert.run(conn, { name: "eve", email: "eve@example.com" });
+const l2: void = await insert.run(conn, { name: "eve", email: null });
 // JSON constructors are typed from their arguments: the engine prepares `select p.id, p.title, p.tag
 // from posts p` and `select u.email, u.flag from users u` and reads the server's types and NOT NULL
 // flags back into the shape. The `coalesce(json_arrayagg(...), json_array())` under an ungrouped
