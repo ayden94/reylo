@@ -14,8 +14,9 @@ export function Header() {
     <header
       className="sticky top-0 z-40 flex h-(--fd-banner-height) items-center gap-4 border-b bg-fd-background/85 px-4 backdrop-blur-sm md:px-6 xl:px-8"
     >
-      <a href="/" className="inline-flex items-center gap-2 font-semibold tracking-tight text-fd-headings">
-        <Mark className="h-3.5 w-auto" />
+      <a href="/" className="whitespace-nowrap font-semibold tracking-tight text-fd-headings">
+        {/* Centred on the middle of the word's ink, 0.26em above the baseline in Inter, where the eye puts the word's centre; centring it on the line box set it 1.5px high. */}
+        <Mark className="mr-2 inline-block h-[0.875em] w-auto align-[-0.178em]" />
         Reylo
       </a>
       <div className="flex-1" />
