@@ -651,6 +651,60 @@ type Result = { id: number; name: string }[];
 </Tab>
 </Tabs>
 
+### A list, in its order
+
+Each dialect numbers a list's elements, so the rows can come back in the list's order.
+
+<Tabs groupId="dialect" persist items={["Postgres", "MySQL", "SQLite"]}>
+<Tab value="Postgres">
+
+`with ordinality` adds each element's position:
+
+```sql title="users_in_order.sql"
+select u.id, u.name
+from unnest(:ids::int[]) with ordinality as i(id, position)
+join users u on u.id = i.id
+order by i.position
+```
+
+</Tab>
+<Tab value="MySQL">
+
+A `for ordinality` column holds each element's position:
+
+```sql title="users_in_order.sql"
+with input as (
+  select :ids::json('{ "type": "array", "items": "int" }') as ids
+)
+select u.id, u.name
+from input, json_table(input.ids, '$[*]' columns (position for ordinality, id int path '$')) as i
+join users u on u.id = i.id
+order by i.position
+```
+
+</Tab>
+<Tab value="SQLite">
+
+`json_each` gives each element's index as `key`:
+
+```sql title="users_in_order.sql"
+with input as (
+  select :ids::json('{ "type": "array", "items": "integer" }') as ids
+)
+select u.id, u.name
+from input, json_each(input.ids) as i
+join users u on u.id = i.value
+order by i.key
+```
+
+</Tab>
+</Tabs>
+
+```ts
+type Params = { ids: number[] };
+type Result = { id: number; name: string }[];
+```
+
 ### Nested rows
 
 Build the related rows as JSON in the statement. Reylo types the JSON from the arguments that build it.
