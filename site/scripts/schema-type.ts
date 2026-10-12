@@ -3,21 +3,15 @@
 // `unknown` until typed JSON parameters are built; scripts/capture-types.ts puts this type in its
 // place, so the docs show what the build will give.
 //
-// One function reads both notations the maintainer is choosing between:
-// - the page's: JSON Schema's shape with the dialect's type names as leaves (`"name": "text"`), a
-//   bare string as a property's schema, a key ending in `?` optional and nullable
-//   (`email?: string | null`), and every other key required;
-// - plain JSON Schema: `string`, `integer`, `number`, `boolean`, `null`, `object` and `array`,
-//   `required`, `"type": [..., "null"]`, `enum`, `const`, `oneOf` and `anyOf`.
-// A schema is read as the page's notation when anything in it is (a bare string as a schema, a
-// key ending in `?`, a dialect's type name); otherwise as JSON Schema, where a property that
-// `required` does not list is optional. An object with a `required` list follows the list in
-// either notation. A type name the dialect does not have is an error.
+// The schema is JSON Schema 2020-12 whose leaf types are the dialect's type names (the maintainer,
+// 2026-10-12): `type` is `object`, `array`, a type of the dialect, or a list of one of those and
+// `null`; a key is optional unless `required` lists it; every schema is an object, never a bare
+// type name; `enum` and `const` narrow a type, and `oneOf`, `anyOf` and `allOf` combine object
+// schemas. JSON Schema's own `string` and `number` are not type names here; a type name the dialect
+// does not have is an error.
 
 export type Dialect = 'postgres' | 'mysql' | 'sqlite';
 type Schema = string | boolean | { [key: string]: unknown };
-
-const JSON_SCHEMA_TYPES = new Set(['string', 'integer', 'number', 'boolean', 'null', 'object', 'array']);
 
 const names = (type: string, words: string) => Object.fromEntries(words.split(',').map((w) => [w.trim(), type]));
 
@@ -56,13 +50,9 @@ function leaf(name: string, dialect: Dialect, at: string): string {
   }
   base = base.replace(/\s*\([^)]*\)/g, '');
   if (dialect === 'mysql') base = base.replace(/(?:\s+(?:unsigned|signed|zerofill))+$/, '');
-  const type = JSON_SCHEMA_TYPES.has(base) ? jsonSchemaType(base) : LEAVES[dialect][base];
-  if (type === undefined) throw new Error(`${at}: "${name}" is not a ${dialect === 'postgres' ? 'Postgres' : dialect === 'mysql' ? 'MySQL' : 'SQLite'} type name this schema reads (nor one of JSON Schema's: ${[...JSON_SCHEMA_TYPES].join(', ')})`);
+  const type = LEAVES[dialect][base];
+  if (type === undefined) throw new Error(`${at}: "${name}" is not a ${dialect === 'postgres' ? 'Postgres' : dialect === 'mysql' ? 'MySQL' : 'SQLite'} type name this schema reads; a leaf's type is the dialect's own, such as "text"`);
   return dims ? `${parens(type)}${'[]'.repeat(dims)}` : type;
-}
-
-function jsonSchemaType(name: string): string {
-  return name === 'integer' ? 'number' : name === 'object' ? 'Record<string, unknown>' : name === 'array' ? 'unknown[]' : name;
 }
 
 const ident = (name: string) => (/^[A-Za-z_$][\w$]*$/.test(name) ? name : JSON.stringify(name));
@@ -100,31 +90,17 @@ function skipString(text: string, i: number): number {
   return text.length;
 }
 
-/** Whether the schema uses the page's notation anywhere: a bare string as a schema, a key ending in `?`, a type name of the dialect. */
-function pageNotation(schema: unknown): boolean {
-  if (typeof schema === 'string') return true;
-  if (Array.isArray(schema)) return schema.some(pageNotation);
-  if (schema === null || typeof schema !== 'object') return false;
-  const s = schema as Record<string, unknown>;
-  const types = typeof s.type === 'string' ? [s.type] : Array.isArray(s.type) ? s.type : [];
-  if (types.some((t) => typeof t === 'string' && !JSON_SCHEMA_TYPES.has(t))) return true;
-  const props = s.properties && typeof s.properties === 'object' ? (s.properties as Record<string, unknown>) : {};
-  if (Object.keys(props).some((k) => k.endsWith('?'))) return true;
-  return [...Object.values(props), s.items, s.additionalProperties, ...(['oneOf', 'anyOf', 'allOf', 'prefixItems'] as const).flatMap((k) => (Array.isArray(s[k]) ? (s[k] as unknown[]) : []))].some((v) => v !== undefined && typeof v !== 'boolean' && pageNotation(v));
-}
-
 /**
  * The TypeScript type of a value the schema accepts. `dialect` reads its type names; `at` names
  * the place for an error (the parameter).
  */
 export function schemaType(schema: Schema, dialect: Dialect, at = 'the schema'): string {
-  const page = pageNotation(schema);
   const type = (s: unknown, where: string): string => {
-    if (s === true || (s !== null && typeof s === 'object' && !Array.isArray(s) && Object.keys(s).length === 0)) return 'unknown';
+    if (s === true) return 'unknown';
     if (s === false) return 'never';
-    if (typeof s === 'string') return leaf(s, dialect, where);
-    if (s === null || typeof s !== 'object' || Array.isArray(s)) throw new Error(`${where}: a schema is an object or a type name, not ${JSON.stringify(s)}`);
+    if (s === null || typeof s !== 'object' || Array.isArray(s)) throw new Error(`${where}: a schema is an object, as in { "type": "text" }, not ${JSON.stringify(s)}`);
     const o = s as Record<string, unknown>;
+    if (Object.keys(o).length === 0) return 'unknown';
     if ('const' in o) return JSON.stringify(o.const);
     if (Array.isArray(o.enum)) return union(o.enum.map((v) => JSON.stringify(v)));
     const alternatives = (['oneOf', 'anyOf'] as const).find((k) => Array.isArray(o[k]));
@@ -137,10 +113,11 @@ export function schemaType(schema: Schema, dialect: Dialect, at = 'the schema'):
     }
     if (Array.isArray(o.allOf)) return (o.allOf as unknown[]).map((m, i) => parens(type(m, `${where}.allOf[${i}]`))).join(' & ');
     const types = typeof o.type === 'string' ? [o.type] : Array.isArray(o.type) ? (o.type as unknown[]) : o.properties || o.additionalProperties !== undefined ? ['object'] : o.items || o.prefixItems ? ['array'] : [];
-    if (!types.length) return 'unknown';
+    if (!types.length) throw new Error(`${where}: a schema names its "type"`);
     return union(
       types.map((t) => {
         if (typeof t !== 'string') throw new Error(`${where}: "type" holds ${JSON.stringify(t)}, not a type name`);
+        if (t === 'null') return 'null';
         if (t === 'object') return object(o, where);
         if (t === 'array') return array(o, where);
         return leaf(t, dialect, where);
@@ -150,15 +127,10 @@ export function schemaType(schema: Schema, dialect: Dialect, at = 'the schema'):
   const object = (o: Record<string, unknown>, where: string): string => {
     const props = (o.properties ?? {}) as Record<string, unknown>;
     if (typeof props !== 'object' || Array.isArray(props)) throw new Error(`${where}: "properties" is an object of schemas`);
-    const required = Array.isArray(o.required) ? new Set(o.required as string[]) : undefined;
-    const fields = Object.entries(props).map(([key, value]) => {
-      const loose = key.endsWith('?');
-      const name = loose ? key.slice(0, -1) : key;
-      const t = type(value, `${where}.${name}`);
-      if (loose) return `${ident(name)}?: ${union([t, 'null'])}`;
-      const optional = required ? !required.has(name) : !page;
-      return `${ident(name)}${optional ? '?' : ''}: ${t}`;
-    });
+    // A key is optional unless `required` lists it, as in JSON Schema.
+    const required = new Set(Array.isArray(o.required) ? (o.required as string[]) : []);
+    for (const name of required) if (!(name in props)) throw new Error(`${where}: "required" lists "${name}", which "properties" does not name`);
+    const fields = Object.entries(props).map(([name, value]) => `${ident(name)}${required.has(name) ? '' : '?'}: ${type(value, `${where}.${name}`)}`);
     const extra = o.additionalProperties;
     const rest = extra === undefined || extra === false ? undefined : extra === true ? 'unknown' : type(extra, `${where}.additionalProperties`);
     if (!fields.length) return rest === undefined ? (extra === false ? 'Record<never, never>' : 'Record<string, unknown>') : `Record<string, ${rest}>`;

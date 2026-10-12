@@ -1021,7 +1021,7 @@ select id, name from users where id = any(:ids)
 
 ```sql title="users_by_ids.sql" tab="MySQL" tab-group="dialect"
 with input as (
-  select :ids::json('{ "type": "array", "items": "int" }') as ids
+  select :ids::json('{ "type": "array", "items": { "type": "int" } }') as ids
 )
 select id, name from users
 where id in (
@@ -1031,7 +1031,7 @@ where id in (
 
 ```sql title="users_by_ids.sql" tab="SQLite" tab-group="dialect"
 with input as (
-  select :ids::json('{ "type": "array", "items": "integer" }') as ids
+  select :ids::json('{ "type": "array", "items": { "type": "integer" } }') as ids
 )
 select id, name from users
 where id in (select j.value from input, json_each(input.ids) as j)
@@ -1072,7 +1072,7 @@ order by i.position
 ```sql title="users_in_order.sql" tab="MySQL" tab-group="dialect"
 -- a for ordinality column numbers the elements
 with input as (
-  select :ids::json('{ "type": "array", "items": "int" }') as ids
+  select :ids::json('{ "type": "array", "items": { "type": "int" } }') as ids
 )
 select u.id, u.name
 from input, json_table(input.ids, '$[*]' columns (
@@ -1086,7 +1086,7 @@ order by i.position
 ```sql title="users_in_order.sql" tab="SQLite" tab-group="dialect"
 -- json_each numbers the elements as key
 with input as (
-  select :ids::json('{ "type": "array", "items": "integer" }') as ids
+  select :ids::json('{ "type": "array", "items": { "type": "integer" } }') as ids
 )
 select u.id, u.name
 from input, json_each(input.ids) as i
@@ -1219,9 +1219,10 @@ with input as (
     "items": {
       "type": "object",
       "properties": {
-        "name": "text",
-        "email?": { "type": "text", "format": "email" }
-      }
+        "name": { "type": "text" },
+        "email": { "type": ["text", "null"], "format": "email" }
+      },
+      "required": ["name"]
     }
   }') as users
 )
@@ -1240,9 +1241,10 @@ with input as (
     "items": {
       "type": "object",
       "properties": {
-        "name": "text",
-        "email?": { "type": "varchar(255)", "format": "email" }
-      }
+        "name": { "type": "text" },
+        "email": { "type": ["varchar(255)", "null"], "format": "email" }
+      },
+      "required": ["name"]
     }
   }') as users
 )
@@ -1261,9 +1263,10 @@ with input as (
     "items": {
       "type": "object",
       "properties": {
-        "name": "text",
-        "email?": { "type": "text", "format": "email" }
-      }
+        "name": { "type": "text" },
+        "email": { "type": ["text", "null"], "format": "email" }
+      },
+      "required": ["name"]
     }
   }') as users
 )
@@ -1286,13 +1289,13 @@ const created = await createUsers.run(db, {
 
 A JSON parameter carries a schema in its cast. The schema gives the parameter its TypeScript type, and Reylo checks each value against it before the statement runs. The database never sees the schema: it receives the value as JSON text.
 
-- `type` is `"object"`, `"array"`, or one of the dialect's types (below).
-- A field that needs only a type is written as the type: `"name": "text"`.
-- Every key is required. A key that ends in `?` may be left out or be `null`: `"email?": "text"` is `email?: string | null`.
+- The schema is JSON Schema, with one difference: `type` is `"object"`, `"array"`, or one of the dialect's types (below), as in `{ "type": "text" }`.
+- A key is optional unless `required` lists it. A value that may be `null` says so in its type, `{ "type": ["text", "null"] }`, so `email` above is `email?: string | null`.
 - A key the schema does not name is ignored, unless its object sets `"additionalProperties": false`.
 - A nested object or array stays JSON: read it with the database's JSON functions, as in [Insert related rows](#insert-related-rows).
 - A text type or `uuid` is a `string`, a number type a `number`, `boolean` a `boolean`, `json` and `jsonb` any JSON value.
 - The checks are JSON Schema's validation keywords, such as `format`, `pattern`, `minLength`, `maxLength`, `minimum`, `maximum`, `multipleOf`, `enum`, `const`, `minItems`, `maxItems` and `uniqueItems`. `enum` and `const` also narrow the type. A value that fails makes `run` reject before the statement reaches the database, with every issue listed.
+- `oneOf` makes a union of objects, told apart by a required `const` key, as in [Record events of several kinds](#record-events-of-several-kinds), and `allOf` combines objects. A union of plain values, such as `["text", "int"]`, is refused, since the statement reads a field into a column of one type.
 
 <DialectTabs follow>
 <Dialect value="Postgres">
@@ -1330,13 +1333,18 @@ with input as (
     "items": {
       "type": "object",
       "properties": {
-        "name": "text",
+        "name": { "type": "text" },
         "email": { "type": "text", "format": "email" },
         "posts": {
           "type": "array",
-          "items": { "type": "object", "properties": { "title": "text" } }
+          "items": {
+            "type": "object",
+            "properties": { "title": { "type": "text" } },
+            "required": ["title"]
+          }
         }
-      }
+      },
+      "required": ["name", "email", "posts"]
     }
   }') as users
 ),
@@ -1378,9 +1386,10 @@ with input as (
     "items": {
       "type": "object",
       "properties": {
-        "name": "text",
+        "name": { "type": "text" },
         "email": { "type": "varchar(255)", "format": "email" }
-      }
+      },
+      "required": ["name", "email"]
     }
   }') as users
 )
@@ -1399,12 +1408,17 @@ with input as (
     "items": {
       "type": "object",
       "properties": {
-        "email": "varchar(255)",
+        "email": { "type": "varchar(255)" },
         "posts": {
           "type": "array",
-          "items": { "type": "object", "properties": { "title": "text" } }
+          "items": {
+            "type": "object",
+            "properties": { "title": { "type": "text" } },
+            "required": ["title"]
+          }
         }
-      }
+      },
+      "required": ["email", "posts"]
     }
   }') as users
 )
@@ -1457,9 +1471,10 @@ with input as (
     "items": {
       "type": "object",
       "properties": {
-        "name": "text",
+        "name": { "type": "text" },
         "email": { "type": "text", "format": "email" }
-      }
+      },
+      "required": ["name", "email"]
     }
   }') as users
 )
@@ -1475,12 +1490,17 @@ with input as (
     "items": {
       "type": "object",
       "properties": {
-        "email": "text",
+        "email": { "type": "text" },
         "posts": {
           "type": "array",
-          "items": { "type": "object", "properties": { "title": "text" } }
+          "items": {
+            "type": "object",
+            "properties": { "title": { "type": "text" } },
+            "required": ["title"]
+          }
         }
-      }
+      },
+      "required": ["email", "posts"]
     }
   }') as users
 )
@@ -1656,7 +1676,7 @@ const result = await deleteUser.run(db, { id: 1 });
 
 ### Record events of several kinds
 
-`oneOf` types a JSON parameter as a union. A `const` key tells the members apart:
+`oneOf` types a JSON parameter as a union of objects. A required `const` key tells the members apart, and each member closes with `"additionalProperties": false`, so a key that only another member names is refused:
 
 ```sql title="record_events.sql" tab="Postgres" tab-group="dialect"
 with input as (
@@ -1668,16 +1688,20 @@ with input as (
           "type": "object",
           "properties": {
             "kind": { "type": "text", "const": "click" },
-            "x": "int",
-            "y": "int"
-          }
+            "x": { "type": "int" },
+            "y": { "type": "int" }
+          },
+          "required": ["kind", "x", "y"],
+          "additionalProperties": false
         },
         {
           "type": "object",
           "properties": {
             "kind": { "type": "text", "const": "key" },
-            "code": "text"
-          }
+            "code": { "type": "text" }
+          },
+          "required": ["kind", "code"],
+          "additionalProperties": false
         }
       ]
     }
@@ -1699,16 +1723,20 @@ with input as (
           "type": "object",
           "properties": {
             "kind": { "type": "text", "const": "click" },
-            "x": "int",
-            "y": "int"
-          }
+            "x": { "type": "int" },
+            "y": { "type": "int" }
+          },
+          "required": ["kind", "x", "y"],
+          "additionalProperties": false
         },
         {
           "type": "object",
           "properties": {
             "kind": { "type": "text", "const": "key" },
-            "code": "text"
-          }
+            "code": { "type": "text" }
+          },
+          "required": ["kind", "code"],
+          "additionalProperties": false
         }
       ]
     }
@@ -1731,16 +1759,20 @@ with input as (
           "type": "object",
           "properties": {
             "kind": { "type": "text", "const": "click" },
-            "x": "integer",
-            "y": "integer"
-          }
+            "x": { "type": "integer" },
+            "y": { "type": "integer" }
+          },
+          "required": ["kind", "x", "y"],
+          "additionalProperties": false
         },
         {
           "type": "object",
           "properties": {
             "kind": { "type": "text", "const": "key" },
-            "code": "text"
-          }
+            "code": { "type": "text" }
+          },
+          "required": ["kind", "code"],
+          "additionalProperties": false
         }
       ]
     }
