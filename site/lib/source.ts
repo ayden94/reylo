@@ -25,7 +25,8 @@ const docs = defineDocs({
   docs: {
     // Fumadocs' defaults plus Twoslash on `ts twoslash` blocks (lib/twoslash.ts), whose imports of
     // the page's `.sql` blocks are typed by the modules Reylo's mapper produced for them
-    // (lib/remark-mapper.ts), and each section's Markdown on its heading (lib/remark-sections.ts).
+    // (lib/remark-mapper.ts), each section's Markdown on its heading (lib/remark-sections.ts), and
+    // each distinct Twoslash popup built once (lib/recma-shared-popups.ts).
     // The macro runs this only at build time, so the app never imports TypeScript.
     mdxOptions: async (environment) => {
       const { applyMdxPreset } = await import('fumadocs-mdx/config');
@@ -33,8 +34,10 @@ const docs = defineDocs({
       const { reyloTwoslash } = await import('./twoslash');
       const { remarkMapper } = await import('./remark-mapper');
       const { remarkSections } = await import('./remark-sections');
+      const { recmaSharedPopups } = await import('./recma-shared-popups');
       return applyMdxPreset({
         remarkPlugins: [remarkSections, remarkMapper],
+        recmaPlugins: [recmaSharedPopups],
         rehypeCodeOptions: {
           ...rehypeCodeDefaultOptions,
           transformers: [...(rehypeCodeDefaultOptions.transformers ?? []), reyloTwoslash(), hangingIndent],

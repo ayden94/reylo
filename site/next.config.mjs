@@ -13,5 +13,13 @@ const config = {
 };
 
 const withMDX = createMDX();
+const mdxConfig = withMDX(config);
 
-export default withMDX(config);
+// In `next dev`, the compiled page is ignore-listed, so React keeps none of its stack frames, and
+// made smaller: without this the dev server ran out of memory on the first render after an edit
+// (lib/mdx-dev-loader.mjs). Loaders run last to first, so this one runs after fumadocs-mdx's.
+if (process.env.NODE_ENV === 'development') {
+  mdxConfig.turbopack.rules['*.{md,mdx}'].loaders.unshift({ loader: './lib/mdx-dev-loader.mjs' });
+}
+
+export default mdxConfig;
