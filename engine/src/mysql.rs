@@ -367,6 +367,12 @@ pub fn analyze(sql: &str, lexed: &Lexed, text: Option<MysqlText>, host: &Host) -
         Some(_) => ("many".to_string(), Some("only a SELECT is proven".into())),
         // MySQL has no RETURNING: a write returns no rows however the server reads it.
         None if matches!(read, Some(Statement::Insert(_) | Statement::Update(_) | Statement::Delete(_))) => ("none".to_string(), None),
+        // A prepare with no columns is a statement with no result set: a write the engine's
+        // parser does not read (`delete t1, t2 from …`, `update t1, t2 set …`) or a SELECT whose
+        // rows go into variables or a file (`select … into @n`), and it returns no rows. Not a
+        // `CALL`, which prepares with no columns and returns whatever result sets the procedure
+        // makes: only a statement that opens with a write or a SELECT.
+        None if raw.columns.is_empty() && opens_without_result_sets(&rewritten.sql) => ("none".to_string(), None),
         None => ("many".to_string(), Some(misread.unwrap_or_else(|| "the engine could not parse the statement, so nothing bounds its rows".into()))),
     };
     Some(Analysis {
@@ -787,6 +793,19 @@ fn widened(ty: &Type, reached: u8) -> Option<Type> {
     (distinct.len() > 1).then(|| Type::Scalar { name: distinct.join("|") })
 }
 
+/// Whether a statement's first word makes it a write or a SELECT, which return no result set when
+/// the prepare gives them no columns (a `CALL` does not say what its procedure returns).
+fn opens_without_result_sets(sql: &str) -> bool {
+    use sqlparser::keywords::Keyword;
+    let Ok(tokens) = sqlparser::tokenizer::Tokenizer::new(&MySqlDialect {}, sql).tokenize() else { return false };
+    let first = tokens.iter().find_map(|t| match t {
+        sqlparser::tokenizer::Token::Whitespace(_) | sqlparser::tokenizer::Token::LParen => None,
+        sqlparser::tokenizer::Token::Word(w) => Some(Some(w.keyword)),
+        _ => Some(None),
+    });
+    matches!(first, Some(Some(Keyword::DELETE | Keyword::UPDATE | Keyword::INSERT | Keyword::REPLACE | Keyword::SELECT | Keyword::WITH)))
+}
+
 /// Parse with the depth bound the Postgres parser has ([`crate::stack::MAX_DEPTH`] messages, about
 /// 500 levels of expression) in place of sqlparser's default of 50, so a statement nests as deeply
 /// on MySQL as on Postgres before only the server's describe is left. sqlparser's bound counts
@@ -795,11 +814,34 @@ fn widened(ty: &Type, reached: u8) -> Option<Type> {
 /// then recurse through: so a statement with more operators than the bound is refused before it
 /// is read. That counts operators in separate expressions together, and only ever leaves a
 /// statement to the describe that a deeper bound would have read.
+///
+/// MySQL's compound interval units (`interval '1:30' minute_second`, `extract(day_hour from d)`)
+/// are not sqlparser's (0.63 refuses the statement), so each is read as its smallest part, the
+/// unit that decides what MySQL computes: `day_hour` as `hour` keeps `date_add` of a DATE a
+/// DATETIME, `year_month` as `month` keeps it a DATE, and EXTRACT is a BIGINT either way. Each of
+/// them is a reserved word in MySQL, so a bare one is always the unit. The token keeps its place
+/// in the text; only a probe printed from the tree (a JSON shape's) names the smaller unit, which
+/// the server types alike.
 fn parse(dialect: &dyn sqlparser::dialect::Dialect, sql: &str) -> Result<Vec<Statement>, sqlparser::parser::ParserError> {
     use sqlparser::keywords::Keyword;
-    use sqlparser::tokenizer::Token;
+    use sqlparser::tokenizer::{Token, Word};
     let bound = crate::stack::MAX_DEPTH / 2;
-    let tokens = sqlparser::tokenizer::Tokenizer::new(dialect, sql).tokenize_with_location()?;
+    let mut tokens = sqlparser::tokenizer::Tokenizer::new(dialect, sql).tokenize_with_location()?;
+    for t in tokens.iter_mut() {
+        let Token::Word(w) = &t.token else { continue };
+        if w.quote_style.is_some() {
+            continue;
+        }
+        let unit = match w.value.to_ascii_uppercase().as_str() {
+            "SECOND_MICROSECOND" | "MINUTE_MICROSECOND" | "HOUR_MICROSECOND" | "DAY_MICROSECOND" => (Keyword::MICROSECOND, "MICROSECOND"),
+            "MINUTE_SECOND" | "HOUR_SECOND" | "DAY_SECOND" => (Keyword::SECOND, "SECOND"),
+            "HOUR_MINUTE" | "DAY_MINUTE" => (Keyword::MINUTE, "MINUTE"),
+            "DAY_HOUR" => (Keyword::HOUR, "HOUR"),
+            "YEAR_MONTH" => (Keyword::MONTH, "MONTH"),
+            _ => continue,
+        };
+        t.token = Token::Word(Word { value: unit.1.to_string(), quote_style: None, keyword: unit.0 });
+    }
     let operators = tokens
         .iter()
         .filter(|t| match &t.token {
@@ -1604,6 +1646,54 @@ mod tests {
             let (analysis, _) = crate::stack::run(|| analyzed(&crate::stack::nested("sum", n), described.clone(), "STRICT_TRANS_TABLES"));
             assert_eq!(analysis.columns.len(), 1, "{n}");
         }
+    }
+
+    #[test]
+    fn compound_interval_units_are_read() {
+        // Every compound unit of MySQL, in an INTERVAL and in EXTRACT, read as its smallest part.
+        let units = [
+            ("second_microsecond", "MICROSECOND"),
+            ("minute_microsecond", "MICROSECOND"),
+            ("minute_second", "SECOND"),
+            ("hour_microsecond", "MICROSECOND"),
+            ("hour_second", "SECOND"),
+            ("hour_minute", "MINUTE"),
+            ("day_microsecond", "MICROSECOND"),
+            ("day_second", "SECOND"),
+            ("day_minute", "MINUTE"),
+            ("day_hour", "HOUR"),
+            ("YEAR_MONTH", "MONTH"),
+        ];
+        for (unit, read) in units {
+            let sql = format!("select date_add(d, interval '1' {unit}), extract({unit} from d) from t where id = ?");
+            let tree = parse(&MySqlDialect {}, &sql).unwrap_or_else(|e| panic!("{sql}: {e}")).pop().unwrap().to_string();
+            assert_eq!(tree, format!("SELECT date_add(d, INTERVAL '1' {read}), EXTRACT({read} FROM d) FROM t WHERE id = ?"));
+        }
+        // A quoted name is a name.
+        assert_eq!(parse(&MySqlDialect {}, "select `day_hour` from t").unwrap().pop().unwrap().to_string(), "SELECT `day_hour` FROM t");
+        // Read, the statement is proven: one row without FROM, at most one by the key.
+        let default = "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION";
+        let text = json!({ "columns": [{ "name": "x", "type": 253, "flags": 0 }], "params": [] });
+        assert_eq!(analyzed("select date_add('2100-12-31 23:59:59', interval '1:1' minute_second)", text, default).0.cardinality, "one");
+        let at = json!({ "columns": [{ "name": "x", "type": 12, "flags": 0 }], "params": [{ "type": 3 }] });
+        assert_eq!(analyzed("select now() - interval '1 1' day_hour as x from users where id = :id", at, default).0.cardinality, "maybeOne");
+    }
+
+    #[test]
+    fn a_write_the_parser_does_not_read_returns_no_rows() {
+        // sqlparser reads neither MySQL's multi-table DELETE nor its multi-table UPDATE, nor a
+        // SELECT … INTO after its WHERE; the prepare has no columns, so none returns a row.
+        let default = "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION";
+        let none = json!({ "columns": [], "params": [{ "type": 3 }] });
+        for sql in ["delete u.*, e.* from users u join emails e on e.user_id = u.id where u.id = :id", "update users, emails set users.name = 'a', emails.email = 'b' where users.id = :id", "select id from users where id = :id into @found"] {
+            assert!(parse(&MySqlDialect {}, sql).is_err(), "{sql}");
+            let analysis = analyzed(sql, none.clone(), default).0;
+            assert_eq!((analysis.cardinality.as_str(), analysis.columns.len(), analysis.params.len()), ("none", 0, 1), "{sql}");
+        }
+        // A CALL the parser does not read returns whatever its procedure makes.
+        let call = format!("call report(:id{})", " + 1".repeat(600));
+        assert!(parse(&MySqlDialect {}, &call).is_err());
+        assert_eq!(analyzed(&call, none.clone(), default).0.cardinality, "many");
     }
 
     #[test]

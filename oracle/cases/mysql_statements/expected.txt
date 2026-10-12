@@ -48,8 +48,8 @@ select_distinctrow.sql: many () -> { name: text }
 select_for_share.sql: maybeOne (id: int4) -> { id: int4 }
 select_function_writes.sql: maybeOne (id: int4) -> { id: int4, n: int4|int8? }
 select_high_priority.sql: maybeOne (id: int4) -> { id: int4 }
-select_into_outfile.sql: many () -> {  }
-select_into_variable.sql: many (id: int4) -> {  }
+select_into_outfile.sql: none () -> {  }
+select_into_variable.sql: none (id: int4) -> {  }
 select_one.sql: maybeOne (id: int4) -> { id: int4, name: text }
 select_sql_calc.sql: maybeOne () -> { id: int4 }
 select_stored_function.sql: one () -> { n: int4|int8? }
