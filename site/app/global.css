@@ -91,6 +91,12 @@ button {
   @apply pb-3;
 }
 
+/* The page opens with its first paragraph right under the title. The body is a flex item, so its
+   first child's margin does not collapse into the page's 1rem gap; without this the two add up. */
+#nd-page .prose > :first-child {
+  margin-top: 0;
+}
+
 html .prose {
   font-weight: 400;
 
@@ -105,16 +111,51 @@ html .prose {
     letter-spacing: -0.02em;
   }
 
+  /* No rule under an h3: the rule is what marks an h2 off from it, beside its size. */
   & > h3 {
-    font-size: 1.15rem;
+    color: var(--color-fd-headings);
+    font-size: 1.2rem;
     font-weight: 600;
-    @apply mt-9;
+    line-height: 1.4;
+    @apply mt-10;
   }
 
-  /* The link icon sits in the margin to the left of the heading, always visible. */
+  /* A heading that is a code token, such as a file name, is set in mono without the wash. */
+  h2 code,
+  h3 code {
+    background: none !important;
+    padding: 0 !important;
+    font-size: 0.92em;
+    font-weight: 600;
+  }
+
+  /* The link icon sits in the margin to the left of the heading, always visible; the button that
+     copies the section as Markdown sits at the right end of its line, as on Motherload's docs. */
   .reylo-heading {
     position: relative;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
     scroll-margin-top: 7rem;
+  }
+
+  .reylo-heading-text {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .reylo-copy-section {
+    display: inline-flex;
+    flex-shrink: 0;
+    padding: 0.3125rem;
+    border-radius: 0.375rem;
+    color: color-mix(in oklab, var(--color-fd-muted-foreground) 60%, transparent);
+    transition: color 120ms, background-color 120ms;
+  }
+
+  .reylo-copy-section:hover {
+    color: var(--color-fd-foreground);
+    background-color: var(--color-fd-accent);
   }
 
   .reylo-anchor {
@@ -137,6 +178,22 @@ html .prose {
   h2 > .reylo-anchor {
     /* The rule's padding sits below the text; center on the text line, not the box. */
     top: calc(50% - 0.0625rem);
+  }
+
+  /* Below md the page's margin is narrower than the icon, which would be cut off at the window's
+     edge: the icon joins the copy button at the right end of the line, still always visible. */
+  @media (width < 48rem) {
+    .reylo-anchor {
+      position: static;
+      translate: none;
+      order: 2;
+      margin-inline-end: -0.5rem;
+      padding: 0.3125rem;
+    }
+
+    .reylo-copy-section {
+      order: 3;
+    }
   }
 
   /* Links keep the text colour; the yellow is the rule beneath the word. */
@@ -183,8 +240,53 @@ html .prose {
   margin: 0;
 }
 
+/* The table of contents sits on the left, beside the text it indexes. */
 #nd-toc a[data-active='true'] {
   color: var(--color-fd-headings);
+}
+
+/* The list scrolls under "On this page": an entry fades out fully before it reaches the title,
+   instead of passing under it half faded, and the first entry starts clear of the fade.
+   (`#nd-toc > .overflow-auto` outranks Fumadocs' `mask-[…]` class.) */
+#nd-toc > .overflow-auto {
+  padding-block: 1.25rem;
+  mask-image: linear-gradient(to bottom, transparent, #000 1.25rem, #000 calc(100% - 1.25rem), transparent);
+}
+
+/* A code token in the table of contents (and in its popover below xl) is a chip, like inline code
+   in the text but on a fainter wash, so the list stays quieter than the page. Fumadocs gives each
+   entry the `prose` class, which would otherwise paint the text's own wash and colour here. The
+   chip takes its entry's colour; the active entry's chip takes a stronger wash. */
+#nd-toc code,
+[data-toc-popover] code {
+  border: none;
+  border-radius: 0.3125rem;
+  padding: 0.0625rem 0.3125rem;
+  font-size: 0.9em;
+  color: inherit;
+  background-color: color-mix(in oklab, var(--reylo-yellow) 12%, transparent);
+  transition: background-color 120ms;
+}
+
+#nd-toc a:hover code,
+[data-toc-popover] a:hover code {
+  background-color: color-mix(in oklab, var(--reylo-yellow) 16%, transparent);
+}
+
+#nd-toc a[data-active='true'] code,
+[data-toc-popover] a[data-active='true'] code {
+  background-color: color-mix(in oklab, var(--reylo-yellow) 22%, transparent);
+}
+
+/* The note under the opening paragraph (`<p className="reylo-lede">`): italic and muted, with its
+   emphasis set upright so it still stands out inside the italic, as on Motherload's docs. */
+#nd-page .prose .reylo-lede {
+  font-style: italic;
+  color: var(--color-fd-muted-foreground);
+}
+
+#nd-page .prose .reylo-lede em {
+  font-style: normal;
 }
 
 ::selection {
@@ -196,8 +298,36 @@ html .prose {
    popup is open takes the links' yellow rule; the popup is one steel card with
    the type as its text, not a code card (border, copy button) inside a card. */
 
+/* A pointer over every name that has a popup, and a quick fade: Fumadocs' 300ms one trails the
+   popup. Every such name keeps its dotted rule, not only while the pointer is over the block, so a
+   reader sees which names can be hovered (Motherload's docs do the same). */
+.twoslash .twoslash-hover {
+  cursor: pointer;
+  transition: border-color 80ms;
+  border-bottom-color: color-mix(in oklab, currentColor 40%, transparent);
+}
+
+/* The open token's rule is 2px, drawn as its 1px border plus a 1px shadow under it: a thicker
+   border would push the line down by a pixel while the popup is open. */
 .twoslash .twoslash-hover[data-popup-open] {
-  border-bottom: 2px solid var(--reylo-yellow);
+  border-bottom-style: solid;
+  border-bottom-color: var(--reylo-yellow);
+  box-shadow: 0 1px 0 var(--reylo-yellow);
+}
+
+/* Base UI's positioner, the popup's parent, carries no z-index, so a `^?` card (relative, z-index 8)
+   painted over an open popup; the popup's own z-50 sits inside the positioner and does nothing. */
+[role='presentation']:has(> .fd-twoslash-popover) {
+  z-index: 50;
+}
+
+/* The popup appears in 60ms and goes at once (Fumadocs: 100ms each way). */
+.fd-twoslash-popover[data-open] {
+  animation-duration: 60ms;
+}
+
+.fd-twoslash-popover[data-closed] {
+  animation: none;
 }
 
 .fd-twoslash-popover {
@@ -208,7 +338,8 @@ html .prose {
   box-shadow: 0 8px 24px -8px rgb(0 0 0 / 0.6);
 }
 
-.fd-twoslash-popover figure.shiki {
+.fd-twoslash-popover figure.shiki,
+.twoslash-query-line figure.shiki {
   margin: 0;
   border: none;
   border-radius: 0;
@@ -216,20 +347,25 @@ html .prose {
   background: transparent;
 }
 
-.fd-twoslash-popover figure.shiki > div:has(> button[aria-label='Copy Text']) {
+.fd-twoslash-popover figure.shiki > div:has(> button[aria-label='Copy Text']),
+.twoslash-query-line figure.shiki > div:has(> button[aria-label='Copy Text']) {
   display: none;
 }
 
-.fd-twoslash-popover figure.shiki [role='region'] {
+.fd-twoslash-popover figure.shiki [role='region'],
+.twoslash-query-line figure.shiki [role='region'] {
   padding-block: 0;
 }
 
-.fd-twoslash-popover figure.shiki .line {
+.fd-twoslash-popover figure.shiki .line,
+.twoslash-query-line figure.shiki .line {
   padding-inline: 0;
 }
 
-/* A method's signature is one long line: wrap it inside the popup instead of scrolling. */
-.fd-twoslash-popover figure.shiki pre {
+/* A method's signature or a long type is one line: wrap it inside the popup or the query's card
+   instead of scrolling. */
+.fd-twoslash-popover figure.shiki pre,
+.twoslash-query-line figure.shiki pre {
   width: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -239,4 +375,252 @@ html .prose {
   border-top: 1px solid var(--color-fd-border);
   padding-top: 8px;
   color: var(--color-fd-muted-foreground);
+}
+
+/* A `^?` query shows the hover's card inline, under the line it asks about. The card is as wide as
+   its type, up to the block's width, not the hover popup's fixed 20rem, which cut a long type off
+   at the card's edge; the type wraps inside it (above). */
+.twoslash-query-line .twoslash-popup-container {
+  width: fit-content;
+  max-width: 100%;
+  margin-right: 0;
+  padding: 0.375rem 0.75rem;
+}
+
+/* A query is the last line of its block, and Twoslash leaves the empty line its `^?` comment was
+   on below the card: hide that line, so the block ends at the card plus its padding. */
+figure.shiki code > .twoslash-query-line + .line:last-child:not(:has(span:not(:empty))) {
+  display: none;
+}
+
+/* ── Code never scrolls sideways ─────────────────────────────────────────────
+   The page keeps every line of code within 90 characters, which fit the column
+   at every desktop width. Where they do not (a phone, a narrow window), a long
+   line wraps at the block's edge instead of scrolling, and a wrapped line's
+   continuation hangs two characters in from the line's own indent (which
+   lib/source.ts sets as `--indent` on each line), so it reads as one line.
+   Fumadocs sizes the <pre> to its longest line (`w-max`) inside a scrolling
+   region; here it takes the region's width. */
+#nd-page figure.shiki pre {
+  width: auto;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+#nd-page figure.shiki > [role='region'] {
+  overflow-x: hidden;
+}
+
+#nd-page figure.shiki pre .line {
+  padding-inline-start: calc(var(--padding-left, 1rem) + var(--indent, 0ch) + 2ch);
+  text-indent: calc(-1 * (var(--indent, 0ch) + 2ch));
+}
+
+/* JetBrains Mono draws `->>`, `=>` and `!=` as single glyphs; code shows the characters typed. */
+pre,
+code {
+  font-variant-ligatures: none;
+}
+
+/* A query's card sets its type flush with its padding; a wrapped line of the type hangs under it. */
+#nd-page .twoslash-query-line figure.shiki {
+  --padding-left: 0rem;
+  --padding-right: 0rem;
+}
+
+/* The hanging indent is the line's own; the hover tokens and the query cards inside it inherit
+   `text-indent`, and an inline block would take it as its own first-line indent. */
+#nd-page figure.shiki pre .line * {
+  text-indent: 0;
+}
+
+/* ── Code tabs ───────────────────────────────────────────────────────────────
+   An example's SQL is a group of tabs, Postgres, MySQL and SQLite, whose blocks
+   share a file name. The name stands at the right end of the strip, in mono,
+   quieter than the tabs, with a file glyph, so the group has one bar: which
+   dialect on the left, which file on the right (components/code-tabs.tsx). */
+.reylo-code-tabs [role='tablist'] {
+  align-items: center;
+}
+
+.reylo-code-tabs-file {
+  margin-inline-start: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.375rem 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--color-fd-muted-foreground);
+  white-space: nowrap;
+}
+
+.reylo-code-tabs-file::before {
+  content: '';
+  width: 0.75rem;
+  height: 0.75rem;
+  flex-shrink: 0;
+  background-color: currentColor;
+  opacity: 0.7;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z'/%3E%3Cpath d='M14 2v4a2 2 0 0 0 2 2h4'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+/* ── <DialectTabs> ───────────────────────────────────────────────────────────
+   With a strip it is Fumadocs' tabs card. With `follow` it is no box at all,
+   only the chosen dialect's content, which carries its own card. */
+#nd-page .reylo-dialect-follow {
+  display: block;
+  overflow: visible;
+  margin-block: 1rem;
+  border: none;
+  border-radius: 0;
+  background: none;
+}
+
+#nd-page .reylo-dialect-follow > .reylo-dialect-panel {
+  padding: 0;
+  border-radius: 0;
+  background: none;
+}
+
+/* Fumadocs pulls a lone block out to the edges of a tabs panel (`-m-4`, no border); a followed
+   panel has no padding to pull it over, so the block keeps its own margins and border. */
+#nd-page .reylo-dialect-follow > .reylo-dialect-panel > figure.shiki {
+  margin: 0;
+  border: 1px solid var(--color-fd-border);
+}
+
+/* An example reads as one card: the SQL tabs and, directly under them, the TypeScript that
+   imports the file, which follows the tab chosen above. The two share the rule between them and
+   lose the rounded corners where they meet. */
+#nd-page .reylo-code-tabs:has(+ .reylo-dialect-follow) {
+  margin-bottom: 0;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+#nd-page .reylo-code-tabs:has(+ .reylo-dialect-follow) figure.shiki {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+#nd-page .reylo-code-tabs + .reylo-dialect-follow {
+  margin-top: 0;
+}
+
+#nd-page .reylo-code-tabs + .reylo-dialect-follow > .reylo-dialect-panel > figure.shiki:first-child {
+  margin-top: -1px;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+/* Consecutive blocks in a followed panel (a `.sql` file and the TypeScript that imports it) are one
+   card too, as an example's SQL tabs and its main.ts are. */
+#nd-page .reylo-dialect-follow > .reylo-dialect-panel > figure.shiki:has(+ figure.shiki) {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+#nd-page .reylo-dialect-follow > .reylo-dialect-panel > figure.shiki + figure.shiki {
+  margin-top: -1px;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+/* ── Phones ──────────────────────────────────────────────────────────────────
+   A tab strip wraps instead of hiding tabs past the edge (the Postgres and SQLite driver groups
+   have more tabs than a phone's width), and a tabs panel pads less, so a nested code line keeps
+   more of the narrow column. An untitled block's copy button floats over its first line, so that
+   line stops short of it. */
+@media (width < 48rem) {
+  #nd-page .reylo-code-tabs [role='tablist'] {
+    flex-wrap: wrap;
+    row-gap: 0;
+  }
+
+  #nd-page .reylo-dialect-tabs > .reylo-dialect-panel {
+    padding: 0.5rem;
+  }
+
+  #nd-page figure.shiki:not(:has(figcaption)) pre .line:first-child {
+    padding-inline-end: 2rem;
+  }
+}
+
+/* The Dialects tables line up, and a short type in a cell (`Row | null`) stays on one line. */
+#nd-page .prose table td:first-child {
+  width: 10rem;
+}
+
+#nd-page .prose td code {
+  white-space: nowrap;
+}
+
+/* ── <Details> ───────────────────────────────────────────────────────────────
+   A secondary detail: one small muted line with a chevron, no box, so it reads as an aside and
+   not as the most important thing in its section; opened, its text hangs from a thin rule. */
+
+#nd-page .reylo-details {
+  margin-block: 0.75rem;
+}
+
+#nd-page .reylo-details > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5em;
+  cursor: pointer;
+  list-style: none;
+  font-size: 0.875rem;
+  color: var(--color-fd-muted-foreground);
+  transition: color 80ms;
+}
+
+#nd-page .reylo-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+#nd-page .reylo-details > summary::before {
+  content: '';
+  flex: none;
+  width: 0.4em;
+  height: 0.4em;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateX(-0.1em) rotate(-45deg);
+  transition: transform 120ms;
+}
+
+#nd-page .reylo-details[open] > summary::before {
+  transform: translateY(-0.1em) rotate(45deg);
+}
+
+#nd-page .reylo-details > summary:hover,
+#nd-page .reylo-details[open] > summary {
+  color: var(--color-fd-foreground);
+}
+
+/* A code part of a summary keeps the summary's colour, on a fainter wash, so the line stays quiet. */
+#nd-page .reylo-details > summary code {
+  color: inherit;
+  background-color: color-mix(in oklab, var(--reylo-yellow) 10%, transparent);
+}
+
+/* Several in a row, such as the bundlers under Setup, read as one list. */
+#nd-page .reylo-details + .reylo-details {
+  margin-top: -0.25rem;
+}
+
+#nd-page .reylo-details-body {
+  margin-top: 0.5rem;
+  padding-left: 1rem;
+  border-left: 1px solid var(--color-fd-border);
+}
+
+#nd-page .reylo-details-body > :first-child {
+  margin-top: 0;
+}
+
+#nd-page .reylo-details-body > :last-child {
+  margin-bottom: 0;
 }
