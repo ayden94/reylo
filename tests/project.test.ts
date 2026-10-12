@@ -72,10 +72,25 @@ test("the types start from the driver package.json names, and the project file's
   assert.deepEqual(project({ dependencies: { mariadb: "^3" } }, "types:\n  decimal: number\n  json: string\n").repr, { dates: "Date", bigint: "bigint", decimal: "number", json: "string", binary: "Uint8Array" });
   // PlanetScale's HTTP driver returns dates and 64-bit integers as text; a dev dependency counts.
   assert.deepEqual(project({ devDependencies: { "@planetscale/database": "^1" } }).repr, { dates: "string", bigint: "string", decimal: "string", json: "parsed", binary: "Uint8Array" });
-  // With several, the first reylo lists is taken: mysql2 before mariadb.
-  assert.equal(project({ dependencies: { mariadb: "^3", mysql2: "^3" } }).driver, "mysql2");
+  // With several, the driver the code runs with is taken: mysql2, which the type check needs, gives way to mariadb and PlanetScale.
+  assert.deepEqual([project({ dependencies: { mariadb: "^3", mysql2: "^3" } }).driver, project({ dependencies: { mariadb: "^3", mysql2: "^3" } }).repr.bigint], ["mariadb", "bigint"]);
+  assert.equal(project({ dependencies: { mariadb: "^3" }, devDependencies: { mysql2: "^3" } }).driver, "mariadb");
+  assert.deepEqual([project({ dependencies: { mysql2: "^3", "@planetscale/database": "^1" } }).driver, project({ dependencies: { mysql2: "^3", "@planetscale/database": "^1" } }).repr.dates], ["@planetscale/database", "string"]);
+  // A driver named in dependencies beats one in devDependencies, even one the analysis cannot use.
+  assert.equal(project({ dependencies: { mysql2: "^3" }, devDependencies: { mariadb: "^3" } }).driver, "mysql2");
+  // A `types` key still wins over the preset of the driver found.
+  assert.equal(project({ dependencies: { mariadb: "^3", mysql2: "^3" } }, "types:\n  bigint: number\n").repr.bigint, "number");
   // A driver of another dialect is not this project's.
   assert.equal(project({ dependencies: { pg: "^8" } }).driver, undefined);
+  // On Postgres: PGlite kept in devDependencies for the tests does not type code that runs on pg, and PGlite named beside pg in dependencies is the driver the code runs with.
+  const pg = (deps: object) => resolveProject(e, tree({ "package.json": JSON.stringify(deps), ".reylo.yaml": "url: postgres://localhost/app\n" }), {});
+  assert.deepEqual([pg({ dependencies: { pg: "^8" }, devDependencies: { "@electric-sql/pglite": "^0.3" } }).driver, pg({ dependencies: { pg: "^8" }, devDependencies: { "@electric-sql/pglite": "^0.3" } }).repr.bigint], ["pg", "string"]);
+  assert.deepEqual([pg({ dependencies: { pg: "^8", "@electric-sql/pglite": "^0.3" } }).driver, pg({ dependencies: { pg: "^8", "@electric-sql/pglite": "^0.3" } }).repr.bigint], ["@electric-sql/pglite", "number | bigint"]);
+  assert.equal(pg({ dependencies: { "@electric-sql/pglite": "^0.3" }, devDependencies: { postgres: "^3" } }).driver, "@electric-sql/pglite");
+  // On SQLite, where the analysis needs no driver, better-sqlite3 in devDependencies for a script does not beat libSQL in dependencies.
+  const lite = (deps: object) => resolveProject(e, tree({ "package.json": JSON.stringify(deps), ".reylo.yaml": "url: file:./app.db\n" }), {});
+  assert.deepEqual([lite({ dependencies: { "@libsql/client": "^0.15" }, devDependencies: { "better-sqlite3": "^12" } }).driver, lite({ dependencies: { "@libsql/client": "^0.15" }, devDependencies: { "better-sqlite3": "^12" } }).repr.binary], ["@libsql/client", "ArrayBuffer"]);
+  assert.equal(lite({ dependencies: { "@libsql/client": "^0.15", "better-sqlite3": "^12" } }).driver, "better-sqlite3");
   const sqlite = tree({ "package.json": JSON.stringify({ dependencies: { "@libsql/client": "^0.15" } }), ".reylo.yaml": "url: file:./app.db\n" });
   assert.equal(resolveProject(e, sqlite, {}).repr.binary, "ArrayBuffer");
   assert.ok(resolveProject(e, sqlite, {}).watched.includes(join(sqlite, "package.json")));

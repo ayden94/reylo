@@ -93,8 +93,8 @@ function place(text: string, offset: number): string {
 }
 
 /**
- * The drivers reylo knows, per dialect, in the order one is taken when `package.json` names
- * several, each with what it returns at its own defaults where that differs from the dialect's
+ * The drivers reylo knows, per dialect, in the order of the last step of `detectDriver`'s rule,
+ * each with what it returns at its own defaults where that differs from the dialect's
  * (measured 2026-10-02 against each driver). reylo decodes its own queries on the pg family and
  * PGlite (src/decode.ts), so their arrays and intervals are the defaults. A driver that returns a
  * Buffer keeps `Uint8Array`: a Buffer is one, and naming `Buffer` would need @types/node in every
@@ -114,7 +114,20 @@ const DRIVERS: Record<Dialect, [string, Partial<Repr>][]> = {
   ],
 };
 
-/** The first driver of the dialect that the package's `package.json` names, in any dependency list. */
+/** The drivers reylo's analysis describes a statement through (src/describe.ts, src/mysql-describe.ts). */
+const ANALYSIS_DRIVERS = new Set(["pg", "postgres", "mysql2"]);
+
+/**
+ * The driver the project's code runs with, among the dialect's drivers that its `package.json`
+ * names (decided 2026-10-11), ranked:
+ * 1. by where it is named: `dependencies`, `peerDependencies` or `optionalDependencies` before
+ *    `devDependencies`, so that PGlite kept for the tests does not type code that runs on `pg`;
+ * 2. then a driver the analysis cannot use before `pg`, postgres.js or mysql2, which a project
+ *    installs for the type check whatever it runs on: mariadb and PlanetScale beat mysql2, and
+ *    PGlite beats `pg` and postgres.js, when both are in the same list;
+ * 3. then the order of `DRIVERS`.
+ * SQLite has no driver the analysis uses, so steps 1 and 3 decide there.
+ */
 export function detectDriver(root: string, dialect: Dialect): [string, Partial<Repr>] | undefined {
   let pkg: Record<string, unknown>;
   try {
@@ -122,8 +135,13 @@ export function detectDriver(root: string, dialect: Dialect): [string, Partial<R
   } catch {
     return undefined;
   }
-  const named = new Set(["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"].flatMap((k) => Object.keys((pkg[k] as object | undefined) ?? {})));
-  return DRIVERS[dialect].find(([name]) => named.has(name));
+  const names = (key: string) => new Set(Object.keys((pkg[key] as object | undefined) ?? {}));
+  const run = new Set(["dependencies", "peerDependencies", "optionalDependencies"].flatMap((k) => [...names(k)]));
+  const dev = names("devDependencies");
+  const rank = (name: string, index: number) => [run.has(name) ? 0 : 1, ANALYSIS_DRIVERS.has(name) ? 1 : 0, index];
+  const ranked = DRIVERS[dialect].map((driver, index) => ({ driver, key: rank(driver[0], index) })).filter(({ driver: [name] }) => run.has(name) || dev.has(name));
+  ranked.sort((a, b) => a.key[0]! - b.key[0]! || a.key[1]! - b.key[1]! || a.key[2]! - b.key[2]!);
+  return ranked[0]?.driver;
 }
 
 export function resolveProject(engine: Engine, projectDir: string, env: Record<string, string | undefined> = process.env): ResolvedProject {

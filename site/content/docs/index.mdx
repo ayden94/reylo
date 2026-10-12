@@ -554,24 +554,24 @@ types:
 
 </Details>
 
-Some drivers return other defaults, and Reylo follows the driver it finds in `package.json`:
+Some drivers return other defaults, and Reylo types each value the way the driver your code runs with returns it. It finds that driver in `package.json`: one in `dependencies` before one in `devDependencies`, and in the same list, your driver before the `pg`, postgres.js or mysql2 the type check needs:
 
 <DialectTabs>
 <Dialect value="Postgres">
 
-PGlite returns `bigint` as a `number`, or as a `bigint` above 2^53. The type check needs `pg` or postgres.js as well, and Reylo follows the first of `pg`, pg-promise, Neon, `@vercel/postgres`, postgres.js and PGlite that `package.json` names, so with PGlite set `bigint: number`, which holds below 2^53.
+PGlite returns `bigint` as a `number`, or as a `bigint` above 2^53, and Reylo types it so. The type check needs `pg` or postgres.js as well, and PGlite beside it in `dependencies` is the driver Reylo follows; PGlite kept in `devDependencies` for tests leaves an app on `pg` typed as `pg` returns.
 
 On `pg`, pg-promise, Neon's Pool and Client, and PGlite, Reylo decodes the types those drivers leave as text or objects (enum and other arrays, `interval`, `numeric[]`), so the rows match the [Data types](#data-types) tables; it does so for its own queries only, and a parser you registered still wins. Reylo does not follow two drivers yet: Neon's `neon()` returns enum arrays as text, `interval` as an object and `numeric[]` as numbers, and Bun.sql returns enum, `uuid`, `citext` and range arrays as text.
 
 </Dialect>
 <Dialect value="MySQL">
 
-mariadb returns `BIGINT` as a `bigint`, and PlanetScale returns dates and `BIGINT` as strings. The type check needs `mysql2` too, which Reylo takes first, so set `bigint: bigint` for mariadb, and `dates: string` and `bigint: string` for PlanetScale. Reylo does not follow two mariadb values yet: it returns `SET` as an array and `BIT(1)` as a boolean.
+mariadb returns `BIGINT` as a `bigint`, and PlanetScale returns dates and `BIGINT` as strings, and Reylo types them so. The type check needs `mysql2` too, and mariadb or PlanetScale beside it is the driver Reylo follows. Reylo does not follow two mariadb values yet: it returns `SET` as an array and `BIT(1)` as a boolean.
 
 </Dialect>
 <Dialect value="SQLite">
 
-libSQL returns `BLOB` as an `ArrayBuffer`, and Cloudflare D1 as a `number[]`. Reylo follows each: it takes the first of better-sqlite3, libSQL, `sqlite3`, `sqlite` and `wrangler` (D1's) that `package.json` names.
+libSQL returns `BLOB` as an `ArrayBuffer`, and Cloudflare D1 as a `number[]`. Reylo follows each, found as `@libsql/client` and as `wrangler` (D1's). With two drivers in the same list, it takes the first of better-sqlite3, libSQL, `sqlite3`, `sqlite` and `wrangler`.
 
 </Dialect>
 </DialectTabs>
