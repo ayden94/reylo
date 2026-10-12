@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { execute, type QueryModule } from "../src/execute.ts";
+import { arrayLiteral, execute, type QueryModule } from "../src/execute.ts";
 import { defineQuery } from "../src/index.ts";
 
 // Each fake client records what execute handed it and answers the way its driver does; the
@@ -42,6 +42,31 @@ test("postgres: unsafe(text, values) → rows, as on postgres.js and Bun.sql and
   const tx = { unsafe: (...args: unknown[]) => (calls.push({ method: "unsafe", args }), Promise.resolve([row])) };
   assert.deepEqual(await execute(tx, pg, { id: 1, name: "ada" }), [row]);
   assert.deepEqual(calls, [{ method: "unsafe", args: ["select $1::int as id, $2 as name, $1 as again", [1, "ada"]] }]);
+});
+
+test("postgres: Bun.sql, which cannot bind a JavaScript array, gets the array's literal text; postgres.js gets the array", async () => {
+  const q: QueryModule<"postgres"> = { dialect: "postgres", sql: "select id from users where id = any(:ids) and name = :name", params: ["ids", "name"] };
+  const seen: unknown[][] = [];
+  const unsafe = async (_: string, values?: unknown[]) => (seen.push(values!), []);
+  const bun = { unsafe, commitDistributed: async () => {} };
+  await execute(bun, q, { ids: [1, 3], name: "ada" });
+  await execute({ unsafe }, q, { ids: [1, 3], name: "ada" });
+  assert.deepEqual(seen, [["{\"1\",\"3\"}", "ada"], [[1, 3], "ada"]]);
+});
+
+test("arrayLiteral writes a Postgres array literal as pg does: nesting, NULL, quotes, backslashes, binary, dates, the empty array", () => {
+  assert.equal(arrayLiteral([]), "{}");
+  assert.equal(arrayLiteral([1, 2n, 1.5, true]), '{"1","2","1.5","true"}');
+  assert.equal(arrayLiteral([[1, 2], [3, null], []]), '{{"1","2"},{"3",NULL},{}}');
+  assert.equal(arrayLiteral([null, undefined, "", "NULL"]), '{NULL,NULL,"","NULL"}');
+  assert.equal(arrayLiteral(['say "hi"', "back\\slash", "a,b", "{x}", " pad "]), String.raw`{"say \"hi\"","back\\slash","a,b","{x}"," pad "}`);
+  assert.equal(arrayLiteral([Uint8Array.of(1, 2, 255), Buffer.from([0, 16]), new Uint8Array([9, 171, 9]).subarray(1, 2)]), String.raw`{\\x0102ff,\\x0010,\\xab}`);
+  assert.equal(arrayLiteral([{ a: 'q"' }]), String.raw`{"{\"a\":\"q\\\"\"}"}`);
+  // pg's dateToString: the local time, then the offset.
+  const d = new Date(2026, 0, 2, 3, 4, 5, 6);
+  const offset = -d.getTimezoneOffset();
+  const zone = `${offset < 0 ? "-" : "+"}${String(Math.floor(Math.abs(offset) / 60)).padStart(2, "0")}:${String(Math.abs(offset) % 60).padStart(2, "0")}`;
+  assert.equal(arrayLiteral([d]), `{"2026-01-02T03:04:05.006${zone}"}`);
 });
 
 test("postgres: Neon's neon() before 1.0 is called with (text, values)", async () => {
@@ -95,6 +120,55 @@ test("mysql: mariadb's callback API answers through the callback, and its errors
   };
   assert.deepEqual(await execute(conn as never, my, { id: 1, name: "ada" }), [{ values: [1, "ada", 1] }]);
   await assert.rejects(() => execute(conn as never, { dialect: "mysql", sql: "insert into t values (:a)", params: ["a"] }, { a: 1 }) as Promise<unknown>, (e) => e === failure);
+});
+
+// A plain Uint8Array (TextEncoder's, getRandomValues') and a view into a larger buffer, neither a Buffer.
+const binary = () => ({ plain: Uint8Array.of(1, 2, 255), view: new Uint8Array([9, 1, 2, 255, 9]).subarray(1, 4) });
+const bin: QueryModule<"mysql"> = { dialect: "mysql", sql: "select hex(:plain), hex(:view), hex(:buf), :n", params: ["plain", "view", "buf", "n"] };
+
+test("mysql: mariadb, which writes a value that is not a Buffer as JSON, gets a binary value as a Buffer over the same memory", async () => {
+  const { plain, view } = binary();
+  const buf = Buffer.from([1, 2, 255]);
+  for (const api of ["promise", "callback"]) {
+    const seen: unknown[][] = [];
+    const conn =
+      api === "promise"
+        ? { batch: async () => ({}), query: async (_: string, values: unknown[]) => (seen.push(values), []) }
+        : { batch: () => ({}), query: (_: string, values: unknown[], done: (e: Error | null, rows?: unknown) => void) => (seen.push(values), setImmediate(() => done(null, [])), { on() {} }) };
+    await execute(conn as never, bin, { plain, view, buf, n: 1 });
+    const [a, b, c, n] = seen[0]!;
+    assert.ok(Buffer.isBuffer(a) && Buffer.isBuffer(b), api);
+    assert.deepEqual([...(a as Buffer)], [1, 2, 255]);
+    assert.deepEqual([...(b as Buffer)], [1, 2, 255]);
+    // Views, not copies: the same memory at the same offset.
+    assert.ok((a as Buffer).buffer === plain.buffer && (b as Buffer).buffer === view.buffer && (b as Buffer).byteOffset === 1);
+    assert.equal(c, buf);
+    assert.equal(n, 1);
+  }
+});
+
+test("postgres: Neon's neon() before 0.10, which sends a Buffer as JSON, gets a binary value in Postgres's hex form", async () => {
+  const { plain, view } = binary();
+  const seen: unknown[][] = [];
+  const sql = (_: string, values?: unknown[]) => (seen.push(values!), Promise.resolve([]));
+  const q: QueryModule<"postgres"> = { dialect: "postgres", sql: "select :plain::bytea, :view::bytea, :buf::bytea, :empty::bytea, :n", params: ["plain", "view", "buf", "empty", "n"] };
+  await execute(sql, q, { plain, view, buf: Buffer.from([0, 16, 171]), empty: new Uint8Array(0), n: 1 });
+  assert.deepEqual(seen[0], ["\\x0102ff", "\\x0102ff", "\\x0010ab", "\\x", 1]);
+});
+
+test("every other driver gets a binary value as it is, pg-promise included, since it binds a { text, values } object", async () => {
+  const { plain } = binary();
+  const seen: unknown[] = [];
+  const pgq: QueryModule<"postgres"> = { dialect: "postgres", sql: "select :b::bytea", params: ["b"] };
+  const liteq: QueryModule<"sqlite"> = { dialect: "sqlite", sql: "select :b", params: ["b"] };
+  const pgp = { manyOrNone: async () => [], query: async (q: any): Promise<any> => (seen.push(q.values[0]), []) };
+  await execute(pgp, pgq, { b: plain });
+  await execute({ query: async (_: string, values?: unknown[]) => (seen.push(values![0]), { rows: [] }) }, pgq, { b: plain });
+  await execute({ unsafe: async (_: string, values?: unknown[]) => (seen.push(values![0]), []) }, pgq, { b: plain });
+  await execute({ execute: async (_: string, values?: unknown[]) => (seen.push(values![0]), [[], []] as [unknown, unknown]) }, { ...bin, sql: "select hex(:b)", params: ["b"] }, { b: plain });
+  await execute({ prepare: () => ({ all: (...values: unknown[]) => (seen.push(values[0]), []) }) }, liteq, { b: plain });
+  assert.equal(seen.length, 5);
+  for (const v of seen) assert.equal(v, plain);
 });
 
 test("mysql: PlanetScale 2.0, which binds no parameters, runs a statement without any and refuses one with some", async () => {

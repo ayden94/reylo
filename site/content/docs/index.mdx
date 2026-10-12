@@ -549,6 +549,7 @@ types:
 <Details summary="How Buffer, Temporal and nested JSON values are typed">
 
 - A `Buffer` is typed `Uint8Array`, which it extends. `binary: Buffer` types it `Buffer`, in a project with `@types/node`.
+- A binary parameter takes a `Uint8Array`, a `Buffer` or not, on every driver: mariadb, which writes any other value as JSON, gets it from Reylo as a `Buffer`.
 - With `dates: temporal`, the driver builds `Temporal` values, typed by TypeScript's `esnext.temporal` lib.
 - The settings do not reach inside nested JSON: there the database writes each value as JSON.
 

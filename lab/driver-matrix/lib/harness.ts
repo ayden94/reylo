@@ -253,6 +253,8 @@ export function queries(d: Dialect) {
   return {
     params: q(`select id, name, active, score from ${t("people")} where id = :i and name = :t and active = :b and ${cast(":nul", "int")} is null`, ["i", "t", "b", "nul"], "one"),
     omitted: q(`select id from ${t("people")} where id = :i and ${cast(":omit", "text")} is null`, ["i", "omit"], "many"),
+    list: q(`select id from ${t("people")} where id = any(:ids) and name = any(:names) order by id`, ["ids", "names"], "many"),
+    binary: q(d === "postgres" ? `select encode(:a::bytea, 'hex') as a, encode(:b::bytea, 'hex') as b` : `select lower(hex(:a)) as a, lower(hex(:b)) as b`, ["a", "b"], "one"),
     many: q(`select id, name from ${t("people")} order by id`, [], "many"),
     one: q(`select id, name from ${t("people")} where id = :id`, ["id"], "one"),
     maybeOne: q(`select id, name from ${t("people")} where id = :id`, ["id"], "maybeOne"),
@@ -379,6 +381,26 @@ export const SCENARIOS: Scenario[] = [
     async run(ctx, client, q) {
       const rows = await call(ctx, q.omitted, client, { i: 1 });
       eq(rows, [{ id: 1 }], "rows");
+    },
+  },
+  {
+    id: "S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes",
+    on: "client",
+    async run(ctx, client, q) {
+      // Not Buffers: what TextEncoder and crypto.getRandomValues return. mariadb writes such a
+      // value as JSON ({"0":1,"1":2,"2":255}) unless reylo hands it a Buffer.
+      const plain = Uint8Array.of(1, 2, 255);
+      const view = new Uint8Array([9, 1, 2, 255, 9]).subarray(1, 4);
+      eq(await call(ctx, q.binary, client, { a: plain, b: view }), { a: "0102ff", b: "0102ff" }, "hex of the bound bytes");
+    },
+  },
+  {
+    id: "S1d array params: = any(:ids) over an int and a text array",
+    on: "client",
+    dialects: ["postgres"],
+    async run(ctx, client, q) {
+      // Bun.sql binds no JavaScript array, so reylo hands it the array's literal text.
+      eq(await call(ctx, q.list, client, { ids: [1, 3, 4], names: ["ada", "cy", 'say "hi" \\ {x,y}'] }), [PEOPLE[0], PEOPLE[2]].map(({ id }) => ({ id })), "rows");
     },
   },
   {

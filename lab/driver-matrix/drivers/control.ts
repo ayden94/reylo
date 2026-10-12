@@ -1,6 +1,8 @@
 // Failing controls: clients that are deliberately wrong, so every row here must FAIL. They show
 // the scenarios can fail at all (a green matrix with no failing control is no evidence).
-//   --case pg      PGlite behind a client that binds each integer parameter plus one, and a
+//   --case pg      PGlite behind a client that binds each integer parameter plus one, a plain
+//                  Uint8Array as its JSON text, as mariadb does without a Buffer, and an array as
+//                  its elements joined by commas, as Bun.sql does, and a
 //                  transaction whose "rollback" commits and whose failure is swallowed
 //   --case sqlite  a node:sqlite database declared asynchronous, so runSync must refuse it and does not;
 //                  and a transaction(fn) whose statements answer through a promise, so runSync must throw
@@ -53,7 +55,7 @@ if (a.case === "sqlite") {
   await runJob(meta, async () => {
     const db = new PGlite();
     await db.exec(seedSql("postgres"));
-    const corrupt = { query: (text: string, values?: unknown[]) => db.query(text, values?.map((v) => (typeof v === "number" ? v + 1 : v))) };
+    const corrupt = { query: (text: string, values?: unknown[]) => db.query(text, values?.map((v) => (typeof v === "number" ? v + 1 : v instanceof Uint8Array && !Buffer.isBuffer(v) ? JSON.stringify(v) : Array.isArray(v) ? v.join(",") : v))) };
     const good = callbackTx((fn) => db.transaction(fn));
     const broken: TxOps = {
       commit: good.commit,
@@ -73,7 +75,7 @@ if (a.case === "sqlite") {
       dialect: "postgres",
       count: async (tag) => (await db.query("select count(*)::int as n from driver_matrix.scratch where tag = $1", [tag])).rows[0].n,
       shapes: [
-        { name: "integer parameters bound plus one", kind: "async", scope: (fn) => fn(corrupt) },
+        { name: "parameters corrupted: an integer plus one, a Uint8Array as JSON, an array as a,b", kind: "async", scope: (fn) => fn(corrupt) },
         { name: "rollback that commits", kind: "async", tx: broken },
       ],
       close: () => db.close(),

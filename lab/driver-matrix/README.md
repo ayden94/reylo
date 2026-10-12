@@ -42,6 +42,8 @@ Every scenario asserts its result. Each call also checks Reylo's return contract
 | S0 | The return contract of `run` and `runSync` on a select and on a syntax error, and which client method Reylo called |
 | S1a | Integer, text, boolean and null parameters; the returned row (SQLite gets 1 for the boolean, since it has no boolean type) |
 | S1b | An omitted (undefined) parameter binds NULL |
+| S1c | A plain `Uint8Array` and a view into a larger buffer, neither a Buffer, bind as their bytes (`hex` of each) |
+| S1d | Postgres only: `id = any(:ids) and name = any(:names)` over an int array and a text array whose last element holds a quote, a backslash, a space and braces |
 | S2a–S2e | Three rows for `many`; the row for `one`; null for `maybeOne` on zero rows; Reylo's "Expected at most one row, got 2" on two; `with(client)(params)` |
 | S3 | An INSERT without RETURNING (cardinality `none`) resolves undefined; the row is read back through Reylo and counted through the driver |
 | S3n | The same with the values written into the SQL, so Reylo passes no parameters |
@@ -53,7 +55,7 @@ Every scenario asserts its result. Each call also checks Reylo's return contract
 | S8 | 20 queries in flight on the shape resolve with the right rows |
 | S9 | An unsupported client: `run` rejects with Reylo's own TypeError |
 
-Visibility is always checked with a raw count through the driver, never through Reylo. A raw count also runs before each job as a preflight, so a driver that cannot reach its server at all is reported once as "not run" instead of failing every scenario. [drivers/control.ts](drivers/control.ts) holds the failing controls: a client that binds every integer plus one, a transaction whose rollback commits, a synchronous database declared asynchronous, and a `db.transaction(fn)` whose statements answer through a promise. 19 of their 42 rows fail, and each of the 23 that pass is a scenario that the breakage does not touch. Since `run` returns a promise on every client, a synchronous database declared asynchronous changes only what S0 expects of `runSync`, so 15 of the 23 are its rows.
+Visibility is always checked with a raw count through the driver, never through Reylo. A raw count also runs before each job as a preflight, so a driver that cannot reach its server at all is reported once as "not run" instead of failing every scenario. [drivers/control.ts](drivers/control.ts) holds the failing controls: a client that binds every integer plus one, a plain `Uint8Array` as its JSON (as mariadb does) and an array as its elements joined by commas (as Bun.sql does), a transaction whose rollback commits, a synchronous database declared asynchronous, and a `db.transaction(fn)` whose statements answer through a promise. 21 of their 45 rows fail, and each of the 24 that pass is a scenario that the breakage does not touch. Since `run` returns a promise on every client, a synchronous database declared asynchronous changes only what S0 expects of `runSync`, so 16 of the 24 are its rows.
 
 ## Servers
 
@@ -111,6 +113,19 @@ Two driver behaviours show up as details on passing rows:
 The whole matrix ran again against src/ at 27887ee, on Node 26.11.1 and 24.21.0 (nub's, through `DM_NODE26` and `DM_NODE24`) and Bun 1.4.3, with the containers in colima 0.10.3 (Docker 29.5) and a throwaway Postgres 18 standing in for the shared Postgres 14 (`DM_PG_URL`): 2933 rows, 2889 pass, 2 fail, 39 unsupported and 3 not run, the counts recorded above, and 19 of 42 control rows failing as designed. [compare.ts](compare.ts) set every row of every job beside its row in [RESULTS.md](RESULTS.md), keyed by package, version, target, shape and scenario: all 2921 keys give the recorded result. RESULTS.md was left as it was; the error and detail texts differ only by connection ids and the drivers' wording (Bun 1.4 adds the aborted COMMIT to three rows' detail). better-sqlite3 11.10.0 ran from a source build (above); 9.6.0 and 8.7.0 do not compile against Node 24 and stay "not run".
 
 One change was needed: Bun 1.4's MySQL adapter refuses to fetch the server's RSA key for `caching_sha2_password` over a connection without TLS ("The server requested RSA public key retrieval …", `ERR_MYSQL_PUBLIC_KEY_RETRIEVAL_NOT_ALLOWED`), which Bun 1.3 and mysql2 do unasked, so both Bun.sql MySQL jobs were "not run" until [drivers/bunsql.ts](drivers/bunsql.ts) passed `allowPublicKeyRetrieval: true`; then they give their 75 recorded passes each.
+
+## Re-run (2026-10-12): binary and array parameters
+
+S1c and S1d are new, after the coordinator measured two drivers that corrupt or refuse a parameter of a type Reylo declares. The whole matrix ran first against src/execute.ts as it was at 4784b29, in the same environment as the re-run of 2026-10-11 (Node 26.11.1 and 24.21.0, Bun 1.4.3, colima, a throwaway Postgres 18 through `DM_PG_URL`):
+
+| Rows | Result | Diagnosis |
+| --- | --- | --- |
+| mariadb 3.5.4, 3.4.5 and 2.5.6, S1c on every shape on both servers | fail (42 rows) | mariadb writes any value that is not a Buffer as JSON: `hex(?)` of `Uint8Array.of(1, 2, 255)` was `7B2230223A312C2231223A322C2232223A3235357D`, the hex of `{"0":1,"1":2,"2":255}` |
+| @neondatabase/serverless 0.9.5, S1c on `neon()` and `neon(url, { fullResults: true })` | fail (2 rows) | Its HTTP path sends a Buffer as JSON, `{"type":"Buffer","data":[1,2,255]}`, which pg's own `prepareValue` makes of a `Uint8Array` first; 0.10 added `encodeBuffersAsBytea` |
+| Bun.sql 1.4.3 on Postgres, S1d on all four shapes | fail (4 rows, in a run of that job alone) | Bun.sql binds no JavaScript array: "insufficient data left in message" (08P01) |
+| pg-promise 12.7.1, S1c | pass | pg-promise formats a plain `Uint8Array` as JSON when it writes the values into the text, but Reylo hands it a `{ text, values }` object, which pg binds |
+
+Reylo now gives mariadb a Buffer over the same memory, Neon's `neon()` (the callable form before 1.0) a binary value as `\x` and its hex, and Bun.sql an array parameter as its Postgres array literal, written as pg writes one (`src/execute.ts`). The run after the fix wrote [RESULTS.md](RESULTS.md): 46 jobs and 3146 rows, with 3099 pass, 2 fail (PlanetScale's simulator, as before), 42 unsupported (PlanetScale 2.0 refuses S1c as it refuses every statement with parameters) and 3 not run, and 21 of 45 control rows failing as designed. Every row that was in RESULTS.md before has the result it had; the renamed control shape is the only key that changed.
 
 `scripts/gates.sh` runs every job and `node compare.ts` after them, the container jobs when Docker or colima is there; `node runner.ts --only <id>` runs one job, and `node compare.ts` compares whatever `.out/` holds.
 

@@ -131,8 +131,9 @@ export function renderParamType(t: EngineType, dialect: "postgres" | "sqlite" | 
   }
   // A SQLite driver binds a number or a BigInt for an INTEGER, whatever it returns.
   if (t.kind === "scalar" && dialect === "sqlite" && t.name === "integer") return repr.bigint === "number" ? "number" : `number | ${repr.bigint}`;
-  // Every driver binds a Uint8Array (a Buffer is one) for a binary value, a digit string for a
-  // decimal, and any JSON value for a JSON parameter, whatever it returns for them.
+  // Every driver binds a Uint8Array (a Buffer is one) for a binary value, mariadb and Neon's
+  // neon() before 0.10 once `execute` has converted it, a digit string for a decimal, and any
+  // JSON value for a JSON parameter, whatever it returns for them.
   if (t.kind === "scalar" && (t.name === "bytea" || t.name === "blob")) return "Uint8Array";
   if (t.kind === "scalar" && t.name === "numeric" && dialect !== "sqlite") return repr.decimal === "number" ? "number | string" : "string";
   if (t.kind === "json") return "unknown";

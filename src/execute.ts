@@ -174,9 +174,13 @@ async function executeAsync(c: AnyClient | null | undefined, query: QueryModule,
       // for a template instead of running anything. Where the driver takes a decoder per
       // query, reylo passes its own (decode.ts).
       if (typeof c.query === "function") return await queryPostgres(c, text, values);
-      if (typeof c.unsafe === "function") return await c.unsafe(text, values);
+      // Bun.sql (its commitDistributed() tells it from postgres.js) cannot bind a JavaScript
+      // array: `any($1)` failed with "insufficient data left in message" and `$1::text[]` with
+      // "malformed array literal", so it gets the array's literal text, which the server reads
+      // as the parameter's type.
+      if (typeof c.unsafe === "function") return await c.unsafe(text, typeof c.commitDistributed === "function" ? values.map((v) => (Array.isArray(v) ? arrayLiteral(v) : v)) : values);
       if (typeof c === "function") {
-        const result = await c(text, values);
+        const result = await c(text, values.map(asByteaHex));
         return Array.isArray(result) ? result : result.rows;
       }
       break;
@@ -186,8 +190,9 @@ async function executeAsync(c: AnyClient | null | undefined, query: QueryModule,
       // Its callback API (mariadb/callback) answers through the callback and returns a command
       // object; its promise API returns a promise and ignores the callback.
       if (typeof c.batch === "function" && typeof c.query === "function") {
+        const bound = values.map(asBuffer);
         const result = await new Promise((resolve, reject) => {
-          const returned = c.query(text, values, (error: Error | null, rows: unknown) => (error ? reject(error) : resolve(rows)));
+          const returned = c.query(text, bound, (error: Error | null, rows: unknown) => (error ? reject(error) : resolve(rows)));
           if (typeof returned?.then === "function") returned.then(resolve, reject);
         });
         return Array.isArray(result) ? result : [];
@@ -250,6 +255,51 @@ function statement(query: QueryModule, input: ParamsInput) {
 function value(params: Record<string, unknown>, name: string) {
   const v = params[name];
   return v === undefined ? null : v;
+}
+
+// A binary parameter is typed Uint8Array, and every driver binds one as it is (pg-promise too,
+// since it gets { text, values }) but two (lab/driver-matrix, S1c). mariadb writes any value
+// that is not a Buffer as JSON, so a plain Uint8Array (TextEncoder's, getRandomValues') arrived
+// as the text {"0":1,"1":2,"2":255}: it gets a Buffer over the same memory, where a Buffer
+// exists (not in every Worker). Neon's neon() before 0.10 sends a Buffer as JSON as well, so it
+// gets Postgres's hex form, `\x0102ff`, which 0.10 and later send for a Buffer themselves.
+function asBuffer(v: unknown) {
+  return v instanceof Uint8Array && typeof globalThis.Buffer === "function" && !Buffer.isBuffer(v) ? Buffer.from(v.buffer, v.byteOffset, v.byteLength) : v;
+}
+
+function asByteaHex(v: unknown) {
+  if (!(v instanceof Uint8Array)) return v;
+  let hex = "\\x";
+  for (const byte of v) hex += (byte < 16 ? "0" : "") + byte.toString(16);
+  return hex;
+}
+
+/**
+ * A Postgres array literal, written as pg writes one (`arrayString` in pg/lib/utils.js): a nested
+ * array in braces, null and undefined as NULL, binary data as `\\x` and its hex, and every other
+ * element quoted, with `"` and `\` escaped: a Date as its local time and offset, an object as
+ * its JSON, anything else as its string.
+ */
+export function arrayLiteral(array: readonly unknown[]): string {
+  let out = "{";
+  for (let i = 0; i < array.length; i++) {
+    const v = array[i];
+    if (i) out += ",";
+    if (v == null) out += "NULL";
+    else if (Array.isArray(v)) out += arrayLiteral(v);
+    else if (ArrayBuffer.isView(v)) out += "\\" + asByteaHex(new Uint8Array(v.buffer, v.byteOffset, v.byteLength));
+    else out += `"${(v instanceof Date ? dateText(v) : typeof v === "object" ? JSON.stringify(v) : String(v)).replace(/[\\"]/g, "\\$&")}"`;
+  }
+  return out + "}";
+}
+
+/** pg's `dateToString`: the local date and time to the millisecond, then the offset; BC for a year before 1. */
+function dateText(d: Date): string {
+  const pad = (n: number, width = 2) => String(n).padStart(width, "0");
+  const year = d.getFullYear();
+  const offset = -d.getTimezoneOffset();
+  const abs = Math.abs(offset);
+  return `${pad(year < 1 ? 1 - year : year, 4)}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}${offset < 0 ? "-" : "+"}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}${year < 1 ? " BC" : ""}`;
 }
 
 // Without the engine's rewritten statement (a query defined by hand) the runtime lexes the
