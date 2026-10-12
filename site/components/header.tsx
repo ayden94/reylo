@@ -15,8 +15,8 @@ export function Header() {
       className="sticky top-0 z-40 flex h-(--fd-banner-height) items-center gap-4 border-b bg-fd-background/85 px-4 backdrop-blur-sm md:px-6 xl:px-8"
     >
       <a href="/" className="whitespace-nowrap font-semibold tracking-tight text-fd-headings">
-        {/* Centred on the middle of the word's ink, 0.26em above the baseline in Inter, where the eye puts the word's centre; centring it on the line box set it 1.5px high. */}
-        <Mark className="mr-2 inline-block h-[0.875em] w-auto align-[-0.178em]" />
+        {/* As tall as Inter's capitals and standing on the baseline, so the level ends of its arms sit on the R's top line and on the baseline. */}
+        <Mark className="mr-[0.3em] inline-block h-[0.7275em] w-auto align-baseline" />
         Reylo
       </a>
       <div className="flex-1" />
