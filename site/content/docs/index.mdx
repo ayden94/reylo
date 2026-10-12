@@ -551,6 +551,8 @@ types:
 - A `Buffer` is typed `Uint8Array`, which it extends. `binary: Buffer` types it `Buffer`, in a project with `@types/node`.
 - A binary parameter takes a `Uint8Array`, a `Buffer` or not, on every driver: mariadb, which writes any other value as JSON, gets it from Reylo as a `Buffer`.
 - On Postgres, an array parameter takes a JavaScript array on every driver, for a SQL array (`any(:ids)`, `:tags::text[]`) and for JSON (`:data::jsonb`) alike: Reylo writes it in the form the driver binds right.
+- A `timestamptz` parameter takes a `Date`, or a string that names its zone: `"2026-10-12T19:06:48Z"`, `"2026-10-12 19:06:48+09"`, `"2026-10-12 19:06:48 Asia/Tokyo"`. A `timestamp` or `date` parameter, and on MySQL a `DATETIME`, `TIMESTAMP` or `DATE` one, has no zone and takes the wall-clock text, `"2026-10-12 19:06:48"` or `"2026-10-12"`: drivers write a `Date`'s time in different zones, the app's, the server's or UTC, so Reylo refuses one before the statement runs. Format a `Date` the driver returned for such a column before passing it back.
+- A parameter the statement reads as JSON (`:data::jsonb`, `cast(:data as json)`, a `json` column) takes any JSON value, and the database receives its JSON text on every driver: a string is a JSON string, so `'{"a":1}'` is stored as the string `"{\"a\":1}"`, not as an object. To pass JSON text you already hold, cast it from text: `:data::text::jsonb`.
 - With `dates: temporal`, the driver builds `Temporal` values, typed by TypeScript's `esnext.temporal` lib.
 - The settings do not reach inside nested JSON: there the database writes each value as JSON.
 

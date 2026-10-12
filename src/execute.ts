@@ -179,7 +179,8 @@ function isSyncSqlite(c: AnyClient | null | undefined): boolean {
 async function executeAsync(c: AnyClient | null | undefined, query: QueryModule, params: ParamsInput): Promise<unknown[]> {
   if (c == null || (typeof c !== "object" && typeof c !== "function")) throw unsupported(c, query.dialect);
   const { text, values, names } = statement(query, params);
-  const kind = (i: number) => query.inputs?.[names[i]!]?.type.kind;
+  const type = (i: number) => query.inputs?.[names[i]!]?.type;
+  const isJsonParam = (v: unknown, i: number) => isJsonValue(query, names[i]!, v);
   switch (query.dialect) {
     case "postgres": {
       // An array for a SQL array parameter goes as its literal text, which the server reads as
@@ -187,17 +188,30 @@ async function executeAsync(c: AnyClient | null | undefined, query: QueryModule,
       // (`any($1)` failed with "insufficient data left in message"), postgres.js types an
       // array by its first element ("cannot cast type boolean to boolean[]" for `$1::bool[]`),
       // and the copy of pg inside Neon's Pool and Client threw on a Uint8Array element and
-      // left the connection out of step. An array for a JSON parameter goes to pg's family,
-      // PGlite and Neon as its JSON text, since pg writes it as an array literal too (`[1]`
-      // failed with "invalid input syntax for type json", and `[]` was stored as `{}`); to
-      // postgres.js and Bun.sql, which bind it as JSON, as it is.
-      const bound = values.map((v, i) => (Array.isArray(v) && kind(i) === "array" ? arrayLiteral(v) : v));
-      const json = () => bound.map((v, i) => (Array.isArray(v) && isJson(kind(i)) ? JSON.stringify(v) : v));
+      // left the connection out of step. Each element of a `jsonb[]` is a JSON value.
+      const bound = values.map((v, i) => {
+        const t = type(i);
+        return Array.isArray(v) && t?.kind === "array" ? arrayLiteral(isJson(t.of.kind) ? v.map((e) => (e == null ? e : JSON.stringify(e))) : v) : v;
+      });
+      // A JSON parameter goes to pg's family, PGlite and Neon as its JSON text. postgres.js and
+      // Bun.sql serialize a value for a JSON parameter themselves, so JSON text would be stored
+      // as a JSON string; and they type a boolean, a number (Bun.sql) or an array of either by
+      // its JavaScript type ("cannot cast type boolean to jsonb"). An object whose toJSON()
+      // returns the value is bound as JSON and serialized to exactly its JSON text.
+      const json = () => bound.map((v, i) => (isJsonParam(v, i) ? JSON.stringify(v) : v));
       // query() before unsafe(): Neon's neon() has both, and its unsafe() builds a fragment
       // for a template instead of running anything. Where the driver takes a decoder per
       // query, reylo passes its own (decode.ts).
       if (typeof c.query === "function") return await queryPostgres(c, text, json());
-      if (typeof c.unsafe === "function") return await c.unsafe(text, bound);
+      if (typeof c.unsafe === "function") {
+        // postgres.js reads a string for a date or time parameter through `new Date(x)` and binds
+        // its toISOString(), so a timestamp's wall-clock time moved by the app's offset, and
+        // `infinity` or a zone name failed with "Invalid time value". Declared `unknown` (705), it
+        // is sent as the text, which the server reads as the parameter's type, as it would an
+        // undeclared one. Bun.sql (commitDistributed()) sends the text and has no typed().
+        const asText = typeof c.typed === "function" && typeof c.commitDistributed !== "function";
+        return await c.unsafe(text, bound.map((v, i) => (isJsonParam(v, i) ? { toJSON: () => v } : asText && typeof v === "string" && isTime(type(i)) ? c.typed(v, 705) : v)));
+      }
       if (typeof c === "function") {
         const result = await c(text, json().map(asByteaHex));
         return Array.isArray(result) ? result : result.rows;
@@ -268,8 +282,16 @@ function statement(query: QueryModule, input: ParamsInput) {
     throw new TypeError(`The parameters must be an object keyed by parameter name (or by number, { 1: ... }, for positional placeholders), or an array in the order of the query's params; got ${String(input)}.`);
   } else params = input as Record<string, unknown>;
   // The mapper already rewrote the statement; only the values need ordering.
-  if (query.text && query.order) return { text: query.text, values: query.order.map((name) => value(params, name)), names: query.order };
-  return query.dialect === "postgres" ? rewrite(query, params) : rewriteRepeating(query, params);
+  const bound =
+    query.text && query.order
+      ? { text: query.text, values: query.order.map((name) => value(params, name)), names: query.order }
+      : query.dialect === "postgres"
+        ? rewrite(query, params)
+        : rewriteRepeating(query, params);
+  bound.names.forEach((name, i) => checkTime(query.inputs?.[name]?.type, name, bound.values[i]));
+  // Every MySQL and SQLite driver binds JSON text as text, which the database reads as JSON.
+  if (query.dialect !== "postgres") bound.values = bound.values.map((v, i) => (isJsonValue(query, bound.names[i]!, v) ? JSON.stringify(v) : v));
+  return bound;
 }
 
 function value(params: Record<string, unknown>, name: string) {
@@ -290,6 +312,42 @@ function asBuffer(v: unknown) {
 }
 
 const isJson = (kind: EngineType["kind"] | undefined) => kind === "json" || kind === "object" || kind === "list";
+
+// A JSON parameter's value is a JavaScript value, which reaches the database as its JSON text
+// (JSON.stringify), so a string is a JSON string on every driver; null is SQL NULL. Each driver
+// left to itself did something else (docs/driver-decoding.md, 2026-10-12): pg wrote an array as
+// an array literal and a string as raw JSON text, mariadb expanded an array into a list, the
+// SQLite drivers refused an object, and mysql2 bound 5 as 5.0.
+function isJsonValue(query: QueryModule, name: string, v: unknown): boolean {
+  return v != null && isJson(query.inputs?.[name]?.type.kind);
+}
+
+// A date or time value's type says whether it has a zone (src/render.ts; the maintainer,
+// 2026-10-12), and a value that would be read in a zone nobody chose is refused before the
+// statement runs. A `timestamp` or a `date` (MySQL's DATETIME and TIMESTAMP are the engine's
+// `timestamp`) takes no Date: pg and mysql2 wrote its wall-clock time in the app's zone,
+// postgres.js in the server's, PGlite and Bun.sql in UTC, and Bun.sql's `date` failed in every
+// zone. A string for a `timestamptz` names its zone: without one the server reads it in the
+// session's TimeZone, which the driver or the server sets.
+const zoned = /(?:\d:\d\d(?::\d\d(?:\.\d+)?)?(?:\s*(?:z|[+-]\d\d?(?::?\d\d){0,2})|\s+[a-z][\w/+-]*)|^-?infinity|^epoch|^now)(?:\s+bc)?$/i;
+
+const isTime = (type: EngineType | undefined) => type?.kind === "scalar" && type.name.split("|").every((part) => part === "timestamp" || part === "timestamptz" || part === "date");
+
+function checkTime(type: EngineType | undefined, name: string, v: unknown): void {
+  if (type === undefined || v == null) return;
+  if (type.kind === "array") {
+    if (Array.isArray(v)) for (const e of v) checkTime(Array.isArray(e) ? type : type.of, name, e);
+    return;
+  }
+  if (type.kind !== "scalar") return;
+  if (type.name === "timestamptz") {
+    if (typeof v === "string" && !zoned.test(v.trim())) {
+      throw new TypeError(`Parameter "${name}" is a timestamptz, an instant, so a string for it names its zone ("2026-10-12T19:06:48.282Z", "2026-10-12 19:06:48+09", "2026-10-12 19:06:48 America/Los_Angeles"); got ${JSON.stringify(v)}, which the server would read in the session's time zone. A Date is the instant it is.`);
+    }
+  } else if (v instanceof Date && type.name.split("|").every((part) => part === "timestamp" || part === "date")) {
+    throw new TypeError(`Parameter "${name}" is a ${type.name === "date" ? "date" : "timestamp"} without a time zone, so it takes the wall-clock text ("2026-10-12 19:06:48.282", "2026-10-12"), not a Date: drivers write a Date's time in different zones (the app's, the server's or UTC). A timestamptz parameter takes a Date.`);
+  }
+}
 
 function asByteaHex(v: unknown) {
   if (!(v instanceof Uint8Array)) return v;

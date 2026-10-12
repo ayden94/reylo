@@ -120,14 +120,19 @@ function renderFields(fields: { name: string; type: EngineType; nullable: boolea
 
 /**
  * The type a parameter accepts. The `dates` and `bigint` settings describe what the driver
- * returns, not what it takes: every Postgres and MySQL driver serializes a `Date` or an ISO
- * string for a timestamp, and a number, a BigInt or a digit string for a 64-bit integer, so a
- * value read back under any representation can be passed in again, and `limit :n` takes a number.
+ * returns, not what it takes: every Postgres and MySQL driver binds a number, a BigInt or a digit
+ * string for a 64-bit integer, so `limit :n` takes a number. A `timestamptz` is an instant, which
+ * every Postgres driver binds a `Date` as; a string for it must name its zone (`src/execute.ts`).
+ * A `timestamp` or a `date` (MySQL's DATETIME and TIMESTAMP are the engine's `timestamp`) is a
+ * wall-clock reading with no zone, and the drivers write a `Date`'s in different zones, the app's
+ * (pg, mysql2), the server's (postgres.js) or UTC (PGlite, Bun.sql), so it takes the text alone
+ * (the maintainer, 2026-10-12).
  */
 export function renderParamType(t: EngineType, dialect: "postgres" | "sqlite" | "mysql" = "postgres", repr: Repr = defaultRepr): string {
   if (t.kind === "scalar" && dialect !== "sqlite") {
     if (t.name === "int8") return "number | bigint | string";
-    if (t.name in temporal) return "Date | string";
+    if (t.name === "timestamptz") return "Date | string";
+    if (t.name.split("|").every((name) => name in temporal)) return "string";
   }
   // A SQLite driver binds a number or a BigInt for an INTEGER, whatever it returns.
   if (t.kind === "scalar" && dialect === "sqlite" && t.name === "integer") return repr.bigint === "number" ? "number" : `number | ${repr.bigint}`;

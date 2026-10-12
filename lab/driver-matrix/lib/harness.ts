@@ -261,6 +261,22 @@ export function queries(d: Dialect, typed = true) {
     list: q(`select id from ${t("people")} where id = any(:ids) and name = any(:names) order by id`, ["ids", "names"], "many", { inputs: { ids: { type: array("int4") }, names: { type: array("text") } } }),
     typedArrays: q(`select :b::bool[]::text as b, extract(epoch from (:d::timestamptz[])[1])::text as d, array(select encode(x, 'hex') from unnest(:x::bytea[]) as x)::text as x`, ["b", "d", "x"], "one", { inputs: { b: { type: array("bool") }, d: { type: array("timestamptz") }, x: { type: array("bytea") } } }),
     jsonArrays: q(`select (:a::jsonb)::text as a, (:e::jsonb)::text as e`, ["a", "e"], "one", { inputs: { a: { type: { kind: "json" } }, e: { type: { kind: "json" } } } }),
+    // Postgres and MySQL type a parameter read as JSON as JSON (`::jsonb`, json_extract's document), and the text comes back to be parsed, since each database spaces it its own way.
+    jsonValues: q(
+      ["s", "n", "b", "t", "o", "a", "e", "z"].map((p) => (d === "postgres" ? `(:${p}::jsonb)::text as ${p}` : `cast(json_extract(:${p}, '$') as char) as ${p}`)).join(", ").replace(/^/, "select "),
+      ["s", "n", "b", "t", "o", "a", "e", "z"],
+      "one",
+      { inputs: Object.fromEntries(["s", "n", "b", "t", "o", "a", "e", "z"].map((p) => [p, { type: { kind: "json" } }])) },
+    ),
+    // A timestamptz is an instant and takes a Date; a timestamp or a date has no zone and takes its text (MySQL has no timestamptz).
+    times: q(
+      d === "postgres"
+        ? `select (:tz::timestamptz = '2026-01-02T03:04:05.006Z'::timestamptz and :named::timestamptz = '2026-01-02T03:04:05.006Z'::timestamptz) as tz, :at::timestamp::text as at, :day::date::text as day`
+        : `select true as tz, date_format(cast(:at as datetime(3)), '%Y-%m-%d %H:%i:%s.%f') as at, cast(cast(:day as date) as char) as day`,
+      d === "postgres" ? ["tz", "named", "at", "day"] : ["at", "day"],
+      "one",
+      { inputs: { tz: { type: { kind: "scalar", name: "timestamptz" } }, named: { type: { kind: "scalar", name: "timestamptz" } }, at: { type: { kind: "scalar", name: "timestamp" } }, day: { type: { kind: "scalar", name: "date" } } } },
+    ),
     binary: q(d === "postgres" ? `select encode(:a::bytea, 'hex') as a, encode(:b::bytea, 'hex') as b` : `select lower(hex(:a)) as a, lower(hex(:b)) as b`, ["a", "b"], "one"),
     many: q(`select id, name from ${t("people")} order by id`, [], "many"),
     one: q(`select id, name from ${t("people")} where id = :id`, ["id"], "one"),
@@ -418,6 +434,43 @@ export const SCENARIOS: Scenario[] = [
       // pg writes any array as an array literal, so `[]` became `{}` and `[1]` an error; reylo
       // sends it the JSON text, and leaves the array to the drivers that bind it as JSON.
       eq(await call(ctx, q.jsonArrays, client, { a: [1, { k: 'say "hi"' }, null], e: [] }), { a: '[1, {"k": "say \\"hi\\""}, null]', e: "[]" }, "the stored JSON");
+    },
+  },
+  {
+    id: "S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL",
+    on: "client",
+    dialects: ["postgres", "mysql"],
+    async run(ctx, client, q) {
+      // Reylo binds a JSON parameter's value as its JSON text. Left to themselves, pg and mariadb
+      // passed a string through as raw JSON text, mariadb expanded an array into a list, and
+      // postgres.js and Bun.sql typed a boolean (Bun.sql a number too) by its JavaScript type.
+      const values = { s: 'say "hi"', n: 5, b: true, t: '{"a":1}', o: { k: [1, null] }, a: [1, 2], e: [], z: null };
+      const row = (await call(ctx, q.jsonValues, client, values)) as Record<string, string | null>;
+      eq(Object.fromEntries(Object.entries(row).map(([k, v]) => [k, v == null ? v : JSON.parse(v)])), values, "the stored JSON, parsed");
+    },
+  },
+  {
+    id: "S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called",
+    on: "client",
+    dialects: ["postgres", "mysql"],
+    async run(ctx, client, q) {
+      // The drivers wrote a Date's wall-clock time in the app's zone (pg, mysql2), the server's
+      // (postgres.js) or UTC (PGlite, Bun.sql), and Bun.sql's `date` failed in every zone.
+      // postgres.js read a date or time string through new Date(): the timestamp moved by the
+      // app's offset, and the zone name failed with "Invalid time value".
+      const at = "2026-01-02 03:04:05.006";
+      const row = await call(ctx, q.times, client, { tz: new Date(Date.UTC(2026, 0, 2, 3, 4, 5, 6)), named: "2026-01-02 12:04:05.006 Asia/Tokyo", at, day: "2026-01-02" });
+      eq({ ...row, tz: Boolean(Number(row.tz)) }, { tz: true, at: ctx.job.dialect === "postgres" ? at : `${at}000`, day: "2026-01-02" }, "row");
+      const sent = spy(client);
+      let refused: unknown = null;
+      try {
+        await call(ctx, q.times, client, { tz: new Date(0), named: "2026-01-02T03:04:05Z", at, day: new Date(Date.UTC(2026, 0, 2)) });
+      } catch (e) {
+        refused = e;
+      }
+      const called = sent.stop();
+      if (!(refused instanceof TypeError) || !/^Parameter "day" is a date without a time zone/.test(refused.message)) throw new Violation(`a Date for a date parameter was not refused with reylo's TypeError: ${describe(refused)}`);
+      if (!called.startsWith("no method") && !called.startsWith("the client as a function")) throw new Violation(`reylo called ${called} before refusing the Date`);
     },
   },
   {

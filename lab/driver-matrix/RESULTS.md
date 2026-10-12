@@ -1,41 +1,41 @@
 # Driver matrix results
 
-Generated 2026-10-12T19:59:35.671Z by `./run.sh` against the working tree at cf2bc64 (uncommitted changes in src/: yes; src/execute.ts a9c66e922796, src/index.ts bf6bacc47423). The report and the diagnoses are in [README.md](README.md).
+Generated 2026-10-12T20:17:59.902Z by `./run.sh` against the working tree at ab86ebc (uncommitted changes in src/: yes; src/execute.ts b7dfb84f5035, src/index.ts bf6bacc47423). The report and the diagnoses are in [README.md](README.md).
 
-3230 rows: 3183 pass, 2 fail, 42 unsupported (reylo refuses them with its own TypeError, as its contract says), 0 skip, 3 not run. Failing controls: 24 of 87 control rows fail, as designed.
+3510 rows: 3457 pass, 2 fail, 48 unsupported (reylo refuses them with its own TypeError, as its contract says), 0 skip, 3 not run. Failing controls: 27 of 93 control rows fail, as designed.
 
 ## Per job
 
 | Package@version | Runtime | Target | Pass | Fail | Unsupported | Skip | Not run |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| pg@8.23.0 | node 26.11.1 | Postgres 14 (local) | 85 | 0 | 0 | 0 | 0 |
+| pg@8.23.0 | node 26.11.1 | Postgres 14 (local) | 93 | 0 | 0 | 0 | 0 |
 | pg@7.18.2 | node 26.11.1 | Postgres 14 (local) | 0 | 0 | 0 | 0 | 1 |
-| postgres@3.4.9 | node 26.11.1 | Postgres 14 (local) | 95 | 0 | 0 | 0 | 0 |
-| @electric-sql/pglite@0.5.8 | node 26.11.1 | PGlite (in-process) | 45 | 0 | 0 | 0 | 0 |
-| @electric-sql/pglite@0.4.6 | node 26.11.1 | PGlite (in-process) | 45 | 0 | 0 | 0 | 0 |
-| @electric-sql/pglite@0.3.16 | node 26.11.1 | PGlite (in-process) | 45 | 0 | 0 | 0 | 0 |
-| @electric-sql/pglite@0.2.17 | node 26.11.1 | PGlite (in-process) | 45 | 0 | 0 | 0 | 0 |
-| @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | 125 | 0 | 0 | 0 | 0 |
-| @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | 125 | 0 | 0 | 0 | 0 |
-| @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | 125 | 0 | 0 | 0 | 0 |
-| pg-promise@12.7.1 | node 26.11.1 | Postgres 14 (local) | 90 | 0 | 0 | 0 | 0 |
-| Bun.sql (postgres)@1.4.3 | bun 1.4.3 | Postgres 14 (local) | 95 | 0 | 0 | 0 | 0 |
-| mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | 117 | 0 | 0 | 0 | 0 |
-| mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | 117 | 0 | 0 | 0 | 0 |
-| mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | 117 | 0 | 0 | 0 | 0 |
-| mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | 117 | 0 | 0 | 0 | 0 |
-| mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | 117 | 0 | 0 | 0 | 0 |
-| mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | 117 | 0 | 0 | 0 | 0 |
-| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | 122 | 0 | 0 | 0 | 0 |
-| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | 122 | 0 | 0 | 0 | 0 |
-| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | 122 | 0 | 0 | 0 | 0 |
-| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | 122 | 0 | 0 | 0 | 0 |
-| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | 122 | 0 | 0 | 0 | 0 |
-| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | 122 | 0 | 0 | 0 | 0 |
-| Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.4 | 79 | 0 | 0 | 0 | 0 |
-| Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.0 | 79 | 0 | 0 | 0 | 0 |
-| @planetscale/database@2.0.0 | node 26.11.1 | MySQL 8.4 via ps-http-sim | 13 | 0 | 40 | 0 | 0 |
-| @planetscale/database@1.20.2 | node 26.11.1 | MySQL 8.4 via ps-http-sim | 51 | 2 | 0 | 0 | 0 |
+| postgres@3.4.9 | node 26.11.1 | Postgres 14 (local) | 103 | 0 | 0 | 0 | 0 |
+| @electric-sql/pglite@0.5.8 | node 26.11.1 | PGlite (in-process) | 49 | 0 | 0 | 0 | 0 |
+| @electric-sql/pglite@0.4.6 | node 26.11.1 | PGlite (in-process) | 49 | 0 | 0 | 0 | 0 |
+| @electric-sql/pglite@0.3.16 | node 26.11.1 | PGlite (in-process) | 49 | 0 | 0 | 0 | 0 |
+| @electric-sql/pglite@0.2.17 | node 26.11.1 | PGlite (in-process) | 49 | 0 | 0 | 0 | 0 |
+| @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | 137 | 0 | 0 | 0 | 0 |
+| @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | 137 | 0 | 0 | 0 | 0 |
+| @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | 137 | 0 | 0 | 0 | 0 |
+| pg-promise@12.7.1 | node 26.11.1 | Postgres 14 (local) | 98 | 0 | 0 | 0 | 0 |
+| Bun.sql (postgres)@1.4.3 | bun 1.4.3 | Postgres 14 (local) | 103 | 0 | 0 | 0 | 0 |
+| mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | 131 | 0 | 0 | 0 | 0 |
+| mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | 131 | 0 | 0 | 0 | 0 |
+| mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | 131 | 0 | 0 | 0 | 0 |
+| mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | 131 | 0 | 0 | 0 | 0 |
+| mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | 131 | 0 | 0 | 0 | 0 |
+| mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | 131 | 0 | 0 | 0 | 0 |
+| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | 136 | 0 | 0 | 0 | 0 |
+| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | 136 | 0 | 0 | 0 | 0 |
+| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | 136 | 0 | 0 | 0 | 0 |
+| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | 136 | 0 | 0 | 0 | 0 |
+| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | 136 | 0 | 0 | 0 | 0 |
+| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | 136 | 0 | 0 | 0 | 0 |
+| Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.4 | 87 | 0 | 0 | 0 | 0 |
+| Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.0 | 87 | 0 | 0 | 0 | 0 |
+| @planetscale/database@2.0.0 | node 26.11.1 | MySQL 8.4 via ps-http-sim | 13 | 0 | 46 | 0 | 0 |
+| @planetscale/database@1.20.2 | node 26.11.1 | MySQL 8.4 via ps-http-sim | 57 | 2 | 0 | 0 | 0 |
 | better-sqlite3@13.0.3 | node 26.11.1 | SQLite file | 22 | 0 | 0 | 0 | 0 |
 | better-sqlite3@12.11.1 | node 26.11.1 | SQLite file | 22 | 0 | 0 | 0 | 0 |
 | better-sqlite3@11.10.0 | node 24.21.0 | SQLite file | 22 | 0 | 0 | 0 | 0 |
@@ -72,9 +72,9 @@ Rows where reylo refuses the client or the statement with its own TypeError, whi
 
 | Package | Versions | Runtimes | Shape | Scenarios | reylo's refusal |
 | --- | --- | --- | --- | --- | --- |
-| @planetscale/database | 2.0.0 | node 26.11.1 | connect() Connection | S1a, S1b, S1c, S2b, S2c, S2d, S2e, S3, S5a, S5b, S6b, S8 | reylo refused it: @planetscale/database 2.0 binds no parameters, so reylo cannot pass this statement's values to it; use its 1.x line, or mysql2 on PlanetScale's MySQL endpoint. (cause: Error: Query parameters are not supported: pass a complete SQL string and options to execute(query, options)) |
-| @planetscale/database | 2.0.0 | node 26.11.1 | Client | S1a, S1b, S1c, S2b, S2c, S2d, S2e, S3, S5a, S5b, S6b, S8 | reylo refused it: @planetscale/database 2.0 binds no parameters, so reylo cannot pass this statement's values to it; use its 1.x line, or mysql2 on PlanetScale's MySQL endpoint. (cause: Error: Query parameters are not supported: pass a complete SQL string and options to execute(query, options)) |
-| @planetscale/database | 2.0.0 | node 26.11.1 | conn.transaction(tx) | S1a, S1b, S1c, S2b, S2c, S2d, S2e, S3, S5a, S5b, S6b, S7a, S7b, S7c, S7d, S8 | reylo refused it: @planetscale/database 2.0 binds no parameters, so reylo cannot pass this statement's values to it; use its 1.x line, or mysql2 on PlanetScale's MySQL endpoint. (cause: Error: Query parameters are not supported: pass a complete SQL string and options to execute(query, options)) |
+| @planetscale/database | 2.0.0 | node 26.11.1 | connect() Connection | S1a, S1b, S1c, S1g, S1h, S2b, S2c, S2d, S2e, S3, S5a, S5b, S6b, S8 | reylo refused it: @planetscale/database 2.0 binds no parameters, so reylo cannot pass this statement's values to it; use its 1.x line, or mysql2 on PlanetScale's MySQL endpoint. (cause: Error: Query parameters are not supported: pass a complete SQL string and options to execute(query, options)) |
+| @planetscale/database | 2.0.0 | node 26.11.1 | Client | S1a, S1b, S1c, S1g, S1h, S2b, S2c, S2d, S2e, S3, S5a, S5b, S6b, S8 | reylo refused it: @planetscale/database 2.0 binds no parameters, so reylo cannot pass this statement's values to it; use its 1.x line, or mysql2 on PlanetScale's MySQL endpoint. (cause: Error: Query parameters are not supported: pass a complete SQL string and options to execute(query, options)) |
+| @planetscale/database | 2.0.0 | node 26.11.1 | conn.transaction(tx) | S1a, S1b, S1c, S1g, S1h, S2b, S2c, S2d, S2e, S3, S5a, S5b, S6b, S7a, S7b, S7c, S7d, S8 | reylo refused it: @planetscale/database 2.0 binds no parameters, so reylo cannot pass this statement's values to it; use its 1.x line, or mysql2 on PlanetScale's MySQL endpoint. (cause: Error: Query parameters are not supported: pass a complete SQL string and options to execute(query, options)) |
 | node:sqlite | 26.11.1, 24.21.0 | node 26.11.1, node 24.21.0 | db.createTagStore() | S9 | reylo refused it: reylo cannot run a sqlite statement on an object with get, all, iterate, run, clear. It takes a client with prepare(sql) as on better-sqlite3, node:sqlite, bun:sqlite and Cloudflare D1; execute({ sql, args }) as on @libsql/client; all(sql, params) as on sqlite3 and sqlite; or unsafe(text, values) as on Bun.sql. A tag store is not a client: pass its database, store.db. |
 
 ## Failing controls
@@ -89,6 +89,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | control/pg | parameters corrupted: an integer plus one, a Uint8Array as JSON | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | FAIL | Error: Invalid input for bytea type |
 | control/pg | parameters corrupted: an integer plus one, a Uint8Array as JSON | S1d array params: = any(:ids) over an int and a text array | PASS |  |
 | control/pg | parameters corrupted: an integer plus one, a Uint8Array as JSON | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | PASS |  |
+| control/pg | parameters corrupted: an integer plus one, a Uint8Array as JSON | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | PASS |  |
+| control/pg | parameters corrupted: an integer plus one, a Uint8Array as JSON | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | PASS |  |
 | control/pg | parameters corrupted: an integer plus one, a Uint8Array as JSON | S1f array params: bool[], timestamptz[] and bytea[] | PASS |  |
 | control/pg | parameters corrupted: an integer plus one, a Uint8Array as JSON | S2a many: 3 rows | PASS |  |
 | control/pg | parameters corrupted: an integer plus one, a Uint8Array as JSON | S2b one: the row | FAIL | row: expected {"id":2,"name":"bob"}, got {"id":3,"name":"cy"} |
@@ -97,7 +99,7 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | control/pg | parameters corrupted: an integer plus one, a Uint8Array as JSON | S2e with(client)(params) | FAIL | Error: Expected exactly one row, got 0 |
 | control/pg | parameters corrupted: an integer plus one, a Uint8Array as JSON | S3 write without RETURNING (none), then a separate read | FAIL | read back through reylo: expected {"n":3}, got {"n":4} |
 | control/pg | parameters corrupted: an integer plus one, a Uint8Array as JSON | S3n write without parameters (none), then a separate read | PASS |  |
-| control/pg | parameters corrupted: an integer plus one, a Uint8Array as JSON | S4 INSERT ... RETURNING | FAIL | returned row: expected {"n":4,"tag":"control@pg/parameters corrupted: an integer plus one, a Uint8Array as JSON/S4/mv5oeck8ao7e/3"}, got {"tag":"control@pg/parameters corrupted: an integer plus one, a Uint8Array as JSON/S4/mv5oeck8ao7e/3","n":5} |
+| control/pg | parameters corrupted: an integer plus one, a Uint8Array as JSON | S4 INSERT ... RETURNING | FAIL | returned row: expected {"n":4,"tag":"control@pg/parameters corrupted: an integer plus one, a Uint8Array as JSON/S4/mv5p20bimg6k/3"}, got {"tag":"control@pg/parameters corrupted: an integer plus one, a Uint8Array as JSON/S4/mv5p20bimg6k/3","n":5} |
 | control/pg | parameters corrupted: an integer plus one, a Uint8Array as JSON | S5a repeated :id (runtime lexer) | FAIL | Error: Expected exactly one row, got 0 |
 | control/pg | parameters corrupted: an integer plus one, a Uint8Array as JSON | S5b repeated :id (mapper text/order) | FAIL | Error: Expected exactly one row, got 0 |
 | control/pg | parameters corrupted: an integer plus one, a Uint8Array as JSON | S6a syntax error rejects with the driver's error | PASS |  |
@@ -109,6 +111,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | control/pg | unsafe() binding an array as a,b, statements without inputs | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | PASS |  |
 | control/pg | unsafe() binding an array as a,b, statements without inputs | S1d array params: = any(:ids) over an int and a text array | FAIL | me: malformed array literal: "1,3,4" [code=22P02 severity=ERROR] |
 | control/pg | unsafe() binding an array as a,b, statements without inputs | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | FAIL | me: invalid input syntax for type json [code=22P02 severity=ERROR] |
+| control/pg | unsafe() binding an array as a,b, statements without inputs | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | FAIL | me: invalid input syntax for type json [code=22P02 severity=ERROR] |
+| control/pg | unsafe() binding an array as a,b, statements without inputs | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | FAIL | reylo contract: a Date for a date parameter was not refused with reylo's TypeError: non-Error thrown: null |
 | control/pg | unsafe() binding an array as a,b, statements without inputs | S1f array params: bool[], timestamptz[] and bytea[] | FAIL | me: malformed array literal: "true,false" [code=22P02 severity=ERROR] |
 | control/pg | unsafe() binding an array as a,b, statements without inputs | S2a many: 3 rows | PASS |  |
 | control/pg | unsafe() binding an array as a,b, statements without inputs | S2b one: the row | PASS |  |
@@ -129,6 +133,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | control/pg | unsafe() binding every array as its array literal, a JSON parameter's too | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | PASS |  |
 | control/pg | unsafe() binding every array as its array literal, a JSON parameter's too | S1d array params: = any(:ids) over an int and a text array | PASS |  |
 | control/pg | unsafe() binding every array as its array literal, a JSON parameter's too | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | FAIL | me: invalid input syntax for type json [code=22P02 severity=ERROR] |
+| control/pg | unsafe() binding every array as its array literal, a JSON parameter's too | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | FAIL | me: invalid input syntax for type json [code=22P02 severity=ERROR] |
+| control/pg | unsafe() binding every array as its array literal, a JSON parameter's too | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | PASS |  |
 | control/pg | unsafe() binding every array as its array literal, a JSON parameter's too | S1f array params: bool[], timestamptz[] and bytea[] | PASS |  |
 | control/pg | unsafe() binding every array as its array literal, a JSON parameter's too | S2a many: 3 rows | PASS |  |
 | control/pg | unsafe() binding every array as its array literal, a JSON parameter's too | S2b one: the row | PASS |  |
@@ -187,6 +193,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | pg@8.23.0 | node 26.11.1 | Postgres 14 (local) | Pool | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | pg@8.23.0 | node 26.11.1 | Postgres 14 (local) | Pool | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | pg@8.23.0 | node 26.11.1 | Postgres 14 (local) | Pool | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| pg@8.23.0 | node 26.11.1 | Postgres 14 (local) | Pool | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| pg@8.23.0 | node 26.11.1 | Postgres 14 (local) | Pool | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | pg@8.23.0 | node 26.11.1 | Postgres 14 (local) | Pool | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | pg@8.23.0 | node 26.11.1 | Postgres 14 (local) | Pool | S2a many: 3 rows | pass |  |
 | pg@8.23.0 | node 26.11.1 | Postgres 14 (local) | Pool | S2b one: the row | pass |  |
@@ -207,6 +215,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | pg@8.23.0 | node 26.11.1 | Postgres 14 (local) | Client (connected) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | pg@8.23.0 | node 26.11.1 | Postgres 14 (local) | Client (connected) | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | pg@8.23.0 | node 26.11.1 | Postgres 14 (local) | Client (connected) | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| pg@8.23.0 | node 26.11.1 | Postgres 14 (local) | Client (connected) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| pg@8.23.0 | node 26.11.1 | Postgres 14 (local) | Client (connected) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | pg@8.23.0 | node 26.11.1 | Postgres 14 (local) | Client (connected) | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | pg@8.23.0 | node 26.11.1 | Postgres 14 (local) | Client (connected) | S2a many: 3 rows | pass |  |
 | pg@8.23.0 | node 26.11.1 | Postgres 14 (local) | Client (connected) | S2b one: the row | pass |  |
@@ -227,6 +237,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | pg@8.23.0 | node 26.11.1 | Postgres 14 (local) | PoolClient (pool.connect()) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | pg@8.23.0 | node 26.11.1 | Postgres 14 (local) | PoolClient (pool.connect()) | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | pg@8.23.0 | node 26.11.1 | Postgres 14 (local) | PoolClient (pool.connect()) | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| pg@8.23.0 | node 26.11.1 | Postgres 14 (local) | PoolClient (pool.connect()) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| pg@8.23.0 | node 26.11.1 | Postgres 14 (local) | PoolClient (pool.connect()) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | pg@8.23.0 | node 26.11.1 | Postgres 14 (local) | PoolClient (pool.connect()) | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | pg@8.23.0 | node 26.11.1 | Postgres 14 (local) | PoolClient (pool.connect()) | S2a many: 3 rows | pass |  |
 | pg@8.23.0 | node 26.11.1 | Postgres 14 (local) | PoolClient (pool.connect()) | S2b one: the row | pass |  |
@@ -247,6 +259,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | pg@8.23.0 | node 26.11.1 | Postgres 14 (local) | PoolClient in BEGIN/COMMIT | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | pg@8.23.0 | node 26.11.1 | Postgres 14 (local) | PoolClient in BEGIN/COMMIT | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | pg@8.23.0 | node 26.11.1 | Postgres 14 (local) | PoolClient in BEGIN/COMMIT | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| pg@8.23.0 | node 26.11.1 | Postgres 14 (local) | PoolClient in BEGIN/COMMIT | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| pg@8.23.0 | node 26.11.1 | Postgres 14 (local) | PoolClient in BEGIN/COMMIT | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | pg@8.23.0 | node 26.11.1 | Postgres 14 (local) | PoolClient in BEGIN/COMMIT | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | pg@8.23.0 | node 26.11.1 | Postgres 14 (local) | PoolClient in BEGIN/COMMIT | S2a many: 3 rows | pass |  |
 | pg@8.23.0 | node 26.11.1 | Postgres 14 (local) | PoolClient in BEGIN/COMMIT | S2b one: the row | pass |  |
@@ -273,6 +287,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | postgres@3.4.9 | node 26.11.1 | Postgres 14 (local) | sql | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | postgres@3.4.9 | node 26.11.1 | Postgres 14 (local) | sql | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | postgres@3.4.9 | node 26.11.1 | Postgres 14 (local) | sql | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| postgres@3.4.9 | node 26.11.1 | Postgres 14 (local) | sql | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| postgres@3.4.9 | node 26.11.1 | Postgres 14 (local) | sql | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | postgres@3.4.9 | node 26.11.1 | Postgres 14 (local) | sql | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | postgres@3.4.9 | node 26.11.1 | Postgres 14 (local) | sql | S2a many: 3 rows | pass |  |
 | postgres@3.4.9 | node 26.11.1 | Postgres 14 (local) | sql | S2b one: the row | pass |  |
@@ -293,6 +309,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | postgres@3.4.9 | node 26.11.1 | Postgres 14 (local) | sql.begin(tx) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | postgres@3.4.9 | node 26.11.1 | Postgres 14 (local) | sql.begin(tx) | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | postgres@3.4.9 | node 26.11.1 | Postgres 14 (local) | sql.begin(tx) | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| postgres@3.4.9 | node 26.11.1 | Postgres 14 (local) | sql.begin(tx) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| postgres@3.4.9 | node 26.11.1 | Postgres 14 (local) | sql.begin(tx) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | postgres@3.4.9 | node 26.11.1 | Postgres 14 (local) | sql.begin(tx) | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | postgres@3.4.9 | node 26.11.1 | Postgres 14 (local) | sql.begin(tx) | S2a many: 3 rows | pass |  |
 | postgres@3.4.9 | node 26.11.1 | Postgres 14 (local) | sql.begin(tx) | S2b one: the row | pass |  |
@@ -318,6 +336,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | postgres@3.4.9 | node 26.11.1 | Postgres 14 (local) | tx.savepoint(sp) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | postgres@3.4.9 | node 26.11.1 | Postgres 14 (local) | tx.savepoint(sp) | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | postgres@3.4.9 | node 26.11.1 | Postgres 14 (local) | tx.savepoint(sp) | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| postgres@3.4.9 | node 26.11.1 | Postgres 14 (local) | tx.savepoint(sp) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| postgres@3.4.9 | node 26.11.1 | Postgres 14 (local) | tx.savepoint(sp) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | postgres@3.4.9 | node 26.11.1 | Postgres 14 (local) | tx.savepoint(sp) | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | postgres@3.4.9 | node 26.11.1 | Postgres 14 (local) | tx.savepoint(sp) | S2a many: 3 rows | pass |  |
 | postgres@3.4.9 | node 26.11.1 | Postgres 14 (local) | tx.savepoint(sp) | S2b one: the row | pass |  |
@@ -343,6 +363,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | postgres@3.4.9 | node 26.11.1 | Postgres 14 (local) | sql.reserve() | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | postgres@3.4.9 | node 26.11.1 | Postgres 14 (local) | sql.reserve() | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | postgres@3.4.9 | node 26.11.1 | Postgres 14 (local) | sql.reserve() | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| postgres@3.4.9 | node 26.11.1 | Postgres 14 (local) | sql.reserve() | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| postgres@3.4.9 | node 26.11.1 | Postgres 14 (local) | sql.reserve() | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | postgres@3.4.9 | node 26.11.1 | Postgres 14 (local) | sql.reserve() | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | postgres@3.4.9 | node 26.11.1 | Postgres 14 (local) | sql.reserve() | S2a many: 3 rows | pass |  |
 | postgres@3.4.9 | node 26.11.1 | Postgres 14 (local) | sql.reserve() | S2b one: the row | pass |  |
@@ -368,6 +390,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | @electric-sql/pglite@0.5.8 | node 26.11.1 | PGlite (in-process) | PGlite | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | @electric-sql/pglite@0.5.8 | node 26.11.1 | PGlite (in-process) | PGlite | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | @electric-sql/pglite@0.5.8 | node 26.11.1 | PGlite (in-process) | PGlite | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| @electric-sql/pglite@0.5.8 | node 26.11.1 | PGlite (in-process) | PGlite | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| @electric-sql/pglite@0.5.8 | node 26.11.1 | PGlite (in-process) | PGlite | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | @electric-sql/pglite@0.5.8 | node 26.11.1 | PGlite (in-process) | PGlite | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | @electric-sql/pglite@0.5.8 | node 26.11.1 | PGlite (in-process) | PGlite | S2a many: 3 rows | pass |  |
 | @electric-sql/pglite@0.5.8 | node 26.11.1 | PGlite (in-process) | PGlite | S2b one: the row | pass |  |
@@ -388,6 +412,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | @electric-sql/pglite@0.5.8 | node 26.11.1 | PGlite (in-process) | db.transaction(tx) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | @electric-sql/pglite@0.5.8 | node 26.11.1 | PGlite (in-process) | db.transaction(tx) | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | @electric-sql/pglite@0.5.8 | node 26.11.1 | PGlite (in-process) | db.transaction(tx) | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| @electric-sql/pglite@0.5.8 | node 26.11.1 | PGlite (in-process) | db.transaction(tx) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| @electric-sql/pglite@0.5.8 | node 26.11.1 | PGlite (in-process) | db.transaction(tx) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | @electric-sql/pglite@0.5.8 | node 26.11.1 | PGlite (in-process) | db.transaction(tx) | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | @electric-sql/pglite@0.5.8 | node 26.11.1 | PGlite (in-process) | db.transaction(tx) | S2a many: 3 rows | pass |  |
 | @electric-sql/pglite@0.5.8 | node 26.11.1 | PGlite (in-process) | db.transaction(tx) | S2b one: the row | pass |  |
@@ -413,6 +439,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | @electric-sql/pglite@0.4.6 | node 26.11.1 | PGlite (in-process) | PGlite | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | @electric-sql/pglite@0.4.6 | node 26.11.1 | PGlite (in-process) | PGlite | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | @electric-sql/pglite@0.4.6 | node 26.11.1 | PGlite (in-process) | PGlite | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| @electric-sql/pglite@0.4.6 | node 26.11.1 | PGlite (in-process) | PGlite | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| @electric-sql/pglite@0.4.6 | node 26.11.1 | PGlite (in-process) | PGlite | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | @electric-sql/pglite@0.4.6 | node 26.11.1 | PGlite (in-process) | PGlite | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | @electric-sql/pglite@0.4.6 | node 26.11.1 | PGlite (in-process) | PGlite | S2a many: 3 rows | pass |  |
 | @electric-sql/pglite@0.4.6 | node 26.11.1 | PGlite (in-process) | PGlite | S2b one: the row | pass |  |
@@ -433,6 +461,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | @electric-sql/pglite@0.4.6 | node 26.11.1 | PGlite (in-process) | db.transaction(tx) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | @electric-sql/pglite@0.4.6 | node 26.11.1 | PGlite (in-process) | db.transaction(tx) | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | @electric-sql/pglite@0.4.6 | node 26.11.1 | PGlite (in-process) | db.transaction(tx) | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| @electric-sql/pglite@0.4.6 | node 26.11.1 | PGlite (in-process) | db.transaction(tx) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| @electric-sql/pglite@0.4.6 | node 26.11.1 | PGlite (in-process) | db.transaction(tx) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | @electric-sql/pglite@0.4.6 | node 26.11.1 | PGlite (in-process) | db.transaction(tx) | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | @electric-sql/pglite@0.4.6 | node 26.11.1 | PGlite (in-process) | db.transaction(tx) | S2a many: 3 rows | pass |  |
 | @electric-sql/pglite@0.4.6 | node 26.11.1 | PGlite (in-process) | db.transaction(tx) | S2b one: the row | pass |  |
@@ -458,6 +488,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | @electric-sql/pglite@0.3.16 | node 26.11.1 | PGlite (in-process) | PGlite | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | @electric-sql/pglite@0.3.16 | node 26.11.1 | PGlite (in-process) | PGlite | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | @electric-sql/pglite@0.3.16 | node 26.11.1 | PGlite (in-process) | PGlite | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| @electric-sql/pglite@0.3.16 | node 26.11.1 | PGlite (in-process) | PGlite | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| @electric-sql/pglite@0.3.16 | node 26.11.1 | PGlite (in-process) | PGlite | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | @electric-sql/pglite@0.3.16 | node 26.11.1 | PGlite (in-process) | PGlite | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | @electric-sql/pglite@0.3.16 | node 26.11.1 | PGlite (in-process) | PGlite | S2a many: 3 rows | pass |  |
 | @electric-sql/pglite@0.3.16 | node 26.11.1 | PGlite (in-process) | PGlite | S2b one: the row | pass |  |
@@ -478,6 +510,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | @electric-sql/pglite@0.3.16 | node 26.11.1 | PGlite (in-process) | db.transaction(tx) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | @electric-sql/pglite@0.3.16 | node 26.11.1 | PGlite (in-process) | db.transaction(tx) | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | @electric-sql/pglite@0.3.16 | node 26.11.1 | PGlite (in-process) | db.transaction(tx) | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| @electric-sql/pglite@0.3.16 | node 26.11.1 | PGlite (in-process) | db.transaction(tx) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| @electric-sql/pglite@0.3.16 | node 26.11.1 | PGlite (in-process) | db.transaction(tx) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | @electric-sql/pglite@0.3.16 | node 26.11.1 | PGlite (in-process) | db.transaction(tx) | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | @electric-sql/pglite@0.3.16 | node 26.11.1 | PGlite (in-process) | db.transaction(tx) | S2a many: 3 rows | pass |  |
 | @electric-sql/pglite@0.3.16 | node 26.11.1 | PGlite (in-process) | db.transaction(tx) | S2b one: the row | pass |  |
@@ -503,6 +537,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | @electric-sql/pglite@0.2.17 | node 26.11.1 | PGlite (in-process) | PGlite | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | @electric-sql/pglite@0.2.17 | node 26.11.1 | PGlite (in-process) | PGlite | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | @electric-sql/pglite@0.2.17 | node 26.11.1 | PGlite (in-process) | PGlite | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| @electric-sql/pglite@0.2.17 | node 26.11.1 | PGlite (in-process) | PGlite | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| @electric-sql/pglite@0.2.17 | node 26.11.1 | PGlite (in-process) | PGlite | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | @electric-sql/pglite@0.2.17 | node 26.11.1 | PGlite (in-process) | PGlite | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | @electric-sql/pglite@0.2.17 | node 26.11.1 | PGlite (in-process) | PGlite | S2a many: 3 rows | pass |  |
 | @electric-sql/pglite@0.2.17 | node 26.11.1 | PGlite (in-process) | PGlite | S2b one: the row | pass |  |
@@ -523,6 +559,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | @electric-sql/pglite@0.2.17 | node 26.11.1 | PGlite (in-process) | db.transaction(tx) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | @electric-sql/pglite@0.2.17 | node 26.11.1 | PGlite (in-process) | db.transaction(tx) | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | @electric-sql/pglite@0.2.17 | node 26.11.1 | PGlite (in-process) | db.transaction(tx) | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| @electric-sql/pglite@0.2.17 | node 26.11.1 | PGlite (in-process) | db.transaction(tx) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| @electric-sql/pglite@0.2.17 | node 26.11.1 | PGlite (in-process) | db.transaction(tx) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | @electric-sql/pglite@0.2.17 | node 26.11.1 | PGlite (in-process) | db.transaction(tx) | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | @electric-sql/pglite@0.2.17 | node 26.11.1 | PGlite (in-process) | db.transaction(tx) | S2a many: 3 rows | pass |  |
 | @electric-sql/pglite@0.2.17 | node 26.11.1 | PGlite (in-process) | db.transaction(tx) | S2b one: the row | pass |  |
@@ -548,6 +586,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | Pool (WebSocket) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | Pool (WebSocket) | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | Pool (WebSocket) | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | Pool (WebSocket) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | Pool (WebSocket) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | Pool (WebSocket) | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | Pool (WebSocket) | S2a many: 3 rows | pass |  |
 | @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | Pool (WebSocket) | S2b one: the row | pass |  |
@@ -568,6 +608,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | Client (WebSocket, connected) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | Client (WebSocket, connected) | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | Client (WebSocket, connected) | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | Client (WebSocket, connected) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | Client (WebSocket, connected) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | Client (WebSocket, connected) | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | Client (WebSocket, connected) | S2a many: 3 rows | pass |  |
 | @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | Client (WebSocket, connected) | S2b one: the row | pass |  |
@@ -588,6 +630,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient (pool.connect()) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient (pool.connect()) | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient (pool.connect()) | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient (pool.connect()) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient (pool.connect()) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient (pool.connect()) | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient (pool.connect()) | S2a many: 3 rows | pass |  |
 | @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient (pool.connect()) | S2b one: the row | pass |  |
@@ -608,6 +652,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient in BEGIN/COMMIT | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient in BEGIN/COMMIT | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient in BEGIN/COMMIT | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient in BEGIN/COMMIT | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient in BEGIN/COMMIT | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient in BEGIN/COMMIT | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient in BEGIN/COMMIT | S2a many: 3 rows | pass |  |
 | @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient in BEGIN/COMMIT | S2b one: the row | pass |  |
@@ -633,6 +679,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | neon() HTTP function | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | neon() HTTP function | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | neon() HTTP function | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | neon() HTTP function | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | neon() HTTP function | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | neon() HTTP function | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | neon() HTTP function | S2a many: 3 rows | pass |  |
 | @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | neon() HTTP function | S2b one: the row | pass |  |
@@ -653,6 +701,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | neon(url, { fullResults: true }) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | neon(url, { fullResults: true }) | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | neon(url, { fullResults: true }) | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | neon(url, { fullResults: true }) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | neon(url, { fullResults: true }) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | neon(url, { fullResults: true }) | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | neon(url, { fullResults: true }) | S2a many: 3 rows | pass |  |
 | @neondatabase/serverless@1.1.0 | node 26.11.1 | Postgres 14 via local Neon proxy | neon(url, { fullResults: true }) | S2b one: the row | pass |  |
@@ -673,6 +723,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | Pool (WebSocket) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | Pool (WebSocket) | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | Pool (WebSocket) | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | Pool (WebSocket) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | Pool (WebSocket) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | Pool (WebSocket) | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | Pool (WebSocket) | S2a many: 3 rows | pass |  |
 | @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | Pool (WebSocket) | S2b one: the row | pass |  |
@@ -693,6 +745,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | Client (WebSocket, connected) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | Client (WebSocket, connected) | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | Client (WebSocket, connected) | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | Client (WebSocket, connected) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | Client (WebSocket, connected) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | Client (WebSocket, connected) | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | Client (WebSocket, connected) | S2a many: 3 rows | pass |  |
 | @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | Client (WebSocket, connected) | S2b one: the row | pass |  |
@@ -713,6 +767,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient (pool.connect()) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient (pool.connect()) | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient (pool.connect()) | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient (pool.connect()) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient (pool.connect()) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient (pool.connect()) | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient (pool.connect()) | S2a many: 3 rows | pass |  |
 | @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient (pool.connect()) | S2b one: the row | pass |  |
@@ -733,6 +789,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient in BEGIN/COMMIT | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient in BEGIN/COMMIT | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient in BEGIN/COMMIT | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient in BEGIN/COMMIT | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient in BEGIN/COMMIT | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient in BEGIN/COMMIT | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient in BEGIN/COMMIT | S2a many: 3 rows | pass |  |
 | @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient in BEGIN/COMMIT | S2b one: the row | pass |  |
@@ -758,6 +816,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | neon() HTTP function | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | neon() HTTP function | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | neon() HTTP function | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | neon() HTTP function | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | neon() HTTP function | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | neon() HTTP function | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | neon() HTTP function | S2a many: 3 rows | pass |  |
 | @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | neon() HTTP function | S2b one: the row | pass |  |
@@ -778,6 +838,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | neon(url, { fullResults: true }) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | neon(url, { fullResults: true }) | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | neon(url, { fullResults: true }) | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | neon(url, { fullResults: true }) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | neon(url, { fullResults: true }) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | neon(url, { fullResults: true }) | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | neon(url, { fullResults: true }) | S2a many: 3 rows | pass |  |
 | @neondatabase/serverless@0.10.4 | node 26.11.1 | Postgres 14 via local Neon proxy | neon(url, { fullResults: true }) | S2b one: the row | pass |  |
@@ -798,6 +860,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | Pool (WebSocket) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | Pool (WebSocket) | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | Pool (WebSocket) | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | Pool (WebSocket) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | Pool (WebSocket) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | Pool (WebSocket) | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | Pool (WebSocket) | S2a many: 3 rows | pass |  |
 | @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | Pool (WebSocket) | S2b one: the row | pass |  |
@@ -818,6 +882,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | Client (WebSocket, connected) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | Client (WebSocket, connected) | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | Client (WebSocket, connected) | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | Client (WebSocket, connected) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | Client (WebSocket, connected) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | Client (WebSocket, connected) | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | Client (WebSocket, connected) | S2a many: 3 rows | pass |  |
 | @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | Client (WebSocket, connected) | S2b one: the row | pass |  |
@@ -838,6 +904,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient (pool.connect()) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient (pool.connect()) | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient (pool.connect()) | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient (pool.connect()) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient (pool.connect()) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient (pool.connect()) | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient (pool.connect()) | S2a many: 3 rows | pass |  |
 | @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient (pool.connect()) | S2b one: the row | pass |  |
@@ -858,6 +926,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient in BEGIN/COMMIT | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient in BEGIN/COMMIT | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient in BEGIN/COMMIT | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient in BEGIN/COMMIT | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient in BEGIN/COMMIT | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient in BEGIN/COMMIT | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient in BEGIN/COMMIT | S2a many: 3 rows | pass |  |
 | @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | PoolClient in BEGIN/COMMIT | S2b one: the row | pass |  |
@@ -883,6 +953,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | neon() HTTP function | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | neon() HTTP function | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | neon() HTTP function | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | neon() HTTP function | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | neon() HTTP function | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | neon() HTTP function | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | neon() HTTP function | S2a many: 3 rows | pass |  |
 | @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | neon() HTTP function | S2b one: the row | pass |  |
@@ -903,6 +975,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | neon(url, { fullResults: true }) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | neon(url, { fullResults: true }) | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | neon(url, { fullResults: true }) | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | neon(url, { fullResults: true }) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | neon(url, { fullResults: true }) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | neon(url, { fullResults: true }) | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | neon(url, { fullResults: true }) | S2a many: 3 rows | pass |  |
 | @neondatabase/serverless@0.9.5 | node 26.11.1 | Postgres 14 via local Neon proxy | neon(url, { fullResults: true }) | S2b one: the row | pass |  |
@@ -923,6 +997,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | pg-promise@12.7.1 | node 26.11.1 | Postgres 14 (local) | db | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | pg-promise@12.7.1 | node 26.11.1 | Postgres 14 (local) | db | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | pg-promise@12.7.1 | node 26.11.1 | Postgres 14 (local) | db | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| pg-promise@12.7.1 | node 26.11.1 | Postgres 14 (local) | db | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| pg-promise@12.7.1 | node 26.11.1 | Postgres 14 (local) | db | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | pg-promise@12.7.1 | node 26.11.1 | Postgres 14 (local) | db | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | pg-promise@12.7.1 | node 26.11.1 | Postgres 14 (local) | db | S2a many: 3 rows | pass |  |
 | pg-promise@12.7.1 | node 26.11.1 | Postgres 14 (local) | db | S2b one: the row | pass |  |
@@ -943,6 +1019,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | pg-promise@12.7.1 | node 26.11.1 | Postgres 14 (local) | db.task(t) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | pg-promise@12.7.1 | node 26.11.1 | Postgres 14 (local) | db.task(t) | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | pg-promise@12.7.1 | node 26.11.1 | Postgres 14 (local) | db.task(t) | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| pg-promise@12.7.1 | node 26.11.1 | Postgres 14 (local) | db.task(t) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| pg-promise@12.7.1 | node 26.11.1 | Postgres 14 (local) | db.task(t) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | pg-promise@12.7.1 | node 26.11.1 | Postgres 14 (local) | db.task(t) | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | pg-promise@12.7.1 | node 26.11.1 | Postgres 14 (local) | db.task(t) | S2a many: 3 rows | pass |  |
 | pg-promise@12.7.1 | node 26.11.1 | Postgres 14 (local) | db.task(t) | S2b one: the row | pass |  |
@@ -963,6 +1041,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | pg-promise@12.7.1 | node 26.11.1 | Postgres 14 (local) | db.tx(t) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | pg-promise@12.7.1 | node 26.11.1 | Postgres 14 (local) | db.tx(t) | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | pg-promise@12.7.1 | node 26.11.1 | Postgres 14 (local) | db.tx(t) | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| pg-promise@12.7.1 | node 26.11.1 | Postgres 14 (local) | db.tx(t) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| pg-promise@12.7.1 | node 26.11.1 | Postgres 14 (local) | db.tx(t) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | pg-promise@12.7.1 | node 26.11.1 | Postgres 14 (local) | db.tx(t) | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | pg-promise@12.7.1 | node 26.11.1 | Postgres 14 (local) | db.tx(t) | S2a many: 3 rows | pass |  |
 | pg-promise@12.7.1 | node 26.11.1 | Postgres 14 (local) | db.tx(t) | S2b one: the row | pass |  |
@@ -988,6 +1068,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | pg-promise@12.7.1 | node 26.11.1 | Postgres 14 (local) | t.tx(t2) (savepoint) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | pg-promise@12.7.1 | node 26.11.1 | Postgres 14 (local) | t.tx(t2) (savepoint) | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | pg-promise@12.7.1 | node 26.11.1 | Postgres 14 (local) | t.tx(t2) (savepoint) | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| pg-promise@12.7.1 | node 26.11.1 | Postgres 14 (local) | t.tx(t2) (savepoint) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| pg-promise@12.7.1 | node 26.11.1 | Postgres 14 (local) | t.tx(t2) (savepoint) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | pg-promise@12.7.1 | node 26.11.1 | Postgres 14 (local) | t.tx(t2) (savepoint) | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | pg-promise@12.7.1 | node 26.11.1 | Postgres 14 (local) | t.tx(t2) (savepoint) | S2a many: 3 rows | pass |  |
 | pg-promise@12.7.1 | node 26.11.1 | Postgres 14 (local) | t.tx(t2) (savepoint) | S2b one: the row | pass |  |
@@ -1013,6 +1095,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | Bun.sql (postgres)@1.4.3 | bun 1.4.3 | Postgres 14 (local) | sql | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | Bun.sql (postgres)@1.4.3 | bun 1.4.3 | Postgres 14 (local) | sql | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | Bun.sql (postgres)@1.4.3 | bun 1.4.3 | Postgres 14 (local) | sql | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| Bun.sql (postgres)@1.4.3 | bun 1.4.3 | Postgres 14 (local) | sql | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| Bun.sql (postgres)@1.4.3 | bun 1.4.3 | Postgres 14 (local) | sql | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | Bun.sql (postgres)@1.4.3 | bun 1.4.3 | Postgres 14 (local) | sql | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | Bun.sql (postgres)@1.4.3 | bun 1.4.3 | Postgres 14 (local) | sql | S2a many: 3 rows | pass |  |
 | Bun.sql (postgres)@1.4.3 | bun 1.4.3 | Postgres 14 (local) | sql | S2b one: the row | pass |  |
@@ -1033,6 +1117,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | Bun.sql (postgres)@1.4.3 | bun 1.4.3 | Postgres 14 (local) | sql.begin(tx) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | Bun.sql (postgres)@1.4.3 | bun 1.4.3 | Postgres 14 (local) | sql.begin(tx) | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | Bun.sql (postgres)@1.4.3 | bun 1.4.3 | Postgres 14 (local) | sql.begin(tx) | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| Bun.sql (postgres)@1.4.3 | bun 1.4.3 | Postgres 14 (local) | sql.begin(tx) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| Bun.sql (postgres)@1.4.3 | bun 1.4.3 | Postgres 14 (local) | sql.begin(tx) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | Bun.sql (postgres)@1.4.3 | bun 1.4.3 | Postgres 14 (local) | sql.begin(tx) | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | Bun.sql (postgres)@1.4.3 | bun 1.4.3 | Postgres 14 (local) | sql.begin(tx) | S2a many: 3 rows | pass |  |
 | Bun.sql (postgres)@1.4.3 | bun 1.4.3 | Postgres 14 (local) | sql.begin(tx) | S2b one: the row | pass |  |
@@ -1058,6 +1144,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | Bun.sql (postgres)@1.4.3 | bun 1.4.3 | Postgres 14 (local) | tx.savepoint(sp) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | Bun.sql (postgres)@1.4.3 | bun 1.4.3 | Postgres 14 (local) | tx.savepoint(sp) | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | Bun.sql (postgres)@1.4.3 | bun 1.4.3 | Postgres 14 (local) | tx.savepoint(sp) | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| Bun.sql (postgres)@1.4.3 | bun 1.4.3 | Postgres 14 (local) | tx.savepoint(sp) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| Bun.sql (postgres)@1.4.3 | bun 1.4.3 | Postgres 14 (local) | tx.savepoint(sp) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | Bun.sql (postgres)@1.4.3 | bun 1.4.3 | Postgres 14 (local) | tx.savepoint(sp) | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | Bun.sql (postgres)@1.4.3 | bun 1.4.3 | Postgres 14 (local) | tx.savepoint(sp) | S2a many: 3 rows | pass |  |
 | Bun.sql (postgres)@1.4.3 | bun 1.4.3 | Postgres 14 (local) | tx.savepoint(sp) | S2b one: the row | pass |  |
@@ -1083,6 +1171,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | Bun.sql (postgres)@1.4.3 | bun 1.4.3 | Postgres 14 (local) | sql.reserve() | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
 | Bun.sql (postgres)@1.4.3 | bun 1.4.3 | Postgres 14 (local) | sql.reserve() | S1d array params: = any(:ids) over an int and a text array | pass |  |
 | Bun.sql (postgres)@1.4.3 | bun 1.4.3 | Postgres 14 (local) | sql.reserve() | S1e JSON params: an array bound to :a::jsonb is stored as that JSON array | pass |  |
+| Bun.sql (postgres)@1.4.3 | bun 1.4.3 | Postgres 14 (local) | sql.reserve() | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| Bun.sql (postgres)@1.4.3 | bun 1.4.3 | Postgres 14 (local) | sql.reserve() | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | Bun.sql (postgres)@1.4.3 | bun 1.4.3 | Postgres 14 (local) | sql.reserve() | S1f array params: bool[], timestamptz[] and bytea[] | pass |  |
 | Bun.sql (postgres)@1.4.3 | bun 1.4.3 | Postgres 14 (local) | sql.reserve() | S2a many: 3 rows | pass |  |
 | Bun.sql (postgres)@1.4.3 | bun 1.4.3 | Postgres 14 (local) | sql.reserve() | S2b one: the row | pass |  |
@@ -1106,6 +1196,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | promise Pool | S1a params: int, text, bool, null | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | promise Pool | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | promise Pool | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | promise Pool | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | promise Pool | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | promise Pool | S2a many: 3 rows | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | promise Pool | S2b one: the row | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | promise Pool | S2c maybeOne: zero rows gives null | pass |  |
@@ -1122,6 +1214,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | promise Connection | S1a params: int, text, bool, null | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | promise Connection | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | promise Connection | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | promise Connection | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | promise Connection | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | promise Connection | S2a many: 3 rows | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | promise Connection | S2b one: the row | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | promise Connection | S2c maybeOne: zero rows gives null | pass |  |
@@ -1138,6 +1232,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | promise PoolConnection (getConnection()) | S1a params: int, text, bool, null | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | promise PoolConnection (getConnection()) | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | promise PoolConnection (getConnection()) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | promise PoolConnection (getConnection()) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | promise PoolConnection (getConnection()) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | promise PoolConnection (getConnection()) | S2a many: 3 rows | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | promise PoolConnection (getConnection()) | S2b one: the row | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | promise PoolConnection (getConnection()) | S2c maybeOne: zero rows gives null | pass |  |
@@ -1154,6 +1250,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | promise PoolConnection in beginTransaction() | S1a params: int, text, bool, null | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | promise PoolConnection in beginTransaction() | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | promise PoolConnection in beginTransaction() | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | promise PoolConnection in beginTransaction() | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | promise PoolConnection in beginTransaction() | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | promise PoolConnection in beginTransaction() | S2a many: 3 rows | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | promise PoolConnection in beginTransaction() | S2b one: the row | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | promise PoolConnection in beginTransaction() | S2c maybeOne: zero rows gives null | pass |  |
@@ -1175,6 +1273,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | callback Pool (no .promise()) | S1a params: int, text, bool, null | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | callback Pool (no .promise()) | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | callback Pool (no .promise()) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | callback Pool (no .promise()) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | callback Pool (no .promise()) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | callback Pool (no .promise()) | S2a many: 3 rows | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | callback Pool (no .promise()) | S2b one: the row | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | callback Pool (no .promise()) | S2c maybeOne: zero rows gives null | pass |  |
@@ -1191,6 +1291,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | callback Connection (no .promise()) | S1a params: int, text, bool, null | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | callback Connection (no .promise()) | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | callback Connection (no .promise()) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | callback Connection (no .promise()) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | callback Connection (no .promise()) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | callback Connection (no .promise()) | S2a many: 3 rows | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | callback Connection (no .promise()) | S2b one: the row | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | callback Connection (no .promise()) | S2c maybeOne: zero rows gives null | pass |  |
@@ -1207,6 +1309,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | callback PoolConnection (no .promise()) | S1a params: int, text, bool, null | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | callback PoolConnection (no .promise()) | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | callback PoolConnection (no .promise()) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | callback PoolConnection (no .promise()) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | callback PoolConnection (no .promise()) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | callback PoolConnection (no .promise()) | S2a many: 3 rows | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | callback PoolConnection (no .promise()) | S2b one: the row | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.4 | callback PoolConnection (no .promise()) | S2c maybeOne: zero rows gives null | pass |  |
@@ -1223,6 +1327,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | promise Pool | S1a params: int, text, bool, null | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | promise Pool | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | promise Pool | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | promise Pool | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | promise Pool | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | promise Pool | S2a many: 3 rows | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | promise Pool | S2b one: the row | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | promise Pool | S2c maybeOne: zero rows gives null | pass |  |
@@ -1239,6 +1345,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | promise Connection | S1a params: int, text, bool, null | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | promise Connection | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | promise Connection | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | promise Connection | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | promise Connection | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | promise Connection | S2a many: 3 rows | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | promise Connection | S2b one: the row | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | promise Connection | S2c maybeOne: zero rows gives null | pass |  |
@@ -1255,6 +1363,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | promise PoolConnection (getConnection()) | S1a params: int, text, bool, null | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | promise PoolConnection (getConnection()) | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | promise PoolConnection (getConnection()) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | promise PoolConnection (getConnection()) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | promise PoolConnection (getConnection()) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | promise PoolConnection (getConnection()) | S2a many: 3 rows | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | promise PoolConnection (getConnection()) | S2b one: the row | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | promise PoolConnection (getConnection()) | S2c maybeOne: zero rows gives null | pass |  |
@@ -1271,6 +1381,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | promise PoolConnection in beginTransaction() | S1a params: int, text, bool, null | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | promise PoolConnection in beginTransaction() | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | promise PoolConnection in beginTransaction() | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | promise PoolConnection in beginTransaction() | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | promise PoolConnection in beginTransaction() | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | promise PoolConnection in beginTransaction() | S2a many: 3 rows | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | promise PoolConnection in beginTransaction() | S2b one: the row | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | promise PoolConnection in beginTransaction() | S2c maybeOne: zero rows gives null | pass |  |
@@ -1292,6 +1404,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | callback Pool (no .promise()) | S1a params: int, text, bool, null | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | callback Pool (no .promise()) | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | callback Pool (no .promise()) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | callback Pool (no .promise()) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | callback Pool (no .promise()) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | callback Pool (no .promise()) | S2a many: 3 rows | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | callback Pool (no .promise()) | S2b one: the row | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | callback Pool (no .promise()) | S2c maybeOne: zero rows gives null | pass |  |
@@ -1308,6 +1422,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | callback Connection (no .promise()) | S1a params: int, text, bool, null | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | callback Connection (no .promise()) | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | callback Connection (no .promise()) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | callback Connection (no .promise()) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | callback Connection (no .promise()) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | callback Connection (no .promise()) | S2a many: 3 rows | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | callback Connection (no .promise()) | S2b one: the row | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | callback Connection (no .promise()) | S2c maybeOne: zero rows gives null | pass |  |
@@ -1324,6 +1440,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | callback PoolConnection (no .promise()) | S1a params: int, text, bool, null | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | callback PoolConnection (no .promise()) | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | callback PoolConnection (no .promise()) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | callback PoolConnection (no .promise()) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | callback PoolConnection (no .promise()) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | callback PoolConnection (no .promise()) | S2a many: 3 rows | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | callback PoolConnection (no .promise()) | S2b one: the row | pass |  |
 | mysql2@3.24.5 | node 26.11.1 | MySQL 8.0 | callback PoolConnection (no .promise()) | S2c maybeOne: zero rows gives null | pass |  |
@@ -1340,6 +1458,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | promise Pool | S1a params: int, text, bool, null | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | promise Pool | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | promise Pool | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | promise Pool | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | promise Pool | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | promise Pool | S2a many: 3 rows | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | promise Pool | S2b one: the row | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | promise Pool | S2c maybeOne: zero rows gives null | pass |  |
@@ -1356,6 +1476,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | promise Connection | S1a params: int, text, bool, null | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | promise Connection | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | promise Connection | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | promise Connection | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | promise Connection | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | promise Connection | S2a many: 3 rows | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | promise Connection | S2b one: the row | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | promise Connection | S2c maybeOne: zero rows gives null | pass |  |
@@ -1372,6 +1494,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | promise PoolConnection (getConnection()) | S1a params: int, text, bool, null | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | promise PoolConnection (getConnection()) | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | promise PoolConnection (getConnection()) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | promise PoolConnection (getConnection()) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | promise PoolConnection (getConnection()) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | promise PoolConnection (getConnection()) | S2a many: 3 rows | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | promise PoolConnection (getConnection()) | S2b one: the row | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | promise PoolConnection (getConnection()) | S2c maybeOne: zero rows gives null | pass |  |
@@ -1388,6 +1512,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | promise PoolConnection in beginTransaction() | S1a params: int, text, bool, null | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | promise PoolConnection in beginTransaction() | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | promise PoolConnection in beginTransaction() | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | promise PoolConnection in beginTransaction() | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | promise PoolConnection in beginTransaction() | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | promise PoolConnection in beginTransaction() | S2a many: 3 rows | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | promise PoolConnection in beginTransaction() | S2b one: the row | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | promise PoolConnection in beginTransaction() | S2c maybeOne: zero rows gives null | pass |  |
@@ -1409,6 +1535,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | callback Pool (no .promise()) | S1a params: int, text, bool, null | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | callback Pool (no .promise()) | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | callback Pool (no .promise()) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | callback Pool (no .promise()) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | callback Pool (no .promise()) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | callback Pool (no .promise()) | S2a many: 3 rows | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | callback Pool (no .promise()) | S2b one: the row | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | callback Pool (no .promise()) | S2c maybeOne: zero rows gives null | pass |  |
@@ -1425,6 +1553,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | callback Connection (no .promise()) | S1a params: int, text, bool, null | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | callback Connection (no .promise()) | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | callback Connection (no .promise()) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | callback Connection (no .promise()) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | callback Connection (no .promise()) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | callback Connection (no .promise()) | S2a many: 3 rows | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | callback Connection (no .promise()) | S2b one: the row | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | callback Connection (no .promise()) | S2c maybeOne: zero rows gives null | pass |  |
@@ -1441,6 +1571,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | callback PoolConnection (no .promise()) | S1a params: int, text, bool, null | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | callback PoolConnection (no .promise()) | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | callback PoolConnection (no .promise()) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | callback PoolConnection (no .promise()) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | callback PoolConnection (no .promise()) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | callback PoolConnection (no .promise()) | S2a many: 3 rows | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | callback PoolConnection (no .promise()) | S2b one: the row | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.4 | callback PoolConnection (no .promise()) | S2c maybeOne: zero rows gives null | pass |  |
@@ -1457,6 +1589,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | promise Pool | S1a params: int, text, bool, null | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | promise Pool | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | promise Pool | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | promise Pool | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | promise Pool | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | promise Pool | S2a many: 3 rows | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | promise Pool | S2b one: the row | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | promise Pool | S2c maybeOne: zero rows gives null | pass |  |
@@ -1473,6 +1607,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | promise Connection | S1a params: int, text, bool, null | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | promise Connection | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | promise Connection | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | promise Connection | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | promise Connection | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | promise Connection | S2a many: 3 rows | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | promise Connection | S2b one: the row | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | promise Connection | S2c maybeOne: zero rows gives null | pass |  |
@@ -1489,6 +1625,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | promise PoolConnection (getConnection()) | S1a params: int, text, bool, null | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | promise PoolConnection (getConnection()) | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | promise PoolConnection (getConnection()) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | promise PoolConnection (getConnection()) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | promise PoolConnection (getConnection()) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | promise PoolConnection (getConnection()) | S2a many: 3 rows | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | promise PoolConnection (getConnection()) | S2b one: the row | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | promise PoolConnection (getConnection()) | S2c maybeOne: zero rows gives null | pass |  |
@@ -1505,6 +1643,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | promise PoolConnection in beginTransaction() | S1a params: int, text, bool, null | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | promise PoolConnection in beginTransaction() | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | promise PoolConnection in beginTransaction() | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | promise PoolConnection in beginTransaction() | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | promise PoolConnection in beginTransaction() | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | promise PoolConnection in beginTransaction() | S2a many: 3 rows | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | promise PoolConnection in beginTransaction() | S2b one: the row | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | promise PoolConnection in beginTransaction() | S2c maybeOne: zero rows gives null | pass |  |
@@ -1526,6 +1666,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | callback Pool (no .promise()) | S1a params: int, text, bool, null | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | callback Pool (no .promise()) | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | callback Pool (no .promise()) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | callback Pool (no .promise()) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | callback Pool (no .promise()) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | callback Pool (no .promise()) | S2a many: 3 rows | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | callback Pool (no .promise()) | S2b one: the row | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | callback Pool (no .promise()) | S2c maybeOne: zero rows gives null | pass |  |
@@ -1542,6 +1684,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | callback Connection (no .promise()) | S1a params: int, text, bool, null | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | callback Connection (no .promise()) | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | callback Connection (no .promise()) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | callback Connection (no .promise()) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | callback Connection (no .promise()) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | callback Connection (no .promise()) | S2a many: 3 rows | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | callback Connection (no .promise()) | S2b one: the row | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | callback Connection (no .promise()) | S2c maybeOne: zero rows gives null | pass |  |
@@ -1558,6 +1702,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | callback PoolConnection (no .promise()) | S1a params: int, text, bool, null | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | callback PoolConnection (no .promise()) | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | callback PoolConnection (no .promise()) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | callback PoolConnection (no .promise()) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | callback PoolConnection (no .promise()) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | callback PoolConnection (no .promise()) | S2a many: 3 rows | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | callback PoolConnection (no .promise()) | S2b one: the row | pass |  |
 | mysql2@3.15.3 | node 26.11.1 | MySQL 8.0 | callback PoolConnection (no .promise()) | S2c maybeOne: zero rows gives null | pass |  |
@@ -1574,6 +1720,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | promise Pool | S1a params: int, text, bool, null | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | promise Pool | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | promise Pool | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | promise Pool | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | promise Pool | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | promise Pool | S2a many: 3 rows | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | promise Pool | S2b one: the row | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | promise Pool | S2c maybeOne: zero rows gives null | pass |  |
@@ -1590,6 +1738,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | promise Connection | S1a params: int, text, bool, null | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | promise Connection | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | promise Connection | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | promise Connection | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | promise Connection | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | promise Connection | S2a many: 3 rows | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | promise Connection | S2b one: the row | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | promise Connection | S2c maybeOne: zero rows gives null | pass |  |
@@ -1606,6 +1756,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | promise PoolConnection (getConnection()) | S1a params: int, text, bool, null | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | promise PoolConnection (getConnection()) | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | promise PoolConnection (getConnection()) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | promise PoolConnection (getConnection()) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | promise PoolConnection (getConnection()) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | promise PoolConnection (getConnection()) | S2a many: 3 rows | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | promise PoolConnection (getConnection()) | S2b one: the row | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | promise PoolConnection (getConnection()) | S2c maybeOne: zero rows gives null | pass |  |
@@ -1622,6 +1774,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | promise PoolConnection in beginTransaction() | S1a params: int, text, bool, null | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | promise PoolConnection in beginTransaction() | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | promise PoolConnection in beginTransaction() | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | promise PoolConnection in beginTransaction() | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | promise PoolConnection in beginTransaction() | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | promise PoolConnection in beginTransaction() | S2a many: 3 rows | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | promise PoolConnection in beginTransaction() | S2b one: the row | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | promise PoolConnection in beginTransaction() | S2c maybeOne: zero rows gives null | pass |  |
@@ -1643,6 +1797,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | callback Pool (no .promise()) | S1a params: int, text, bool, null | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | callback Pool (no .promise()) | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | callback Pool (no .promise()) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | callback Pool (no .promise()) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | callback Pool (no .promise()) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | callback Pool (no .promise()) | S2a many: 3 rows | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | callback Pool (no .promise()) | S2b one: the row | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | callback Pool (no .promise()) | S2c maybeOne: zero rows gives null | pass |  |
@@ -1659,6 +1815,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | callback Connection (no .promise()) | S1a params: int, text, bool, null | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | callback Connection (no .promise()) | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | callback Connection (no .promise()) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | callback Connection (no .promise()) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | callback Connection (no .promise()) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | callback Connection (no .promise()) | S2a many: 3 rows | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | callback Connection (no .promise()) | S2b one: the row | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | callback Connection (no .promise()) | S2c maybeOne: zero rows gives null | pass |  |
@@ -1675,6 +1833,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | callback PoolConnection (no .promise()) | S1a params: int, text, bool, null | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | callback PoolConnection (no .promise()) | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | callback PoolConnection (no .promise()) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | callback PoolConnection (no .promise()) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | callback PoolConnection (no .promise()) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | callback PoolConnection (no .promise()) | S2a many: 3 rows | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | callback PoolConnection (no .promise()) | S2b one: the row | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.4 | callback PoolConnection (no .promise()) | S2c maybeOne: zero rows gives null | pass |  |
@@ -1691,6 +1851,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | promise Pool | S1a params: int, text, bool, null | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | promise Pool | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | promise Pool | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | promise Pool | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | promise Pool | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | promise Pool | S2a many: 3 rows | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | promise Pool | S2b one: the row | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | promise Pool | S2c maybeOne: zero rows gives null | pass |  |
@@ -1707,6 +1869,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | promise Connection | S1a params: int, text, bool, null | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | promise Connection | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | promise Connection | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | promise Connection | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | promise Connection | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | promise Connection | S2a many: 3 rows | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | promise Connection | S2b one: the row | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | promise Connection | S2c maybeOne: zero rows gives null | pass |  |
@@ -1723,6 +1887,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | promise PoolConnection (getConnection()) | S1a params: int, text, bool, null | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | promise PoolConnection (getConnection()) | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | promise PoolConnection (getConnection()) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | promise PoolConnection (getConnection()) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | promise PoolConnection (getConnection()) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | promise PoolConnection (getConnection()) | S2a many: 3 rows | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | promise PoolConnection (getConnection()) | S2b one: the row | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | promise PoolConnection (getConnection()) | S2c maybeOne: zero rows gives null | pass |  |
@@ -1739,6 +1905,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | promise PoolConnection in beginTransaction() | S1a params: int, text, bool, null | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | promise PoolConnection in beginTransaction() | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | promise PoolConnection in beginTransaction() | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | promise PoolConnection in beginTransaction() | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | promise PoolConnection in beginTransaction() | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | promise PoolConnection in beginTransaction() | S2a many: 3 rows | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | promise PoolConnection in beginTransaction() | S2b one: the row | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | promise PoolConnection in beginTransaction() | S2c maybeOne: zero rows gives null | pass |  |
@@ -1760,6 +1928,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | callback Pool (no .promise()) | S1a params: int, text, bool, null | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | callback Pool (no .promise()) | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | callback Pool (no .promise()) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | callback Pool (no .promise()) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | callback Pool (no .promise()) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | callback Pool (no .promise()) | S2a many: 3 rows | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | callback Pool (no .promise()) | S2b one: the row | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | callback Pool (no .promise()) | S2c maybeOne: zero rows gives null | pass |  |
@@ -1776,6 +1946,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | callback Connection (no .promise()) | S1a params: int, text, bool, null | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | callback Connection (no .promise()) | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | callback Connection (no .promise()) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | callback Connection (no .promise()) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | callback Connection (no .promise()) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | callback Connection (no .promise()) | S2a many: 3 rows | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | callback Connection (no .promise()) | S2b one: the row | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | callback Connection (no .promise()) | S2c maybeOne: zero rows gives null | pass |  |
@@ -1792,6 +1964,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | callback PoolConnection (no .promise()) | S1a params: int, text, bool, null | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | callback PoolConnection (no .promise()) | S1b omitted param (undefined) binds NULL | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | callback PoolConnection (no .promise()) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | callback PoolConnection (no .promise()) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | callback PoolConnection (no .promise()) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | callback PoolConnection (no .promise()) | S2a many: 3 rows | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | callback PoolConnection (no .promise()) | S2b one: the row | pass |  |
 | mysql2@2.3.3 | node 26.11.1 | MySQL 8.0 | callback PoolConnection (no .promise()) | S2c maybeOne: zero rows gives null | pass |  |
@@ -1808,6 +1982,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | Pool | S1a params: int, text, bool, null | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | Pool | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | Pool | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | Pool | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | Pool | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | Pool | S2a many: 3 rows | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | Pool | S2b one: the row | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | Pool | S2c maybeOne: zero rows gives null | pass |  |
@@ -1817,13 +1993,15 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | Pool | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | Pool | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | Pool | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | Pool | S6a syntax error rejects with the driver's error | pass | we: (conn:178, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | Pool | S6b unique violation rejects with the driver's error | pass | we: (conn:175, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | Pool | S6a syntax error rejects with the driver's error | pass | we: (conn:223, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | Pool | S6b unique violation rejects with the driver's error | pass | we: (conn:224, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | Pool | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | Connection | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | Connection | S1a params: int, text, bool, null | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | Connection | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | Connection | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | Connection | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | Connection | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | Connection | S2a many: 3 rows | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | Connection | S2b one: the row | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | Connection | S2c maybeOne: zero rows gives null | pass |  |
@@ -1833,13 +2011,15 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | Connection | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | Connection | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | Connection | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | Connection | S6a syntax error rejects with the driver's error | pass | we: (conn:181, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | Connection | S6b unique violation rejects with the driver's error | pass | we: (conn:181, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | Connection | S6a syntax error rejects with the driver's error | pass | we: (conn:226, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | Connection | S6b unique violation rejects with the driver's error | pass | we: (conn:226, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | Connection | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S1a params: int, text, bool, null | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S2a many: 3 rows | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S2b one: the row | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S2c maybeOne: zero rows gives null | pass |  |
@@ -1849,13 +2029,15 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S6a syntax error rejects with the driver's error | pass | we: (conn:171, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S6b unique violation rejects with the driver's error | pass | we: (conn:178, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S6a syntax error rejects with the driver's error | pass | we: (conn:225, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S6b unique violation rejects with the driver's error | pass | we: (conn:222, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S1a params: int, text, bool, null | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S2a many: 3 rows | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S2b one: the row | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S2c maybeOne: zero rows gives null | pass |  |
@@ -1865,18 +2047,20 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S6a syntax error rejects with the driver's error | pass | we: (conn:176, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S6b unique violation rejects with the driver's error | pass | we: (conn:166, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S6a syntax error rejects with the driver's error | pass | we: (conn:214, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S6b unique violation rejects with the driver's error | pass | we: (conn:211, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S7a tx: write then commit is visible | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S7b tx: write then rollback is not visible | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S7c tx: savepoint rollback keeps the outer write | pass |  |
-| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S7d tx: a failing statement rolls the transaction back | pass | we: (conn:179, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S7d tx: a failing statement rolls the transaction back | pass | we: (conn:224, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S7n tx: a write without parameters, then commit, is visible | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S1a params: int, text, bool, null | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S2a many: 3 rows | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S2b one: the row | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S2c maybeOne: zero rows gives null | pass |  |
@@ -1886,13 +2070,15 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S6a syntax error rejects with the driver's error | pass | we: (conn:182, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S6b unique violation rejects with the driver's error | pass | we: (conn:182, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S6a syntax error rejects with the driver's error | pass | we: (conn:227, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S6b unique violation rejects with the driver's error | pass | we: (conn:227, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S1a params: int, text, bool, null | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S2a many: 3 rows | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S2b one: the row | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S2c maybeOne: zero rows gives null | pass |  |
@@ -1902,13 +2088,15 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S6a syntax error rejects with the driver's error | pass | we: (conn:167, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S6b unique violation rejects with the driver's error | pass | we: (conn:168, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S6a syntax error rejects with the driver's error | pass | we: (conn:215, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S6b unique violation rejects with the driver's error | pass | we: (conn:217, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S1a params: int, text, bool, null | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S2a many: 3 rows | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S2b one: the row | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S2c maybeOne: zero rows gives null | pass |  |
@@ -1918,18 +2106,20 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S6a syntax error rejects with the driver's error | pass | we: (conn:172, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S6b unique violation rejects with the driver's error | pass | we: (conn:168, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S6a syntax error rejects with the driver's error | pass | we: (conn:215, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S6b unique violation rejects with the driver's error | pass | we: (conn:217, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S7a tx: write then commit is visible | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S7b tx: write then rollback is not visible | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S7c tx: savepoint rollback keeps the outer write | pass |  |
-| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S7d tx: a failing statement rolls the transaction back | pass | we: (conn:172, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S7d tx: a failing statement rolls the transaction back | pass | we: (conn:215, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S7n tx: a write without parameters, then commit, is visible | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | Pool | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | Pool | S1a params: int, text, bool, null | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | Pool | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | Pool | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | Pool | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | Pool | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | Pool | S2a many: 3 rows | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | Pool | S2b one: the row | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | Pool | S2c maybeOne: zero rows gives null | pass |  |
@@ -1939,13 +2129,15 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | Pool | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | Pool | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | Pool | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | Pool | S6a syntax error rejects with the driver's error | pass | we: (conn:664, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | Pool | S6b unique violation rejects with the driver's error | pass | we: (conn:673, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | Pool | S6a syntax error rejects with the driver's error | pass | we: (conn:884, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | Pool | S6b unique violation rejects with the driver's error | pass | we: (conn:874, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | Pool | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | Connection | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | Connection | S1a params: int, text, bool, null | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | Connection | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | Connection | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | Connection | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | Connection | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | Connection | S2a many: 3 rows | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | Connection | S2b one: the row | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | Connection | S2c maybeOne: zero rows gives null | pass |  |
@@ -1955,13 +2147,15 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | Connection | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | Connection | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | Connection | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | Connection | S6a syntax error rejects with the driver's error | pass | we: (conn:678, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | Connection | S6b unique violation rejects with the driver's error | pass | we: (conn:678, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | Connection | S6a syntax error rejects with the driver's error | pass | we: (conn:887, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | Connection | S6b unique violation rejects with the driver's error | pass | we: (conn:887, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | Connection | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S1a params: int, text, bool, null | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S2a many: 3 rows | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S2b one: the row | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S2c maybeOne: zero rows gives null | pass |  |
@@ -1971,13 +2165,15 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S6a syntax error rejects with the driver's error | pass | we: (conn:676, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S6b unique violation rejects with the driver's error | pass | we: (conn:664, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S6a syntax error rejects with the driver's error | pass | we: (conn:883, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S6b unique violation rejects with the driver's error | pass | we: (conn:877, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S1a params: int, text, bool, null | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S2a many: 3 rows | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S2b one: the row | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S2c maybeOne: zero rows gives null | pass |  |
@@ -1987,18 +2183,20 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S6a syntax error rejects with the driver's error | pass | we: (conn:672, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S6b unique violation rejects with the driver's error | pass | we: (conn:675, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S6a syntax error rejects with the driver's error | pass | we: (conn:879, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S6b unique violation rejects with the driver's error | pass | we: (conn:882, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S7a tx: write then commit is visible | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S7b tx: write then rollback is not visible | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S7c tx: savepoint rollback keeps the outer write | pass |  |
-| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S7d tx: a failing statement rolls the transaction back | pass | we: (conn:670, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S7d tx: a failing statement rolls the transaction back | pass | we: (conn:885, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S7n tx: a write without parameters, then commit, is visible | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S1a params: int, text, bool, null | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S2a many: 3 rows | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S2b one: the row | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S2c maybeOne: zero rows gives null | pass |  |
@@ -2008,13 +2206,15 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S6a syntax error rejects with the driver's error | pass | we: (conn:679, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S6b unique violation rejects with the driver's error | pass | we: (conn:679, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S6a syntax error rejects with the driver's error | pass | we: (conn:888, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S6b unique violation rejects with the driver's error | pass | we: (conn:888, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S1a params: int, text, bool, null | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S2a many: 3 rows | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S2b one: the row | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S2c maybeOne: zero rows gives null | pass |  |
@@ -2024,13 +2224,15 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S6a syntax error rejects with the driver's error | pass | we: (conn:663, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S6b unique violation rejects with the driver's error | pass | we: (conn:665, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S6a syntax error rejects with the driver's error | pass | we: (conn:876, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S6b unique violation rejects with the driver's error | pass | we: (conn:878, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S1a params: int, text, bool, null | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S2a many: 3 rows | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S2b one: the row | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S2c maybeOne: zero rows gives null | pass |  |
@@ -2040,18 +2242,20 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S6a syntax error rejects with the driver's error | pass | we: (conn:667, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S6b unique violation rejects with the driver's error | pass | we: (conn:671, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S6a syntax error rejects with the driver's error | pass | we: (conn:878, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S6b unique violation rejects with the driver's error | pass | we: (conn:873, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S7a tx: write then commit is visible | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S7b tx: write then rollback is not visible | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S7c tx: savepoint rollback keeps the outer write | pass |  |
-| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S7d tx: a failing statement rolls the transaction back | pass | we: (conn:667, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S7d tx: a failing statement rolls the transaction back | pass | we: (conn:878, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S7n tx: a write without parameters, then commit, is visible | pass |  |
 | mariadb@3.5.4 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | Pool | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | Pool | S1a params: int, text, bool, null | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | Pool | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | Pool | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | Pool | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | Pool | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | Pool | S2a many: 3 rows | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | Pool | S2b one: the row | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | Pool | S2c maybeOne: zero rows gives null | pass |  |
@@ -2061,13 +2265,15 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | Pool | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | Pool | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | Pool | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | Pool | S6a syntax error rejects with the driver's error | pass | SqlError: (conn:183, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | Pool | S6b unique violation rejects with the driver's error | pass | SqlError: (conn:185, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | Pool | S6a syntax error rejects with the driver's error | pass | SqlError: (conn:240, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | Pool | S6b unique violation rejects with the driver's error | pass | SqlError: (conn:233, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | Pool | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | Connection | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | Connection | S1a params: int, text, bool, null | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | Connection | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | Connection | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | Connection | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | Connection | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | Connection | S2a many: 3 rows | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | Connection | S2b one: the row | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | Connection | S2c maybeOne: zero rows gives null | pass |  |
@@ -2077,13 +2283,15 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | Connection | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | Connection | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | Connection | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | Connection | S6a syntax error rejects with the driver's error | pass | SqlError: (conn:198, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | Connection | S6b unique violation rejects with the driver's error | pass | SqlError: (conn:198, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | Connection | S6a syntax error rejects with the driver's error | pass | SqlError: (conn:243, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | Connection | S6b unique violation rejects with the driver's error | pass | SqlError: (conn:243, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | Connection | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S1a params: int, text, bool, null | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S2a many: 3 rows | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S2b one: the row | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S2c maybeOne: zero rows gives null | pass |  |
@@ -2093,13 +2301,15 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S6a syntax error rejects with the driver's error | pass | SqlError: (conn:193, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S6b unique violation rejects with the driver's error | pass | SqlError: (conn:197, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S6a syntax error rejects with the driver's error | pass | SqlError: (conn:242, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S6b unique violation rejects with the driver's error | pass | SqlError: (conn:238, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S1a params: int, text, bool, null | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S2a many: 3 rows | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S2b one: the row | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S2c maybeOne: zero rows gives null | pass |  |
@@ -2109,18 +2319,20 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S6a syntax error rejects with the driver's error | pass | SqlError: (conn:194, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S6b unique violation rejects with the driver's error | pass | SqlError: (conn:192, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S6a syntax error rejects with the driver's error | pass | SqlError: (conn:241, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S6b unique violation rejects with the driver's error | pass | SqlError: (conn:231, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S7a tx: write then commit is visible | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S7b tx: write then rollback is not visible | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S7c tx: savepoint rollback keeps the outer write | pass |  |
-| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S7d tx: a failing statement rolls the transaction back | pass | SqlError: (conn:185, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S7d tx: a failing statement rolls the transaction back | pass | SqlError: (conn:235, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S7n tx: a write without parameters, then commit, is visible | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S1a params: int, text, bool, null | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S2a many: 3 rows | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S2b one: the row | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S2c maybeOne: zero rows gives null | pass |  |
@@ -2130,13 +2342,15 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S6a syntax error rejects with the driver's error | pass | SqlError: (conn:199, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S6b unique violation rejects with the driver's error | pass | SqlError: (conn:199, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S6a syntax error rejects with the driver's error | pass | SqlError: (conn:244, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S6b unique violation rejects with the driver's error | pass | SqlError: (conn:244, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S1a params: int, text, bool, null | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S2a many: 3 rows | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S2b one: the row | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S2c maybeOne: zero rows gives null | pass |  |
@@ -2146,13 +2360,15 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S6a syntax error rejects with the driver's error | pass | SqlError: (conn:184, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S6b unique violation rejects with the driver's error | pass | SqlError: (conn:186, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S6a syntax error rejects with the driver's error | pass | SqlError: (conn:232, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S6b unique violation rejects with the driver's error | pass | SqlError: (conn:234, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S1a params: int, text, bool, null | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S2a many: 3 rows | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S2b one: the row | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S2c maybeOne: zero rows gives null | pass |  |
@@ -2162,18 +2378,20 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S6a syntax error rejects with the driver's error | pass | SqlError: (conn:191, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S6b unique violation rejects with the driver's error | pass | SqlError: (conn:184, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S6a syntax error rejects with the driver's error | pass | SqlError: (conn:232, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S6b unique violation rejects with the driver's error | pass | SqlError: (conn:236, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S7a tx: write then commit is visible | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S7b tx: write then rollback is not visible | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S7c tx: savepoint rollback keeps the outer write | pass |  |
-| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S7d tx: a failing statement rolls the transaction back | pass | SqlError: (conn:191, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S7d tx: a failing statement rolls the transaction back | pass | SqlError: (conn:232, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S7n tx: a write without parameters, then commit, is visible | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | Pool | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | Pool | S1a params: int, text, bool, null | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | Pool | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | Pool | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | Pool | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | Pool | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | Pool | S2a many: 3 rows | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | Pool | S2b one: the row | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | Pool | S2c maybeOne: zero rows gives null | pass |  |
@@ -2183,13 +2401,15 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | Pool | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | Pool | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | Pool | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | Pool | S6a syntax error rejects with the driver's error | pass | SqlError: (conn:690, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | Pool | S6b unique violation rejects with the driver's error | pass | SqlError: (conn:683, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | Pool | S6a syntax error rejects with the driver's error | pass | SqlError: (conn:889, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | Pool | S6b unique violation rejects with the driver's error | pass | SqlError: (conn:900, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | Pool | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | Connection | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | Connection | S1a params: int, text, bool, null | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | Connection | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | Connection | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | Connection | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | Connection | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | Connection | S2a many: 3 rows | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | Connection | S2b one: the row | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | Connection | S2c maybeOne: zero rows gives null | pass |  |
@@ -2199,13 +2419,15 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | Connection | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | Connection | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | Connection | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | Connection | S6a syntax error rejects with the driver's error | pass | SqlError: (conn:695, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | Connection | S6b unique violation rejects with the driver's error | pass | SqlError: (conn:695, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | Connection | S6a syntax error rejects with the driver's error | pass | SqlError: (conn:904, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | Connection | S6b unique violation rejects with the driver's error | pass | SqlError: (conn:904, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | Connection | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S1a params: int, text, bool, null | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S2a many: 3 rows | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S2b one: the row | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S2c maybeOne: zero rows gives null | pass |  |
@@ -2215,13 +2437,15 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S6a syntax error rejects with the driver's error | pass | SqlError: (conn:691, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S6b unique violation rejects with the driver's error | pass | SqlError: (conn:689, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S6a syntax error rejects with the driver's error | pass | SqlError: (conn:889, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S6b unique violation rejects with the driver's error | pass | SqlError: (conn:891, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S1a params: int, text, bool, null | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S2a many: 3 rows | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S2b one: the row | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S2c maybeOne: zero rows gives null | pass |  |
@@ -2231,18 +2455,20 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S6a syntax error rejects with the driver's error | pass | SqlError: (conn:685, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S6b unique violation rejects with the driver's error | pass | SqlError: (conn:687, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S6a syntax error rejects with the driver's error | pass | SqlError: (conn:903, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S6b unique violation rejects with the driver's error | pass | SqlError: (conn:897, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S7a tx: write then commit is visible | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S7b tx: write then rollback is not visible | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S7c tx: savepoint rollback keeps the outer write | pass |  |
-| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S7d tx: a failing statement rolls the transaction back | pass | SqlError: (conn:683, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S7d tx: a failing statement rolls the transaction back | pass | SqlError: (conn:900, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S7n tx: a write without parameters, then commit, is visible | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S1a params: int, text, bool, null | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S2a many: 3 rows | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S2b one: the row | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S2c maybeOne: zero rows gives null | pass |  |
@@ -2252,13 +2478,15 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S6a syntax error rejects with the driver's error | pass | SqlError: (conn:696, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S6b unique violation rejects with the driver's error | pass | SqlError: (conn:696, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S6a syntax error rejects with the driver's error | pass | SqlError: (conn:905, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S6b unique violation rejects with the driver's error | pass | SqlError: (conn:905, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S1a params: int, text, bool, null | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S2a many: 3 rows | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S2b one: the row | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S2c maybeOne: zero rows gives null | pass |  |
@@ -2268,13 +2496,15 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S6a syntax error rejects with the driver's error | pass | SqlError: (conn:680, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S6b unique violation rejects with the driver's error | pass | SqlError: (conn:682, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S6a syntax error rejects with the driver's error | pass | SqlError: (conn:894, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S6b unique violation rejects with the driver's error | pass | SqlError: (conn:896, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S1a params: int, text, bool, null | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S2a many: 3 rows | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S2b one: the row | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S2c maybeOne: zero rows gives null | pass |  |
@@ -2284,18 +2514,20 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S6a syntax error rejects with the driver's error | pass | SqlError: (conn:686, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S6b unique violation rejects with the driver's error | pass | SqlError: (conn:684, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S6a syntax error rejects with the driver's error | pass | SqlError: (conn:896, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S6b unique violation rejects with the driver's error | pass | SqlError: (conn:898, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S7a tx: write then commit is visible | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S7b tx: write then rollback is not visible | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S7c tx: savepoint rollback keeps the outer write | pass |  |
-| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S7d tx: a failing statement rolls the transaction back | pass | SqlError: (conn:686, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S7d tx: a failing statement rolls the transaction back | pass | SqlError: (conn:896, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S7n tx: a write without parameters, then commit, is visible | pass |  |
 | mariadb@3.4.5 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | Pool | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | Pool | S1a params: int, text, bool, null | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | Pool | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | Pool | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | Pool | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | Pool | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | Pool | S2a many: 3 rows | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | Pool | S2b one: the row | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | Pool | S2c maybeOne: zero rows gives null | pass |  |
@@ -2305,13 +2537,15 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | Pool | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | Pool | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | Pool | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | Pool | S6a syntax error rejects with the driver's error | pass | SqlError: (conn=209, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | Pool | S6b unique violation rejects with the driver's error | pass | SqlError: (conn=212, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | Pool | S6a syntax error rejects with the driver's error | pass | SqlError: (conn=258, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | Pool | S6b unique violation rejects with the driver's error | pass | SqlError: (conn=255, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | Pool | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | Connection | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | Connection | S1a params: int, text, bool, null | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | Connection | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | Connection | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | Connection | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | Connection | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | Connection | S2a many: 3 rows | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | Connection | S2b one: the row | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | Connection | S2c maybeOne: zero rows gives null | pass |  |
@@ -2321,13 +2555,15 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | Connection | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | Connection | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | Connection | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | Connection | S6a syntax error rejects with the driver's error | pass | SqlError: (conn=215, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | Connection | S6b unique violation rejects with the driver's error | pass | SqlError: (conn=215, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | Connection | S6a syntax error rejects with the driver's error | pass | SqlError: (conn=260, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | Connection | S6b unique violation rejects with the driver's error | pass | SqlError: (conn=260, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | Connection | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S1a params: int, text, bool, null | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S2a many: 3 rows | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S2b one: the row | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S2c maybeOne: zero rows gives null | pass |  |
@@ -2337,13 +2573,15 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S6a syntax error rejects with the driver's error | pass | SqlError: (conn=202, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S6b unique violation rejects with the driver's error | pass | SqlError: (conn=214, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S6a syntax error rejects with the driver's error | pass | SqlError: (conn=259, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S6b unique violation rejects with the driver's error | pass | SqlError: (conn=256, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection (getConnection()) | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S1a params: int, text, bool, null | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S2a many: 3 rows | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S2b one: the row | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S2c maybeOne: zero rows gives null | pass |  |
@@ -2353,18 +2591,20 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S6a syntax error rejects with the driver's error | pass | SqlError: (conn=209, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S6b unique violation rejects with the driver's error | pass | SqlError: (conn=212, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S6a syntax error rejects with the driver's error | pass | SqlError: (conn=250, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S6b unique violation rejects with the driver's error | pass | SqlError: (conn=257, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S7a tx: write then commit is visible | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S7b tx: write then rollback is not visible | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S7c tx: savepoint rollback keeps the outer write | pass |  |
-| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S7d tx: a failing statement rolls the transaction back | pass | SqlError: (conn=206, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S7d tx: a failing statement rolls the transaction back | pass | SqlError: (conn=246, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S7n tx: a write without parameters, then commit, is visible | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | PoolConnection in beginTransaction() | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S1a params: int, text, bool, null | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S2a many: 3 rows | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S2b one: the row | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S2c maybeOne: zero rows gives null | pass |  |
@@ -2374,13 +2614,15 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S6a syntax error rejects with the driver's error | pass | SqlError: (conn=216, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S6b unique violation rejects with the driver's error | pass | SqlError: (conn=216, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S6a syntax error rejects with the driver's error | pass | SqlError: (conn=261, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S6b unique violation rejects with the driver's error | pass | SqlError: (conn=261, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback Connection (mariadb/callback) | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S1a params: int, text, bool, null | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S2a many: 3 rows | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S2b one: the row | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S2c maybeOne: zero rows gives null | pass |  |
@@ -2390,13 +2632,15 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S6a syntax error rejects with the driver's error | pass | SqlError: (conn=201, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S6b unique violation rejects with the driver's error | pass | SqlError: (conn=203, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S6a syntax error rejects with the driver's error | pass | SqlError: (conn=249, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S6b unique violation rejects with the driver's error | pass | SqlError: (conn=251, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback Pool (mariadb/callback) | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S1a params: int, text, bool, null | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S2a many: 3 rows | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S2b one: the row | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S2c maybeOne: zero rows gives null | pass |  |
@@ -2406,18 +2650,20 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S6a syntax error rejects with the driver's error | pass | SqlError: (conn=203, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S6b unique violation rejects with the driver's error | pass | SqlError: (conn=201, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S6a syntax error rejects with the driver's error | pass | SqlError: (conn=245, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S6b unique violation rejects with the driver's error | pass | SqlError: (conn=249, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S7a tx: write then commit is visible | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S7b tx: write then rollback is not visible | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S7c tx: savepoint rollback keeps the outer write | pass |  |
-| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S7d tx: a failing statement rolls the transaction back | pass | SqlError: (conn=203, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S7d tx: a failing statement rolls the transaction back | pass | SqlError: (conn=245, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S7n tx: a write without parameters, then commit, is visible | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MariaDB 11 | callback PoolConnection in beginTransaction() (mariadb/callback) | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | Pool | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | Pool | S1a params: int, text, bool, null | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | Pool | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | Pool | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | Pool | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | Pool | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | Pool | S2a many: 3 rows | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | Pool | S2b one: the row | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | Pool | S2c maybeOne: zero rows gives null | pass |  |
@@ -2427,13 +2673,15 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | Pool | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | Pool | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | Pool | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | Pool | S6a syntax error rejects with the driver's error | pass | SqlError: (conn=699, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | Pool | S6b unique violation rejects with the driver's error | pass | SqlError: (conn=701, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | Pool | S6a syntax error rejects with the driver's error | pass | SqlError: (conn=917, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | Pool | S6b unique violation rejects with the driver's error | pass | SqlError: (conn=921, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | Pool | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | Connection | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | Connection | S1a params: int, text, bool, null | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | Connection | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | Connection | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | Connection | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | Connection | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | Connection | S2a many: 3 rows | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | Connection | S2b one: the row | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | Connection | S2c maybeOne: zero rows gives null | pass |  |
@@ -2443,13 +2691,15 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | Connection | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | Connection | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | Connection | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | Connection | S6a syntax error rejects with the driver's error | pass | SqlError: (conn=707, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | Connection | S6b unique violation rejects with the driver's error | pass | SqlError: (conn=707, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | Connection | S6a syntax error rejects with the driver's error | pass | SqlError: (conn=926, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | Connection | S6b unique violation rejects with the driver's error | pass | SqlError: (conn=926, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | Connection | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S1a params: int, text, bool, null | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S2a many: 3 rows | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S2b one: the row | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S2c maybeOne: zero rows gives null | pass |  |
@@ -2459,13 +2709,15 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S6a syntax error rejects with the driver's error | pass | SqlError: (conn=710, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S6b unique violation rejects with the driver's error | pass | SqlError: (conn=703, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S6a syntax error rejects with the driver's error | pass | SqlError: (conn=930, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S6b unique violation rejects with the driver's error | pass | SqlError: (conn=919, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection (getConnection()) | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S1a params: int, text, bool, null | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S2a many: 3 rows | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S2b one: the row | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S2c maybeOne: zero rows gives null | pass |  |
@@ -2475,18 +2727,20 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S6a syntax error rejects with the driver's error | pass | SqlError: (conn=708, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S6b unique violation rejects with the driver's error | pass | SqlError: (conn=705, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S6a syntax error rejects with the driver's error | pass | SqlError: (conn=917, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S6b unique violation rejects with the driver's error | pass | SqlError: (conn=929, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S7a tx: write then commit is visible | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S7b tx: write then rollback is not visible | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S7c tx: savepoint rollback keeps the outer write | pass |  |
-| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S7d tx: a failing statement rolls the transaction back | pass | SqlError: (conn=699, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S7d tx: a failing statement rolls the transaction back | pass | SqlError: (conn=928, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S7n tx: a write without parameters, then commit, is visible | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | PoolConnection in beginTransaction() | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S1a params: int, text, bool, null | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S2a many: 3 rows | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S2b one: the row | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S2c maybeOne: zero rows gives null | pass |  |
@@ -2496,13 +2750,15 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S6a syntax error rejects with the driver's error | pass | SqlError: (conn=723, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S6b unique violation rejects with the driver's error | pass | SqlError: (conn=723, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S6a syntax error rejects with the driver's error | pass | SqlError: (conn=932, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S6b unique violation rejects with the driver's error | pass | SqlError: (conn=932, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback Connection (mariadb/callback) | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S1a params: int, text, bool, null | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S2a many: 3 rows | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S2b one: the row | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S2c maybeOne: zero rows gives null | pass |  |
@@ -2512,13 +2768,15 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S6a syntax error rejects with the driver's error | pass | SqlError: (conn=698, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S6b unique violation rejects with the driver's error | pass | SqlError: (conn=700, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S6a syntax error rejects with the driver's error | pass | SqlError: (conn=920, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S6b unique violation rejects with the driver's error | pass | SqlError: (conn=922, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback Pool (mariadb/callback) | S8 20 concurrent queries resolve with the right rows | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called query(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S1a params: int, text, bool, null | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S1b omitted param (undefined) binds NULL | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S2a many: 3 rows | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S2b one: the row | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S2c maybeOne: zero rows gives null | pass |  |
@@ -2528,18 +2786,20 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S3n write without parameters (none), then a separate read | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S5a repeated :id (runtime lexer) | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S5b repeated :id (mapper text/order) | pass |  |
-| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S6a syntax error rejects with the driver's error | pass | SqlError: (conn=700, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
-| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S6b unique violation rejects with the driver's error | pass | SqlError: (conn=702, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S6a syntax error rejects with the driver's error | pass | SqlError: (conn=922, no: 1064, SQLState: 42000) You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec 1' at line 1 sql: selec 1 - parameters:[] [code=ER_PARSE_ERROR errno=1064 sqlState=42000] |
+| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S6b unique violation rejects with the driver's error | pass | SqlError: (conn=924, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S7a tx: write then commit is visible | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S7b tx: write then rollback is not visible | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S7c tx: savepoint rollback keeps the outer write | pass |  |
-| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S7d tx: a failing statement rolls the transaction back | pass | SqlError: (conn=700, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
+| mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S7d tx: a failing statement rolls the transaction back | pass | SqlError: (conn=922, no: 1062, SQLState: 23000) Duplicate entry 'taken' for key 'uniq.PRIMARY' sql: insert into driver_matrix.uniq (k) values (?) - parameters:['taken'] [code=ER_DUP_ENTRY errno=1062 sqlState=23000] |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S7n tx: a write without parameters, then commit, is visible | pass |  |
 | mariadb@2.5.6 | node 26.11.1 | MySQL 8.4 | callback PoolConnection in beginTransaction() (mariadb/callback) | S8 20 concurrent queries resolve with the right rows | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.4 | sql | S0 run() returns a promise on every client; runSync() returns the value on a sync client and is refused elsewhere | pass | reylo called unsafe(); run returned a promise and rejected on a failing statement; runSync refused the client before calling it |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.4 | sql | S1a params: int, text, bool, null | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.4 | sql | S1b omitted param (undefined) binds NULL | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.4 | sql | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.4 | sql | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.4 | sql | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.4 | sql | S2a many: 3 rows | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.4 | sql | S2b one: the row | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.4 | sql | S2c maybeOne: zero rows gives null | pass |  |
@@ -2556,6 +2816,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.4 | sql.begin(tx) | S1a params: int, text, bool, null | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.4 | sql.begin(tx) | S1b omitted param (undefined) binds NULL | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.4 | sql.begin(tx) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.4 | sql.begin(tx) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.4 | sql.begin(tx) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.4 | sql.begin(tx) | S2a many: 3 rows | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.4 | sql.begin(tx) | S2b one: the row | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.4 | sql.begin(tx) | S2c maybeOne: zero rows gives null | pass |  |
@@ -2577,6 +2839,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.4 | tx.savepoint(sp) | S1a params: int, text, bool, null | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.4 | tx.savepoint(sp) | S1b omitted param (undefined) binds NULL | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.4 | tx.savepoint(sp) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.4 | tx.savepoint(sp) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.4 | tx.savepoint(sp) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.4 | tx.savepoint(sp) | S2a many: 3 rows | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.4 | tx.savepoint(sp) | S2b one: the row | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.4 | tx.savepoint(sp) | S2c maybeOne: zero rows gives null | pass |  |
@@ -2598,6 +2862,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.4 | sql.reserve() | S1a params: int, text, bool, null | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.4 | sql.reserve() | S1b omitted param (undefined) binds NULL | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.4 | sql.reserve() | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.4 | sql.reserve() | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.4 | sql.reserve() | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.4 | sql.reserve() | S2a many: 3 rows | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.4 | sql.reserve() | S2b one: the row | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.4 | sql.reserve() | S2c maybeOne: zero rows gives null | pass |  |
@@ -2619,6 +2885,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.0 | sql | S1a params: int, text, bool, null | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.0 | sql | S1b omitted param (undefined) binds NULL | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.0 | sql | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.0 | sql | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.0 | sql | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.0 | sql | S2a many: 3 rows | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.0 | sql | S2b one: the row | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.0 | sql | S2c maybeOne: zero rows gives null | pass |  |
@@ -2635,6 +2903,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.0 | sql.begin(tx) | S1a params: int, text, bool, null | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.0 | sql.begin(tx) | S1b omitted param (undefined) binds NULL | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.0 | sql.begin(tx) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.0 | sql.begin(tx) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.0 | sql.begin(tx) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.0 | sql.begin(tx) | S2a many: 3 rows | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.0 | sql.begin(tx) | S2b one: the row | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.0 | sql.begin(tx) | S2c maybeOne: zero rows gives null | pass |  |
@@ -2656,6 +2926,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.0 | tx.savepoint(sp) | S1a params: int, text, bool, null | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.0 | tx.savepoint(sp) | S1b omitted param (undefined) binds NULL | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.0 | tx.savepoint(sp) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.0 | tx.savepoint(sp) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.0 | tx.savepoint(sp) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.0 | tx.savepoint(sp) | S2a many: 3 rows | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.0 | tx.savepoint(sp) | S2b one: the row | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.0 | tx.savepoint(sp) | S2c maybeOne: zero rows gives null | pass |  |
@@ -2677,6 +2949,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.0 | sql.reserve() | S1a params: int, text, bool, null | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.0 | sql.reserve() | S1b omitted param (undefined) binds NULL | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.0 | sql.reserve() | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.0 | sql.reserve() | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.0 | sql.reserve() | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.0 | sql.reserve() | S2a many: 3 rows | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.0 | sql.reserve() | S2b one: the row | pass |  |
 | Bun.sql (mysql)@1.4.3 | bun 1.4.3 | MySQL 8.0 | sql.reserve() | S2c maybeOne: zero rows gives null | pass |  |
@@ -2698,6 +2972,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | @planetscale/database@2.0.0 | node 26.11.1 | MySQL 8.4 via ps-http-sim | connect() Connection | S1a params: int, text, bool, null | UNSUPPORTED | reylo refused it: @planetscale/database 2.0 binds no parameters, so reylo cannot pass this statement's values to it; use its 1.x line, or mysql2 on PlanetScale's MySQL endpoint. (cause: Error: Query parameters are not supported: pass a complete SQL string and options to execute(query, options)) |
 | @planetscale/database@2.0.0 | node 26.11.1 | MySQL 8.4 via ps-http-sim | connect() Connection | S1b omitted param (undefined) binds NULL | UNSUPPORTED | reylo refused it: @planetscale/database 2.0 binds no parameters, so reylo cannot pass this statement's values to it; use its 1.x line, or mysql2 on PlanetScale's MySQL endpoint. (cause: Error: Query parameters are not supported: pass a complete SQL string and options to execute(query, options)) |
 | @planetscale/database@2.0.0 | node 26.11.1 | MySQL 8.4 via ps-http-sim | connect() Connection | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | UNSUPPORTED | reylo refused it: @planetscale/database 2.0 binds no parameters, so reylo cannot pass this statement's values to it; use its 1.x line, or mysql2 on PlanetScale's MySQL endpoint. (cause: Error: Query parameters are not supported: pass a complete SQL string and options to execute(query, options)) |
+| @planetscale/database@2.0.0 | node 26.11.1 | MySQL 8.4 via ps-http-sim | connect() Connection | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | UNSUPPORTED | reylo refused it: @planetscale/database 2.0 binds no parameters, so reylo cannot pass this statement's values to it; use its 1.x line, or mysql2 on PlanetScale's MySQL endpoint. (cause: Error: Query parameters are not supported: pass a complete SQL string and options to execute(query, options)) |
+| @planetscale/database@2.0.0 | node 26.11.1 | MySQL 8.4 via ps-http-sim | connect() Connection | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | UNSUPPORTED | reylo refused it: @planetscale/database 2.0 binds no parameters, so reylo cannot pass this statement's values to it; use its 1.x line, or mysql2 on PlanetScale's MySQL endpoint. (cause: Error: Query parameters are not supported: pass a complete SQL string and options to execute(query, options)) |
 | @planetscale/database@2.0.0 | node 26.11.1 | MySQL 8.4 via ps-http-sim | connect() Connection | S2a many: 3 rows | pass |  |
 | @planetscale/database@2.0.0 | node 26.11.1 | MySQL 8.4 via ps-http-sim | connect() Connection | S2b one: the row | UNSUPPORTED | reylo refused it: @planetscale/database 2.0 binds no parameters, so reylo cannot pass this statement's values to it; use its 1.x line, or mysql2 on PlanetScale's MySQL endpoint. (cause: Error: Query parameters are not supported: pass a complete SQL string and options to execute(query, options)) |
 | @planetscale/database@2.0.0 | node 26.11.1 | MySQL 8.4 via ps-http-sim | connect() Connection | S2c maybeOne: zero rows gives null | UNSUPPORTED | reylo refused it: @planetscale/database 2.0 binds no parameters, so reylo cannot pass this statement's values to it; use its 1.x line, or mysql2 on PlanetScale's MySQL endpoint. (cause: Error: Query parameters are not supported: pass a complete SQL string and options to execute(query, options)) |
@@ -2714,6 +2990,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | @planetscale/database@2.0.0 | node 26.11.1 | MySQL 8.4 via ps-http-sim | Client | S1a params: int, text, bool, null | UNSUPPORTED | reylo refused it: @planetscale/database 2.0 binds no parameters, so reylo cannot pass this statement's values to it; use its 1.x line, or mysql2 on PlanetScale's MySQL endpoint. (cause: Error: Query parameters are not supported: pass a complete SQL string and options to execute(query, options)) |
 | @planetscale/database@2.0.0 | node 26.11.1 | MySQL 8.4 via ps-http-sim | Client | S1b omitted param (undefined) binds NULL | UNSUPPORTED | reylo refused it: @planetscale/database 2.0 binds no parameters, so reylo cannot pass this statement's values to it; use its 1.x line, or mysql2 on PlanetScale's MySQL endpoint. (cause: Error: Query parameters are not supported: pass a complete SQL string and options to execute(query, options)) |
 | @planetscale/database@2.0.0 | node 26.11.1 | MySQL 8.4 via ps-http-sim | Client | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | UNSUPPORTED | reylo refused it: @planetscale/database 2.0 binds no parameters, so reylo cannot pass this statement's values to it; use its 1.x line, or mysql2 on PlanetScale's MySQL endpoint. (cause: Error: Query parameters are not supported: pass a complete SQL string and options to execute(query, options)) |
+| @planetscale/database@2.0.0 | node 26.11.1 | MySQL 8.4 via ps-http-sim | Client | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | UNSUPPORTED | reylo refused it: @planetscale/database 2.0 binds no parameters, so reylo cannot pass this statement's values to it; use its 1.x line, or mysql2 on PlanetScale's MySQL endpoint. (cause: Error: Query parameters are not supported: pass a complete SQL string and options to execute(query, options)) |
+| @planetscale/database@2.0.0 | node 26.11.1 | MySQL 8.4 via ps-http-sim | Client | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | UNSUPPORTED | reylo refused it: @planetscale/database 2.0 binds no parameters, so reylo cannot pass this statement's values to it; use its 1.x line, or mysql2 on PlanetScale's MySQL endpoint. (cause: Error: Query parameters are not supported: pass a complete SQL string and options to execute(query, options)) |
 | @planetscale/database@2.0.0 | node 26.11.1 | MySQL 8.4 via ps-http-sim | Client | S2a many: 3 rows | pass |  |
 | @planetscale/database@2.0.0 | node 26.11.1 | MySQL 8.4 via ps-http-sim | Client | S2b one: the row | UNSUPPORTED | reylo refused it: @planetscale/database 2.0 binds no parameters, so reylo cannot pass this statement's values to it; use its 1.x line, or mysql2 on PlanetScale's MySQL endpoint. (cause: Error: Query parameters are not supported: pass a complete SQL string and options to execute(query, options)) |
 | @planetscale/database@2.0.0 | node 26.11.1 | MySQL 8.4 via ps-http-sim | Client | S2c maybeOne: zero rows gives null | UNSUPPORTED | reylo refused it: @planetscale/database 2.0 binds no parameters, so reylo cannot pass this statement's values to it; use its 1.x line, or mysql2 on PlanetScale's MySQL endpoint. (cause: Error: Query parameters are not supported: pass a complete SQL string and options to execute(query, options)) |
@@ -2730,6 +3008,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | @planetscale/database@2.0.0 | node 26.11.1 | MySQL 8.4 via ps-http-sim | conn.transaction(tx) | S1a params: int, text, bool, null | UNSUPPORTED | reylo refused it: @planetscale/database 2.0 binds no parameters, so reylo cannot pass this statement's values to it; use its 1.x line, or mysql2 on PlanetScale's MySQL endpoint. (cause: Error: Query parameters are not supported: pass a complete SQL string and options to execute(query, options)) |
 | @planetscale/database@2.0.0 | node 26.11.1 | MySQL 8.4 via ps-http-sim | conn.transaction(tx) | S1b omitted param (undefined) binds NULL | UNSUPPORTED | reylo refused it: @planetscale/database 2.0 binds no parameters, so reylo cannot pass this statement's values to it; use its 1.x line, or mysql2 on PlanetScale's MySQL endpoint. (cause: Error: Query parameters are not supported: pass a complete SQL string and options to execute(query, options)) |
 | @planetscale/database@2.0.0 | node 26.11.1 | MySQL 8.4 via ps-http-sim | conn.transaction(tx) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | UNSUPPORTED | reylo refused it: @planetscale/database 2.0 binds no parameters, so reylo cannot pass this statement's values to it; use its 1.x line, or mysql2 on PlanetScale's MySQL endpoint. (cause: Error: Query parameters are not supported: pass a complete SQL string and options to execute(query, options)) |
+| @planetscale/database@2.0.0 | node 26.11.1 | MySQL 8.4 via ps-http-sim | conn.transaction(tx) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | UNSUPPORTED | reylo refused it: @planetscale/database 2.0 binds no parameters, so reylo cannot pass this statement's values to it; use its 1.x line, or mysql2 on PlanetScale's MySQL endpoint. (cause: Error: Query parameters are not supported: pass a complete SQL string and options to execute(query, options)) |
+| @planetscale/database@2.0.0 | node 26.11.1 | MySQL 8.4 via ps-http-sim | conn.transaction(tx) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | UNSUPPORTED | reylo refused it: @planetscale/database 2.0 binds no parameters, so reylo cannot pass this statement's values to it; use its 1.x line, or mysql2 on PlanetScale's MySQL endpoint. (cause: Error: Query parameters are not supported: pass a complete SQL string and options to execute(query, options)) |
 | @planetscale/database@2.0.0 | node 26.11.1 | MySQL 8.4 via ps-http-sim | conn.transaction(tx) | S2a many: 3 rows | pass |  |
 | @planetscale/database@2.0.0 | node 26.11.1 | MySQL 8.4 via ps-http-sim | conn.transaction(tx) | S2b one: the row | UNSUPPORTED | reylo refused it: @planetscale/database 2.0 binds no parameters, so reylo cannot pass this statement's values to it; use its 1.x line, or mysql2 on PlanetScale's MySQL endpoint. (cause: Error: Query parameters are not supported: pass a complete SQL string and options to execute(query, options)) |
 | @planetscale/database@2.0.0 | node 26.11.1 | MySQL 8.4 via ps-http-sim | conn.transaction(tx) | S2c maybeOne: zero rows gives null | UNSUPPORTED | reylo refused it: @planetscale/database 2.0 binds no parameters, so reylo cannot pass this statement's values to it; use its 1.x line, or mysql2 on PlanetScale's MySQL endpoint. (cause: Error: Query parameters are not supported: pass a complete SQL string and options to execute(query, options)) |
@@ -2751,6 +3031,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | @planetscale/database@1.20.2 | node 26.11.1 | MySQL 8.4 via ps-http-sim | connect() Connection | S1a params: int, text, bool, null | pass |  |
 | @planetscale/database@1.20.2 | node 26.11.1 | MySQL 8.4 via ps-http-sim | connect() Connection | S1b omitted param (undefined) binds NULL | pass |  |
 | @planetscale/database@1.20.2 | node 26.11.1 | MySQL 8.4 via ps-http-sim | connect() Connection | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| @planetscale/database@1.20.2 | node 26.11.1 | MySQL 8.4 via ps-http-sim | connect() Connection | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| @planetscale/database@1.20.2 | node 26.11.1 | MySQL 8.4 via ps-http-sim | connect() Connection | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | @planetscale/database@1.20.2 | node 26.11.1 | MySQL 8.4 via ps-http-sim | connect() Connection | S2a many: 3 rows | pass |  |
 | @planetscale/database@1.20.2 | node 26.11.1 | MySQL 8.4 via ps-http-sim | connect() Connection | S2b one: the row | pass |  |
 | @planetscale/database@1.20.2 | node 26.11.1 | MySQL 8.4 via ps-http-sim | connect() Connection | S2c maybeOne: zero rows gives null | pass |  |
@@ -2767,6 +3049,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | @planetscale/database@1.20.2 | node 26.11.1 | MySQL 8.4 via ps-http-sim | Client | S1a params: int, text, bool, null | pass |  |
 | @planetscale/database@1.20.2 | node 26.11.1 | MySQL 8.4 via ps-http-sim | Client | S1b omitted param (undefined) binds NULL | pass |  |
 | @planetscale/database@1.20.2 | node 26.11.1 | MySQL 8.4 via ps-http-sim | Client | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| @planetscale/database@1.20.2 | node 26.11.1 | MySQL 8.4 via ps-http-sim | Client | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| @planetscale/database@1.20.2 | node 26.11.1 | MySQL 8.4 via ps-http-sim | Client | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | @planetscale/database@1.20.2 | node 26.11.1 | MySQL 8.4 via ps-http-sim | Client | S2a many: 3 rows | pass |  |
 | @planetscale/database@1.20.2 | node 26.11.1 | MySQL 8.4 via ps-http-sim | Client | S2b one: the row | pass |  |
 | @planetscale/database@1.20.2 | node 26.11.1 | MySQL 8.4 via ps-http-sim | Client | S2c maybeOne: zero rows gives null | pass |  |
@@ -2783,6 +3067,8 @@ Deliberately broken clients (drivers/control.ts). Every row marked FAIL here is 
 | @planetscale/database@1.20.2 | node 26.11.1 | MySQL 8.4 via ps-http-sim | conn.transaction(tx) | S1a params: int, text, bool, null | pass |  |
 | @planetscale/database@1.20.2 | node 26.11.1 | MySQL 8.4 via ps-http-sim | conn.transaction(tx) | S1b omitted param (undefined) binds NULL | pass |  |
 | @planetscale/database@1.20.2 | node 26.11.1 | MySQL 8.4 via ps-http-sim | conn.transaction(tx) | S1c binary params: a plain Uint8Array and a view into a larger buffer bind as their bytes | pass |  |
+| @planetscale/database@1.20.2 | node 26.11.1 | MySQL 8.4 via ps-http-sim | conn.transaction(tx) | S1g JSON params: a string, a number, a boolean, JSON text, an object and arrays are stored as their JSON, null as NULL | pass |  |
+| @planetscale/database@1.20.2 | node 26.11.1 | MySQL 8.4 via ps-http-sim | conn.transaction(tx) | S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called | pass |  |
 | @planetscale/database@1.20.2 | node 26.11.1 | MySQL 8.4 via ps-http-sim | conn.transaction(tx) | S2a many: 3 rows | pass |  |
 | @planetscale/database@1.20.2 | node 26.11.1 | MySQL 8.4 via ps-http-sim | conn.transaction(tx) | S2b one: the row | pass |  |
 | @planetscale/database@1.20.2 | node 26.11.1 | MySQL 8.4 via ps-http-sim | conn.transaction(tx) | S2c maybeOne: zero rows gives null | pass |  |

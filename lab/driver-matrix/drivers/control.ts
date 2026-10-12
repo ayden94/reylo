@@ -62,7 +62,11 @@ if (a.case === "sqlite") {
     const corrupt = { query: (text: string, values?: unknown[]) => db.query(text, values?.map((v) => (typeof v === "number" ? v + 1 : v instanceof Uint8Array && !Buffer.isBuffer(v) ? JSON.stringify(v) : v))) };
     const unsafe = (bind: (v: unknown) => unknown) => ({ unsafe: async (text: string, values?: unknown[]) => (await db.query(text, values?.map(bind))).rows });
     const joined = unsafe((v) => (Array.isArray(v) ? v.join(",") : v));
-    const literal = unsafe((v) => (Array.isArray(v) ? arrayLiteral(v) : v));
+    // Reylo hands unsafe() a JSON parameter as an object whose toJSON() returns the value.
+    const literal = unsafe((v) => {
+      const x = v !== null && typeof v === "object" && !(v instanceof Date) && typeof (v as { toJSON?: unknown }).toJSON === "function" ? (v as { toJSON(): unknown }).toJSON() : v;
+      return Array.isArray(x) ? arrayLiteral(x) : v;
+    });
     const good = callbackTx((fn) => db.transaction(fn));
     const broken: TxOps = {
       commit: good.commit,

@@ -114,6 +114,20 @@ test("decimal, json and binary follow the driver's representation; parameters ta
   assert.equal(renderType(inner, false, "postgres", repr({ binary: "Buffer", decimal: "string" })), "{ b: string; n: number }");
 });
 
+test("a timestamptz parameter takes a Date or a string; a timestamp or a date, which has no zone, a string, under every representation", () => {
+  for (const repr of reprs) {
+    assert.equal(renderParamType(scalar("timestamptz"), "postgres", repr), "Date | string", JSON.stringify(repr));
+    assert.equal(renderParamType({ kind: "array", of: scalar("timestamptz") }, "postgres", repr), "(Date | string)[]");
+    for (const name of ["timestamp", "date"]) {
+      assert.equal(renderParamType(scalar(name), "postgres", repr), "string");
+      assert.equal(renderParamType(scalar(name), "mysql", repr), "string");
+      assert.equal(renderParamType({ kind: "array", of: scalar(name) }, "postgres", repr), "string[]");
+    }
+    // What MySQL answers by what is bound for a placeholder compared with a DATE and a DATETIME.
+    assert.equal(renderParamType(scalar("date|timestamp"), "mysql", repr), "string");
+  }
+});
+
 test("an array's elements are nullable only where the statement builds it from a value that may be NULL", () => {
   // `array_agg(u.email)` over a LEFT JOIN is `{NULL}` for a team with no users; a table's array
   // column, which the statement does not build, is `T[]` as the maintainer decided on 2026-10-03.

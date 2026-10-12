@@ -55,16 +55,61 @@ const typed: QueryModule<"postgres"> = {
 };
 const typedValues = { ids: [1, 3], name: "ada", data: [1, { a: "b" }] };
 
-test("postgres: every client gets an array for a SQL array parameter as its literal text; postgres.js and Bun.sql get an array for a JSON parameter as it is", async () => {
+test("postgres: every client gets an array for a SQL array parameter as its literal text; postgres.js and Bun.sql get a JSON parameter as an object they serialize to its JSON text", async () => {
   const seen: unknown[][] = [];
   const unsafe = async (_: string, values?: unknown[]) => (seen.push(values!), []);
   const bun = { unsafe, commitDistributed: async () => {} };
   await execute(bun, typed, typedValues);
   await execute({ unsafe }, typed, typedValues);
-  assert.deepEqual(seen, [
-    ['{"1","3"}', "ada", [1, { a: "b" }]],
-    ['{"1","3"}', "ada", [1, { a: "b" }]],
-  ]);
+  assert.equal(seen.length, 2);
+  for (const [ids, name, data] of seen) {
+    assert.deepEqual([ids, name], ['{"1","3"}', "ada"]);
+    // Not a string, which they would store as a JSON string, and not the array, whose type they would take from its first element.
+    assert.equal(typeof data, "object");
+    assert.ok(!Array.isArray(data));
+    assert.equal(JSON.stringify(data), '[1,{"a":"b"}]');
+  }
+});
+
+// Every kind of JSON value, null, and a jsonb[] parameter, whose elements are JSON values.
+const jsonQuery: QueryModule<"postgres"> = {
+  dialect: "postgres",
+  sql: "select :s::jsonb, :n::jsonb, :b::jsonb, :t::jsonb, :z::jsonb, :o::jsonb, :e::jsonb, :l::jsonb[]",
+  params: ["s", "n", "b", "t", "z", "o", "e", "l"],
+  inputs: { ...Object.fromEntries([..."snbtzoe"].map((k) => [k, { type: { kind: "json" as const } }])), l: { type: { kind: "array", of: { kind: "json" } } } },
+};
+const jsonValues = { s: "abc", n: 5, b: true, t: '{"a":1}', z: null, o: { d: new Date("2026-01-02T03:04:05Z") }, e: [], l: ["x", { a: 1 }, null, [true]] };
+const jsonTexts = ['"abc"', "5", "true", '"{\\"a\\":1}"', null, '{"d":"2026-01-02T03:04:05.000Z"}', "[]", '{"\\"x\\"","{\\"a\\":1}",NULL,"[true]"}'];
+
+test("postgres: a JSON parameter's value is a JavaScript value, which every driver gets as its JSON text, a string as a JSON string, null as NULL", async () => {
+  const seen: unknown[][] = [];
+  await execute({ query: async (_: string, values?: unknown[]) => (seen.push(values!), { rows: [] }) }, jsonQuery, jsonValues);
+  const pgp = { manyOrNone: async () => [], query: async (q: any): Promise<any> => (seen.push(q.values), []) };
+  await execute(pgp, jsonQuery, jsonValues);
+  await execute((_: string, values?: unknown[]) => (seen.push(values!), Promise.resolve([])), jsonQuery, jsonValues);
+  const unsafe = async (_: string, values?: unknown[]) => (seen.push(values!.map((v) => (v !== null && typeof v === "object" ? JSON.stringify(v) : v))), []);
+  const bun = { unsafe, commitDistributed: async () => {} };
+  await execute({ unsafe }, jsonQuery, jsonValues);
+  await execute(bun, jsonQuery, jsonValues);
+  assert.equal(seen.length, 5);
+  for (const values of seen) assert.deepEqual(values, jsonTexts);
+});
+
+test("mysql and sqlite: every driver gets a JSON parameter as its JSON text, and null as NULL", async () => {
+  const json = { type: { kind: "json" } } as const;
+  const mq: QueryModule<"mysql"> = { dialect: "mysql", sql: "select cast(:a as json), cast(:b as json), :name, cast(:a as json), cast(:z as json)", params: ["a", "b", "name", "z"], inputs: { a: json, b: json, z: json, name: { type: { kind: "scalar", name: "text" } } } };
+  const values = { a: [1, 2], b: "abc", name: "ada", z: null };
+  const expected = ["[1,2]", '"abc"', "ada", "[1,2]", null];
+  const seen: unknown[][] = [];
+  await execute({ execute: async (_: string, v?: unknown[]) => (seen.push(v!), [[], []] as [unknown, unknown]) }, mq, values);
+  await execute({ query: async (_: string, v: unknown) => (seen.push(v as unknown[]), []), batch: async () => [] }, mq, values);
+  await execute({ unsafe: async (_: string, v?: unknown[]) => (seen.push(v!), []), commitDistributed: async () => {} }, mq, values);
+  const lq: QueryModule<"sqlite"> = { ...mq, dialect: "sqlite", sql: "select json(:a) as a, json(:b) as b, :name as name, json(:a) as again, json(:z) as z" };
+  await execute({ execute: async (s: { args: unknown[] }) => (seen.push(s.args), { rows: [] }), executeMultiple: async () => {} }, lq, values);
+  assert.equal(seen.length, 4);
+  // node:sqlite would read an array as its named parameters.
+  assert.deepEqual((execute(new DatabaseSync(":memory:"), lq, values) as object[]).map((r) => ({ ...r })), [{ a: "[1,2]", b: '"abc"', name: "ada", again: "[1,2]", z: null }]);
+  for (const v of seen) assert.deepEqual(v, expected);
 });
 
 test("postgres: pg's family, PGlite and Neon, which write any array as an array literal, get an array for a JSON parameter as its JSON text", async () => {
@@ -91,6 +136,48 @@ test("a query without inputs, defined by hand or built before them, binds every 
   seen.length = 0;
   await execute({ unsafe }, hand, { ids: [2] });
   assert.deepEqual(seen, [['{"2"}']]);
+});
+
+test("a Date for a timestamp or date parameter, and a string without its zone for a timestamptz one, is refused before the statement runs", async () => {
+  const time = (name: string) => ({ type: { kind: "scalar" as const, name } });
+  const q: QueryModule<"postgres"> = {
+    dialect: "postgres",
+    sql: "select :at::timestamp, :day::date, :tz::timestamptz, :tzs::timestamptz[], :days::date[]",
+    params: ["at", "day", "tz", "tzs", "days"],
+    inputs: { at: time("timestamp"), day: time("date"), tz: time("timestamptz"), tzs: { type: { kind: "array", of: time("timestamptz").type } }, days: { type: { kind: "array", of: time("date").type } } },
+  };
+  const seen: unknown[][] = [];
+  const client = { query: async (_: string, values?: unknown[]) => (seen.push(values!), { rows: [] }) };
+  const ok = { at: "2026-10-12 19:06:48.282", day: "2026-10-12", tz: new Date(0), tzs: ["2026-10-12T19:06:48.282Z", "2026-10-12 19:06:48+09", "2026-10-12 19:06:48.5-07:30", "2026-10-12 19:06 America/Los_Angeles", "2026-10-12 19:06:48 UTC", "infinity", "-infinity", "0001-01-01 00:00:00+00 BC", null, new Date(0)], days: [["2026-10-12"]] };
+  await execute(client, q, ok);
+  assert.equal(seen.length, 1);
+  const refused = async (values: Record<string, unknown>, message: RegExp) => assert.rejects(Promise.resolve().then(() => execute(client, q, { ...ok, ...values })), (e: Error) => e instanceof TypeError && message.test(e.message));
+  await refused({ at: new Date() }, /^Parameter "at" is a timestamp without a time zone, so it takes the wall-clock text/);
+  await refused({ day: new Date() }, /^Parameter "day" is a date without a time zone/);
+  await refused({ days: [[new Date()]] }, /^Parameter "days" is a date/);
+  for (const tz of ["2026-10-12 19:06:48", "2026-10-12T19:06:48.282", "2026-10-12"]) await refused({ tz }, /^Parameter "tz" is a timestamptz, an instant, so a string for it names its zone/);
+  await refused({ tzs: ["2026-10-12T00:00:00Z", "2026-10-12 19:06"] }, /^Parameter "tzs" is a timestamptz/);
+  assert.equal(seen.length, 1);
+  // MySQL's DATETIME and TIMESTAMP are the engine's timestamp, and a placeholder compared with both is either.
+  const my: QueryModule<"mysql"> = { dialect: "mysql", sql: "select :at", params: ["at"], inputs: { at: time("date|timestamp") } };
+  await assert.rejects(Promise.resolve().then(() => execute({ execute: async () => [[], []] as [unknown, unknown] }, my, { at: new Date() })), /^TypeError: Parameter "at" is a timestamp without a time zone/);
+});
+
+test("postgres: postgres.js, which binds a date or time string through new Date(), gets one declared unknown; Bun.sql gets the string", async () => {
+  const time = (name: string) => ({ type: { kind: "scalar" as const, name } });
+  const q: QueryModule<"postgres"> = { dialect: "postgres", sql: "select :at::timestamp, :day::date, :tz::timestamptz, :d::timestamptz, :name::text", params: ["at", "day", "tz", "d", "name"], inputs: { at: time("timestamp"), day: time("date"), tz: time("timestamptz"), d: time("timestamptz"), name: time("text") } };
+  const values = { at: "2026-01-02 03:04:05.006", day: "infinity", tz: "2026-01-02 03:04:05 America/New_York", d: new Date(0), name: "ada" };
+  const seen: unknown[][] = [];
+  const unsafe = async (_: string, v?: unknown[]) => (seen.push(v!), []);
+  const typed = (value: unknown, type: number) => ({ value, type });
+  const postgresJs = { unsafe, typed };
+  await execute(postgresJs, q, values);
+  const bun = { unsafe, typed, commitDistributed: async () => {} };
+  await execute(bun, q, values);
+  assert.deepEqual(seen, [
+    [{ value: "2026-01-02 03:04:05.006", type: 705 }, { value: "infinity", type: 705 }, { value: "2026-01-02 03:04:05 America/New_York", type: 705 }, new Date(0), "ada"],
+    ["2026-01-02 03:04:05.006", "infinity", "2026-01-02 03:04:05 America/New_York", new Date(0), "ada"],
+  ]);
 });
 
 test("arrayLiteral writes a Postgres array literal as pg does: nesting, NULL, quotes, backslashes, binary, dates, the empty array", () => {

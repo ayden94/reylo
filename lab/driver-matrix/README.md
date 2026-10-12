@@ -46,8 +46,9 @@ Every scenario asserts its result. Each call also checks Reylo's return contract
 | S1d | Postgres only: `id = any(:ids) and name = any(:names)` over an int array and a text array whose last element holds a quote, a backslash, a space and braces |
 | S1e | Postgres only: an array bound to `:a::jsonb` (`[1, {"k": "say \"hi\""}, null]`) and `[]` to `:e::jsonb` are stored as those JSON arrays |
 | S1f | Postgres only: `bool[]`, `timestamptz[]` and `bytea[]` parameters |
+| S1g | Postgres and MySQL: a string with a quote, a number, a boolean, JSON text, an object, an array and `[]` bound to JSON parameters (`:s::jsonb`, `json_extract(:s, '$')`) are stored as their JSON, and null as NULL; the stored text is parsed, since each database spaces it its own way |
 
-S1d, S1e and S1f give each statement the `inputs` the loader writes from the analysis (each parameter's type), since Reylo converts an array by it and converts none for a query without it.
+S1d to S1g give each statement the `inputs` the loader writes from the analysis (each parameter's type), since Reylo converts an array by it and converts none for a query without it.
 | S2a–S2e | Three rows for `many`; the row for `one`; null for `maybeOne` on zero rows; Reylo's "Expected at most one row, got 2" on two; `with(client)(params)` |
 | S3 | An INSERT without RETURNING (cardinality `none`) resolves undefined; the row is read back through Reylo and counted through the driver |
 | S3n | The same with the values written into the SQL, so Reylo passes no parameters |
@@ -134,6 +135,23 @@ S1c to S1f are new, after the coordinator measured drivers that corrupt or refus
 | pg-promise 12.7.1, S1c (4784b29) | pass | pg-promise formats a plain `Uint8Array` as JSON when it writes the values into the text, but Reylo hands it a `{ text, values }` object, which pg binds |
 
 Reylo now gives mariadb a Buffer over the same memory and Neon's `neon()` before 1.0 a binary value as `\x` and its hex; and, by the parameter types the module carries as `inputs`, every Postgres client an array for a SQL array parameter as its array literal, written as pg writes one, and pg's family, PGlite and Neon an array for a JSON parameter as its JSON text, while postgres.js and Bun.sql get that one as it is (`src/execute.ts`). The run after the fix wrote [RESULTS.md](RESULTS.md): 46 jobs and 3230 rows, with 3183 pass, 2 fail (PlanetScale's simulator, as before), 42 unsupported (PlanetScale 2.0 refuses S1c as it refuses every statement with parameters) and 3 not run, and 24 of 87 control rows failing as designed. Every row that was in RESULTS.md before has the result it had; the control shapes are the only keys that changed.
+
+## Re-run (2026-10-12): JSON and date parameters
+
+S1g and S1h are new, after every driver was measured binding a JSON value and the maintainer decided that only a `timestamptz` parameter takes a `Date`. They ran in the same environment (Node 26.11.1 and 24.21.0, Bun 1.4.3, colima, a throwaway Postgres 18 through `DM_PG_URL`, the process in America/Los_Angeles), first against src/execute.ts at ab86ebc, where every row of both failed on every Postgres and MySQL job:
+
+| Rows | Result at ab86ebc | Diagnosis |
+| --- | --- | --- |
+| pg 8.23.0, pg-promise 12.7.1, PGlite 0.2 to 0.5 and Neon 0.9.5, 0.10.4 and 1.1.0, S1g | fail (every row) | pg passes a string through as raw JSON text, so `'say "hi"'` into `::jsonb` failed with "invalid input syntax for type json" |
+| postgres 3.4.9, S1g | fail (4 rows) | postgres.js declares a boolean by its JavaScript type: "cannot cast type boolean to jsonb" |
+| Bun.sql 1.4.3 on Postgres, S1g | fail (4 rows) | Bun.sql declares a number and a boolean by their JavaScript type: "cannot cast type integer to jsonb" |
+| mysql2 2.3.3, 3.15.3 and 3.24.5 and Bun.sql 1.4.3 on MySQL, S1g | fail (every row) | A string is bound as text, which `json_extract` refuses: "Invalid JSON text in argument 1" |
+| mariadb 2.5.6, 3.4.5 and 3.5.4, S1g, on MariaDB 11 and MySQL 8.4 | fail (42 rows) | mariadb expands an array into a list: a syntax error |
+| @planetscale/database 1.20.2, S1g | fail (3 rows) | "Cannot format query: empty arrays are not valid SQL values" |
+| Every Postgres and MySQL job, S1h | fail (every row) | Reylo passed a `Date` for a `date` parameter to the driver; on Bun.sql it failed with `time zone "gmt-0800" not recognized` |
+| postgres 3.4.9, S1h | fail (4 rows) | postgres.js reads a string for a date or time parameter through `new Date(x)`: the zone name failed with "Invalid time value", and `2026-01-02 03:04:05.006` into `timestamp` was stored at 11:04:05.006 |
+
+Reylo now binds a JSON parameter's value as its JSON text (to postgres.js and Bun.sql as an object whose `toJSON()` returns the value), refuses a `Date` for a `timestamp` or `date` parameter and a `timestamptz` string without its zone before the driver is called, and gives postgres.js a date or time string declared `unknown` (`sql.typed(value, 705)`). The run after the fix wrote [RESULTS.md](RESULTS.md): 46 jobs and 3510 rows, with 3457 pass, 2 fail (PlanetScale's simulator, as before), 48 unsupported (PlanetScale 2.0 refuses S1g and S1h as it refuses every statement with parameters) and 3 not run, and 27 of 93 control rows failing as designed: the `unsafe()` control without inputs fails S1g and S1h, and the one that writes every array as its literal fails S1g. Every row that was in RESULTS.md before has the result it had.
 
 `scripts/gates.sh` runs every job and `node compare.ts` after them, the container jobs when Docker or colima is there; `node runner.ts --only <id>` runs one job, and `node compare.ts` compares whatever `.out/` holds.
 
