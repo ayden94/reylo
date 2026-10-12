@@ -325,60 +325,109 @@ struct Level {
 }
 
 /// The parameters the statement tests for NULL (`?1 IS NULL`, `?1 IS NOT NULL`) or passes first to
-/// `coalesce` or `ifnull`: the caller means to pass NULL for them.
+/// `coalesce` or `ifnull`: the caller means to pass NULL for them. The test may be of the column of
+/// a WITH query or a subquery that selects the parameter (`with input as (select :p as p) … where
+/// input.p is null`), since each parameter appears once in a statement and a value tested and read
+/// again is selected once in a WITH.
 fn guarded_params(t: &Tree) -> HashSet<String> {
-    fn walk(n: &Node, out: &mut HashSet<String>) {
-        let variable = |x: Option<&Node>| x.filter(|x| x.op == "variable").and_then(|x| x.name.clone());
+    /// Every FROM item's subquery, a WITH query's too, by the item's cursor: SQLite numbers the
+    /// cursors of one statement apart.
+    fn subqueries<'a>(sel: &'a Sel, out: &mut HashMap<i64, &'a Sel>) {
+        for f in &sel.from {
+            if let Some(sub) = &f.subquery {
+                out.insert(f.cursor, sub);
+                subqueries(sub, out);
+            }
+        }
+        for n in sel.columns.iter().map(|c| &c.expr).chain(sel.where_.iter()).chain(sel.having.iter()) {
+            nested(n, out);
+        }
+        if let Some(prior) = &sel.prior {
+            subqueries(prior, out);
+        }
+    }
+    fn nested<'a>(n: &'a Node, out: &mut HashMap<i64, &'a Sel>) {
+        if let Some(sel) = &n.select {
+            subqueries(sel, out);
+        }
+        for child in n.left.iter().chain(n.right.iter()).map(|b| b.as_ref()).chain(n.list.iter()).chain(n.args.iter()) {
+            nested(child, out);
+        }
+    }
+    /// The parameter an operand is, under any casts, or that the column of a subquery selects. A
+    /// compound subquery's column is any of its arms', so it selects no one parameter.
+    fn variable(x: Option<&Node>, subs: &HashMap<i64, &Sel>, depth: usize) -> Option<String> {
+        let x = x?;
+        match x.op.as_str() {
+            "variable" => x.name.clone(),
+            "cast" => variable(x.left.as_deref(), subs, depth),
+            "column" if depth < 32 => {
+                let sel = subs.get(&x.cursor).filter(|sel| sel.prior.is_none() && sel.rows.is_empty())?;
+                variable(sel.columns.get(usize::try_from(x.index).ok()?).map(|c| &c.expr), subs, depth + 1)
+            }
+            _ => None,
+        }
+    }
+    fn walk(n: &Node, subs: &HashMap<i64, &Sel>, out: &mut HashSet<String>) {
         match n.op.as_str() {
             "isnull" | "notnull" | "is" | "is not" => {
-                out.extend(variable(n.left.as_deref()));
-                out.extend(variable(n.right.as_deref()));
+                out.extend(variable(n.left.as_deref(), subs, 0));
+                out.extend(variable(n.right.as_deref(), subs, 0));
             }
-            "function" if matches!(n.name.as_deref(), Some("coalesce" | "ifnull")) => out.extend(variable(n.args.first())),
+            "function" if matches!(n.name.as_deref(), Some("coalesce" | "ifnull")) => out.extend(variable(n.args.first(), subs, 0)),
             _ => {}
         }
         for child in n.left.iter().chain(n.right.iter()).map(|b| b.as_ref()).chain(n.list.iter()).chain(n.args.iter()) {
-            walk(child, out);
+            walk(child, subs, out);
         }
         if let Some(sel) = &n.select {
-            walk_select(sel, out);
+            walk_select(sel, subs, out);
         }
     }
-    fn walk_select(sel: &Sel, out: &mut HashSet<String>) {
+    fn walk_select(sel: &Sel, subs: &HashMap<i64, &Sel>, out: &mut HashSet<String>) {
         for n in sel.columns.iter().map(|c| &c.expr).chain(sel.rows.iter().flatten()) {
-            walk(n, out);
+            walk(n, subs, out);
         }
         for n in sel.where_.iter().chain(sel.having.iter()).chain(sel.group_by.iter()).chain(sel.order_by.iter()).chain(sel.limit.iter()).chain(sel.offset.iter()) {
-            walk(n, out);
+            walk(n, subs, out);
         }
         for f in &sel.from {
             if let Some(sub) = &f.subquery {
-                walk_select(sub, out);
+                walk_select(sub, subs, out);
             }
             for a in &f.args {
-                walk(a, out);
+                walk(a, subs, out);
             }
         }
         if let Some(prior) = &sel.prior {
-            walk_select(prior, out);
+            walk_select(prior, subs, out);
+        }
+    }
+    let mut subs = HashMap::new();
+    if let Some(sel) = &t.statement {
+        subqueries(sel, &mut subs);
+    }
+    if let Some(dml) = &t.dml {
+        for n in dml.values.iter().flatten().chain(dml.set.iter().map(|s| &s.expr)).chain(dml.where_.iter()) {
+            nested(n, &mut subs);
         }
     }
     let mut out = HashSet::new();
     if let Some(sel) = &t.statement {
-        walk_select(sel, &mut out);
+        walk_select(sel, &subs, &mut out);
     }
     if let Some(dml) = &t.dml {
         for n in dml.values.iter().flatten().chain(dml.set.iter().map(|s| &s.expr)).chain(dml.where_.iter()) {
-            walk(n, &mut out);
+            walk(n, &subs, &mut out);
         }
         if let Some(u) = &dml.upsert {
             for n in u.set.iter().map(|s| &s.expr).chain(u.where_.iter()) {
-                walk(n, &mut out);
+                walk(n, &subs, &mut out);
             }
         }
     }
     for c in t.returning.iter().flatten() {
-        walk(&c.expr, &mut out);
+        walk(&c.expr, &subs, &mut out);
     }
     out
 }
@@ -1674,7 +1723,18 @@ mod tests {
     fn the_postgres_nullability_rules_hold_on_sqlite() {
         let nullable_param = |sql: &str, name: &str| analysis(sql).params.iter().find(|p| p.name == name).is_some_and(|p| p.nullable);
         // A parameter the statement tests for NULL or coalesces takes NULL; any other is a value.
-        assert!(nullable_param("select id from users where (:p is null or score > :p)", "p"));
+        // Each parameter appears once, so a value tested and read again is selected once in a
+        // WITH, and the test of its column is the test of the parameter, however it is named.
+        assert!(nullable_param("with input as (select cast(:p as integer) as p) select id from users, input where (input.p is null or score > input.p)", "p"));
+        assert!(nullable_param("with input as (select :p as p) select id from users, input i where (p is null or score > i.p)", "p"));
+        assert!(nullable_param("select id from users, (select :p as p) s where s.p is null or score > s.p", "p"));
+        assert!(nullable_param("with input as (select :p as p) select id from users, input where score = coalesce(input.p, score)", "p"));
+        assert!(!nullable_param("with input as (select :p as p) select id from users, input where score > input.p", "p"));
+        assert!(!nullable_param("with input as (select :p as p union all select 1) select id from users, input where input.p is null", "p"));
+        assert!(nullable_param("select id from users where cast(:p as integer) is null", "p"));
+        let sql = "select id from users where (:p is null or score > :p)";
+        let repeated = analysis(sql);
+        assert_eq!(repeated.diagnostics.iter().map(|d| (d.code, d.start, d.length)).collect::<Vec<_>>(), [(3, sql.rfind(":p").unwrap(), 2)]);
         assert!(nullable_param("select coalesce(:s, 0) as x", "s"));
         assert!(!nullable_param("select id from users where score > :p", "p"));
         assert_eq!(col(&analysis("select upper(:s) as u"), "u"), ("text".into(), false));
@@ -2051,11 +2111,13 @@ mod tests {
         let want = [("a", "integer", false), ("b", "text", false), ("e", "text", true), ("c", "integer", false), ("d", "text", false), ("e2", "text", true), ("f", "integer", false), ("g", "text", false)];
         assert_eq!(got, want.map(|(n, t, null)| (n.to_string(), t.to_string(), null)));
         assert_eq!((a.cardinality.as_str(), a.cardinality_reason.as_deref()), ("many", Some("a VALUES list of 3 rows returns 3 rows")));
-        // A parameter written to a nullable column in one row and a NOT NULL one in another
-        // cannot be null, and neither can one a row does not write whole.
-        let a = analysis("insert into users (name, email) values ('a', :x), (:x, 'b'), ('c', lower(:y))");
-        assert_eq!(a.params.iter().map(|p| p.nullable).collect::<Vec<_>>(), [false, false]);
+        // A parameter a row does not write whole cannot be null. Each parameter appears once, so
+        // one cannot be written to a nullable column in one row and a NOT NULL one in another.
+        let a = analysis("insert into users (name, email) values ('a', :x), (:w, 'b'), ('c', lower(:y))");
+        assert_eq!(a.params.iter().map(|p| p.nullable).collect::<Vec<_>>(), [true, false, false]);
         assert_eq!(a.cardinality, "none");
+        let a = analysis("insert into users (name, email) values ('a', :x), (:x, 'b')");
+        assert_eq!(a.diagnostics.iter().map(|d| d.code).collect::<Vec<_>>(), [3]);
         // Without a column list the rows fill the columns in order; under a WITH too.
         let a = analysis("with w as (select 1) insert into posts values (:id, :u, :t, :b), (:id2, :u2, :t2, :b2)");
         assert_eq!(a.params.iter().map(|p| (scalar_name(&p.ty).unwrap_or("unknown"), p.nullable)).collect::<Vec<_>>(), [("integer", false), ("integer", false), ("text", false), ("text", true)].repeat(2));

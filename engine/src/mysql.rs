@@ -87,6 +87,10 @@ pub fn analyze_text(sql: &str, host: &Host) -> Lazy<Analysis> {
         let d = Diagnostic { message: "Named and positional parameters cannot be mixed in one statement.".into(), start: first.start, length: (first.end - first.start).max(1), code: 2 };
         return Some(crate::postgres::bare(sql, &lexed, Dialect::Mysql, vec![d]));
     }
+    let repeated = crate::postgres::repeated(sql, &lexed);
+    if !repeated.is_empty() {
+        return Some(crate::postgres::bare(sql, &lexed, Dialect::Mysql, repeated));
+    }
     analyze(sql, &lexed, text, host)
 }
 
@@ -1768,19 +1772,19 @@ mod tests {
         assert_eq!(types("select u.*, :n * 2 as c from users u", &[3, 253, 8], &[8]), "int4 text int8|float8|numeric");
         assert_eq!(types("select :n * 2 as c, u.* from users u", &[8, 3, 253], &[8]), "int8|float8|numeric int4 text");
         // `-5` is a BIGINT where the prepare typed `-?` a DOUBLE.
-        assert_eq!(types("select -:x as c, abs(:x) as d", &[5, 5], &[5, 5]), "float8|int8|numeric float8|int8|numeric");
+        assert_eq!(types("select -:x as c, abs(:y) as d", &[5, 5], &[5, 5]), "float8|int8|numeric float8|int8|numeric");
         // A string for a DECIMAL makes the product a DOUBLE where it is written into the text,
         // and is the value itself where nothing computes with it.
-        assert_eq!(types("select id * :rate as c, coalesce(:rate, price) as d, +:rate as e, round(:rate) as f from users", &[246, 246, 246, 246], &[246, 246, 246, 246]), "numeric|int8|float8 numeric|int8|float8|text numeric|int8|float8|text numeric|int8|float8");
-        assert_eq!(types("select length(:s) as c, year(:d) as d, app.pick(:s) as e", &[8, 8, 8], &[253, 10, 253]), "int8 int8 int8");
+        assert_eq!(types("select id * :rate as c, coalesce(:fallback, price) as d, +:plus as e, round(:rounded) as f from users", &[246, 246, 246, 246], &[246, 246, 246, 246]), "numeric|int8|float8 numeric|int8|float8|text numeric|int8|float8|text numeric|int8|float8");
+        assert_eq!(types("select length(:s) as c, year(:d) as d, app.pick(:t) as e", &[8, 8, 8], &[253, 10, 253]), "int8 int8 int8");
         // A comparison and a cast are their own types whatever the value is, and so is a column
         // beside the placeholder.
-        assert_eq!(types("select id = :n as c, cast(:n as signed) as d, id from users", &[8, 8, 3], &[8, 8]), "int8 int8 int4");
+        assert_eq!(types("select id = :n as c, cast(:m as signed) as d, id from users", &[8, 8, 3], &[8, 8]), "int8 int8 int4");
         // A column of a derived table or a WITH query carries what reached it.
         assert_eq!(types("select d.c from (select :n + 1 as c from users) d", &[8], &[8]), "int8|float8|numeric");
         assert_eq!(types("with d as (select :n + 1 as c) select sum(c) as c from d", &[246], &[8]), "numeric|int8|float8");
         assert_eq!(types("select (select max(:n + p.id) from posts p) as c from users", &[8], &[8]), "int8|float8|numeric");
-        assert_eq!(types("select id from users where id = :n union all select :n + 1", &[8], &[8, 8]), "int8|float8|numeric");
+        assert_eq!(types("select id from users where id = :n union all select :m + 1", &[8], &[8, 8]), "int8|float8|numeric");
         // A `Date` bound for a DATE makes the sum a DATETIME, and a string written into the text a string.
         assert_eq!(types("select :day + interval 1 day as c, addtime(:t, '1') as d", &[10, 11], &[10, 11]), "date|timestamp|time|text Unknown");
         assert_eq!(types("select created + interval :n day as c from users", &[10], &[8]), "date");

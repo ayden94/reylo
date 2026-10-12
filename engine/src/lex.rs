@@ -10,8 +10,11 @@
 //! so both stay text there, as `@` (an operator) does on Postgres. A parameter's name drops the
 //! prefix: `:id`, `@id` and `$id` are `id`, and `$2` and `?2` are both `2`. SQLite reads `:id` and
 //! `@id` as two parameters, so the named placeholders of one statement share one prefix. A bare `?` takes the number after the largest one so far, as SQLite numbers it, so `?, ?`
-//! is `1`, `2`. A name may be dotted (`:auth.user_id`): each `.segment` starts like a name, so
-//! `arr[1:2]` and `:t.*` end where they should. The engine rewrites placeholders to whatever the
+//! is `1`, `2`. Each parameter appears once in a statement, so that one place types it: a value
+//! needed twice is selected once in a `with` and read from there, and every later use of a name
+//! is an error at its place ([`repeated`]); a bare `?` is a parameter of its own. A name may be
+//! dotted (`:auth.user_id`): each `.segment` starts like a name, so `arr[1:2]` and `:t.*` end
+//! where they should. The engine rewrites placeholders to whatever the
 //! database binds by position (`$n` on Postgres, `?` on MySQL, `?n` for the SQLite prepare, where
 //! SQLite's own `:name` would end at the first dot) and keeps a map back to the author's text, so
 //! a server error at a rewritten position lands on the right characters of the `.sql` file.
@@ -490,6 +493,50 @@ fn foreign(sql: &str, i: usize, dialect: Dialect) -> LexError {
     LexError { message, offset: i }
 }
 
+/// One use of a parameter after its first, by byte offsets in the original text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Repeated {
+    pub message: String,
+    pub start: usize,
+    pub end: usize,
+}
+
+impl From<Repeated> for LexError {
+    fn from(r: Repeated) -> LexError {
+        LexError { message: r.message, offset: r.start }
+    }
+}
+
+/// Every use of a parameter after its first, each with the error that says so. Each parameter
+/// appears once in a statement (the maintainer's rule of 2026-10-11), so that one place types it:
+/// a value read twice is selected once in a `with` and read from there. The rule holds for every
+/// form a parameter is named by: `:name` (a dotted global such as `:auth.user_id` too), SQLite's
+/// `@name` and `$name`, and the positional `$n` and `?n`, whose name is the number, so `?1` after
+/// a bare `?` that took 1 repeats it. A bare `?` is a parameter of its own and never repeats.
+/// Reylo's analysis reports each one where it is written, and Reylo Framework's build fails on it.
+pub fn repeated(sql: &str, lexed: &Lexed) -> Vec<Repeated> {
+    let mut seen: Vec<&str> = Vec::new();
+    let mut out = Vec::new();
+    for p in &lexed.placeholders {
+        if !seen.contains(&p.name.as_str()) {
+            seen.push(&p.name);
+            continue;
+        }
+        let written = &sql[p.start..p.end];
+        // The name the example selects the value as: the last segment of a dotted name, and `pn`
+        // for a position.
+        let column = if is_positional(&p.name) { format!("p{}", p.name) } else { p.name.rsplit('.').next().unwrap_or(&p.name).to_string() };
+        out.push(Repeated {
+            message: format!(
+                "The parameter {written} appears more than once; use each parameter once, and select it in a with to read it twice, as in: with input as (select {written} as {column}) select … from input"
+            ),
+            start: p.start,
+            end: p.end,
+        });
+    }
+    out
+}
+
 /// Whether a parameter name is one the lexer minted for a positional placeholder: a number,
 /// where a named one starts with a letter or `_`.
 pub fn is_positional(name: &str) -> bool {
@@ -672,6 +719,41 @@ mod tests {
         let q = rewrite(sql, &l, Target::Question);
         assert_eq!(q.sql, "select * from t where id = ? and name = ? and id = ?");
         assert_eq!(q.order, ["id", "name", "id"]);
+    }
+
+    #[test]
+    fn each_parameter_once() {
+        let at = |sql: &str, d: Dialect| repeated(sql, &lex(sql, d).unwrap()).into_iter().map(|r| (r.start, r.end)).collect::<Vec<_>>();
+        // Every use after the first is an error at its place, in every form a dialect names.
+        let sql = "select id, name from users where name like :q or email like :q";
+        let r = repeated(sql, &lex(sql, Dialect::Postgres).unwrap());
+        assert_eq!(r.len(), 1);
+        assert_eq!(&sql[r[0].start..r[0].end], ":q");
+        assert_eq!(r[0].start, sql.rfind(":q").unwrap());
+        assert_eq!(
+            r[0].message,
+            "The parameter :q appears more than once; use each parameter once, and select it in a with to read it twice, as in: with input as (select :q as q) select … from input"
+        );
+        assert_eq!(at("select :a, :b, :a, :a, :b", Dialect::Postgres), [(15, 17), (19, 21), (23, 25)]);
+        assert_eq!(at("select $1, $2, $1", Dialect::Postgres), [(15, 17)]);
+        assert_eq!(at("select ?3, ?3", Dialect::Sqlite), [(11, 13)]);
+        assert_eq!(at("select @a, @a", Dialect::Sqlite), [(11, 13)]);
+        assert_eq!(at("select $a, $a", Dialect::Sqlite), [(11, 13)]);
+        assert_eq!(at("select :a, :a", Dialect::Mysql), [(11, 13)]);
+        // A bare `?` takes 1 here, so `?1` names the same parameter again.
+        assert_eq!(at("select ?, ?1", Dialect::Sqlite), [(10, 12)]);
+        // A dotted global is one name; the example selects it by its last segment, and a
+        // position by `p` and its number.
+        let sql = "select * from t where owner = :auth.user_id or author = :auth.user_id";
+        assert!(repeated(sql, &lex(sql, Dialect::Postgres).unwrap())[0].message.contains("with input as (select :auth.user_id as user_id)"));
+        let sql = "select $1::int + $1";
+        assert!(repeated(sql, &lex(sql, Dialect::Postgres).unwrap())[0].message.starts_with("The parameter $1 appears more than once;"));
+        assert!(repeated(sql, &lex(sql, Dialect::Postgres).unwrap())[0].message.contains("(select $1 as p1)"));
+        // A bare `?` never repeats; distinct names, text and casts are not uses.
+        assert!(at("select ?, ?, ?", Dialect::Mysql).is_empty());
+        assert!(at("select ?, ?", Dialect::Sqlite).is_empty());
+        assert!(at("select :a, :b, ':a', x::a -- :a", Dialect::Postgres).is_empty());
+        assert!(at("with input as (select :q::text as q) select 1 from t, input where a = input.q or b = input.q", Dialect::Postgres).is_empty());
     }
 
     #[test]

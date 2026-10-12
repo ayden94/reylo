@@ -109,6 +109,43 @@ test("the module a build step emits carries the analysis and reads nothing at ru
   }
 });
 
+test("a parameter written twice is an error at each later use, which the type check places and a build fails on; a with reads the value twice", async () => {
+  const { root, env } = project();
+  writeFileSync(join(root, ".env"), `DATABASE_URL=${env.DATABASE_URL}\n`);
+  const twice = "select id, name from users\nwhere name like :q or name = :q or id = :q";
+  try {
+    const session = await Session.for(root);
+    const outcome = await session.analyze(twice);
+    assert.ok(outcome.ok);
+    // Byte offsets, as the content mapper hands them to the type check: the second and third :q.
+    const second = twice.indexOf(":q or id");
+    assert.deepEqual(outcome.analysis.diagnostics.map((d) => [d.code, d.start, d.length]), [[3, second, 2], [3, twice.lastIndexOf(":q"), 2]]);
+    assert.equal(outcome.analysis.diagnostics[0]!.message, "The parameter :q appears more than once; use each parameter once, and select it in a with to read it twice, as in: with input as (select :q as q) select … from input");
+    const file = join(root, "search.sql");
+    writeFileSync(file, twice);
+    await assert.rejects(sqlModule(file, twice), /search\.sql: The parameter :q appears more than once/);
+    // SQLite's own forms and its numbered placeholder are names too; a bare ? never repeats.
+    for (const sql of ["select id from users where name = @q or name = @q", "select id from users where id = ?1 or id = ?1", "select id from users where id = ? or id = ?1"]) {
+      const refused = await session.analyze(sql);
+      assert.ok(refused.ok);
+      assert.deepEqual(refused.analysis.diagnostics.map((d) => d.code), [3], sql);
+    }
+    const bare = await session.analyze("select id from users where id = ? or id = ?");
+    assert.ok(bare.ok);
+    assert.deepEqual(bare.analysis.diagnostics, []);
+    const once = "with input as (select cast(:q as text) as q) select id, name from users, input where input.q is null or name like input.q or name = input.q";
+    const read = await session.analyze(once);
+    assert.ok(read.ok);
+    assert.deepEqual(read.analysis.diagnostics, []);
+    assert.deepEqual(read.analysis.params.map((p) => [p.name, p.nullable]), [["q", true]]);
+    writeFileSync(file, once);
+    const { code } = await sqlModule(file, once);
+    assert.match(code, /export const params = \["q"\];/);
+  } finally {
+    for (const session of Session.opened()) await session.close();
+  }
+});
+
 test("the Postgres fingerprint runs on the server, holds while nothing changes, and moves with each catalog the analysis reads", { skip: live }, async () => {
   const postgres = createRequire(join(DRIVERS, "postgres", "package.json"))("postgres");
   const admin = postgres(PG, { max: 1, onnotice: () => {} });

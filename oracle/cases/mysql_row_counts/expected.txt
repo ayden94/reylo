@@ -52,7 +52,7 @@ key_parenthesized.sql: many (id: int4) -> { id: int4 }
 key_parenthesized_limit.sql: maybeOne () -> { id: int4 }
 key_partition.sql: maybeOne (id: int4) -> { id: int4 }
 key_straight_join.sql: maybeOne (id: int4) -> { id: int4 }
-key_union.sql: many (id: int4) -> { id: int4|int8 }
+key_union.sql: many (id: int4, other: int4) -> { id: int4|int8 }
 key_view.sql: many (id: int4) -> { id: int4|int8 }
 key_window.sql: maybeOne (id: int4) -> { id: int4, r: int8 }
 key_with.sql: many (id: int4) -> { id: int4 }

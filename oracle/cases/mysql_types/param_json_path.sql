@@ -1,1 +1,1 @@
-select id, json_extract(doc, :path) as found from everything where json_extract(doc, :path) is not null
+select id, found from (select id, json_extract(doc, :path) as found from everything) as e where found is not null

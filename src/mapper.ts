@@ -114,9 +114,9 @@ serve({
     diagnostics.push(...analysis.diagnostics.map((d) => diag(d.message, d.start, d.length, d.code)));
     strict(analysis);
     const inferred = analysis.cardinality;
-    // The declared names are the lexer's, each once in order of first use: the module's `params`
-    // at run time, which an array of values follows. (A rewritten statement can bind one name at
-    // several positions, as MySQL's `?` and SQLite's do.)
+    // The declared names are the lexer's, in order of first use: the module's `params` at run time,
+    // which an array of values follows. Each parameter appears once in a statement; a second use is
+    // the engine's diagnostic (code 3), placed above.
     const order = names;
     if (analysis.diagnostics.some((d) => d.code === 6) || (dialect === "postgres" && analysis.kind === "")) return emit("unknown", "unknown", inferred, order);
     const columns = analysis.columns.map((c) => `${ident(c.name)}: ${renderType(c.type, false, dialect, project.repr)}${c.nullable ? " | null" : ""}`);

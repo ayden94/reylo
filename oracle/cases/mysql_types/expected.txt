@@ -40,7 +40,7 @@ param_float.sql: many (f: float8, d: float8) -> { id: int4 }
 param_functions_of_numbers.sql: one (q: numeric, r: float8, s: int4, t: int4, u: int4, v: float8, w: float8, x: float8, y: float8, z: int4, aa: int4, ab: bytea, ac: int4, ad: bytea, ae: bytea) -> { p: numeric|int8|float8?, q: float8|int8|numeric?, r: int8|float8|numeric?, s: int8|float8|numeric?, t: int8|float8|numeric?, u: float8|int8|numeric?, v: float8|int8|numeric?, w: float8|int8|numeric?, x: numeric|int8|float8?, y: int8|float8|numeric?, z: unknown?, za: unknown?, zb: unknown?, zc: unknown? }
 param_functions_of_strings.sql: one (a: text, b: timestamp, c: timestamp, d: timestamp, e: text, f: text, g: timestamp, h: timestamp, i: timestamp, j: text, k: text, l: int4, m: date, n: timestamp, o: timestamp, p: time) -> { a: int8?, b: int2?, c: int8|int4?, d: int8?, e: int8|int4?, f: numeric|int8|float8?, g: int8|int4?, h: int8|int4?, i: int8?, j: int8?, k: int8?, l: date|timestamp|time|text?, m: timestamp|date|time|text?, n: date|timestamp|time|text?, o: int8|float8|numeric? }
 param_greatest.sql: many (n: int4, m: int4) -> { g: int8|float8|numeric?, l: int8|float8|numeric? }
-param_group_by.sql: many (n: unknown) -> {  } !! reylo6: Expression #1 of SELECT list is not in GROUP BY clause and contains nonaggregated column 'reylo_oracle_mysql_types.everything.whole' which is not functionally dependent on columns in GROUP BY clause; this is incompatible with sql_mode=only_full_group_by (ER_WRONG_FIELD_WITH_GROUP)
+param_group_by.sql: many (n: int4) -> { bucket: int8?, c: int8 }
 param_group_by_alias.sql: many (n: int4) -> { bucket: int8|float8|numeric?, c: int8 }
 param_if.sql: many (a: int4) -> { picked: int8|float8|numeric? }
 param_in.sql: many (a: int4, b: int4) -> { id: int4 }
@@ -67,7 +67,7 @@ param_pass_decimal.sql: many (p: numeric, q: numeric, r: numeric, s: numeric, t:
 param_pass_window.sql: many (a: text, b: int4, c: numeric) -> { a: text?, b: int8|float8|numeric?, c: numeric|int8|float8|text? }
 param_plus_column.sql: many (n: int4) -> { sum: int8|float8|numeric? }
 param_plus_one.sql: one (n: int4) -> { next: int8|float8|numeric? }
-param_repeated.sql: many (n: int4) -> { id: int4 }
+param_repeated.sql: many (n: unknown) -> {  } !! reylo3: The parameter :n appears more than once; use each parameter once, and select it in a with to read it twice, as in: with input as (select :n as n) select … from input !! reylo3: The parameter :n appears more than once; use each parameter once, and select it in a with to read it twice, as in: with input as (select :n as n) select … from input
 param_string_functions.sql: many (a: text, b: text, c: text, d: text) -> { c: text?, u: text?, l: int8?, wc: text? }
 param_subquery.sql: one (n: int4, m: text) -> { sub: int8|float8|numeric?, mx: text? }
 param_text.sql: many (v: text, c: text, tx: text, kind: text, flags: text) -> { id: int4 }

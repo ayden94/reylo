@@ -145,6 +145,32 @@ fn analyze_here(sql: &str) -> Result<Analysis, AnalyzeError> {
             }
         }
     });
+    // The names a FROM item gives those WITH queries (`FROM input i`), so a test of `i.q` reaches
+    // the parameter as one of `input.q` does.
+    let mut cte_aliases: HashMap<String, String> = HashMap::new();
+    if !cte_param_columns.is_empty() {
+        visit(&tree, &mut |key, node| {
+            if key != "RangeVar" {
+                return;
+            }
+            let (Some(rel), Some(alias)) = (node.get("relname").and_then(|r| r.as_str()), node.get("alias").and_then(|a| a.get("aliasname")).and_then(|a| a.as_str())) else { return };
+            if cte_param_columns.keys().any(|(cte, _)| cte == rel) {
+                cte_aliases.insert(alias.to_string(), rel.to_string());
+            }
+        });
+    }
+    // The parameter an operand is, through casts, or that the column of such a WITH query selects
+    // (`input.q`, by the query's name or a FROM item's alias for it). Each parameter appears once in
+    // a statement, so a value tested and read again is selected once in a WITH: the test of its
+    // column is the test of the parameter.
+    let param_of = |arg: &Value| {
+        direct_param_number(arg).or_else(|| {
+            column_ref_fields(arg).and_then(|(qual, col)| {
+                let qual = qual?;
+                cte_param_columns.get(&(qual.clone(), col.clone())).or_else(|| cte_aliases.get(&qual).and_then(|cte| cte_param_columns.get(&(cte.clone(), col)))).copied()
+            })
+        })
+    };
 
     // Pass 2: everything else.
     let mut kind = top_kind;
@@ -275,7 +301,7 @@ fn analyze_here(sql: &str) -> Result<Analysis, AnalyzeError> {
         }
         "CoalesceExpr" => {
             let Some(args) = node.get("args").and_then(|a| a.as_array()) else { return };
-            if let Some(n) = args.first().and_then(direct_param_number) {
+            if let Some(n) = args.first().and_then(param_of) {
                 let entry = params.entry(n).or_default();
                 entry.coalesce = true;
                 if let Some(d) = args.get(1).and_then(const_json) {
@@ -288,10 +314,7 @@ fn analyze_here(sql: &str) -> Result<Analysis, AnalyzeError> {
                 return;
             }
             let Some(arg) = node.get("arg") else { return };
-            let hit = direct_param_number(arg).or_else(|| {
-                column_ref_fields(arg).and_then(|(qual, col)| cte_param_columns.get(&(qual?, col)).copied())
-            });
-            if let Some(n) = hit {
+            if let Some(n) = param_of(arg) {
                 params.entry(n).or_default().null_guarded = true;
             }
         }
@@ -651,12 +674,14 @@ mod tests {
 
     #[test]
     fn null_guard_marks_optional() {
-        let a = analyze("SELECT id FROM t WHERE ($1::text IS NULL OR title ILIKE '%' || $1 || '%')").unwrap();
+        let a = analyze("SELECT id FROM t WHERE $1::text IS NULL OR title = 'x'").unwrap();
         assert!(a.params.get(&1).unwrap().null_guarded);
     }
 
     #[test]
     fn input_cte_null_guard_traces_through() {
+        // Each parameter appears once in a statement, so a value tested and read again is selected
+        // once in a WITH, and a test of its column is a test of the parameter.
         let a = analyze(
             "WITH input AS (SELECT coalesce($1::int, 50) AS lim, $2::text AS q)
              SELECT id FROM todos, input WHERE (input.q IS NULL OR title ILIKE '%' || input.q || '%')
@@ -665,6 +690,14 @@ mod tests {
         .unwrap();
         assert_eq!(a.params.get(&1).unwrap().coalesce_default, Some(serde_json::json!(50)));
         assert!(a.params.get(&2).unwrap().null_guarded);
+        // By the name a FROM item gives the WITH query too, and a coalesce of its column.
+        let a = analyze("WITH input AS (SELECT $1::int AS min) SELECT id FROM t, input i WHERE i.min IS NULL OR score > i.min").unwrap();
+        assert!(a.params.get(&1).unwrap().null_guarded);
+        let a = analyze("WITH input AS (SELECT $1::int AS v) SELECT id FROM t, input WHERE score = coalesce(input.v, score)").unwrap();
+        assert!(a.params.get(&1).unwrap().coalesce);
+        // A column that only compares with the parameter's says nothing of NULL.
+        let a = analyze("WITH input AS (SELECT $1::int AS v) SELECT id FROM t, input i WHERE score > i.v").unwrap();
+        assert!(a.params.get(&1).is_none_or(|u| !u.null_guarded && !u.coalesce));
     }
 
     #[test]

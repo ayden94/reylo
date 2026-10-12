@@ -247,7 +247,7 @@ struct CatalogRows {
 }
 
 /// The statement's placeholders, or the bare analysis that reports why they cannot be read: a
-/// lex error, or named and positional parameters mixed.
+/// lex error, named and positional parameters mixed, or a parameter used more than once.
 pub(crate) fn lexed(sql: &str, dialect: Dialect) -> Result<Lexed, Analysis> {
     let lexed = match lex::lex(sql, dialect) {
         Ok(l) => l,
@@ -258,7 +258,16 @@ pub(crate) fn lexed(sql: &str, dialect: Dialect) -> Result<Lexed, Analysis> {
         let d = diag("Named and positional parameters cannot be mixed in one statement.", first.start, first.end - first.start, 2);
         return Err(bare(sql, &lexed, dialect, vec![d]));
     }
+    let repeated = repeated(sql, &lexed);
+    if !repeated.is_empty() {
+        return Err(bare(sql, &lexed, dialect, repeated));
+    }
     Ok(lexed)
+}
+
+/// Each later use of a parameter, as the diagnostic at its place ([`lex::repeated`]).
+pub(crate) fn repeated(sql: &str, lexed: &Lexed) -> Vec<Diagnostic> {
+    lex::repeated(sql, lexed).into_iter().map(|r| diag(r.message, r.start, r.end - r.start, 3)).collect()
 }
 
 fn diag(message: impl Into<String>, start: usize, length: usize, code: u32) -> Diagnostic {
@@ -1432,6 +1441,26 @@ mod tests {
             }
         }
         panic!("the replay did not converge");
+    }
+
+    #[test]
+    fn each_parameter_appears_once() {
+        // Every later use is an error at its place, before the server is asked anything, and the
+        // parameters stay listed, each once, untyped.
+        let sql = "select id, name from users where name like :q or email like :q or nick like :q";
+        let none = HashMap::new();
+        let host = Host::new(&none);
+        let a = analyze(sql, Dialect::Postgres, &host).expect("refused without a round trip");
+        assert!(host.needs().is_empty());
+        let second = sql.find(":q or nick").unwrap();
+        assert_eq!(a.diagnostics.iter().map(|d| (d.code, d.start, d.length)).collect::<Vec<_>>(), [(3, second, 2), (3, sql.rfind(":q").unwrap(), 2)]);
+        assert!(a.diagnostics[0].message.starts_with("The parameter :q appears more than once; use each parameter once"));
+        assert_eq!(a.params.iter().map(|p| (p.name.as_str(), &p.ty)).collect::<Vec<_>>(), [("q", &Type::Unknown)]);
+        let a = analyze("select $1::int + $1", Dialect::Postgres, &host).unwrap();
+        assert_eq!(a.diagnostics.iter().map(|d| (d.code, d.start)).collect::<Vec<_>>(), [(3, 17)]);
+        // The fix reads the value from a WITH.
+        let a = replay("with input as (select concat('%', :q::text, '%') as pattern) select 1 as one from input where input.pattern like input.pattern");
+        assert!(a.diagnostics.iter().all(|d| d.code != 3), "{:?}", a.diagnostics);
     }
 
     #[test]

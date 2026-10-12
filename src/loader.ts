@@ -18,12 +18,15 @@ export async function sqlModule(path: string, sql: string): Promise<SqlModule> {
   const outcome = await session.analyze(sql);
   if (!outcome.ok) throw new Error(`${path}: ${outcome.message}`);
   const { analysis } = outcome;
+  // A statement whose placeholders break a rule fails the build: one the engine could not read
+  // (1), named and positional mixed (2), or a parameter written more than once (3), since each
+  // parameter appears once so that one place types it.
+  const unread = analysis.diagnostics.find((d) => d.code === 1 || d.code === 2 || d.code === 3);
+  if (unread) throw new Error(`${path}: ${unread.message}`);
   let params: string[];
   if (session.project.dialect === "mysql") {
     // A MySQL session reads its strings by its sql_mode, which the analysis asked for: its
-    // placeholders are the ones the server finds, and a statement it could not read them in fails.
-    const unread = analysis.diagnostics.find((d) => d.code === 1 || d.code === 2);
-    if (unread) throw new Error(`${path}: ${unread.message}`);
+    // placeholders are the ones the server finds.
     params = analysis.params.map((p) => p.name);
   } else {
     try {

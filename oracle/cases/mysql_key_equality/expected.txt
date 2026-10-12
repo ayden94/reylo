@@ -79,7 +79,7 @@ int_abs.sql: maybeOne (id: int4) -> { id: int4 }
 int_alias.sql: maybeOne (id: int4) -> { id: int4 }
 int_and_more.sql: maybeOne (id: int4, skip: text) -> { id: int4, name: text }
 int_arithmetic.sql: maybeOne (id: int4) -> { id: int4 }
-int_between.sql: many (id: int4) -> { id: int4 }
+int_between.sql: many (lo: int4, hi: int4) -> { id: int4 }
 int_cast_char.sql: many (id: text) -> { id: int4 }
 int_cast_signed.sql: maybeOne (id: int4) -> { id: int4 }
 int_coalesce.sql: many (a: int4, b: int4) -> { id: int4 }

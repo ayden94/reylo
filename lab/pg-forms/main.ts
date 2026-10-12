@@ -322,7 +322,8 @@ const paramNull2: Awaited<ReturnType<typeof paramNull.run>> = null! as { id: num
 const paramNull3: ParamNullParamsType = null! as ParamNullParams;
 const paramNull4: ParamNullParams = null! as ParamNullParamsType;
 // Right: a parameter may be null where the statement lets it be, and nowhere else. :email is
-// written whole to a nullable column; :role is tested for null; :name fills a NOT NULL column.
+// written whole to a nullable column; :role is tested for null, through the WITH that selects it
+// once so the statement can read it twice; :name fills a NOT NULL column.
 
 import paramPositional from "./param_positional.sql";
 import type { Params as ParamPositionalParams } from "./param_positional.sql";
