@@ -183,6 +183,7 @@ What each client takes:
 
 - MySQL has no `returning`: a write resolves to `void`, and the insert id is untyped.
 - Nullability is the server's flag: sound for `NOT NULL`, cautious for string and date functions.
+- A parameter's type never includes `null`, even where the statement writes it to a nullable column.
 - A prepare error has no position, so the error covers the whole statement.
 - Reylo is tested against MySQL 8.4, not MariaDB.
 
@@ -191,6 +192,7 @@ What each client takes:
 - A declared type is an affinity, not a constraint: a column in a table without `strict` can hold a value of another type.
 - SQLite has no date, time or boolean type. A date in a `text` column is a `string`; a column declared `boolean`, `date` or `datetime` is `number | string`.
 - The result of a function the application registers, or of `json_extract`, `->` and `->>`, is `unknown`.
+- A parameter inside a row value, as in `(created_at, id) < (:created_at, :id)`, has no type until a cast gives it one.
 - JSON built in the statement is a `string`: the driver returns the text.
 
 ## Editors

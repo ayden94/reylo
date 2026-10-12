@@ -39,13 +39,16 @@ Every type above comes from the database.
 <Accordions type="single">
 <Accordion title="The schema behind the examples">
 
+<Tabs groupId="dialect" persist items={["Postgres", "MySQL", "SQLite"]}>
+<Tab value="Postgres">
+
 ```sql title="schema.sql"
 create type user_role as enum ('admin', 'member');  -- role: "admin" | "member"
 
 create table users (
   id serial primary key,                            -- the primary key: at most one row, so `| null`
   name text not null,                               -- name: string
-  email text,                                       -- email: string | null
+  email text unique,                                -- email: string | null
   role user_role not null default 'member',
   tags text[] not null default '{}',                -- tags: string[]
   created_at timestamptz not null default now()     -- created_at: Date
@@ -58,7 +61,73 @@ create table posts (
   body text,
   published_at timestamptz
 );
+
+create table events (
+  id serial primary key,
+  kind text not null,
+  payload jsonb not null
+);
 ```
+
+</Tab>
+<Tab value="MySQL">
+
+```sql title="schema.sql"
+create table users (
+  id int auto_increment primary key,                         -- the primary key: at most one row, so `| null`
+  name text not null,                                        -- name: string
+  email varchar(255) unique,                                 -- email: string | null
+  role enum('admin', 'member') not null default 'member',    -- role: string
+  tags json not null default (json_array()),                 -- tags: unknown
+  created_at datetime not null default current_timestamp     -- created_at: Date
+);
+
+create table posts (
+  id int auto_increment primary key,
+  user_id int not null,
+  title text not null,
+  body text,
+  published_at datetime,
+  foreign key (user_id) references users (id)
+);
+
+create table events (
+  id int auto_increment primary key,
+  kind text not null,
+  payload json not null
+);
+```
+
+</Tab>
+<Tab value="SQLite">
+
+```sql title="schema.sql"
+create table users (
+  id integer primary key,                                    -- the primary key: at most one row, so `| null`
+  name text not null,                                        -- name: string
+  email text unique,                                         -- email: string | null
+  role text not null default 'member' check (role in ('admin', 'member')),
+  tags text not null default '[]',                           -- tags: string, the JSON text
+  created_at text not null default current_timestamp         -- created_at: string
+) strict;
+
+create table posts (
+  id integer primary key,
+  user_id integer not null references users (id),
+  title text not null,
+  body text,
+  published_at text
+) strict;
+
+create table events (
+  id integer primary key,
+  kind text not null,
+  payload text not null
+) strict;
+```
+
+</Tab>
+</Tabs>
 
 </Accordion>
 </Accordions>
@@ -377,23 +446,143 @@ getUser.params;                      // ["id"]
 getUser.cardinality;                 // "maybeOne"
 ```
 
-## Type inference
+The sections below go through each kind of statement, from reading one row to writing related rows. Reylo puts no limits on the query: any syntax, any built-in function, *the full expressive power of your SQL dialect*. Each example shows the statement in each dialect and the types Reylo infers: the parameters, and what `run` resolves to.
 
-Reylo puts no limits on the query: any syntax, any built-in function, *the full expressive power of your SQL dialect*. Each example shows a statement and the types Reylo infers: the parameters, and what `run` resolves to.
+## Read
 
-### Parameters
+### One row
 
-```sql title="search.sql"
-select id, name from users
-where name like :pattern and role = :role
+A match on a primary or a unique key is at most one row, so `run` resolves to the row or `null`. The statement and its types are the same in every dialect.
+
+```sql title="find_by_email.sql"
+select id, name from users where email = :email
 ```
 
 ```ts
-type Params = { pattern: string; role: "admin" | "member" };
-type Result = { id: number; name: string }[];
+type Params = { email: string };
+type Result = { id: number; name: string } | null;
 ```
 
-### Nullability
+### Many rows
+
+A statement that can match more than one row resolves to an array.
+
+<Tabs groupId="dialect" persist items={["Postgres", "MySQL", "SQLite"]}>
+<Tab value="Postgres">
+
+```sql title="list_users.sql"
+select id, name, role, tags, created_at from users
+where role = :role
+order by created_at desc
+limit :limit offset :offset
+```
+
+```ts
+type Params = {
+  role: "admin" | "member";           // the enum's labels
+  limit: number | bigint | string;    // limit and offset take a bigint
+  offset: number | bigint | string;
+};
+type Result = {
+  id: number;
+  name: string;
+  role: "admin" | "member";
+  tags: string[];
+  created_at: Date;
+}[];
+```
+
+</Tab>
+<Tab value="MySQL">
+
+```sql title="list_users.sql"
+select id, name, role, tags, created_at from users
+where role = :role
+order by created_at desc
+limit :limit offset :offset
+```
+
+```ts
+type Params = { role: string; limit: number; offset: number };
+type Result = {
+  id: number;
+  name: string;
+  role: string;        // an ENUM is a string
+  tags: unknown;       // a JSON column
+  created_at: Date;
+}[];
+```
+
+</Tab>
+<Tab value="SQLite">
+
+```sql title="list_users.sql"
+select id, name, role, tags, created_at from users
+where role = :role
+order by created_at desc
+limit :limit offset :offset
+```
+
+```ts
+type Params = { role: string; limit: number; offset: number };
+type Result = {
+  id: number;
+  name: string;
+  role: string;
+  tags: string;        // the JSON text
+  created_at: string;  // SQLite keeps dates as text
+}[];
+```
+
+</Tab>
+</Tabs>
+
+### Counts
+
+An aggregate without `group by` is exactly one row.
+
+<Tabs groupId="dialect" persist items={["Postgres", "MySQL", "SQLite"]}>
+<Tab value="Postgres">
+
+```sql title="count_users.sql"
+select count(*) as total from users where role = :role
+```
+
+```ts
+type Params = { role: "admin" | "member" };
+type Result = { total: string };   // count(*) is a bigint; count(*)::int is a number
+```
+
+</Tab>
+<Tab value="MySQL">
+
+```sql title="count_users.sql"
+select count(*) as total from users where role = :role
+```
+
+```ts
+type Params = { role: string };
+type Result = { total: number };
+```
+
+</Tab>
+<Tab value="SQLite">
+
+```sql title="count_users.sql"
+select count(*) as total from users where role = :role
+```
+
+```ts
+type Params = { role: string };
+type Result = { total: number };
+```
+
+</Tab>
+</Tabs>
+
+### Joins
+
+A column from the outer side of a join can be `null`. The statement and its types are the same in every dialect.
 
 ```sql title="user_posts.sql"
 select u.name, p.title, coalesce(p.title, '') as label
@@ -409,67 +598,65 @@ type Result = {
 }[];
 ```
 
-### Enums, arrays and dates
+### A list of values
 
-```sql title="profiles.sql"
-select role, tags, created_at from users
+Postgres takes an array. MySQL and SQLite have no array type, so the list is a [JSON parameter](#json-parameters), which the statement reads as rows.
+
+<Tabs groupId="dialect" persist items={["Postgres", "MySQL", "SQLite"]}>
+<Tab value="Postgres">
+
+```sql title="users_by_ids.sql"
+select id, name from users where id = any(:ids)
 ```
 
 ```ts
-type Result = { role: "admin" | "member"; tags: string[]; created_at: Date }[];
+type Params = { ids: number[] };
+type Result = { id: number; name: string }[];
 ```
 
-### Row count
+</Tab>
+<Tab value="MySQL">
 
-```sql
--- get_user.sql
-select * from users where id = :id
-
--- count_users.sql
-select count(*) from users
-
--- list_users.sql
-select * from users
-
--- delete_user.sql
-delete from users where id = :id
-```
-
-```ts
-type GetUser = Row | null;  // a primary-key match, or limit 1
-type CountUsers = Row;      // an aggregate without group by
-type ListUsers = Row[];     // anything else
-type DeleteUser = void;     // a write without returning
-```
-
-### Returning
-
-```sql title="create_user.sql"
-insert into users (name, email) values (:name, :email)
-returning id
-```
-
-```ts
-type Params = { name: string; email: string | null };
-type Result = { id: number };
-```
-
-### Common table expressions
-
-```sql title="post_counts.sql"
-with counts as (
-  select user_id, count(*)::int as posts from posts group by user_id
+```sql title="users_by_ids.sql"
+with input as (
+  select :ids::json('{ "type": "array", "items": "int" }') as ids
 )
-select u.name, coalesce(c.posts, 0) as posts
-from users u
-left join counts c on c.user_id = u.id
+select id, name from users
+where id in (
+  select j.id from input, json_table(input.ids, '$[*]' columns (id int path '$')) as j
+)
 ```
 
 ```ts
-type Result = { name: string; posts: number }[];
+type Params = { ids: number[] };
+type Result = { id: number; name: string }[];
 ```
 
-### Nested JSON
+</Tab>
+<Tab value="SQLite">
+
+```sql title="users_by_ids.sql"
+with input as (
+  select :ids::json('{ "type": "array", "items": "integer" }') as ids
+)
+select id, name from users
+where id in (select j.value from input, json_each(input.ids) as j)
+```
+
+```ts
+type Params = { ids: number[] };
+type Result = { id: number; name: string }[];
+```
+
+</Tab>
+</Tabs>
+
+### Nested rows
+
+Build the related rows as JSON in the statement. Reylo types the JSON from the arguments that build it.
+
+<Tabs groupId="dialect" persist items={["Postgres", "MySQL", "SQLite"]}>
+<Tab value="Postgres">
 
 ```sql title="user_with_posts.sql"
 select u.id, u.name,
@@ -488,6 +675,694 @@ type Result = {
   name: string;
   posts: { id: number; title: string; at: string | null }[];
 } | null;
+```
+
+</Tab>
+<Tab value="MySQL">
+
+```sql title="user_with_posts.sql"
+select u.id, u.name,
+  coalesce((
+    select json_arrayagg(json_object('id', p.id, 'title', p.title, 'at', p.published_at))
+    from posts p where p.user_id = u.id
+  ), json_array()) as posts
+from users u
+where u.id = :id
+```
+
+```ts
+type Params = { id: number };
+type Result = {
+  id: number;
+  name: string;
+  posts: { id: number; title: string; at: string | null }[];
+} | null;
+```
+
+</Tab>
+<Tab value="SQLite">
+
+```sql title="user_with_posts.sql"
+select u.id, u.name,
+  (select json_group_array(json_object('id', p.id, 'title', p.title, 'at', p.published_at))
+   from posts p where p.user_id = u.id) as posts
+from users u
+where u.id = :id
+```
+
+```ts
+type Params = { id: number };
+type Result = {
+  id: number;
+  name: string;
+  posts: string;   // SQLite returns the JSON it builds as text
+} | null;
+```
+
+</Tab>
+</Tabs>
+
+### The next page
+
+To page through rows, pass the sort key of the last row you have, here `created_at` and `id`.
+
+<Tabs groupId="dialect" persist items={["Postgres", "MySQL", "SQLite"]}>
+<Tab value="Postgres">
+
+```sql title="next_page.sql"
+select id, name, created_at from users
+where (created_at, id) < (:created_at, :id)
+order by created_at desc, id desc
+limit 20
+```
+
+```ts
+type Params = { created_at: Date | string; id: number };
+type Result = { id: number; name: string; created_at: Date }[];
+```
+
+</Tab>
+<Tab value="MySQL">
+
+```sql title="next_page.sql"
+select id, name, created_at from users
+where (created_at, id) < (:created_at, :id)
+order by created_at desc, id desc
+limit 20
+```
+
+```ts
+type Params = { created_at: Date | string; id: number };
+type Result = { id: number; name: string; created_at: Date }[];
+```
+
+</Tab>
+<Tab value="SQLite">
+
+SQLite cannot type a parameter inside a row value, so casts type them:
+
+```sql title="next_page.sql"
+select id, name, created_at from users
+where (created_at, id) < (:created_at::text, :id::integer)
+order by created_at desc, id desc
+limit 20
+```
+
+```ts
+type Params = { created_at: string; id: number };
+type Result = { id: number; name: string; created_at: string }[];
+```
+
+</Tab>
+</Tabs>
+
+## Create
+
+### Insert a row
+
+<Tabs groupId="dialect" persist items={["Postgres", "MySQL", "SQLite"]}>
+<Tab value="Postgres">
+
+```sql title="create_user.sql"
+insert into users (name, email) values (:name, :email)
+returning id
+```
+
+```ts
+type Params = { name: string; email: string | null };
+type Result = { id: number };
+```
+
+</Tab>
+<Tab value="MySQL">
+
+MySQL has no `returning`, so the insert resolves to `void`. Read the new id with `last_insert_id()`, on the same connection:
+
+```sql title="create_user.sql"
+insert into users (name, email) values (:name, :email)
+```
+
+```sql title="last_insert_id.sql"
+select last_insert_id() as id
+```
+
+```ts
+// create_user.sql
+type Params = { name: string; email: string };
+type Result = void;
+
+// last_insert_id.sql
+type Result = { id: number };
+```
+
+</Tab>
+<Tab value="SQLite">
+
+```sql title="create_user.sql"
+insert into users (name, email) values (:name, :email)
+returning id
+```
+
+```ts
+type Params = { name: string; email: string | null };
+type Result = { id: number };
+```
+
+</Tab>
+</Tabs>
+
+### Insert many rows
+
+Pass the rows as one [JSON parameter](#json-parameters). The schema in its cast types the parameter, and Reylo checks every row against it before the statement runs. The database reads the JSON with its own functions, and never sees the schema.
+
+<Tabs groupId="dialect" persist items={["Postgres", "MySQL", "SQLite"]}>
+<Tab value="Postgres">
+
+```sql title="create_users.sql"
+with input as (
+  select :users::jsonb('{
+    "type": "array",
+    "maxItems": 1000,
+    "items": {
+      "type": "object",
+      "properties": {
+        "name": "text",
+        "email?": { "type": "text", "format": "email" }
+      }
+    }
+  }') as users
+)
+insert into users (name, email)
+select u.name, u.email
+from input, jsonb_to_recordset(input.users) as u(name text, email text)
+returning id
+```
+
+```ts
+type Params = { users: { name: string; email?: string | null }[] };
+type Result = { id: number }[];
+```
+
+</Tab>
+<Tab value="MySQL">
+
+```sql title="create_users.sql"
+insert into users (name, email)
+with input as (
+  select :users::json('{
+    "type": "array",
+    "maxItems": 1000,
+    "items": {
+      "type": "object",
+      "properties": {
+        "name": "text",
+        "email?": { "type": "varchar(255)", "format": "email" }
+      }
+    }
+  }') as users
+)
+select u.name, u.email
+from input, json_table(input.users, '$[*]' columns (
+  name text path '$.name',
+  email varchar(255) path '$.email'
+)) as u
+```
+
+```ts
+type Params = { users: { name: string; email?: string | null }[] };
+type Result = void;
+```
+
+</Tab>
+<Tab value="SQLite">
+
+```sql title="create_users.sql"
+with input as (
+  select :users::json('{
+    "type": "array",
+    "maxItems": 1000,
+    "items": {
+      "type": "object",
+      "properties": {
+        "name": "text",
+        "email?": { "type": "text", "format": "email" }
+      }
+    }
+  }') as users
+)
+insert into users (name, email)
+select u.value ->> 'name', u.value ->> 'email'
+from input, json_each(input.users) as u
+returning id
+```
+
+```ts
+type Params = { users: { name: string; email?: string | null }[] };
+type Result = { id: number }[];
+```
+
+</Tab>
+</Tabs>
+
+```ts title="main.ts"
+await createUsers.run(sql, {
+  users: [{ name: "Ada", email: "ada@example.com" }, { name: "Grace" }],
+});
+```
+
+### Insert related rows
+
+Users with their posts, in one parameter. The posts find their user by `email`, a unique key.
+
+<Tabs groupId="dialect" persist items={["Postgres", "MySQL", "SQLite"]}>
+<Tab value="Postgres">
+
+Postgres writes both tables in one statement: a `with` inserts the users, and the statement inserts the posts.
+
+```sql title="create_users_with_posts.sql"
+with input as (
+  select :users::jsonb('{
+    "type": "array",
+    "items": {
+      "type": "object",
+      "properties": {
+        "name": "text",
+        "email": { "type": "text", "format": "email" },
+        "posts": {
+          "type": "array",
+          "items": { "type": "object", "properties": { "title": "text" } }
+        }
+      }
+    }
+  }') as users
+),
+new_users as (
+  insert into users (name, email)
+  select u.name, u.email
+  from input, jsonb_to_recordset(input.users) as u(name text, email text)
+  returning id, email
+)
+insert into posts (user_id, title)
+select n.id, p.title
+from input
+cross join jsonb_to_recordset(input.users) as u(email text, posts jsonb)
+join new_users n on n.email = u.email
+cross join jsonb_to_recordset(u.posts) as p(title text)
+```
+
+```ts
+type Params = { users: { name: string; email: string; posts: { title: string }[] }[] };
+type Result = void;
+```
+
+</Tab>
+<Tab value="MySQL">
+
+MySQL cannot write inside a `with`, so the users and the posts are two statements, run in one transaction:
+
+```sql title="insert_users.sql"
+insert into users (name, email)
+with input as (
+  select :users::json('{
+    "type": "array",
+    "items": {
+      "type": "object",
+      "properties": {
+        "name": "text",
+        "email": { "type": "varchar(255)", "format": "email" }
+      }
+    }
+  }') as users
+)
+select u.name, u.email
+from input, json_table(input.users, '$[*]' columns (
+  name text path '$.name',
+  email varchar(255) path '$.email'
+)) as u
+```
+
+```sql title="insert_posts.sql"
+insert into posts (user_id, title)
+with input as (
+  select :users::json('{
+    "type": "array",
+    "items": {
+      "type": "object",
+      "properties": {
+        "email": "varchar(255)",
+        "posts": {
+          "type": "array",
+          "items": { "type": "object", "properties": { "title": "text" } }
+        }
+      }
+    }
+  }') as users
+)
+select users.id, u.title
+from input, json_table(input.users, '$[*]' columns (
+  email varchar(255) collate utf8mb4_0900_ai_ci path '$.email',  -- the collation of users.email
+  nested path '$.posts[*]' columns (title text path '$.title')
+)) as u
+join users on users.email = u.email
+where u.title is not null
+```
+
+```ts title="main.ts"
+const conn = await pool.getConnection();
+try {
+  await conn.beginTransaction();
+  await insertUsers.run(conn, { users });
+  await insertPosts.run(conn, { users });
+  await conn.commit();
+} catch (error) {
+  await conn.rollback();
+  throw error;
+} finally {
+  conn.release();
+}
+```
+
+A `JSON_TABLE` column takes the connection's collation, which mysql2 sets to `utf8mb4_unicode_ci`; a comparison with a column of another collation is an error, so the `email` column names the collation of `users.email`.
+
+</Tab>
+<Tab value="SQLite">
+
+SQLite cannot write inside a `with`, so the users and the posts are two statements, run in one transaction:
+
+```sql title="insert_users.sql"
+with input as (
+  select :users::json('{
+    "type": "array",
+    "items": {
+      "type": "object",
+      "properties": {
+        "name": "text",
+        "email": { "type": "text", "format": "email" }
+      }
+    }
+  }') as users
+)
+insert into users (name, email)
+select u.value ->> 'name', u.value ->> 'email'
+from input, json_each(input.users) as u
+```
+
+```sql title="insert_posts.sql"
+with input as (
+  select :users::json('{
+    "type": "array",
+    "items": {
+      "type": "object",
+      "properties": {
+        "email": "text",
+        "posts": {
+          "type": "array",
+          "items": { "type": "object", "properties": { "title": "text" } }
+        }
+      }
+    }
+  }') as users
+)
+insert into posts (user_id, title)
+select users.id, p.value ->> 'title'
+from input
+join json_each(input.users) as u
+join users on users.email = u.value ->> 'email'
+join json_each(u.value -> 'posts') as p
+```
+
+```ts title="main.ts"
+db.transaction(() => {
+  insertUsers.runSync(db, { users });
+  insertPosts.runSync(db, { users });
+})();
+```
+
+</Tab>
+</Tabs>
+
+### Insert or update
+
+<Tabs groupId="dialect" persist items={["Postgres", "MySQL", "SQLite"]}>
+<Tab value="Postgres">
+
+```sql title="upsert_user.sql"
+insert into users (name, email) values (:name, :email)
+on conflict (email) do update set name = excluded.name
+returning id
+```
+
+```ts
+type Params = { name: string; email: string | null };
+type Result = { id: number };
+```
+
+</Tab>
+<Tab value="MySQL">
+
+```sql title="upsert_user.sql"
+insert into users (name, email) values (:name, :email) as new
+on duplicate key update name = new.name
+```
+
+```ts
+type Params = { name: string; email: string };
+type Result = void;
+```
+
+</Tab>
+<Tab value="SQLite">
+
+```sql title="upsert_user.sql"
+insert into users (name, email) values (:name, :email)
+on conflict (email) do update set name = excluded.name
+returning id
+```
+
+```ts
+type Params = { name: string; email: string | null };
+type Result = { id: number };
+```
+
+</Tab>
+</Tabs>
+
+## Update
+
+<Tabs groupId="dialect" persist items={["Postgres", "MySQL", "SQLite"]}>
+<Tab value="Postgres">
+
+```sql title="rename_user.sql"
+update users set name = :name where id = :id
+returning id, name
+```
+
+```ts
+type Params = { name: string; id: number };
+type Result = { id: number; name: string } | null;   // a primary-key match
+```
+
+</Tab>
+<Tab value="MySQL">
+
+```sql title="rename_user.sql"
+update users set name = :name where id = :id
+```
+
+```ts
+type Params = { name: string; id: number };
+type Result = void;
+```
+
+</Tab>
+<Tab value="SQLite">
+
+```sql title="rename_user.sql"
+update users set name = :name where id = :id
+returning id, name
+```
+
+```ts
+type Params = { name: string; id: number };
+type Result = { id: number; name: string } | null;   // a primary-key match
+```
+
+</Tab>
+</Tabs>
+
+## Delete
+
+A write without `returning` resolves to `void`. The statement and its types are the same in every dialect.
+
+```sql title="delete_user.sql"
+delete from users where id = :id
+```
+
+```ts
+type Params = { id: number };
+type Result = void;
+```
+
+## Parameters
+
+A parameter is a name after a colon, such as `:id`, and `run` takes an object with one key for each name. Reylo types each parameter from where the statement uses it: a column it is compared with or written to, a function's argument, a cast.
+
+Each parameter appears once in a statement, so one place types it. To use a value twice, select it once in a `with`:
+
+<Tabs groupId="dialect" persist items={["Postgres", "MySQL", "SQLite"]}>
+<Tab value="Postgres">
+
+```sql title="search_users.sql"
+with input as (
+  select concat('%', :q::text, '%') as pattern
+)
+select id, name from users, input
+where name like input.pattern or email like input.pattern
+```
+
+</Tab>
+<Tab value="MySQL">
+
+```sql title="search_users.sql"
+with input as (
+  select concat('%', :q, '%') as pattern
+)
+select id, name from users, input
+where name like input.pattern or email like input.pattern
+```
+
+</Tab>
+<Tab value="SQLite">
+
+```sql title="search_users.sql"
+with input as (
+  select concat('%', :q, '%') as pattern
+)
+select id, name from users, input
+where name like input.pattern or email like input.pattern
+```
+
+</Tab>
+</Tabs>
+
+```ts
+type Params = { q: string };
+type Result = { id: number; name: string }[];
+```
+
+`::` casts a parameter in every dialect. MySQL and SQLite have no `::`, so Reylo writes their own `cast(… as …)`. A JSON parameter's cast also carries its schema: see [JSON parameters](#json-parameters).
+
+Positional parameters, a parameter that nothing types, and `null`: see [Parameters](/details#parameters).
+
+## JSON parameters
+
+A JSON parameter carries a schema in its cast, as a string: `:users::jsonb('…')` or `:users::json('…')` on Postgres, `:users::json('…')` on MySQL and SQLite. The schema gives the parameter its TypeScript type, and Reylo checks each value against it before the statement runs. The database never sees the schema: Postgres receives `$1::jsonb`, MySQL `cast(? as json)` and SQLite `?`, and the value is sent as JSON text.
+
+The schema is JSON, shaped as JSON Schema, with your database's type names:
+
+- `type` is `"object"`, `"array"` or a type of the dialect: `"text"`, `"int"` or `"uuid"` on Postgres; `"varchar(255)"` or `"int"` on MySQL; `"text"`, `"integer"`, `"real"`, `"blob"` or `"any"` on SQLite, the types a `strict` table takes.
+- A field that needs nothing but its type is written as the type: `"name": "text"`.
+- Every key is required. A key that ends in `?` may be left out or be `null`: `"email?": "text"` is `email?: string | null`.
+- A key that the schema does not name is ignored, unless its object sets `"additionalProperties": false`.
+- A nested object or array is one JSON value, which the statement reads with the database's JSON functions, as in [Insert related rows](#insert-related-rows).
+
+Each database type is typed as JSON carries it: text types and `uuid` as `string`, number types as `number`, `boolean` as `boolean`, `json` and `jsonb` as any JSON value.
+
+The checks are JSON Schema's validation keywords: `format`, `pattern`, `minLength` and `maxLength`; `minimum`, `maximum` and `multipleOf`; `enum` and `const`; `minItems`, `maxItems` and `uniqueItems`. `enum` and `const` narrow the type too. A value that fails a check makes `run` reject before the statement reaches the database, with every issue listed.
+
+### Unions
+
+`oneOf` types the parameter as a union, and a `const` key tells its members apart:
+
+<Tabs groupId="dialect" persist items={["Postgres", "MySQL", "SQLite"]}>
+<Tab value="Postgres">
+
+```sql title="record_events.sql"
+with input as (
+  select :events::jsonb('{
+    "type": "array",
+    "items": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": { "kind": { "type": "text", "const": "click" }, "x": "int", "y": "int" }
+        },
+        {
+          "type": "object",
+          "properties": { "kind": { "type": "text", "const": "key" }, "code": "text" }
+        }
+      ]
+    }
+  }') as events
+)
+insert into events (kind, payload)
+select e.value ->> 'kind', e.value
+from input, jsonb_array_elements(input.events) as e(value)
+```
+
+</Tab>
+<Tab value="MySQL">
+
+```sql title="record_events.sql"
+insert into events (kind, payload)
+with input as (
+  select :events::json('{
+    "type": "array",
+    "items": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": { "kind": { "type": "text", "const": "click" }, "x": "int", "y": "int" }
+        },
+        {
+          "type": "object",
+          "properties": { "kind": { "type": "text", "const": "key" }, "code": "text" }
+        }
+      ]
+    }
+  }') as events
+)
+select e.kind, e.payload
+from input, json_table(input.events, '$[*]' columns (
+  kind text path '$.kind',
+  payload json path '$'
+)) as e
+```
+
+</Tab>
+<Tab value="SQLite">
+
+```sql title="record_events.sql"
+with input as (
+  select :events::json('{
+    "type": "array",
+    "items": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": { "kind": { "type": "text", "const": "click" }, "x": "integer", "y": "integer" }
+        },
+        {
+          "type": "object",
+          "properties": { "kind": { "type": "text", "const": "key" }, "code": "text" }
+        }
+      ]
+    }
+  }') as events
+)
+insert into events (kind, payload)
+select e.value ->> 'kind', e.value
+from input, json_each(input.events) as e
+```
+
+</Tab>
+</Tabs>
+
+```ts
+type Params = {
+  events: ({ kind: "click"; x: number; y: number } | { kind: "key"; code: string })[];
+};
+type Result = void;
 ```
 
 ## Supported drivers
@@ -521,7 +1396,7 @@ A transaction, savepoint or connection from these clients works too: see [Transa
 
 Each SQL type maps to a TypeScript type.
 
-<Tabs items={["Postgres", "MySQL", "SQLite"]}>
+<Tabs groupId="dialect" persist items={["Postgres", "MySQL", "SQLite"]}>
 <Tab value="Postgres">
 
 | SQL type | TypeScript |
