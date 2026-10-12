@@ -8,9 +8,9 @@
   --font-mono: var(--font-code), ui-monospace, 'SF Mono', Menlo, monospace;
 }
 
-/* ── reylo: steel grays and one yellow ────────────────────────────────────────
+/* ── Reylo: steel grays and one yellow ────────────────────────────────────────
    The layout and type follow zod.dev (Inter, ruled h1 and h2, borderless inline
-   code tinted with the accent, mono tab labels). The colours are reylo's own: a
+   code tinted with the accent, mono tab labels). The colours are Reylo's own: a
    blue-tinted steel scale for every surface and rule, and a yellow that marks
    links, the active table-of-contents entry and inline code. In light mode the
    yellow darkens to ochre wherever it carries text, so it keeps its contrast on

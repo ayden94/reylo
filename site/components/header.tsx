@@ -16,7 +16,7 @@ export function Header() {
     >
       <a href="/" className="inline-flex items-center gap-2 font-semibold tracking-tight text-fd-headings">
         <Mark className="h-3.5 w-auto" />
-        reylo
+        Reylo
       </a>
       <div className="flex-1" />
       <a href="/details" className="text-sm text-fd-muted-foreground transition-colors hover:text-fd-foreground">
