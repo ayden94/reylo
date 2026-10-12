@@ -1004,7 +1004,7 @@ import nextPage from "./next_page.sql";
 
 // the first page: a cursor after every row
 const page = await nextPage.run(db, {
-  created_at: "3000-01-01",
+  created_at: "3000-01-01 00:00:00+00:00",
   id: 0,
 });
 const next = await nextPage.run(db, page.at(-1)!);
@@ -1295,7 +1295,7 @@ A JSON parameter carries a schema in its cast. The schema gives the parameter it
 - A nested object or array stays JSON: read it with the database's JSON functions, as in [Insert related rows](#insert-related-rows).
 - A text type or `uuid` is a `string`, a number type a `number`, `boolean` a `boolean`, `json` and `jsonb` any JSON value.
 - The checks are JSON Schema's validation keywords, such as `format`, `pattern`, `minLength`, `maxLength`, `minimum`, `maximum`, `multipleOf`, `enum`, `const`, `minItems`, `maxItems` and `uniqueItems`. `enum` and `const` also narrow the type. A value that fails makes `run` reject before the statement reaches the database, with every issue listed.
-- `oneOf` makes a union of objects, told apart by a required `const` key, as in [Record events of several kinds](#record-events-of-several-kinds), and `allOf` combines objects. A union of plain values, such as `["text", "int"]`, is refused, since the statement reads a field into a column of one type.
+- `oneOf`, `anyOf` and `allOf` combine schemas, as in [Record events of several kinds](#record-events-of-several-kinds), and `prefixItems` types a tuple.
 
 <DialectTabs follow>
 <Dialect value="Postgres">
@@ -1676,7 +1676,7 @@ const result = await deleteUser.run(db, { id: 1 });
 
 ### Record events of several kinds
 
-`oneOf` types a JSON parameter as a union of objects. A required `const` key tells the members apart, and each member closes with `"additionalProperties": false`, so a key that only another member names is refused:
+`oneOf` types a JSON parameter as a union. Here a `const` key tells the members apart:
 
 ```sql title="record_events.sql" tab="Postgres" tab-group="dialect"
 with input as (
@@ -1691,8 +1691,7 @@ with input as (
             "x": { "type": "int" },
             "y": { "type": "int" }
           },
-          "required": ["kind", "x", "y"],
-          "additionalProperties": false
+          "required": ["kind", "x", "y"]
         },
         {
           "type": "object",
@@ -1700,8 +1699,7 @@ with input as (
             "kind": { "type": "text", "const": "key" },
             "code": { "type": "text" }
           },
-          "required": ["kind", "code"],
-          "additionalProperties": false
+          "required": ["kind", "code"]
         }
       ]
     }
@@ -1726,8 +1724,7 @@ with input as (
             "x": { "type": "int" },
             "y": { "type": "int" }
           },
-          "required": ["kind", "x", "y"],
-          "additionalProperties": false
+          "required": ["kind", "x", "y"]
         },
         {
           "type": "object",
@@ -1735,8 +1732,7 @@ with input as (
             "kind": { "type": "text", "const": "key" },
             "code": { "type": "text" }
           },
-          "required": ["kind", "code"],
-          "additionalProperties": false
+          "required": ["kind", "code"]
         }
       ]
     }
@@ -1762,8 +1758,7 @@ with input as (
             "x": { "type": "integer" },
             "y": { "type": "integer" }
           },
-          "required": ["kind", "x", "y"],
-          "additionalProperties": false
+          "required": ["kind", "x", "y"]
         },
         {
           "type": "object",
@@ -1771,8 +1766,7 @@ with input as (
             "kind": { "type": "text", "const": "key" },
             "code": { "type": "text" }
           },
-          "required": ["kind", "code"],
-          "additionalProperties": false
+          "required": ["kind", "code"]
         }
       ]
     }
