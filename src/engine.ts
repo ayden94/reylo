@@ -3,7 +3,7 @@
 // still needs — statements to describe, catalog queries to run — and this module fulfils
 // those through the project's own driver and calls again.
 import { readFileSync } from "node:fs";
-import { WASI } from "node:wasi";
+import type { WASI as WasiClass } from "node:wasi";
 
 export type Dialect = "postgres" | "sqlite" | "mysql";
 
@@ -81,6 +81,27 @@ type Memory = { buffer: ArrayBuffer };
 type Instance = { exports: Record<string, unknown> };
 const WA = (globalThis as unknown as { WebAssembly: { compile(bytes: Uint8Array): Promise<unknown>; instantiate(module: unknown, imports: object): Promise<Instance> } }).WebAssembly;
 
+// Node warns "ExperimentalWarning: WASI is an experimental feature" when `node:wasi` first loads
+// in a thread, not when a WASI is made, so a static import printed that line before anything else
+// in every program run under `reylo/register`. The module is loaded here instead, when the engine
+// is, while a filter on `process.emitWarning`, which Node's own warning goes through, swallows that
+// one warning and passes every other through. Node 24 and Bun both have `getBuiltinModule`.
+const WASI_WARNING = "WASI is an experimental feature and might change at any time";
+function loadWasi(): { WASI: typeof WasiClass } {
+  const emitWarning = process.emitWarning;
+  process.emitWarning = function (this: unknown, warning: string | Error, ...rest: unknown[]) {
+    const message = typeof warning === "string" ? warning : warning.message;
+    const type = typeof warning === "string" ? (typeof rest[0] === "string" ? rest[0] : (rest[0] as { type?: string } | undefined)?.type) : warning.name;
+    if (message === WASI_WARNING && type === "ExperimentalWarning") return;
+    return (emitWarning as (...args: unknown[]) => void).call(this, warning, ...rest);
+  } as typeof process.emitWarning;
+  try {
+    return process.getBuiltinModule("node:wasi");
+  } finally {
+    process.emitWarning = emitWarning;
+  }
+}
+
 export class Engine {
   #memory: Memory;
   #alloc: (len: number) => number;
@@ -97,6 +118,7 @@ export class Engine {
 
   static async load(path: URL | string = WASM_PATH): Promise<Engine> {
     const module = await WA.compile(readFileSync(path));
+    const { WASI } = loadWasi();
     const wasi = new WASI({ version: "preview1", args: ["reylo-engine"], env: {} });
     // Bun's node:wasi has neither getImportObject nor initialize: it takes the imports from
     // wasiImport, and its start(instance) only sets the memory of a reactor, which has no _start.

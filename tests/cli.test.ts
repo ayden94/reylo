@@ -1,15 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const CLI = join(import.meta.dirname, "..", "src", "cli.ts");
+const REGISTER = join(import.meta.dirname, "..", "src", "register.ts");
 
 function reylo(cwd: string, ...args: string[]) {
-  const r = spawnSync(process.execPath, ["--no-warnings", CLI, ...args], { cwd, encoding: "utf8", env: { PATH: process.env.PATH, DATABASE_URL: "file:./app.db" } });
+  const r = spawnSync(process.execPath, [CLI, ...args], { cwd, encoding: "utf8", env: { PATH: process.env.PATH, DATABASE_URL: "file:./app.db" } });
   // The time varies from run to run; everything else is the readout.
   return { status: r.status, out: r.stdout.replace(/\(\d+\.\d s\)/, "(_ s)"), err: r.stderr };
 }
@@ -38,6 +39,8 @@ test("reylo generate analyzes every .sql file of the project, and prints each fi
 
   const first = reylo(root, "generate");
   assert.equal(first.status, 1, first.err);
+  // Loading the engine prints no ExperimentalWarning for node:wasi (src/engine.ts).
+  assert.equal(first.err, "");
   assert.equal(first.out, [
     `sqlite at ${join(root, "app.db")} (DATABASE_URL in the environment)`,
     `  src/queries/bad.sql    ✗`,
@@ -79,4 +82,23 @@ test("reylo generate analyzes every .sql file of the project, and prints each fi
   assert.equal(reylo(root, "generate", "--watch").status, 2);
   assert.equal(reylo(root, "generate", "package.json").status, 2);
   assert.equal(reylo(root, "frobnicate").status, 2);
+});
+
+test("a program run under the reylo/register preload prints nothing on stderr: node:wasi's ExperimentalWarning is swallowed", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "reylo-register-")));
+  writeFileSync(join(root, "package.json"), `{ "type": "module" }`);
+  // The module a `.sql` file becomes imports reylo, as a lab reaches it: through a link to this repository.
+  mkdirSync(join(root, "node_modules"));
+  symlinkSync(join(import.meta.dirname, ".."), join(root, "node_modules", "reylo"));
+  const db = new DatabaseSync(join(root, "app.db"));
+  db.exec("create table users (id integer primary key, name text not null); insert into users (name) values ('ada')");
+  db.close();
+  writeFileSync(join(root, "user.sql"), "select id, name from users where id = :id");
+  writeFileSync(join(root, "main.ts"), `import { DatabaseSync } from "node:sqlite";\nimport user from "./user.sql";\nconsole.log(JSON.stringify(await user.run(new DatabaseSync("app.db"), { id: 1 })));\n`);
+  // The engine loads in the preload's worker thread, which reports its warnings through the main thread's stderr.
+  const r = spawnSync(process.execPath, ["--import", REGISTER, "main.ts"], { cwd: root, encoding: "utf8", env: { PATH: process.env.PATH, DATABASE_URL: "file:./app.db" } });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, `{"id":1,"name":"ada"}\n`);
+  assert.doesNotMatch(r.stderr, /ExperimentalWarning/);
+  assert.equal(r.stderr, "");
 });
