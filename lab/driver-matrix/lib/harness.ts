@@ -46,6 +46,8 @@ export type Shape = {
   inTransaction?: boolean;
   /** reylo does not support this client: run() must reject with its own TypeError matching this. Only S9 runs. */
   refused?: RegExp;
+  /** The statements without their `inputs`, as a query defined by hand or built before 2026-10-12 has them (a failing control). */
+  untyped?: boolean;
   /** reylo refuses any statement with parameters on this client, with a TypeError matching this whose cause is the driver's error. */
   paramsRefused?: RegExp;
 };
@@ -240,11 +242,13 @@ export async function call(ctx: Ctx, q: any, client: Client, params?: Record<str
 // ---------------------------------------------------------------------------------------------
 // The statements, per dialect
 
-export function queries(d: Dialect) {
+const array = (name: string) => ({ kind: "array", of: { kind: "scalar", name } });
+
+export function queries(d: Dialect, typed = true) {
   const t = (n: string) => (d === "sqlite" ? n : `driver_matrix.${n}`);
   const cast = (p: string, ty: string) => (d === "postgres" ? `${p}::${ty}` : p);
   const q = (sql: string, params: string[], cardinality: "many" | "one" | "maybeOne" | "none" = "many", extra: Record<string, unknown> = {}) =>
-    defineQuery<any, any, any, any>({ dialect: d, sql, params, cardinality, ...extra });
+    defineQuery<any, any, any, any>({ dialect: d, sql, params, cardinality, ...extra, ...(typed ? {} : { inputs: undefined }) });
   const repeatedSql = `select id, name from ${t("people")} where id = :id and name = (select name from ${t("people")} where id = :id)`;
   const repeatedText =
     d === "postgres"
@@ -253,7 +257,10 @@ export function queries(d: Dialect) {
   return {
     params: q(`select id, name, active, score from ${t("people")} where id = :i and name = :t and active = :b and ${cast(":nul", "int")} is null`, ["i", "t", "b", "nul"], "one"),
     omitted: q(`select id from ${t("people")} where id = :i and ${cast(":omit", "text")} is null`, ["i", "omit"], "many"),
-    list: q(`select id from ${t("people")} where id = any(:ids) and name = any(:names) order by id`, ["ids", "names"], "many"),
+    // `inputs` as the loader writes it from the analysis (src/loader.ts); without it reylo converts no array.
+    list: q(`select id from ${t("people")} where id = any(:ids) and name = any(:names) order by id`, ["ids", "names"], "many", { inputs: { ids: { type: array("int4") }, names: { type: array("text") } } }),
+    typedArrays: q(`select :b::bool[]::text as b, extract(epoch from (:d::timestamptz[])[1])::text as d, array(select encode(x, 'hex') from unnest(:x::bytea[]) as x)::text as x`, ["b", "d", "x"], "one", { inputs: { b: { type: array("bool") }, d: { type: array("timestamptz") }, x: { type: array("bytea") } } }),
+    jsonArrays: q(`select (:a::jsonb)::text as a, (:e::jsonb)::text as e`, ["a", "e"], "one", { inputs: { a: { type: { kind: "json" } }, e: { type: { kind: "json" } } } }),
     binary: q(d === "postgres" ? `select encode(:a::bytea, 'hex') as a, encode(:b::bytea, 'hex') as b` : `select lower(hex(:a)) as a, lower(hex(:b)) as b`, ["a", "b"], "one"),
     many: q(`select id, name from ${t("people")} order by id`, [], "many"),
     one: q(`select id, name from ${t("people")} where id = :id`, ["id"], "one"),
@@ -401,6 +408,26 @@ export const SCENARIOS: Scenario[] = [
     async run(ctx, client, q) {
       // Bun.sql binds no JavaScript array, so reylo hands it the array's literal text.
       eq(await call(ctx, q.list, client, { ids: [1, 3, 4], names: ["ada", "cy", 'say "hi" \\ {x,y}'] }), [PEOPLE[0], PEOPLE[2]].map(({ id }) => ({ id })), "rows");
+    },
+  },
+  {
+    id: "S1e JSON params: an array bound to :a::jsonb is stored as that JSON array",
+    on: "client",
+    dialects: ["postgres"],
+    async run(ctx, client, q) {
+      // pg writes any array as an array literal, so `[]` became `{}` and `[1]` an error; reylo
+      // sends it the JSON text, and leaves the array to the drivers that bind it as JSON.
+      eq(await call(ctx, q.jsonArrays, client, { a: [1, { k: 'say "hi"' }, null], e: [] }), { a: '[1, {"k": "say \\"hi\\""}, null]', e: "[]" }, "the stored JSON");
+    },
+  },
+  {
+    id: "S1f array params: bool[], timestamptz[] and bytea[]",
+    on: "client",
+    dialects: ["postgres"],
+    async run(ctx, client, q) {
+      // postgres.js types an array by its first element, and Bun.sql binds none.
+      const row = await call(ctx, q.typedArrays, client, { b: [true, false], d: [new Date(Date.UTC(2026, 0, 2, 3, 4, 5, 6))], x: [Uint8Array.of(1, 2), Uint8Array.of(255)] });
+      eq(row, { b: "{t,f}", d: "1767323045.006000", x: "{0102,ff}" }, "row");
     },
   },
   {
@@ -812,8 +839,9 @@ export async function runJob(meta: JobMeta, setup: () => Promise<Job>): Promise<
     finish(0);
     return;
   }
-  const q = queries(job.dialect);
+  const typed = queries(job.dialect);
   for (const shape of job.shapes) {
+    const q = shape.untyped ? queries(job.dialect, false) : typed;
     const ctx: Ctx = { job, shape, kind: shape.kind, refusals: [] };
     const base = { pkg: job.pkg, version: job.version, runtime, target: job.target, shape: shape.name, live: shape.live ?? meta.live ?? true };
     if (shape.refused) {

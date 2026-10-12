@@ -44,6 +44,10 @@ Every scenario asserts its result. Each call also checks Reylo's return contract
 | S1b | An omitted (undefined) parameter binds NULL |
 | S1c | A plain `Uint8Array` and a view into a larger buffer, neither a Buffer, bind as their bytes (`hex` of each) |
 | S1d | Postgres only: `id = any(:ids) and name = any(:names)` over an int array and a text array whose last element holds a quote, a backslash, a space and braces |
+| S1e | Postgres only: an array bound to `:a::jsonb` (`[1, {"k": "say \"hi\""}, null]`) and `[]` to `:e::jsonb` are stored as those JSON arrays |
+| S1f | Postgres only: `bool[]`, `timestamptz[]` and `bytea[]` parameters |
+
+S1d, S1e and S1f give each statement the `inputs` the loader writes from the analysis (each parameter's type), since Reylo converts an array by it and converts none for a query without it.
 | S2a–S2e | Three rows for `many`; the row for `one`; null for `maybeOne` on zero rows; Reylo's "Expected at most one row, got 2" on two; `with(client)(params)` |
 | S3 | An INSERT without RETURNING (cardinality `none`) resolves undefined; the row is read back through Reylo and counted through the driver |
 | S3n | The same with the values written into the SQL, so Reylo passes no parameters |
@@ -55,7 +59,7 @@ Every scenario asserts its result. Each call also checks Reylo's return contract
 | S8 | 20 queries in flight on the shape resolve with the right rows |
 | S9 | An unsupported client: `run` rejects with Reylo's own TypeError |
 
-Visibility is always checked with a raw count through the driver, never through Reylo. A raw count also runs before each job as a preflight, so a driver that cannot reach its server at all is reported once as "not run" instead of failing every scenario. [drivers/control.ts](drivers/control.ts) holds the failing controls: a client that binds every integer plus one, a plain `Uint8Array` as its JSON (as mariadb does) and an array as its elements joined by commas (as Bun.sql does), a transaction whose rollback commits, a synchronous database declared asynchronous, and a `db.transaction(fn)` whose statements answer through a promise. 21 of their 45 rows fail, and each of the 24 that pass is a scenario that the breakage does not touch. Since `run` returns a promise on every client, a synchronous database declared asynchronous changes only what S0 expects of `runSync`, so 16 of the 24 are its rows.
+Visibility is always checked with a raw count through the driver, never through Reylo. A raw count also runs before each job as a preflight, so a driver that cannot reach its server at all is reported once as "not run" instead of failing every scenario. [drivers/control.ts](drivers/control.ts) holds the failing controls: a client that binds every integer plus one and a plain `Uint8Array` as its JSON (as mariadb does); an `unsafe()` client that binds an array as its elements joined by commas (as Bun.sql does), running the statements without their `inputs`, so that Reylo converts no array; an `unsafe()` client that binds every array as its array literal, a JSON parameter's too, as Reylo did on Bun.sql at cf2bc64; a transaction whose rollback commits; a synchronous database declared asynchronous; and a `db.transaction(fn)` whose statements answer through a promise. 24 of their 87 rows fail, and each of the 63 that pass is a scenario that the breakage does not touch. Since `run` returns a promise on every client, a synchronous database declared asynchronous changes only what S0 expects of `runSync`, so 16 of the 63 are its rows.
 
 ## Servers
 
@@ -114,18 +118,22 @@ The whole matrix ran again against src/ at 27887ee, on Node 26.11.1 and 24.21.0 
 
 One change was needed: Bun 1.4's MySQL adapter refuses to fetch the server's RSA key for `caching_sha2_password` over a connection without TLS ("The server requested RSA public key retrieval …", `ERR_MYSQL_PUBLIC_KEY_RETRIEVAL_NOT_ALLOWED`), which Bun 1.3 and mysql2 do unasked, so both Bun.sql MySQL jobs were "not run" until [drivers/bunsql.ts](drivers/bunsql.ts) passed `allowPublicKeyRetrieval: true`; then they give their 75 recorded passes each.
 
-## Re-run (2026-10-12): binary and array parameters
+## Re-run (2026-10-12): binary, array and JSON parameters
 
-S1c and S1d are new, after the coordinator measured two drivers that corrupt or refuse a parameter of a type Reylo declares. The whole matrix ran first against src/execute.ts as it was at 4784b29, in the same environment as the re-run of 2026-10-11 (Node 26.11.1 and 24.21.0, Bun 1.4.3, colima, a throwaway Postgres 18 through `DM_PG_URL`):
+S1c to S1f are new, after the coordinator measured drivers that corrupt or refuse a parameter of a type Reylo declares. Each ran in the same environment as the re-run of 2026-10-11 (Node 26.11.1 and 24.21.0, Bun 1.4.3, colima, a throwaway Postgres 18 through `DM_PG_URL`). S1c and S1d first ran against src/execute.ts at 4784b29, S1e and S1f against cf2bc64, the first version of the fix:
 
 | Rows | Result | Diagnosis |
 | --- | --- | --- |
-| mariadb 3.5.4, 3.4.5 and 2.5.6, S1c on every shape on both servers | fail (42 rows) | mariadb writes any value that is not a Buffer as JSON: `hex(?)` of `Uint8Array.of(1, 2, 255)` was `7B2230223A312C2231223A322C2232223A3235357D`, the hex of `{"0":1,"1":2,"2":255}` |
-| @neondatabase/serverless 0.9.5, S1c on `neon()` and `neon(url, { fullResults: true })` | fail (2 rows) | Its HTTP path sends a Buffer as JSON, `{"type":"Buffer","data":[1,2,255]}`, which pg's own `prepareValue` makes of a `Uint8Array` first; 0.10 added `encodeBuffersAsBytea` |
-| Bun.sql 1.4.3 on Postgres, S1d on all four shapes | fail (4 rows, in a run of that job alone) | Bun.sql binds no JavaScript array: "insufficient data left in message" (08P01) |
-| pg-promise 12.7.1, S1c | pass | pg-promise formats a plain `Uint8Array` as JSON when it writes the values into the text, but Reylo hands it a `{ text, values }` object, which pg binds |
+| mariadb 3.5.4, 3.4.5 and 2.5.6, S1c on every shape on both servers (4784b29) | fail (42 rows) | mariadb writes any value that is not a Buffer as JSON: `hex(?)` of `Uint8Array.of(1, 2, 255)` was `7B2230223A312C2231223A322C2232223A3235357D`, the hex of `{"0":1,"1":2,"2":255}` |
+| @neondatabase/serverless 0.9.5, S1c on `neon()` and `neon(url, { fullResults: true })` (4784b29) | fail (2 rows) | Its HTTP path sends a Buffer as JSON, `{"type":"Buffer","data":[1,2,255]}`, which pg's own `prepareValue` makes of a `Uint8Array` first; 0.10 added `encodeBuffersAsBytea` |
+| Bun.sql 1.4.3 on Postgres, S1d on all four shapes (4784b29) | fail (4 rows, in a run of that job alone) | Bun.sql binds no JavaScript array: "insufficient data left in message" (08P01) |
+| Bun.sql 1.4.3 on Postgres, S1e on all four shapes (cf2bc64) | fail (4 rows) | cf2bc64 wrote every array as an array literal for Bun.sql, and Bun.sql stores a string bound to `$1::jsonb` as a JSON string: `[1, 2, 3]` was stored as `"{\"1\",\"2\",\"3\"}"` |
+| pg 8.23.0, pg-promise 12.7.1 and @neondatabase/serverless 1.1.0, 0.10.4 and 0.9.5, S1e (cf2bc64) | fail (4, 4 and 2 per Neon version) | pg writes any array as an array literal, a JSON parameter's too: "invalid input syntax for type json", and `[]` is stored as `{}` |
+| postgres 3.4.9, S1f on all four shapes (cf2bc64) | fail (4 rows) | postgres.js types an array by its first element: "cannot cast type boolean to boolean[]" |
+| @neondatabase/serverless 1.1.0, 0.10.4 and 0.9.5, S1f on the Pool and Client (cf2bc64) | fail (2 per version) | The copy of pg inside Neon's Pool and Client has no case for a `Uint8Array` element of an array and throws "r.replace is not a function" while it writes the Bind message, which leaves the connection out of step: the scenarios after it on the same Client time out, and on the Pool the next statement read the previous one's values ("invalid input syntax for type integer: \"{\"true\",\"false\"}\"") |
+| pg-promise 12.7.1, S1c (4784b29) | pass | pg-promise formats a plain `Uint8Array` as JSON when it writes the values into the text, but Reylo hands it a `{ text, values }` object, which pg binds |
 
-Reylo now gives mariadb a Buffer over the same memory, Neon's `neon()` (the callable form before 1.0) a binary value as `\x` and its hex, and Bun.sql an array parameter as its Postgres array literal, written as pg writes one (`src/execute.ts`). The run after the fix wrote [RESULTS.md](RESULTS.md): 46 jobs and 3146 rows, with 3099 pass, 2 fail (PlanetScale's simulator, as before), 42 unsupported (PlanetScale 2.0 refuses S1c as it refuses every statement with parameters) and 3 not run, and 21 of 45 control rows failing as designed. Every row that was in RESULTS.md before has the result it had; the renamed control shape is the only key that changed.
+Reylo now gives mariadb a Buffer over the same memory and Neon's `neon()` before 1.0 a binary value as `\x` and its hex; and, by the parameter types the module carries as `inputs`, every Postgres client an array for a SQL array parameter as its array literal, written as pg writes one, and pg's family, PGlite and Neon an array for a JSON parameter as its JSON text, while postgres.js and Bun.sql get that one as it is (`src/execute.ts`). The run after the fix wrote [RESULTS.md](RESULTS.md): 46 jobs and 3230 rows, with 3183 pass, 2 fail (PlanetScale's simulator, as before), 42 unsupported (PlanetScale 2.0 refuses S1c as it refuses every statement with parameters) and 3 not run, and 24 of 87 control rows failing as designed. Every row that was in RESULTS.md before has the result it had; the control shapes are the only keys that changed.
 
 `scripts/gates.sh` runs every job and `node compare.ts` after them, the container jobs when Docker or colima is there; `node runner.ts --only <id>` runs one job, and `node compare.ts` compares whatever `.out/` holds.
 

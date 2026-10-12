@@ -1,9 +1,9 @@
 // The runtime query object behind `import query from "./file.sql"`.
 // Types come from the content mapper; values come from the runtime loader.
-import { execute, executeSync, type ClientFor, type Dialect, type SyncClientFor } from "./execute.ts";
+import { execute, executeSync, type ClientFor, type Dialect, type Inputs, type SyncClientFor } from "./execute.ts";
 import type { StandardJSONSchemaV1, StandardTypedV1 } from "./standard.ts";
 
-export type { ClientFor, Dialect, SyncClientFor } from "./execute.ts";
+export type { ClientFor, Dialect, Inputs, SyncClientFor } from "./execute.ts";
 
 /** How many rows a statement returns: `none` is a data-modifying statement without RETURNING. */
 export type Cardinality = "many" | "one" | "maybeOne" | "none";
@@ -64,6 +64,8 @@ export type QueryDefinition = {
   /** The statement as the engine rewrote it for the database, and its binding order: every build step puts them in the module. */
   text?: string;
   order?: readonly string[];
+  /** Each parameter's type, by name, as the engine found it: every build step puts it in the module, and a driver that binds some values wrong gets them converted by it. */
+  inputs?: Inputs;
   cardinality?: Cardinality;
   jsonSchema?: { input: Record<string, unknown>; output: Record<string, unknown> };
 };
@@ -75,12 +77,13 @@ export function defineQuery<Params, Row, C extends Cardinality, D extends Dialec
   const missingSchema = () => {
     throw new Error(`No JSON Schema is available for this query yet; run tsc --runExternalCode so the mapper can compute it.`);
   };
-  const query: Query<Params, Row, C, D, Values> & { text?: string | undefined; order?: readonly string[] | undefined } = {
+  const query: Query<Params, Row, C, D, Values> & { text?: string | undefined; order?: readonly string[] | undefined; inputs?: Inputs | undefined } = {
     dialect: def.dialect,
     sql: def.sql,
     params: def.params,
     text: def.text,
     order: def.order,
+    inputs: def.inputs,
     cardinality,
     "~standard": {
       version: 1,

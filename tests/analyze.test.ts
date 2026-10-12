@@ -97,7 +97,7 @@ test("the module a build step emits carries the analysis and reads nothing at ru
       `import { defineQuery } from "reylo";`,
       `export const sql = ${JSON.stringify(SELECT)};`,
       `export const params = ["id"];`,
-      `export default defineQuery({ dialect: "sqlite", sql, params, cardinality: "maybeOne", text: "select id, name from users where id = ?", order: ["id"] });`,
+      `export default defineQuery({ dialect: "sqlite", sql, params, cardinality: "maybeOne", text: "select id, name from users where id = ?", order: ["id"], inputs: {"id":{"type":{"kind":"scalar","name":"integer"}}} });`,
       ``,
     ].join("\n"));
     // A build (a process of its own) that has neither the database nor the entry fails instead of guessing.

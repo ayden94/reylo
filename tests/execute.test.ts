@@ -44,14 +44,53 @@ test("postgres: unsafe(text, values) → rows, as on postgres.js and Bun.sql and
   assert.deepEqual(calls, [{ method: "unsafe", args: ["select $1::int as id, $2 as name, $1 as again", [1, "ada"]] }]);
 });
 
-test("postgres: Bun.sql, which cannot bind a JavaScript array, gets the array's literal text; postgres.js gets the array", async () => {
-  const q: QueryModule<"postgres"> = { dialect: "postgres", sql: "select id from users where id = any(:ids) and name = :name", params: ["ids", "name"] };
+// The module's `inputs`: :ids is an int4[] parameter, :data a jsonb one, :name text.
+const typed: QueryModule<"postgres"> = {
+  dialect: "postgres",
+  sql: "select id from users where id = any(:ids) and name = :name and tags @> :data::jsonb",
+  params: ["ids", "name", "data"],
+  text: "select id from users where id = any($1) and name = $2 and tags @> $3::jsonb",
+  order: ["ids", "name", "data"],
+  inputs: { ids: { type: { kind: "array", of: { kind: "scalar", name: "int4" } } }, name: { type: { kind: "scalar", name: "text" } }, data: { type: { kind: "json" } } },
+};
+const typedValues = { ids: [1, 3], name: "ada", data: [1, { a: "b" }] };
+
+test("postgres: every client gets an array for a SQL array parameter as its literal text; postgres.js and Bun.sql get an array for a JSON parameter as it is", async () => {
   const seen: unknown[][] = [];
   const unsafe = async (_: string, values?: unknown[]) => (seen.push(values!), []);
   const bun = { unsafe, commitDistributed: async () => {} };
-  await execute(bun, q, { ids: [1, 3], name: "ada" });
-  await execute({ unsafe }, q, { ids: [1, 3], name: "ada" });
-  assert.deepEqual(seen, [["{\"1\",\"3\"}", "ada"], [[1, 3], "ada"]]);
+  await execute(bun, typed, typedValues);
+  await execute({ unsafe }, typed, typedValues);
+  assert.deepEqual(seen, [
+    ['{"1","3"}', "ada", [1, { a: "b" }]],
+    ['{"1","3"}', "ada", [1, { a: "b" }]],
+  ]);
+});
+
+test("postgres: pg's family, PGlite and Neon, which write any array as an array literal, get an array for a JSON parameter as its JSON text", async () => {
+  const seen: unknown[][] = [];
+  await execute({ query: async (_: string, values?: unknown[]) => (seen.push(values!), { rows: [] }) }, typed, typedValues);
+  const pgp = { manyOrNone: async () => [], query: async (q: any): Promise<any> => (seen.push(q.values), []) };
+  await execute(pgp, typed, typedValues);
+  await execute((_: string, values?: unknown[]) => (seen.push(values!), Promise.resolve([])), typed, typedValues);
+  assert.equal(seen.length, 3);
+  for (const values of seen) assert.deepEqual(values, ['{"1","3"}', "ada", '[1,{"a":"b"}]']);
+});
+
+test("a query without inputs, defined by hand or built before them, binds every array as it is", async () => {
+  const { inputs: _, ...bare } = typed;
+  const seen: unknown[][] = [];
+  const unsafe = async (_: string, values?: unknown[]) => (seen.push(values!), []);
+  const bun = { unsafe, commitDistributed: async () => {} };
+  await execute(bun, bare, typedValues);
+  await execute({ unsafe }, bare, typedValues);
+  await execute({ query: async (_: string, values?: unknown[]) => (seen.push(values!), { rows: [] }) }, bare, typedValues);
+  for (const values of seen) assert.deepEqual(values, [[1, 3], "ada", [1, { a: "b" }]]);
+  // Hand-written inputs work through the runtime's own lexer too, a repeated name included.
+  const hand: QueryModule<"postgres"> = { dialect: "postgres", sql: "select :ids::int[] = :ids::int[]", params: ["ids"], inputs: { ids: { type: { kind: "array", of: { kind: "scalar", name: "int4" } } } } };
+  seen.length = 0;
+  await execute({ unsafe }, hand, { ids: [2] });
+  assert.deepEqual(seen, [['{"2"}']]);
 });
 
 test("arrayLiteral writes a Postgres array literal as pg does: nesting, NULL, quotes, backslashes, binary, dates, the empty array", () => {

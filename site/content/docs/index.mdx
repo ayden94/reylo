@@ -550,6 +550,7 @@ types:
 
 - A `Buffer` is typed `Uint8Array`, which it extends. `binary: Buffer` types it `Buffer`, in a project with `@types/node`.
 - A binary parameter takes a `Uint8Array`, a `Buffer` or not, on every driver: mariadb, which writes any other value as JSON, gets it from Reylo as a `Buffer`.
+- On Postgres, an array parameter takes a JavaScript array on every driver, for a SQL array (`any(:ids)`, `:tags::text[]`) and for JSON (`:data::jsonb`) alike: Reylo writes it in the form the driver binds right.
 - With `dates: temporal`, the driver builds `Temporal` values, typed by TypeScript's `esnext.temporal` lib.
 - The settings do not reach inside nested JSON: there the database writes each value as JSON.
 

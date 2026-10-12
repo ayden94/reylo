@@ -6,6 +6,7 @@
 // as the client it came from, so it is accepted wherever that client is.
 
 import { queryPostgres } from "./decode.ts";
+import type { EngineType } from "./engine-type.ts";
 import { lexPlaceholders } from "./lex.ts";
 
 export type Dialect = "postgres" | "mysql" | "sqlite";
@@ -103,7 +104,17 @@ export type QueryModule<D extends Dialect = Dialect> = {
   readonly text?: string | undefined;
   /** The binding order for `text`: one name per placeholder of the rewritten statement. */
   readonly order?: readonly string[] | undefined;
+  /** What the analysis found of each parameter, by name (every build step puts it in the module). */
+  readonly inputs?: Inputs | undefined;
 };
+
+/**
+ * Each parameter by name: `type` is the engine's type for it. The run time reads it where a
+ * driver binds a value of one type wrong (an array to a SQL array on postgres.js and Bun.sql, to
+ * JSON on pg); a query without it, defined by hand or built before 2026-10-12, binds every value
+ * as it is. Typed JSON parameters (docs/typed-json-params.md) will carry their schema beside it.
+ */
+export type Inputs = Readonly<Record<string, { readonly type: EngineType }>>;
 
 type AnyClient = Record<string, any> & ((...args: any[]) => any);
 
@@ -167,23 +178,32 @@ function isSyncSqlite(c: AnyClient | null | undefined): boolean {
 
 async function executeAsync(c: AnyClient | null | undefined, query: QueryModule, params: ParamsInput): Promise<unknown[]> {
   if (c == null || (typeof c !== "object" && typeof c !== "function")) throw unsupported(c, query.dialect);
-  const { text, values } = statement(query, params);
+  const { text, values, names } = statement(query, params);
+  const kind = (i: number) => query.inputs?.[names[i]!]?.type.kind;
   switch (query.dialect) {
-    case "postgres":
+    case "postgres": {
+      // An array for a SQL array parameter goes as its literal text, which the server reads as
+      // the parameter's type, written as pg writes it: Bun.sql binds no JavaScript array
+      // (`any($1)` failed with "insufficient data left in message"), postgres.js types an
+      // array by its first element ("cannot cast type boolean to boolean[]" for `$1::bool[]`),
+      // and the copy of pg inside Neon's Pool and Client threw on a Uint8Array element and
+      // left the connection out of step. An array for a JSON parameter goes to pg's family,
+      // PGlite and Neon as its JSON text, since pg writes it as an array literal too (`[1]`
+      // failed with "invalid input syntax for type json", and `[]` was stored as `{}`); to
+      // postgres.js and Bun.sql, which bind it as JSON, as it is.
+      const bound = values.map((v, i) => (Array.isArray(v) && kind(i) === "array" ? arrayLiteral(v) : v));
+      const json = () => bound.map((v, i) => (Array.isArray(v) && isJson(kind(i)) ? JSON.stringify(v) : v));
       // query() before unsafe(): Neon's neon() has both, and its unsafe() builds a fragment
       // for a template instead of running anything. Where the driver takes a decoder per
       // query, reylo passes its own (decode.ts).
-      if (typeof c.query === "function") return await queryPostgres(c, text, values);
-      // Bun.sql (its commitDistributed() tells it from postgres.js) cannot bind a JavaScript
-      // array: `any($1)` failed with "insufficient data left in message" and `$1::text[]` with
-      // "malformed array literal", so it gets the array's literal text, which the server reads
-      // as the parameter's type.
-      if (typeof c.unsafe === "function") return await c.unsafe(text, typeof c.commitDistributed === "function" ? values.map((v) => (Array.isArray(v) ? arrayLiteral(v) : v)) : values);
+      if (typeof c.query === "function") return await queryPostgres(c, text, json());
+      if (typeof c.unsafe === "function") return await c.unsafe(text, bound);
       if (typeof c === "function") {
-        const result = await c(text, values.map(asByteaHex));
+        const result = await c(text, json().map(asByteaHex));
         return Array.isArray(result) ? result : result.rows;
       }
       break;
+    }
     case "mysql": {
       if (typeof c.unsafe === "function") return await c.unsafe(text, values);
       // mariadb, checked before execute() because it has one too (returning rows, not a pair).
@@ -248,7 +268,7 @@ function statement(query: QueryModule, input: ParamsInput) {
     throw new TypeError(`The parameters must be an object keyed by parameter name (or by number, { 1: ... }, for positional placeholders), or an array in the order of the query's params; got ${String(input)}.`);
   } else params = input as Record<string, unknown>;
   // The mapper already rewrote the statement; only the values need ordering.
-  if (query.text && query.order) return { text: query.text, values: query.order.map((name) => value(params, name)) };
+  if (query.text && query.order) return { text: query.text, values: query.order.map((name) => value(params, name)), names: query.order };
   return query.dialect === "postgres" ? rewrite(query, params) : rewriteRepeating(query, params);
 }
 
@@ -264,8 +284,12 @@ function value(params: Record<string, unknown>, name: string) {
 // exists (not in every Worker). Neon's neon() before 0.10 sends a Buffer as JSON as well, so it
 // gets Postgres's hex form, `\x0102ff`, which 0.10 and later send for a Buffer themselves.
 function asBuffer(v: unknown) {
-  return v instanceof Uint8Array && typeof globalThis.Buffer === "function" && !Buffer.isBuffer(v) ? Buffer.from(v.buffer, v.byteOffset, v.byteLength) : v;
+  // Named structurally, so that a project without Node's types can type-check the module.
+  const NodeBuffer = (globalThis as { Buffer?: { isBuffer(v: unknown): boolean; from(buffer: ArrayBufferLike, offset: number, length: number): Uint8Array } }).Buffer;
+  return v instanceof Uint8Array && NodeBuffer !== undefined && !NodeBuffer.isBuffer(v) ? NodeBuffer.from(v.buffer, v.byteOffset, v.byteLength) : v;
 }
+
+const isJson = (kind: EngineType["kind"] | undefined) => kind === "json" || kind === "object" || kind === "list";
 
 function asByteaHex(v: unknown) {
   if (!(v instanceof Uint8Array)) return v;
@@ -314,7 +338,7 @@ function rewrite(query: QueryModule, params: Record<string, unknown>) {
     text += query.sql.slice(last, p.start) + `$${indexOf(query, p) + 1}`;
     last = p.end;
   }
-  return { text: text + query.sql.slice(last), values: query.params.map((name) => value(params, name)) };
+  return { text: text + query.sql.slice(last), values: query.params.map((name) => value(params, name)), names: query.params };
 }
 
 // MySQL has only `?`, and better-sqlite3 reads SQLite's `?NNN` as a named parameter, so both
@@ -324,13 +348,15 @@ function rewriteRepeating(query: QueryModule, params: Record<string, unknown>) {
   let text = "";
   let last = 0;
   const values: unknown[] = [];
+  const names: string[] = [];
   for (const p of placeholders) {
     indexOf(query, p);
     text += query.sql.slice(last, p.start) + "?";
     values.push(value(params, p.name));
+    names.push(p.name);
     last = p.end;
   }
-  return { text: text + query.sql.slice(last), values };
+  return { text: text + query.sql.slice(last), values, names };
 }
 
 function indexOf(query: QueryModule, p: { name: string; start: number; end: number }) {
