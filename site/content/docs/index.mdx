@@ -1021,7 +1021,7 @@ select id, name from users where id = any(:ids)
 
 ```sql title="users_by_ids.sql" tab="MySQL" tab-group="dialect"
 with input as (
-  select :ids::json('{ "type": "array", "items": { "type": "int" } }') as ids
+  select :ids::json('{ "type": "array", "items": { "type": "integer" } }') as ids
 )
 select id, name from users
 where id in (
@@ -1072,7 +1072,7 @@ order by i.position
 ```sql title="users_in_order.sql" tab="MySQL" tab-group="dialect"
 -- a for ordinality column numbers the elements
 with input as (
-  select :ids::json('{ "type": "array", "items": { "type": "int" } }') as ids
+  select :ids::json('{ "type": "array", "items": { "type": "integer" } }') as ids
 )
 select u.id, u.name
 from input, json_table(input.ids, '$[*]' columns (
@@ -1219,8 +1219,8 @@ with input as (
     "items": {
       "type": "object",
       "properties": {
-        "name": { "type": "text" },
-        "email": { "type": ["text", "null"], "format": "email" }
+        "name": { "type": "string" },
+        "email": { "type": ["string", "null"], "format": "email" }
       },
       "required": ["name"]
     }
@@ -1241,8 +1241,8 @@ with input as (
     "items": {
       "type": "object",
       "properties": {
-        "name": { "type": "text" },
-        "email": { "type": ["varchar(255)", "null"], "format": "email" }
+        "name": { "type": "string" },
+        "email": { "type": ["string", "null"], "format": "email" }
       },
       "required": ["name"]
     }
@@ -1263,8 +1263,8 @@ with input as (
     "items": {
       "type": "object",
       "properties": {
-        "name": { "type": "text" },
-        "email": { "type": ["text", "null"], "format": "email" }
+        "name": { "type": "string" },
+        "email": { "type": ["string", "null"], "format": "email" }
       },
       "required": ["name"]
     }
@@ -1289,28 +1289,28 @@ const created = await createUsers.run(db, {
 
 A JSON parameter carries a schema in its cast. The schema gives the parameter its TypeScript type, and Reylo checks each value against it before the statement runs. The database never sees the schema: it receives the value as JSON text.
 
-- The schema is JSON Schema, with one difference: `type` is `"object"`, `"array"`, or one of the dialect's types (below), as in `{ "type": "text" }`.
-- A key is optional unless `required` lists it. A value that may be `null` says so in its type, `{ "type": ["text", "null"] }`, so `email` above is `email?: string | null`.
+- The schema is JSON Schema 2020-12, with its own types: `string`, `number`, `integer`, `boolean`, `null`, `object` and `array`. The statement's column list gives each value its database type.
+- A key is optional unless `required` lists it. A value that may be `null` says so in its type, `{ "type": ["string", "null"] }`, so `email` above is `email?: string | null`.
 - A key the schema does not name is ignored, unless its object sets `"additionalProperties": false`.
 - A nested object or array stays JSON: read it with the database's JSON functions, as in [Insert related rows](#insert-related-rows).
-- A text type or `uuid` is a `string`, a number type a `number`, `boolean` a `boolean`, `json` and `jsonb` any JSON value.
+- `string` is a `string`, `number` and `integer` a `number`, `boolean` a `boolean` and `null` `null`; an object or an array is typed by its shape.
 - The checks are JSON Schema's validation keywords, such as `format`, `pattern`, `minLength`, `maxLength`, `minimum`, `maximum`, `multipleOf`, `enum`, `const`, `minItems`, `maxItems` and `uniqueItems`. `enum` and `const` also narrow the type. A value that fails makes `run` reject before the statement reaches the database, with every issue listed.
 - `oneOf`, `anyOf` and `allOf` combine schemas, as in [Record events of several kinds](#record-events-of-several-kinds), and `prefixItems` types a tuple.
 
 <DialectTabs follow>
 <Dialect value="Postgres">
 
-The cast is `:users::jsonb('…')`, and Postgres receives `$1::jsonb`. A leaf type is a Postgres type, such as `"text"`, `"int"` or `"uuid"`.
+The cast is `:users::jsonb('…')`, and Postgres receives `$1::jsonb`.
 
 </Dialect>
 <Dialect value="MySQL">
 
-The cast is `:users::json('…')`, and MySQL receives `cast(? as json)`. A leaf type is a MySQL type, such as `"varchar(255)"` or `"int"`.
+The cast is `:users::json('…')`, and MySQL receives `cast(? as json)`.
 
 </Dialect>
 <Dialect value="SQLite">
 
-The cast is `:users::json('…')`, and SQLite receives `?`. A leaf type is a type a `strict` table takes: `"text"`, `"integer"`, `"real"`, `"blob"` or `"any"`.
+The cast is `:users::json('…')`, and SQLite receives `?`.
 
 </Dialect>
 </DialectTabs>
@@ -1333,13 +1333,13 @@ with input as (
     "items": {
       "type": "object",
       "properties": {
-        "name": { "type": "text" },
-        "email": { "type": "text", "format": "email" },
+        "name": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
         "posts": {
           "type": "array",
           "items": {
             "type": "object",
-            "properties": { "title": { "type": "text" } },
+            "properties": { "title": { "type": "string" } },
             "required": ["title"]
           }
         }
@@ -1386,8 +1386,8 @@ with input as (
     "items": {
       "type": "object",
       "properties": {
-        "name": { "type": "text" },
-        "email": { "type": "varchar(255)", "format": "email" }
+        "name": { "type": "string" },
+        "email": { "type": "string", "format": "email" }
       },
       "required": ["name", "email"]
     }
@@ -1408,12 +1408,12 @@ with input as (
     "items": {
       "type": "object",
       "properties": {
-        "email": { "type": "varchar(255)" },
+        "email": { "type": "string" },
         "posts": {
           "type": "array",
           "items": {
             "type": "object",
-            "properties": { "title": { "type": "text" } },
+            "properties": { "title": { "type": "string" } },
             "required": ["title"]
           }
         }
@@ -1471,8 +1471,8 @@ with input as (
     "items": {
       "type": "object",
       "properties": {
-        "name": { "type": "text" },
-        "email": { "type": "text", "format": "email" }
+        "name": { "type": "string" },
+        "email": { "type": "string", "format": "email" }
       },
       "required": ["name", "email"]
     }
@@ -1490,12 +1490,12 @@ with input as (
     "items": {
       "type": "object",
       "properties": {
-        "email": { "type": "text" },
+        "email": { "type": "string" },
         "posts": {
           "type": "array",
           "items": {
             "type": "object",
-            "properties": { "title": { "type": "text" } },
+            "properties": { "title": { "type": "string" } },
             "required": ["title"]
           }
         }
@@ -1687,17 +1687,17 @@ with input as (
         {
           "type": "object",
           "properties": {
-            "kind": { "type": "text", "const": "click" },
-            "x": { "type": "int" },
-            "y": { "type": "int" }
+            "kind": { "type": "string", "const": "click" },
+            "x": { "type": "integer" },
+            "y": { "type": "integer" }
           },
           "required": ["kind", "x", "y"]
         },
         {
           "type": "object",
           "properties": {
-            "kind": { "type": "text", "const": "key" },
-            "code": { "type": "text" }
+            "kind": { "type": "string", "const": "key" },
+            "code": { "type": "string" }
           },
           "required": ["kind", "code"]
         }
@@ -1720,17 +1720,17 @@ with input as (
         {
           "type": "object",
           "properties": {
-            "kind": { "type": "text", "const": "click" },
-            "x": { "type": "int" },
-            "y": { "type": "int" }
+            "kind": { "type": "string", "const": "click" },
+            "x": { "type": "integer" },
+            "y": { "type": "integer" }
           },
           "required": ["kind", "x", "y"]
         },
         {
           "type": "object",
           "properties": {
-            "kind": { "type": "text", "const": "key" },
-            "code": { "type": "text" }
+            "kind": { "type": "string", "const": "key" },
+            "code": { "type": "string" }
           },
           "required": ["kind", "code"]
         }
@@ -1754,7 +1754,7 @@ with input as (
         {
           "type": "object",
           "properties": {
-            "kind": { "type": "text", "const": "click" },
+            "kind": { "type": "string", "const": "click" },
             "x": { "type": "integer" },
             "y": { "type": "integer" }
           },
@@ -1763,8 +1763,8 @@ with input as (
         {
           "type": "object",
           "properties": {
-            "kind": { "type": "text", "const": "key" },
-            "code": { "type": "text" }
+            "kind": { "type": "string", "const": "key" },
+            "code": { "type": "string" }
           },
           "required": ["kind", "code"]
         }
