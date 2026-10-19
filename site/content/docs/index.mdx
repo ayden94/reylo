@@ -148,7 +148,7 @@ Add Reylo to `tsconfig.json`:
 }
 ```
 
-Type-check with `--runExternalCode`. Without the flag, `tsc` reports error TS100024 and finds no `.sql` module (TS2307).
+Type-check with `--runExternalCode`. Without the flag, `tsc` reports error TS18068 (TS100024 on nightlies before 2026-09-23) and finds no `.sql` module (TS2307).
 
 ```json title="package.json"
 {
