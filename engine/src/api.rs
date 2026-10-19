@@ -44,8 +44,9 @@ pub enum Answer {
 /// column it comes from (none for an expression), and that table and column.
 /// MySQL's prepare metadata as mysql2 reports it: the protocol type code, the flags (bit 1 is
 /// NOT NULL) and the charset (63 is binary) per result column, and the server's type guess per `?`.
-/// A column also carries its display length and the table it is a column of, which is empty for
-/// an expression; a host that sends neither gets the answer that holds whatever they are.
+/// A column also carries its display length and the table and column it is a column of, which
+/// are empty for an expression; a host that sends none of them gets the answer that holds
+/// whatever they are.
 #[derive(Debug, Clone, Deserialize)]
 pub struct MysqlDescribe {
     pub columns: Vec<MysqlColumn>,
@@ -63,6 +64,9 @@ pub struct MysqlColumn {
     pub length: Option<u32>,
     #[serde(default)]
     pub org_table: Option<String>,
+    /// The column's own name in `org_table`, whatever the statement calls it.
+    #[serde(default)]
+    pub org_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

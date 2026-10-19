@@ -18,6 +18,16 @@ pub struct DescribedColumn {
     /// 'banned')`), those strings: its values are a union of literals, as an enum's labels are.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub values: Option<Vec<String>>,
+    /// For a bare read of a `json` or `jsonb` column a CHECK holds to a JSON Schema the database
+    /// validates (`jsonb_matches_schema('…', doc)`), the canonical schema of the values it admits
+    /// ([`crate::schema_type`]): its values are those, as [`Type::Json`]'s `schema` says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document: Option<serde_json::Value>,
+    /// Whether the column is a whole row the statement reads from a table (`d` of `from docs
+    /// d`): a stored row, which the table's CHECKs held, unlike a row value the statement builds
+    /// (`row(…)::docs`), which only shares the type.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub whole_row: bool,
 }
 
 /// One described statement.
@@ -59,8 +69,13 @@ pub enum Type {
     Composite { name: String, fields: Vec<Field> },
     /// `json[b]_agg(…)`: a JSON array of the item type.
     List { of: Box<Type>, nullable_items: bool },
-    /// A `json`/`jsonb` value the engine could not explain.
-    Json,
+    /// A `json`/`jsonb` value: any JSON, or, where a CHECK holds it to a JSON Schema the
+    /// database validates, the values that schema admits, as the canonical schema of
+    /// [`crate::schema_type`].
+    Json {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        schema: Option<serde_json::Value>,
+    },
     /// Nothing the engine derived.
     Unknown,
 }

@@ -45,6 +45,14 @@ const UNIQUE_KEYS_QUERY: &str = "select s.table_name, s.index_name, s.column_nam
 const TABLE_COLUMNS_QUERY: &str = "select c.table_name, c.column_name from information_schema.columns c \
     where c.table_schema = database() and find_in_set(c.table_name, ?) order by c.table_name, c.ordinal_position";
 
+/// One row per enforced CHECK of the named tables of the current database: the table, and the
+/// CHECK as `information_schema` prints it ([`check_clause`]). `?` is the comma-joined table
+/// names. A server before 8.0.16 has neither table, and its error is no CHECK.
+const CHECKS_QUERY: &str = "select tc.table_name, cc.check_clause from information_schema.table_constraints tc \
+    join information_schema.check_constraints cc on cc.constraint_schema = tc.constraint_schema and cc.constraint_name = tc.constraint_name \
+    where tc.table_schema = database() and tc.constraint_type = 'CHECK' and tc.enforced = 'YES' and find_in_set(tc.table_name, ?) \
+    order by tc.table_name, tc.constraint_name";
+
 /// The statements the MySQL analysis types. A server prepares DDL too, so a migration would
 /// otherwise come back typed as a statement that returns no rows.
 const KINDS: &[&str] = &["select", "with", "table", "values", "insert", "replace", "update", "delete"];
@@ -283,17 +291,35 @@ pub fn analyze(sql: &str, lexed: &Lexed, text: Option<MysqlText>, host: &Host) -
             }
         }
         let mut outcomes: Vec<Option<MysqlDescribe>> = Vec::with_capacity(plan.probes.len());
+        // Per probe, the JSON Schema a CHECK holds each JSON column it reads to.
+        let mut documents: Vec<Vec<Option<Value>>> = Vec::with_capacity(plan.probes.len());
         for probe in &plan.probes {
+            let mut described = &probe.sql;
             let mut outcome = host.describe_mysql(&probe.sql);
             if let (Some(Err(_)), Some(wider)) = (&outcome, &probe.wider) {
+                described = wider;
                 outcome = host.describe_mysql(wider);
             }
             match outcome {
-                Some(Ok(d)) => outcomes.push(Some(d)),
-                Some(Err(_)) => outcomes.push(None),
+                Some(Ok(d)) => {
+                    let read = parse(&dialect, described).ok().and_then(|mut v| if v.len() == 1 { v.pop() } else { None });
+                    match self::documents(read.as_ref(), &d, host) {
+                        Some(found) => documents.push(found),
+                        None => {
+                            pending = true;
+                            documents.push(Vec::new());
+                        }
+                    }
+                    outcomes.push(Some(d));
+                }
+                Some(Err(_)) => {
+                    outcomes.push(None);
+                    documents.push(Vec::new());
+                }
                 None => {
                     pending = true;
                     outcomes.push(None);
+                    documents.push(Vec::new());
                 }
             }
         }
@@ -318,7 +344,7 @@ pub fn analyze(sql: &str, lexed: &Lexed, text: Option<MysqlText>, host: &Host) -
         // What may reach each leaf: a placeholder in a document is the value it is given too.
         let flows: Vec<Vec<u8>> = plan.probes.iter().zip(&outcomes).map(|(probe, outcome)| outcome.as_ref().map(|d| probe_flow(&probe.sql, d, &dialect)).unwrap_or_default()).collect();
         for (name, shape) in &plan.columns {
-            let (ty, non_null) = resolve(shape, &outcomes, &plan, &flows);
+            let (ty, non_null) = resolve(shape, &outcomes, &plan, &flows, &documents);
             shaped.push((name.clone(), ty, non_null));
         }
     }
@@ -328,6 +354,8 @@ pub fn analyze(sql: &str, lexed: &Lexed, text: Option<MysqlText>, host: &Host) -
         false => Some(HashSet::new()),
     };
     let settled = settle(sql, lexed, &rewritten, parsed.as_ref(), &raw, views.as_ref());
+    // A JSON column a CHECK holds to a JSON Schema: the values the schema lets in.
+    let documents = documents(parsed.as_ref(), &raw, host)?;
     let mut shapes_used: Vec<bool> = vec![false; shaped.len()];
     let columns = raw
         .columns
@@ -347,7 +375,13 @@ pub fn analyze(sql: &str, lexed: &Lexed, text: Option<MysqlText>, host: &Host) -
                     let ty = if c.r#type == 245 { shaped_ty.clone() } else { ty };
                     Column { name: c.name.clone(), ty, nullable: !(not_null || *non_null), type_name: name.to_string() }
                 }
-                None => Column { name: c.name.clone(), ty, nullable: !not_null, type_name: name.to_string() },
+                None => {
+                    let ty = match (ty, documents.get(position).cloned().flatten()) {
+                        (Type::Json { schema: None }, Some(schema)) => Type::Json { schema: Some(schema) },
+                        (ty, _) => ty,
+                    };
+                    Column { name: c.name.clone(), ty, nullable: !not_null, type_name: name.to_string() }
+                }
             }
         })
         .collect();
@@ -782,7 +816,7 @@ fn widened(ty: &Type, reached: u8) -> Option<Type> {
     let placeholders = reached & PLACEHOLDERS != 0;
     let name = match ty {
         Type::Scalar { name } => name,
-        Type::Json if placeholders => return Some(Type::Unknown),
+        Type::Json { .. } if placeholders => return Some(Type::Unknown),
         _ => return None,
     };
     let string = reached & PASSED != 0 && reached & (DECIMAL | TEMPORAL | OTHER) != 0;
@@ -925,7 +959,7 @@ fn column_type(code: u32, charset: u32) -> (Type, &'static str) {
         12 => (scalar("timestamp"), "datetime"),
         10 | 14 => (scalar("date"), "date"),
         11 => (scalar("time"), "time"),
-        245 => (Type::Json, "json"),
+        245 => (Type::Json { schema: None }, "json"),
         16 => (scalar("bytea"), "bit"),
         249..=254 | 15 => {
             if charset == 63 { (scalar("bytea"), "binary") } else { (scalar("text"), "varchar") }
@@ -945,20 +979,20 @@ fn param_type(code: u32, charset: u32) -> (Type, &'static str) {
 }
 
 /// One shape plus its probes' prepares as the column's type and whether it is never NULL.
-fn resolve(shape: &Shape, outcomes: &[Option<MysqlDescribe>], plan: &crate::mysql_shape::Plan, flows: &[Vec<u8>]) -> (Type, bool) {
+fn resolve(shape: &Shape, outcomes: &[Option<MysqlDescribe>], plan: &crate::mysql_shape::Plan, flows: &[Vec<u8>], documents: &[Vec<Option<Value>>]) -> (Type, bool) {
     match shape {
         Shape::Object { fields, non_null } => {
             let fields = fields
                 .iter()
                 .map(|(k, s)| {
-                    let (ty, nn) = resolve(s, outcomes, plan, flows);
+                    let (ty, nn) = resolve(s, outcomes, plan, flows, documents);
                     Field { name: k.clone(), ty, nullable: !nn }
                 })
                 .collect();
             (Type::Object { fields }, *non_null)
         }
         Shape::Array { items, non_null } => {
-            let (ty, nn) = resolve(items, outcomes, plan, flows);
+            let (ty, nn) = resolve(items, outcomes, plan, flows, documents);
             (Type::List { of: Box::new(ty), nullable_items: !nn }, *non_null)
         }
         Shape::Column { probe, index } => match outcomes.get(*probe).and_then(|o| o.as_ref()).and_then(|o| o.columns.get(*index)) {
@@ -967,6 +1001,11 @@ fn resolve(shape: &Shape, outcomes: &[Option<MysqlDescribe>], plan: &crate::mysq
             Some(c) => {
                 let ty = column_type(c.r#type, c.charset).0;
                 let ty = flows.get(*probe).and_then(|f| f.get(*index)).and_then(|reached| widened(&ty, *reached)).unwrap_or(ty);
+                // A JSON column a CHECK holds to a JSON Schema: the values it admits.
+                let ty = match (ty, documents.get(*probe).and_then(|d| d.get(*index)).cloned().flatten()) {
+                    (Type::Json { schema: None }, Some(schema)) => Type::Json { schema: Some(schema) },
+                    (ty, _) => ty,
+                };
                 match ty {
                     Type::Scalar { name } if plan.either.contains(&(*probe, *index)) && name.split('|').any(|n| matches!(n, "int2" | "int4" | "int8")) => (Type::Scalar { name: format!("bool|{name}") }, c.flags & 1 != 0),
                     ty => (ty, c.flags & 1 != 0),
@@ -1015,6 +1054,177 @@ fn table_columns(host: &Host, tables: &[String]) -> Lazy<crate::mysql_shape::Col
         }
     }
     Some(columns)
+}
+
+/// Per result column, the canonical schema of the values a CHECK's `json_schema_valid` lets into
+/// the JSON column it reads ([`crate::schema_type`]), where the prepare's origin of the column is
+/// the column itself ([`traced_tables`]).
+fn documents(statement: Option<&Statement>, raw: &MysqlDescribe, host: &Host) -> Lazy<Vec<Option<Value>>> {
+    let none = || Some(vec![None; raw.columns.len()]);
+    let Some(Statement::Query(q)) = statement else { return none() };
+    let Some(tables) = traced_tables(q) else { return none() };
+    let wanted: Vec<(usize, String, String)> = raw
+        .columns
+        .iter()
+        .enumerate()
+        .filter_map(|(i, c)| {
+            let (table, column) = (c.org_table.as_deref()?, c.org_name.as_deref()?);
+            let read = c.r#type == 245 && !column.is_empty() && tables.iter().any(|t| t.eq_ignore_ascii_case(table));
+            read.then(|| (i, table.to_ascii_lowercase(), column.to_ascii_lowercase()))
+        })
+        .collect();
+    if wanted.is_empty() {
+        return none();
+    }
+    let mut names: Vec<String> = wanted.iter().map(|(_, table, _)| table.clone()).collect();
+    names.sort();
+    names.dedup();
+    let rows = host.query(CHECKS_QUERY, vec![json!(names.join(","))], Scope::Statement)?;
+    let mut schemas: HashMap<(String, String), Vec<(String, &[&crate::schema_type::Validator])>> = HashMap::new();
+    for row in rows.unwrap_or_default() {
+        let (Some(table), Some(clause)) = (row.first().and_then(as_str), row.get(1).and_then(as_str)) else { continue };
+        for (column, schema) in check_documents(clause) {
+            schemas.entry((table.to_ascii_lowercase(), column.to_ascii_lowercase())).or_default().push((schema, &[&crate::schema_type::MYSQL]));
+        }
+    }
+    let mut out = vec![None; raw.columns.len()];
+    for (i, table, column) in wanted {
+        if let Some(texts) = schemas.get(&(table, column)) {
+            out[i] = crate::schema_type::checked_type(texts);
+        }
+    }
+    Some(out)
+}
+
+/// The tables of a SELECT whose columns' origins in the prepare are the columns themselves: one
+/// with no WITH and no set operation, every item a column or a `*`, over tables named without a
+/// schema. Through a derived table or a WITH query MySQL gives the base table and the derived
+/// column's own name as a column's origin (`select doc from (select other as doc from o) s` reads
+/// `o.doc`), and an expression's origin is not its value's; a view's columns name the view, which
+/// has no CHECK.
+fn traced_tables(q: &Query) -> Option<Vec<String>> {
+    fn column(e: &Expr) -> bool {
+        match e {
+            Expr::Identifier(_) | Expr::CompoundIdentifier(_) => true,
+            Expr::Nested(inner) => column(inner),
+            _ => false,
+        }
+    }
+    if q.with.is_some() {
+        return None;
+    }
+    let SetExpr::Select(select) = q.body.as_ref() else { return None };
+    let items = select.projection.iter().all(|item| match item {
+        SelectItem::UnnamedExpr(e) | SelectItem::ExprWithAlias { expr: e, .. } => column(e),
+        SelectItem::Wildcard(_) | SelectItem::QualifiedWildcard(..) => true,
+        _ => false,
+    });
+    if !items {
+        return None;
+    }
+    let mut tables = Vec::new();
+    for from in &select.from {
+        for factor in std::iter::once(&from.relation).chain(from.joins.iter().map(|j| &j.relation)) {
+            match factor {
+                TableFactor::Table { name, args: None, .. } if name.0.len() == 1 => tables.push(name.0[0].as_ident()?.value.clone()),
+                _ => return None,
+            }
+        }
+    }
+    Some(tables)
+}
+
+/// `CHECK_CLAUSE` as the CHECK was written. `information_schema` hands its text back double
+/// encoded, each byte of its UTF-8 as the character of that number, and with one more level of
+/// backslash escapes than the server's own reprint. `None` where that does not read back, or
+/// where a string holds `\a` or `\f`, which `sqlparser` reads as control characters and MySQL as
+/// the letters.
+fn check_clause(text: &str) -> Option<String> {
+    let text = if text.chars().all(|c| (c as u32) <= 0xFF) { String::from_utf8(text.chars().map(|c| c as u8).collect()).ok()? } else { text.to_string() };
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        out.push(if c == '\\' { chars.next()? } else { c });
+    }
+    let mut chars = out.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' && matches!(chars.next(), Some('a' | 'f') | None) {
+            return None;
+        }
+    }
+    Some(out)
+}
+
+/// The JSON Schema text each `json_schema_valid('…', column)` of a CHECK holds its column to, as
+/// `(column, schema)`: the call alone, a conjunct of an AND (each one holds), or beside `column
+/// is null` under an OR, which only lets NULL through as well. The function is NULL for a NULL
+/// document and true or false for any other, so a row the CHECK lets in holds a value the schema
+/// admits. `clause` is `CHECK_CLAUSE` ([`check_clause`]).
+fn check_documents(clause: &str) -> Vec<(String, String)> {
+    fn column(e: &Expr) -> Option<String> {
+        match e {
+            Expr::Identifier(i) => Some(i.value.clone()),
+            Expr::Nested(inner) => column(inner),
+            _ => None,
+        }
+    }
+    fn string(e: &Expr) -> Option<String> {
+        match e {
+            Expr::Value(v) => match &v.value {
+                ast::Value::SingleQuotedString(s) => Some(s.clone()),
+                _ => None,
+            },
+            Expr::Prefixed { value, .. } => string(value),
+            Expr::Nested(inner) => string(inner),
+            Expr::Cast { expr, data_type: ast::DataType::JSON, .. } => string(expr),
+            _ => None,
+        }
+    }
+    fn validates(e: &Expr) -> Option<(String, String)> {
+        let Expr::Function(f) = e else { return None };
+        let name = f.name.0.last()?.as_ident()?;
+        if !name.value.eq_ignore_ascii_case("json_schema_valid") {
+            return None;
+        }
+        let ast::FunctionArguments::List(list) = &f.args else { return None };
+        let [FunctionArg::Unnamed(FunctionArgExpr::Expr(schema)), FunctionArg::Unnamed(FunctionArgExpr::Expr(document))] = list.args.as_slice() else { return None };
+        Some((column(document)?, string(schema)?))
+    }
+    fn conjuncts(e: &Expr, only: Option<&str>, out: &mut Vec<(String, String)>) {
+        let mine = |column: &str| only.is_none_or(|o| o.eq_ignore_ascii_case(column));
+        match e {
+            Expr::Nested(inner) => conjuncts(inner, only, out),
+            Expr::BinaryOp { left, op: ast::BinaryOperator::And, right } => {
+                conjuncts(left, only, out);
+                conjuncts(right, only, out);
+            }
+            Expr::BinaryOp { left, op: ast::BinaryOperator::Or, right } => {
+                fn bare(e: &Expr) -> &Expr {
+                    match e {
+                        Expr::Nested(inner) => bare(inner),
+                        other => other,
+                    }
+                }
+                for (null, other) in [(left, right), (right, left)] {
+                    if let Expr::IsNull(tested) = bare(null) {
+                        if let Some(c) = column(tested).filter(|c| mine(c)) {
+                            conjuncts(other, Some(&c), out);
+                        }
+                    }
+                }
+            }
+            _ => {
+                if let Some((c, schema)) = validates(e).filter(|(c, _)| mine(c)) {
+                    out.push((c, schema));
+                }
+            }
+        }
+    }
+    let Some(text) = check_clause(clause) else { return Vec::new() };
+    let Ok(expr) = Parser::new(&MySqlDialect {}).try_with_sql(&text).and_then(|mut p| p.parse_expr()) else { return Vec::new() };
+    let mut out = Vec::new();
+    conjuncts(&expr, None, &mut out);
+    out
 }
 
 fn unique_keys(host: &Host, tables: &[String]) -> Lazy<Keys> {
@@ -1465,6 +1675,37 @@ pub(crate) fn aggregate_where(e: &Expr, counts: &mut dyn FnMut(&ast::Function) -
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_json_schema_check_as_information_schema_prints_it() {
+        // `CHECK_CLAUSE` as MySQL 8.4.11 printed the CHECKs of docs/json-schema-checks/mysql/catalog.ts.
+        let schema = r#"{"type":"object","properties":{"a":{"type":"string"}},"required":["a"]}"#;
+        let at = |clause: &str| check_documents(clause).into_iter().map(|(c, s)| (c, serde_json::from_str::<Value>(&s).unwrap())).collect::<Vec<_>>();
+        let doc = vec![("doc".to_string(), serde_json::from_str::<Value>(schema).unwrap())];
+        assert_eq!(at(&format!(r"json_schema_valid(_utf8mb4\'{schema}\',`doc`)")), doc);
+        assert_eq!(at(&format!(r"((`doc` is null) or json_schema_valid(_utf8mb4\'{schema}\',`doc`))")), doc);
+        assert_eq!(at(&format!(r"(json_schema_valid(_utf8mb4\'{schema}\',`doc`) and (json_length(`doc`) < 5))")), doc);
+        assert_eq!(at(&format!(r"json_schema_valid(cast(_utf8mb4\'{schema}\' as json),`doc`)")), doc);
+        // A schema the CHECK builds, a call compared with a value, and an OR beside another
+        // column's null test say nothing.
+        assert_eq!(at(r"json_schema_valid(json_object(_utf8mb4\'type\',_utf8mb4\'object\'),`doc`)"), vec![]);
+        assert_eq!(at(&format!(r"((`other` is null) or json_schema_valid(_utf8mb4\'{schema}\',`doc`))")), vec![]);
+        assert_eq!(at(&format!(r"((`doc` = 1) or json_schema_valid(_utf8mb4\'{schema}\',`doc`))")), vec![]);
+    }
+
+    #[test]
+    fn a_check_clause_reads_back_through_its_escapes_and_its_double_encoding() {
+        // Quotes, backslashes, a JSON escape, non-ASCII and four-byte text, as 8.4.11 printed them.
+        let catalog = include_str!("../../docs/json-schema-checks/mysql/out/catalog-mysql-8.4.txt");
+        let line = catalog.lines().find_map(|l| l.strip_prefix("c_esc_default ")).unwrap();
+        let clause: String = serde_json::from_str(line).unwrap();
+        let found = check_documents(&clause);
+        assert_eq!(found.len(), 1);
+        let schema: Value = serde_json::from_str(&found[0].1).unwrap();
+        assert_eq!(schema, json!({"enum": ["it's", "a\\b", "\u{e9}", "\u{e9}", "\"q\"", "\u{1f600}", "\u{20ac}", "t\tx", "%_"]}));
+        // A string `sqlparser` would read otherwise than MySQL is not read.
+        assert_eq!(check_clause(r"json_schema_valid(_utf8mb4\'\\f\',`doc`)"), None);
+    }
+
     use super::*;
 
     fn keys() -> Keys {
@@ -1807,7 +2048,7 @@ mod tests {
         assert_eq!(types("select @n := coalesce(@n, 0) + 1 as c, id, @@max_join_size as d, @`q` as e from users", &[8, 3, 8, 251], &[]), "Unknown int4 int8 Unknown");
         assert_eq!(types("select d.c, 'a@b' as e from (select @n as c) d", &[8, 253], &[]), "Unknown text");
         // A string bound beside a JSON value makes the result a string of bytes.
-        assert_eq!(types("select coalesce(doc, :fallback) as c, json_extract(doc, :path) as d from users", &[245, 245], &[245, 253]), "Unknown Json");
+        assert_eq!(types("select coalesce(doc, :fallback) as c, json_extract(doc, :path) as d from users", &[245, 245], &[245, 253]), "Unknown Json { schema: None }");
     }
 
     #[test]

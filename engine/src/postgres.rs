@@ -44,11 +44,15 @@ pub const ATTNOTNULL_QUERY: &str = concat!(
 /// `$1` is `oid[]` of relations, `$2` the `int2[]` of attribute numbers beside them: one row per
 /// validated, enforced CHECK on such a column, the table's on that column alone (and inherited by
 /// any child a scan reads) or the column's domain's, where the column holds `text` or `varchar`
-/// under a deterministic collation, `(relation, attnum, the column's name, the CHECK as the server
-/// prints it)`. `conenforced` is read through `to_jsonb`, since only PostgreSQL 18 has the column.
-/// A table's CHECK says nothing where the table, or a partition or child a scan reads, is a foreign
-/// table, whose rows the server never checks; a domain's input function checks every value.
-pub const CHECKS_QUERY: &str = "SELECT a.attrelid::int8, a.attnum::int4, a.attname::text, pg_catalog.pg_get_expr(k.conbin, k.conrelid, true) \
+/// under a deterministic collation, or `json` or `jsonb`: `(relation, attnum, the column's name,
+/// the CHECK as the server prints it, and per function the CHECK calls, its name, its extension's
+/// name and that extension's version, in three arrays)`. `conenforced` is read through `to_jsonb`,
+/// since only PostgreSQL 18 has the column. A table's CHECK says nothing where the table, or a
+/// partition or child a scan reads, is a foreign table, whose rows the server never checks; a
+/// domain's input function checks every value. Nothing is read under `standard_conforming_strings`
+/// off, where the server prints a string's backslashes doubled and the parser would read them so.
+pub const CHECKS_QUERY: &str = "SELECT a.attrelid::int8, a.attnum::int4, a.attname::text, pg_catalog.pg_get_expr(k.conbin, k.conrelid, true), \
+      f.names, f.extensions, f.versions \
     FROM unnest($1::oid[], $2::int2[]) AS u(rel, att) \
     JOIN pg_attribute a ON a.attrelid = u.rel AND a.attnum = u.att AND NOT a.attisdropped \
     JOIN pg_type t ON t.oid = a.atttypid \
@@ -58,8 +62,16 @@ pub const CHECKS_QUERY: &str = "SELECT a.attrelid::int8, a.attnum::int4, a.attna
           AND NOT EXISTS (WITH RECURSIVE tree(rel) AS (SELECT a.attrelid UNION SELECT i.inhrelid FROM tree t JOIN pg_inherits i ON i.inhparent = t.rel) \
             SELECT 1 FROM tree t JOIN pg_class f ON f.oid = t.rel WHERE f.relkind = 'f')) \
         OR (t.typtype = 'd' AND k.contypid = t.oid)) \
-    WHERE (CASE WHEN t.typtype = 'd' THEN t.typbasetype ELSE t.oid END) IN ('pg_catalog.text'::pg_catalog.regtype, 'pg_catalog.varchar'::pg_catalog.regtype) \
-      AND coalesce((SELECT o.collisdeterministic FROM pg_collation o WHERE o.oid = a.attcollation), true)";
+    LEFT JOIN LATERAL (SELECT pg_catalog.array_agg(p.proname::text ORDER BY p.oid) AS names, \
+        pg_catalog.array_agg(coalesce(e.extname::text, '') ORDER BY p.oid) AS extensions, pg_catalog.array_agg(coalesce(e.extversion, '') ORDER BY p.oid) AS versions \
+      FROM pg_depend d JOIN pg_proc p ON p.oid = d.refobjid \
+      LEFT JOIN pg_depend x ON x.classid = 'pg_catalog.pg_proc'::pg_catalog.regclass AND x.objid = p.oid AND x.deptype = 'e' \
+      LEFT JOIN pg_extension e ON e.oid = x.refobjid \
+      WHERE d.classid = 'pg_catalog.pg_constraint'::pg_catalog.regclass AND d.objid = k.oid AND d.refclassid = 'pg_catalog.pg_proc'::pg_catalog.regclass) f ON true \
+    WHERE pg_catalog.current_setting('standard_conforming_strings') = 'on' \
+      AND ((CASE WHEN t.typtype = 'd' THEN t.typbasetype ELSE t.oid END) IN ('pg_catalog.text'::pg_catalog.regtype, 'pg_catalog.varchar'::pg_catalog.regtype) \
+        AND coalesce((SELECT o.collisdeterministic FROM pg_collation o WHERE o.oid = a.attcollation), true) \
+        OR (CASE WHEN t.typtype = 'd' THEN t.typbasetype ELSE t.oid END) IN ('pg_catalog.json'::pg_catalog.regtype, 'pg_catalog.jsonb'::pg_catalog.regtype))";
 /// `$1` is `oid[]` of relations.
 pub const RELNAMES_QUERY: &str = "SELECT c.oid::int8, c.relname::text FROM pg_class c WHERE c.oid = ANY($1::oid[])";
 /// Every column of the relations the parse names, by name, so provenance and `NOT NULL` are
@@ -138,7 +150,7 @@ pub fn describe(sql: &str, host: &Host) -> Lazy<Result<DescribedStatement, DbErr
         let parsed = analyze::analyze(sql).ok();
         let trust = trust(host);
         let relations = relations_of(parsed.as_ref());
-        engine.described(sql, parsed.as_ref(), &relations, trust.as_ref()).map(|r| r.map(|(_, described)| described))
+        engine.described(sql, parsed.as_ref(), &relations, trust.as_ref(), &[]).map(|r| r.map(|(_, described)| described))
     })
 }
 
@@ -317,12 +329,18 @@ struct Engine<'a> {
     probe_calls: Cell<usize>,
     /// Per placeholder of the main statement, the cast a probe pins on it.
     casts: RefCell<Vec<Option<String>>>,
+    /// The JSON Schemas the CHECKs of each column a parameter is written to hold it to, with the
+    /// validators that read them ([`Engine::checks`]).
+    written: RefCell<HashMap<(u32, i32), Vec<(String, Validators)>>>,
     budget: Cell<usize>,
 }
 
+/// The validators one CHECK's call is read by ([`crate::schema_type::postgres_validator`]).
+type Validators = &'static [&'static crate::schema_type::Validator];
+
 impl<'a> Engine<'a> {
     fn new(host: &'a Host<'a>) -> Engine<'a> {
-        Engine { host, registry: RefCell::new(TypeRegistry::with_builtins()), relations: RefCell::new(HashMap::new()), columns_by_name: RefCell::new(HashMap::new()), views: RefCell::new(HashMap::new()), with_stack: RefCell::new(Vec::new()), probed: RefCell::new(HashSet::new()), probing: RefCell::new(Vec::new()), probe_calls: Cell::new(0), casts: RefCell::new(Vec::new()), budget: Cell::new(MAX_PROBES) }
+        Engine { host, registry: RefCell::new(TypeRegistry::with_builtins()), relations: RefCell::new(HashMap::new()), columns_by_name: RefCell::new(HashMap::new()), views: RefCell::new(HashMap::new()), with_stack: RefCell::new(Vec::new()), probed: RefCell::new(HashSet::new()), probing: RefCell::new(Vec::new()), probe_calls: Cell::new(0), casts: RefCell::new(Vec::new()), written: RefCell::new(HashMap::new()), budget: Cell::new(MAX_PROBES) }
     }
 
     fn run(&self, sql: &str, lexed: &Lexed) -> Lazy<Analysis> {
@@ -353,7 +371,11 @@ impl<'a> Engine<'a> {
             trust
         });
         let operators = set_returning_operators(self.host);
-        let described = self.described(&rewritten.sql, parsed.as_ref(), &relations, trust.as_ref());
+        let written = self.written_columns(parsed.as_ref(), &relations);
+        let described = match &written {
+            Some(written) => self.described(&rewritten.sql, parsed.as_ref(), &relations, trust.as_ref(), &written.iter().map(|(_, rel, att)| (*rel, *att)).collect::<Vec<_>>()),
+            None => None,
+        };
         let functions: &[String] = parsed.as_ref().map(|p| p.functions.as_slice()).unwrap_or(&[]);
         let catalog_rows = catalog_rows(self.host, functions, &relations);
         for probe in &jsonshape::probes_ahead(&rewritten.sql) {
@@ -366,7 +388,7 @@ impl<'a> Engine<'a> {
         } else {
             self.host.query(ARBITERS_QUERY, vec![json!(sorted(conflicts.iter().map(|c| c.relation.clone()).collect()))], Scope::Statement)
         };
-        let (Some(described), Some(trust), Some(operators), Some(catalog_rows), Some(arbiters)) = (described, trust, operators, catalog_rows, arbiters) else { return None };
+        let (Some(described), Some(trust), Some(operators), Some(catalog_rows), Some(arbiters), Some(written)) = (described, trust, operators, catalog_rows, arbiters, written) else { return None };
         let (raw, described) = match described {
             Ok(d) => d,
             Err(e) => {
@@ -416,6 +438,14 @@ impl<'a> Engine<'a> {
             jsonshape::oids(shape, &outcomes, &raw.params, &mut shape_oids);
         }
         self.types(&shape_oids)?;
+        // A stored row inside a JSON document keeps the JSON Schema a CHECK holds its JSON columns
+        // to, as a bare read of them does.
+        let stored: Vec<u32> = outcomes.iter().flatten().flat_map(|o| o.columns.iter()).chain(&described.columns).filter(|c| c.whole_row).map(|c| c.type_oid).collect();
+        let rows: Vec<(u32, i32)> = stored.iter().flat_map(|o| self.registry.borrow().row_json_columns(*o)).collect();
+        if !rows.is_empty() {
+            let checks = self.check_rows(&rows)?;
+            self.registry.borrow_mut().documents.extend(checks.documents);
+        }
 
         let registry = self.registry.borrow();
         let mut unresolved = Vec::new();
@@ -430,7 +460,7 @@ impl<'a> Engine<'a> {
                     unresolved.extend(resolved.unresolved.iter().map(|p| format!("{}: {p}", col.name)));
                     (resolved.ty, !resolved.non_null)
                 }
-                _ => (with_values(with_items(registry.render(col.type_oid), col.nullable_items), col.values.as_deref()), col.nullable),
+                _ => (with_document(with_values(with_items(registry.render(col.type_oid), col.nullable_items), col.values.as_deref()), col.document.as_ref()), col.nullable),
             };
             columns.push(Column { name: col.name.clone(), ty, nullable, type_name: col.type_name.clone() });
         }
@@ -441,7 +471,12 @@ impl<'a> Engine<'a> {
             .map(|(i, name)| {
                 let o = raw.params.get(i).copied().unwrap_or(0);
                 let nullable = nullable.as_ref().is_some_and(|n| n.contains(&(i as i32 + 1)));
-                Param { name: name.clone(), ty: registry.render(o), type_name: registry.name(o), nullable }
+                // A parameter written whole to a JSON column a CHECK holds to a JSON Schema takes
+                // the values that schema admits, and those of every such column it fills.
+                let sources = self.written.borrow();
+                let schemas: Vec<(String, Validators)> = written.iter().filter(|(n, _, _)| *n == i as i32 + 1).flat_map(|(_, rel, att)| sources.get(&(*rel, *att)).cloned().unwrap_or_default()).collect();
+                let document = if schemas.is_empty() { None } else { crate::schema_type::checked_type(&schemas) };
+                Param { name: name.clone(), ty: with_document(registry.render(o), document.as_ref()), type_name: registry.name(o), nullable }
             })
             .collect();
 
@@ -570,6 +605,27 @@ impl<'a> Engine<'a> {
         Some(out)
     }
 
+    /// Each parameter written whole to a column, as `(parameter, relation, attribute)`: the
+    /// columns whose CHECKs may type it ([`Engine::checks`]).
+    fn written_columns(&self, parsed: Option<&Parsed>, relations: &[String]) -> Lazy<Vec<(i32, u32, i32)>> {
+        let Some(parsed) = parsed.filter(|p| !p.filled.is_empty()) else { return Some(Vec::new()) };
+        self.prefetch(relations)?;
+        let columns = self.columns_by_name.borrow();
+        let oids: HashMap<String, u32> = self.relations.borrow().iter().map(|(oid, (name, _))| (name.clone(), *oid)).collect();
+        let mut out = Vec::new();
+        for (n, relation, column) in &parsed.filled {
+            let (Some(known), Some(oid)) = (columns.get(relation), oids.get(relation)) else { continue };
+            let attnum = match column {
+                analyze::Filled::Name(name) => known.iter().find(|(_, (c, _))| c == name).map(|(a, _)| *a),
+                analyze::Filled::Position(i) => known.keys().nth(*i).copied(),
+            };
+            if let Some(attnum) = attnum {
+                out.push((*n, *oid, attnum));
+            }
+        }
+        Some(out)
+    }
+
     /// Ask for a probe's describe ahead of the round that reads it, when nothing has to be
     /// pinned on it first: `probe` finds the answer waiting.
     fn prewarm(&self, sql: &str) {
@@ -585,7 +641,7 @@ impl<'a> Engine<'a> {
     /// The describe of `sql` (the `$n` form) with its columns' nullability settled and refined.
     /// What it needs is asked in the same round as the parse-named relations' columns and types
     /// and every probe that carries no placeholder. `Some(Err)` is the server's refusal.
-    fn described(&self, sql: &str, parsed: Option<&Parsed>, relations: &[String], trust: Option<&Trust>) -> Lazy<Result<(RawDescribe, DescribedStatement), DbError>> {
+    fn described(&self, sql: &str, parsed: Option<&Parsed>, relations: &[String], trust: Option<&Trust>, written: &[(u32, i32)]) -> Lazy<Result<(RawDescribe, DescribedStatement), DbError>> {
         let raw = self.host.describe(sql);
         let prefetched = self.prefetch(relations);
         if let Some((_, queries)) = infer::item_reads(sql) {
@@ -615,13 +671,19 @@ impl<'a> Engine<'a> {
         let mut oids: Vec<u32> = raw.params.clone();
         oids.extend(raw.columns.iter().map(|c| c.oid));
         let types = self.types(&oids);
-        let checks = self.checks(&raw, parsed, trust);
+        let checks = self.checks(&raw, parsed, written, false);
         // Nullability from provenance, then from the SQL.
         let settled = self.settle(sql, &raw, parsed, trust);
         let (Some(()), Some(mut described), Some(checks)) = (types, settled, checks) else { return None };
         for (col, raw) in described.columns.iter_mut().zip(&raw.columns) {
-            col.values = checks.get(&(raw.table, raw.attnum)).cloned();
+            if trust.builtin("=") {
+                col.values = checks.values.get(&(raw.table, raw.attnum)).cloned();
+            }
+            if let Some(document) = checks.documents.get(&(raw.table, raw.attnum)) {
+                col.document = Some(document.clone());
+            }
         }
+        *self.written.borrow_mut() = written.iter().filter_map(|key| Some((*key, checks.sources.get(key)?.clone()))).collect();
         *self.casts.borrow_mut() = raw.params.iter().map(|o| self.registry.borrow().get(*o).map(|t| t.cast_name.clone()).filter(|c| !c.is_empty())).collect();
         self.refine(sql, &mut described, trust)?;
         self.without_missing_rows(sql, parsed, &raw, &mut described);
@@ -646,26 +708,62 @@ impl<'a> Engine<'a> {
         }
     }
 
-    /// Per result column that reads a table's column as it is, the strings a CHECK keeps it to
-    /// ([`check_values`]). The describe names a column's table and attribute only for a bare
-    /// reference (through a view or a subquery too), so an expression over the column is never
-    /// one. Nothing under a set operation, whose provenance names the leftmost arm only, and
-    /// nothing where a user's `=` may be the one a CHECK resolved to.
-    fn checks(&self, raw: &RawDescribe, parsed: Option<&Parsed>, trust: &Trust) -> Lazy<HashMap<(u32, i32), Vec<String>>> {
-        let usable = parsed.is_some_and(|p| !p.has_set_op) && trust.builtin("=");
-        let pairs: Vec<(u32, i32)> = raw.columns.iter().filter(|c| usable && c.table != 0 && c.attnum > 0).map(|c| (c.table, c.attnum)).collect();
+    /// Per result column that reads a table's column as it is, and per column of `written`, what
+    /// its CHECKs say of its values: the strings they keep it to ([`check_values`]; the caller
+    /// takes them only where `=` is the built-in one a CHECK resolved to), and the JSON Schema
+    /// they hold it to ([`check_documents`]). The describe names a column's table and attribute
+    /// only for a bare reference (through a view or a subquery too), so an expression over the
+    /// column is never one. Nothing under a set operation, whose provenance names the leftmost
+    /// arm only.
+    fn checks(&self, raw: &RawDescribe, parsed: Option<&Parsed>, written: &[(u32, i32)], json_only: bool) -> Lazy<Checks> {
+        let usable = parsed.is_some_and(|p| !p.has_set_op);
+        let json = |oid: u32| !json_only || jsonshape::is_json(&self.registry.borrow(), oid);
+        let mut pairs: Vec<(u32, i32)> = raw.columns.iter().filter(|c| usable && c.table != 0 && c.attnum > 0 && json(c.oid)).map(|c| (c.table, c.attnum)).collect();
+        pairs.extend(written.iter().filter(|p| !pairs.contains(p)).copied().collect::<Vec<_>>());
+        self.check_rows(&pairs)
+    }
+
+    /// What the CHECKs of each column of `pairs`, by relation and attribute, say of its values
+    /// ([`Engine::checks`]).
+    fn check_rows(&self, pairs: &[(u32, i32)]) -> Lazy<Checks> {
         if pairs.is_empty() {
-            return Some(HashMap::new());
+            return Some(Checks::default());
         }
         let rs: Vec<u32> = pairs.iter().map(|(r, _)| *r).collect();
         let atts: Vec<i32> = pairs.iter().map(|(_, a)| *a).collect();
         let rows = self.host.query(CHECKS_QUERY, vec![json!(rs), json!(atts)], Scope::Statement)?;
-        let mut out: HashMap<(u32, i32), Vec<String>> = HashMap::new();
+        let mut out = Checks::default();
+        let mut schemas: HashMap<(u32, i32), Vec<(String, Validators)>> = HashMap::new();
         for row in rows.unwrap_or_default() {
             let (Some(rel), Some(att), Some(name), Some(text)) = (row.first().and_then(as_u32), row.get(1).and_then(as_u32), row.get(2).and_then(as_str), row.get(3).and_then(as_str)) else { continue };
-            let Some(values) = check_values(text, name) else { continue };
-            // Every CHECK holds, so a value is in each one's list.
-            out.entry((rel, att as i32)).and_modify(|known| known.retain(|v| values.contains(v))).or_insert(values);
+            let key = (rel, att as i32);
+            if let Some(values) = check_values(text, name) {
+                // Every CHECK holds, so a value is in each one's list.
+                out.values.entry(key).and_modify(|known| known.retain(|v| values.contains(v))).or_insert(values);
+            }
+            let calls: Vec<(String, String, String)> = match (row.get(4).and_then(as_strings), row.get(5).and_then(as_strings), row.get(6).and_then(as_strings)) {
+                (Some(names), Some(extensions), Some(versions)) => names.into_iter().zip(extensions).zip(versions).map(|((n, e), v)| (n, e, v)).collect(),
+                _ => Vec::new(),
+            };
+            for (function, args) in check_documents(text, name) {
+                // The function the CHECK calls under that name, which the catalog names by its
+                // extension: every function of that name it depends on must be the one validator.
+                let mut called = calls.iter().filter(|(n, _, _)| *n == function);
+                let Some((_, extension, version)) = called.next() else { continue };
+                if called.any(|(_, e, v)| e != extension || v != version) {
+                    continue;
+                }
+                let Some((validators, arity, schema_at, document_at)) = crate::schema_type::postgres_validator(&function, extension) else { continue };
+                if let (true, Some(CheckArg::Schema(schema)), Some(CheckArg::Column)) = (args.len() == arity, args.get(schema_at), args.get(document_at)) {
+                    schemas.entry(key).or_default().push((schema.clone(), validators));
+                }
+            }
+        }
+        for (key, texts) in schemas {
+            if let Some(document) = crate::schema_type::checked_type(&texts) {
+                out.documents.insert(key, document);
+            }
+            out.sources.insert(key, texts);
         }
         Some(out)
     }
@@ -775,7 +873,15 @@ impl<'a> Engine<'a> {
                 } else {
                     true
                 };
-                DescribedColumn { name: col.name.clone(), type_oid: col.oid, type_name: registry.name(col.oid), nullable, nullable_items: None, values: None }
+                // A view's column holds what the view's own statement gives it, and so keeps the
+                // JSON Schema a CHECK holds the column it reads to.
+                let document = match view_columns.get(&col.table) {
+                    Some(Some(columns)) if col.attnum > 0 && !degraded => columns.get(col.attnum as usize - 1).and_then(|c| c.document.clone()),
+                    _ => None,
+                };
+                // A whole-row reference (attribute 0) of the relation whose row type the column is.
+                let whole_row = col.table != 0 && col.attnum == 0 && !degraded && registry.get(col.oid).and_then(|t| t.relid) == Some(col.table);
+                DescribedColumn { name: col.name.clone(), type_oid: col.oid, type_name: registry.name(col.oid), nullable, nullable_items: None, values: None, document, whole_row }
             })
             .collect();
         let columns = columns
@@ -965,8 +1071,15 @@ impl<'a> Engine<'a> {
         let mut oids: Vec<u32> = raw.columns.iter().map(|c| c.oid).collect();
         oids.extend(raw.params.iter().copied());
         let types = self.types(&oids);
+        // A JSON column a JSON constructor reads keeps the schema its CHECKs hold it to.
+        let checks = self.checks(&raw, parsed.as_ref(), &[], true);
         let settled = self.settle(sql, &raw, parsed.as_ref(), trust);
-        let (Some(()), Some(mut described)) = (types, settled) else { return None };
+        let (Some(()), Some(mut described), Some(checks)) = (types, settled, checks) else { return None };
+        for (col, raw) in described.columns.iter_mut().zip(&raw.columns) {
+            if let Some(document) = checks.documents.get(&(raw.table, raw.attnum)) {
+                col.document = Some(document.clone());
+            }
+        }
         self.refine(sql, &mut described, trust)?;
         self.without_missing_rows(sql, parsed.as_ref(), &raw, &mut described);
         Some(Some(described))
@@ -1182,6 +1295,102 @@ fn missing_rows(sql: &str, origins: &[bool], columns: &dyn Fn(&str) -> Option<Ve
         return vec![true; count];
     }
     out.iter().zip(origins).map(|(missing, origin)| *missing && *origin).collect()
+}
+
+/// What a column's CHECKs say of its values ([`Engine::checks`]), by relation and attribute.
+#[derive(Default)]
+struct Checks {
+    values: HashMap<(u32, i32), Vec<String>>,
+    documents: HashMap<(u32, i32), Value>,
+    /// The schemas behind each document, which a parameter written to several columns meets all of.
+    sources: HashMap<(u32, i32), Vec<(String, Validators)>>,
+}
+
+/// `ty` as the values `document` admits, when it is a JSON value a CHECK holds to a JSON Schema
+/// ([`crate::schema_type`]).
+pub fn with_document(ty: Type, document: Option<&Value>) -> Type {
+    match (ty, document) {
+        (Type::Json { schema: None }, Some(schema)) => Type::Json { schema: Some(schema.clone()) },
+        (ty, _) => ty,
+    }
+}
+
+/// One argument of a function a CHECK calls, as [`check_documents`] reads it.
+#[derive(Debug, Clone, PartialEq)]
+enum CheckArg {
+    /// A string constant, cast or not to `json`, `jsonb` or `text`: a schema's text.
+    Schema(String),
+    /// The column itself (`VALUE` in a domain's), cast or not to `json` or `jsonb`.
+    Column,
+    Other,
+}
+
+/// The calls of a CHECK, as the server prints it, that hold the column `column` (`VALUE` in a
+/// domain's) to something: each function's name and arguments, where the call stands alone,
+/// among the conjuncts of an AND (each one holds), or beside `column IS NULL` under an OR, which
+/// lets NULL through as well. A strict function that answers true or false for every value is
+/// NULL only for a NULL, so a row such a CHECK lets in holds a value the call is true of; which
+/// functions are such a validator, and which arguments hold the schema and the value, is
+/// [`crate::schema_type::postgres_validator`]'s to say.
+fn check_documents(text: &str, column: &str) -> Vec<(String, Vec<CheckArg>)> {
+    use pg_query::protobuf::node::Node as N;
+    use pg_query::protobuf::Node;
+    let Ok(parsed) = crate::stack::parse(&format!("SELECT {text}")) else { return Vec::new() };
+    let Some(N::SelectStmt(select)) = parsed.protobuf.stmts.first().and_then(|s| s.stmt.as_deref()).and_then(|s| s.node.as_ref()) else { return Vec::new() };
+    let Some(N::ResTarget(target)) = select.target_list.first().and_then(|t| t.node.as_ref()) else { return Vec::new() };
+    fn uncast<'n>(node: &'n Node, through: &[&str]) -> &'n Node {
+        match node.node.as_ref() {
+            Some(N::TypeCast(t)) => {
+                let name = t.type_name.as_ref().and_then(|n| crate::jsonshape::last_string(&n.names)).unwrap_or_default();
+                match (through.contains(&name.as_str()), t.arg.as_deref()) {
+                    (true, Some(arg)) => uncast(arg, through),
+                    _ => node,
+                }
+            }
+            _ => node,
+        }
+    }
+    let is_column = |node: &Node| match uncast(node, &["json", "jsonb"]).node.as_ref() {
+        Some(N::ColumnRef(c)) => matches!(c.fields.as_slice(), [f] if matches!(f.node.as_ref(), Some(N::String(s)) if s.sval == column || s.sval == "value")),
+        _ => false,
+    };
+    let arg = |node: &Node| match uncast(node, &["json", "jsonb", "text"]).node.as_ref() {
+        Some(N::AConst(c)) => match &c.val {
+            Some(pg_query::protobuf::a_const::Val::Sval(s)) => CheckArg::Schema(s.sval.clone()),
+            _ => CheckArg::Other,
+        },
+        _ if is_column(node) => CheckArg::Column,
+        _ => CheckArg::Other,
+    };
+    fn calls(node: &Node, is_column: &dyn Fn(&Node) -> bool, arg: &dyn Fn(&Node) -> CheckArg, out: &mut Vec<(String, Vec<CheckArg>)>) {
+        use pg_query::protobuf::{BoolExprType, NullTestType};
+        match node.node.as_ref() {
+            Some(N::BoolExpr(b)) if b.boolop == BoolExprType::AndExpr as i32 => {
+                for a in &b.args {
+                    calls(a, is_column, arg, out);
+                }
+            }
+            Some(N::BoolExpr(b)) if b.boolop == BoolExprType::OrExpr as i32 && b.args.len() == 2 => {
+                let null_test = |a: &Node| matches!(a.node.as_ref(), Some(N::NullTest(t)) if t.nulltesttype == NullTestType::IsNull as i32 && t.arg.as_deref().is_some_and(is_column));
+                match (null_test(&b.args[0]), null_test(&b.args[1])) {
+                    (true, false) => calls(&b.args[1], is_column, arg, out),
+                    (false, true) => calls(&b.args[0], is_column, arg, out),
+                    _ => {}
+                }
+            }
+            Some(N::FuncCall(f)) if !f.agg_star && !f.func_variadic && f.agg_filter.is_none() && f.over.is_none() => {
+                if let Some(name) = crate::jsonshape::last_string(&f.funcname) {
+                    out.push((name, f.args.iter().map(arg).collect()));
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    if let Some(val) = target.val.as_deref() {
+        calls(val, &is_column, &arg, &mut out);
+    }
+    out
 }
 
 /// `ty` as the union of `values` when it is a string a CHECK keeps to them; the labels of an enum
@@ -1461,6 +1670,27 @@ mod tests {
         // The fix reads the value from a WITH.
         let a = replay("with input as (select concat('%', :q::text, '%') as pattern) select 1 as one from input where input.pattern like input.pattern");
         assert!(a.diagnostics.iter().all(|d| d.code != 3), "{:?}", a.diagnostics);
+    }
+
+    #[test]
+    fn a_check_holds_a_json_column_to_the_schema_it_prints() {
+        // As PostgreSQL 18 printed the CHECKs of docs/json-schema-checks/postgres/catalog.sql.
+        let schema = r#"{"type": "object", "properties": {"name": {"type": "string", "pattern": "^\\d+$", "description": "it's café é"}}, "required": ["name"]}"#;
+        let printed = r#"'{"type": "object", "properties": {"name": {"type": "string", "pattern": "^\\d+$", "description": "it''s café é"}}, "required": ["name"]}'::json"#;
+        let call = |f: &str| vec![(f.to_string(), vec![CheckArg::Schema(schema.into()), CheckArg::Column])];
+        assert_eq!(check_documents(&format!("jsonb_matches_schema({printed}, data)"), "data"), call("jsonb_matches_schema"));
+        assert_eq!(check_documents(&format!("jsonb_matches_schema({printed}, VALUE)"), "doc"), call("jsonb_matches_schema"));
+        assert_eq!(check_documents(&format!("json_matches_schema({printed}, data)"), "data"), call("json_matches_schema"));
+        assert_eq!(check_documents(&format!("jsonb_matches_schema({printed}, data::jsonb)"), "data"), call("jsonb_matches_schema"));
+        assert_eq!(check_documents(&format!("data IS NULL OR jsonb_matches_schema({printed}, data)"), "data"), call("jsonb_matches_schema"));
+        assert_eq!(check_documents(&format!("jsonb_matches_schema({printed}, data) AND jsonb_typeof(data) = 'object'::text"), "data"), call("jsonb_matches_schema"));
+        assert_eq!(check_documents(&format!("jsv.jsonb_matches_schema({printed}, data)"), "data"), call("jsonb_matches_schema"));
+        let jsonb = check_documents(r#"jsonb_matches_schema('{"type": "string"}'::jsonb::json, data)"#, "data");
+        assert_eq!(jsonb, vec![("jsonb_matches_schema".to_string(), vec![CheckArg::Schema(r#"{"type": "string"}"#.into()), CheckArg::Column])]);
+        // Another column's value, or an OR that lets more than NULL through, holds nothing.
+        let two = check_documents(r#"jsonb_matches_schema('{"type": "string"}'::json, a) AND jsonb_matches_schema('{"type": "integer"}'::json, b)"#, "b");
+        assert_eq!(two.iter().map(|(_, args)| args[1].clone()).collect::<Vec<_>>(), [CheckArg::Other, CheckArg::Column]);
+        assert_eq!(check_documents(&format!("data = '1'::jsonb OR jsonb_matches_schema({printed}, data)"), "data"), vec![]);
     }
 
     #[test]

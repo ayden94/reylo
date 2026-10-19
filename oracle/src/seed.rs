@@ -530,6 +530,10 @@ fn contradiction(ty: &Value, text: &str) -> Option<String> {
             let json: Value = serde_json::from_str(text).ok()?;
             json_contradiction(ty, &json, "")
         }
+        Some("json") if ty.get("schema").is_some() => {
+            let json: Value = serde_json::from_str(text).ok()?;
+            json_contradiction(ty, &json, "")
+        }
         _ => None,
     }
 }
@@ -565,12 +569,21 @@ fn array_has_null(text: &str) -> bool {
 
 fn json_contradiction(ty: &Value, json: &Value, path: &str) -> Option<String> {
     match ty["kind"].as_str() {
-        Some("object") => {
+        // A JSON column a CHECK holds to a JSON Schema: the value is one the engine's schema
+        // admits, a JSON null included.
+        Some("json") => {
+            let schema = ty.get("schema")?;
+            let at = if path.is_empty() { "the top" } else { path };
+            (!reylo_engine::schema_type::admits(schema, json)).then(|| format!("holds {json} at {at}, which the schema {schema} does not admit"))
+        }
+        // A row value inside a document is an object of its fields.
+        Some("object") | Some("composite") => {
             let obj = json.as_object()?;
             for f in ty["fields"].as_array()? {
                 let name = f["name"].as_str()?;
                 let v = obj.get(name).unwrap_or(&Value::Null);
-                if v.is_null() {
+                // A null where the field's own schema admits one is the column's value.
+                if v.is_null() && !(f["type"]["kind"] == "json" && f["type"].get("schema").is_some_and(|s| reylo_engine::schema_type::admits(s, v))) {
                     if !f["nullable"].as_bool().unwrap_or(true) {
                         return Some(format!("has a null at {path}.{name}, typed non-null"));
                     }
@@ -584,7 +597,7 @@ fn json_contradiction(ty: &Value, json: &Value, path: &str) -> Option<String> {
         }
         Some("list") => {
             for (i, item) in json.as_array()?.iter().enumerate() {
-                if item.is_null() {
+                if item.is_null() && !(ty["of"]["kind"] == "json" && ty["of"].get("schema").is_some_and(|s| reylo_engine::schema_type::admits(s, item))) {
                     if !ty["nullable_items"].as_bool().unwrap_or(true) {
                         return Some(format!("has a null item at {path}[{i}], typed non-null"));
                     }

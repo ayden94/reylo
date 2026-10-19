@@ -2070,6 +2070,7 @@ What each type becomes with the drivers' default settings.
 | `date`, `timestamp`, `timestamptz` | `Date` |
 | `time`, `timetz`, `interval` | `string` |
 | `json`, `jsonb` | `unknown` |
+| `json`, `jsonb` a JSON Schema `CHECK` holds (`jsonb_matches_schema(…)`) | what the schema admits |
 | `jsonb_build_object(…)`, `jsonb_agg(…)` | the object or array it builds |
 | `bytea` | `Uint8Array` |
 | An array | an array of its element type |
@@ -2092,6 +2093,7 @@ What each type becomes with the drivers' default settings.
 | `DATE`, `DATETIME`, `TIMESTAMP` | `Date` |
 | `TIME` | `string` |
 | `JSON` | `unknown` |
+| `JSON` a JSON Schema `CHECK` holds (`json_schema_valid(…)`) | what the schema admits |
 | `json_object(…)`, `json_arrayagg(…)` | the object or array it builds |
 | `BINARY`, `BLOB` | `Uint8Array` |
 
@@ -2124,7 +2126,7 @@ Reylo prepares the statement on the server and reads the description of its para
 | What | Where it comes from |
 | --- | --- |
 | Parameter types | the server's description of the prepared statement |
-| Column types | the server's description; an enum as its labels, a domain as its base type |
+| Column types | the server's description; an enum as its labels, a domain as its base type, a JSON column as what its JSON Schema `CHECK` admits |
 | Nullability | `NOT NULL` in the catalog, outer joins, the expressions |
 | Row count | primary and unique keys, aggregates, `limit 1`, `returning` |
 | Nested JSON | `jsonb_build_object`, `jsonb_agg`, and `to_jsonb` of a row, typed from their arguments |
@@ -2138,7 +2140,7 @@ Reylo prepares the statement on the server, which reports the column types, `NOT
 | What | Where it comes from |
 | --- | --- |
 | Parameter types | the prepared statement's metadata; whether one may be null, from the statement, as on Postgres |
-| Column types | the prepared statement's metadata |
+| Column types | the prepared statement's metadata; a JSON column read from its table as what its JSON Schema `CHECK` admits |
 | Nullability | the server's `NOT NULL` flag |
 | Row count | primary and unique keys, aggregates; a write is `void` |
 | Nested JSON | `json_object` and `json_arrayagg`, typed from their arguments |
@@ -2168,4 +2170,5 @@ SQLite's limits:
 - SQLite has no date, time or boolean type. A date in a `text` column is a `string`; a column declared `boolean`, `date` or `datetime` is `number | string`.
 - The result of a function the application registers, or of `json_extract`, `->` and `->>`, is `unknown`.
 - JSON built in the statement is a `string`: the driver returns the text.
+- A `check` types nothing, since `pragma ignore_check_constraints` lets a connection write past it: a JSON column a JSON Schema `check` holds is the `string` the driver returns.
 

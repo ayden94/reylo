@@ -10,5 +10,13 @@ export type EngineType =
   | { kind: "object"; fields: { name: string; type: EngineType; nullable: boolean }[] }
   | { kind: "composite"; name: string; fields: { name: string; type: EngineType; nullable: boolean }[] }
   | { kind: "list"; of: EngineType; nullable_items: boolean }
-  | { kind: "json" }
+  /** Any JSON, or with `schema` the values a CHECK's JSON Schema admits, as the engine's canonical schema (engine/src/schema_type.rs). */
+  | { kind: "json"; schema?: JsonSchema }
   | { kind: "unknown" };
+
+/**
+ * The engine's canonical JSON Schema of a JSON value: `true`, `false`, `{}`, `type` (one name or a
+ * list), `enum`, `anyOf`, an array's `prefixItems`, `items` and `minItems`, and an object's
+ * `properties`, `required` and `additionalProperties`, which it always states.
+ */
+export type JsonSchema = boolean | { readonly [key: string]: unknown };

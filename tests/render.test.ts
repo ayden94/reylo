@@ -140,3 +140,32 @@ test("an array's elements are nullable only where the statement builds it from a
   // A parameter's elements are the caller's to pass.
   assert.equal(renderParamType(texts()), "string[]");
 });
+
+test("a JSON column a CHECK holds to a JSON Schema is the type of the values the schema admits", () => {
+  const json = (schema: unknown): EngineType => ({ kind: "json", schema: schema as never });
+  const open = { type: "object", properties: { name: { type: "string" }, age: { type: ["integer", "null"] } }, required: ["name"], additionalProperties: true };
+  assert.equal(renderType(json(open)), "{ name: string; age?: number | null; [key: string]: unknown }");
+  assert.equal(renderType(json({ ...open, additionalProperties: false })), "{ name: string; age?: number | null }");
+  assert.equal(renderType(json({ type: "object", additionalProperties: { type: "string" } })), "{ [key: string]: string }");
+  assert.equal(renderType(json({ type: "object", additionalProperties: false })), "Record<never, never>");
+  assert.equal(renderType(json({ type: ["object", "null"] })), "Record<string, unknown> | null");
+  // A discriminated union, a literal object, a tuple with an optional element and a rest.
+  const tagged = { anyOf: [
+    { type: "object", properties: { kind: { enum: ["a"] }, x: { type: "number" } }, required: ["kind", "x"], additionalProperties: false },
+    { type: "object", properties: { kind: { enum: ["b"] } }, required: ["kind"], additionalProperties: false },
+  ] };
+  assert.equal(renderType(json(tagged)), `{ kind: "a"; x: number } | { kind: "b" }`);
+  assert.equal(renderType(json({ enum: [{ a: 1, "b-c": [true, null] }, "x", 2, null] })), `{ a: 1; "b-c": [true, null] } | "x" | 2 | null`);
+  assert.equal(renderType(json({ type: "array", prefixItems: [{ type: "string" }, { type: ["number", "null"] }], items: { type: "boolean" }, minItems: 1 })), "[string, (number | null)?, ...boolean[]]");
+  assert.equal(renderType(json({ type: "array", prefixItems: [{ type: "string" }], items: false, minItems: 1 })), "[string]");
+  assert.equal(renderType(json({ type: "array", items: { type: ["string", "integer"] } })), "(string | number)[]");
+  assert.equal(renderType(json({ type: "array", items: false })), "[]");
+  assert.equal(renderType(json(false)), "never");
+  assert.equal(renderType(json({})), "unknown");
+  // A driver set up to return JSON as text returns the text; inside a document, and as a
+  // parameter, which every driver binds as a JSON value, the schema's type stands.
+  assert.equal(renderType(json(open), false, "postgres", { ...defaultRepr, json: "string" }), "string");
+  assert.equal(renderType(json(open), true, "postgres", { ...defaultRepr, json: "string" }), "{ name: string; age?: number | null; [key: string]: unknown }");
+  assert.equal(renderParamType(json(open), "postgres", { ...defaultRepr, json: "string" }), "{ name: string; age?: number | null; [key: string]: unknown }");
+  assert.equal(renderType({ kind: "json" }), "unknown");
+});

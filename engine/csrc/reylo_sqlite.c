@@ -628,7 +628,22 @@ static int openSchema(
   sqlite3_free(aMissing);
   for(i=0; i<nDdl; i++){
     char *zErr = 0;
-    if( sqlite3_exec(gDb, azDdl[i], 0, 0, &zErr)!=SQLITE_OK && !internalTable(azDdl[i], zErr) ){
+    int nTry, rcExec = SQLITE_OK;
+    /* A CHECK, an index's expression or a generated column that calls a function the host's
+    ** connection does not have (an extension the application loads, such as sqlite-jsonschema's
+    ** jsonschema_matches) stops CREATE TABLE and CREATE INDEX, though reading the table never
+    ** calls it: SQLite resolves those expressions when it creates them. The function is the
+    ** application's, so the replay stubs it, as it stubs the host's own, and runs the statement
+    ** again. A statement that calls it itself is still refused by functionAuth. */
+    static const char zNoFunction[] = "no such function: ";
+    for(nTry=0; nTry<16; nTry++){
+      rcExec = sqlite3_exec(gDb, azDdl[i], 0, 0, &zErr);
+      if( rcExec==SQLITE_OK || zErr==0 || strncmp(zErr, zNoFunction, sizeof(zNoFunction)-1)!=0 ) break;
+      if( sqlite3FindFunction(gDb, &zErr[sizeof(zNoFunction)-1], -2, SQLITE_UTF8, 0)!=0
+       || sqlite3_create_function_v2(gDb, &zErr[sizeof(zNoFunction)-1], -1, flags, 0, hostFunctionStub, 0, 0, 0)!=SQLITE_OK ) break;
+      sqlite3_free(zErr); zErr = 0;
+    }
+    if( rcExec!=SQLITE_OK && !internalTable(azDdl[i], zErr) ){
       sqlite3_str_appendchar(errors, 1, '{');
       kv_int(errors, "index", i);
       kv_str(errors, "message", zErr);

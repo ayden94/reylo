@@ -1963,6 +1963,25 @@ mod tests {
     }
 
     #[test]
+    fn a_table_whose_check_calls_a_function_the_host_lacks_still_replays() {
+        // sqlite-jsonschema's function, which the application's connection loads and the type
+        // check's does not: CREATE TABLE resolves the CHECK, and the table was left out.
+        let ddl = vec!["create table docs (id integer primary key, doc text check (doc is null or jsonschema_matches('{\"type\":\"object\"}', doc)))".to_string()];
+        let without = Extras { total: vec![], host: Some(vec![HostFunction { name: "lower".into(), arity: 1, kind: 's' }]) };
+        for extras in [Extras::default(), without.clone()] {
+            let read = analyze_ddl("select id, doc from docs", &ddl, &extras).analysis;
+            assert!(read.diagnostics.is_empty(), "{:?}", read.diagnostics);
+            assert_eq!(read.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["id", "doc"]);
+            let write = analyze_ddl("insert into docs (doc) values (:doc) returning id", &ddl, &extras).analysis;
+            assert!(write.diagnostics.is_empty(), "{:?}", write.diagnostics);
+            assert_eq!(param(&write, "doc"), "text");
+        }
+        // A statement that calls the function itself is still refused where the host lacks it.
+        let call = analyze_ddl("select jsonschema_matches('{}', doc) as m from docs", &ddl, &without).analysis;
+        assert!(!call.diagnostics.is_empty());
+    }
+
+    #[test]
     fn unary_plus_is_its_operand() {
         // `+name` returns the text itself, and SQLite writes a one-element `x IN (e)` as `x = +e`.
         let a = analysis("select +name as p, -score as m from users where name in (:n) and id in (:i)");
@@ -2685,3 +2704,4 @@ mod tests {
         assert_eq!(analysis("insert or replace into users (id, name) values (:id, :name) returning id").cardinality, "one");
     }
 }
+

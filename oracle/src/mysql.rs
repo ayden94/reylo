@@ -192,7 +192,7 @@ async fn fulfil(conn: &mut Conn, need: &Value) -> Result<Value, String> {
     match need["kind"].as_str() {
         Some("describe") => match conn.prep(sql).await {
             Ok(statement) => {
-                let columns: Vec<Value> = statement.columns().iter().map(|c| json!({ "name": c.name_str(), "type": c.column_type() as u8, "flags": c.flags().bits(), "charset": c.character_set(), "length": c.column_length(), "org_table": c.org_table_str() })).collect();
+                let columns: Vec<Value> = statement.columns().iter().map(|c| json!({ "name": c.name_str(), "type": c.column_type() as u8, "flags": c.flags().bits(), "charset": c.character_set(), "length": c.column_length(), "org_table": c.org_table_str(), "org_name": c.org_name_str() })).collect();
                 let params: Vec<Value> = statement.params().iter().map(|p| json!({ "type": p.column_type() as u8, "flags": p.flags().bits(), "charset": p.character_set() })).collect();
                 conn.close(statement).await.map_err(|e| e.to_string())?;
                 Ok(json!({ "mysql": { "columns": columns, "params": params } }))
@@ -1193,6 +1193,11 @@ fn type_contradiction(ty: &Value, code: u8, charset: u16) -> Option<String> {
 /// has none, a missing key, or a value of another JSON type than its field's.
 fn json_contradiction(ty: &Value, json: &Value, nullable: bool, path: &str) -> Option<String> {
     let at = if path.is_empty() { "the top".to_string() } else { path.to_string() };
+    // A JSON column a CHECK holds to a JSON Schema: the value is one the engine's schema admits,
+    // a JSON null included, unless the place may hold SQL's NULL, which a document writes alike.
+    if let (Some("json"), Some(schema)) = (ty["kind"].as_str(), ty.get("schema")) {
+        return (!(json.is_null() && nullable) && !reylo_engine::schema_type::admits(schema, json)).then(|| format!("holds {json} at {at}, which the schema {schema} does not admit"));
+    }
     if json.is_null() {
         return (!nullable && matches!(ty["kind"].as_str(), Some("object" | "list" | "scalar"))).then(|| format!("has a null at {at}, typed non-null"));
     }

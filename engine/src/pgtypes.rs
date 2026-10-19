@@ -53,6 +53,8 @@ pub struct PgType {
     pub fields: Vec<Attribute>,
     /// The name a cast may spell, schema-qualified when the search path would not find it.
     pub cast_name: String,
+    /// A composite type's relation, whose columns' CHECKs [`TypeRegistry::documents`] keys by it.
+    pub relid: Option<u32>,
 }
 
 /// One column of a composite type, read from `pg_attribute` beside its relation.
@@ -61,6 +63,9 @@ pub struct Attribute {
     pub name: String,
     pub type_oid: u32,
     pub not_null: bool,
+    /// Its number in the composite's relation; 0 where it was not read.
+    #[serde(default)]
+    pub attnum: i32,
 }
 
 /// The types a statement mentions, by oid. Loaded lazily: the engine asks the host for the oids
@@ -68,6 +73,10 @@ pub struct Attribute {
 #[derive(Debug, Clone, Default)]
 pub struct TypeRegistry {
     pub types: HashMap<u32, PgType>,
+    /// By relation and attribute, the canonical schema of what a CHECK's JSON Schema lets into a
+    /// JSON column of a composite's relation ([`crate::schema_type`]), which a stored row of it
+    /// holds ([`TypeRegistry::render_row`]).
+    pub documents: HashMap<(u32, i32), serde_json::Value>,
 }
 
 /// Whether every row a scan of relation `$rel` reads has a value in the column named `$col`, as
@@ -103,7 +112,9 @@ macro_rules! type_columns {
     pg_catalog.format_type(t.oid, NULL), \
     CASE WHEN t.typtype = 'c' THEN (SELECT array_agg(a.attname::text ORDER BY a.attnum) FROM pg_attribute a WHERE a.attrelid = t.typrelid AND a.attnum > 0 AND NOT a.attisdropped) END, \
     CASE WHEN t.typtype = 'c' THEN (SELECT array_agg(a.atttypid::int8 ORDER BY a.attnum) FROM pg_attribute a WHERE a.attrelid = t.typrelid AND a.attnum > 0 AND NOT a.attisdropped) END, \
-    CASE WHEN t.typtype = 'c' THEN (SELECT array_agg(a.attnotnull AND ", not_null_rows!("t.typrelid", "a.attname"), " ORDER BY a.attnum) FROM pg_attribute a WHERE a.attrelid = t.typrelid AND a.attnum > 0 AND NOT a.attisdropped) END")
+    CASE WHEN t.typtype = 'c' THEN (SELECT array_agg(a.attnotnull AND ", not_null_rows!("t.typrelid", "a.attname"), " ORDER BY a.attnum) FROM pg_attribute a WHERE a.attrelid = t.typrelid AND a.attnum > 0 AND NOT a.attisdropped) END, \
+    CASE WHEN t.typtype = 'c' THEN t.typrelid::int8 END, \
+    CASE WHEN t.typtype = 'c' THEN (SELECT array_agg(a.attnum::int4 ORDER BY a.attnum) FROM pg_attribute a WHERE a.attrelid = t.typrelid AND a.attnum > 0 AND NOT a.attisdropped) END")
     };
 }
 
@@ -238,15 +249,18 @@ impl TypeRegistry {
             let base = row.get(4).and_then(as_u32).unwrap_or(0);
             let labels = row.get(5).and_then(as_strings);
             let cast_name = row.get(6).and_then(Value::as_str).unwrap_or("").to_string();
+            let attnums: Vec<i32> = row.get(11).and_then(Value::as_array).map(|a| a.iter().map(|n| as_u32(n).unwrap_or(0) as i32).collect()).unwrap_or_default();
             let fields = match (row.get(7).and_then(as_strings), row.get(8).and_then(Value::as_array), row.get(9).and_then(Value::as_array)) {
                 (Some(names), Some(oids), Some(not_null)) if names.len() == oids.len() && names.len() == not_null.len() => names
                     .into_iter()
                     .zip(oids)
                     .zip(not_null)
-                    .filter_map(|((name, o), n)| Some(Attribute { name, type_oid: as_u32(o)?, not_null: as_bool(n)? }))
+                    .enumerate()
+                    .filter_map(|(i, ((name, o), n))| Some(Attribute { name, type_oid: as_u32(o)?, not_null: as_bool(n)?, attnum: attnums.get(i).copied().unwrap_or(0) }))
                     .collect(),
                 _ => Vec::new(),
             };
+            let relid = row.get(10).and_then(as_u32).filter(|r| *r != 0);
             let name = name.to_string();
             let kind = match typtype {
                 "b" | "p" if elem != 0 && name.starts_with('_') => TypeKind::Array,
@@ -258,7 +272,7 @@ impl TypeRegistry {
             };
             self.types.insert(
                 oid,
-                PgType { oid, name, kind, elem: (elem != 0).then_some(elem), base: (base != 0).then_some(base), labels: labels.unwrap_or_default(), fields, cast_name },
+                PgType { oid, name, kind, elem: (elem != 0).then_some(elem), base: (base != 0).then_some(base), labels: labels.unwrap_or_default(), fields, cast_name, relid },
             );
         }
     }
@@ -274,6 +288,7 @@ impl TypeRegistry {
             labels: Vec::new(),
             fields: Vec::new(),
             cast_name: String::new(),
+            relid: None,
         });
     }
 
@@ -329,6 +344,38 @@ impl TypeRegistry {
         }
     }
 
+    /// The JSON columns of the relation whose row type `oid` is, by relation and attribute: the
+    /// ones whose CHECKs a stored row of it was held to.
+    pub fn row_json_columns(&self, oid: u32) -> Vec<(u32, i32)> {
+        let Some(t) = self.get(oid).filter(|t| t.kind == TypeKind::Composite) else { return Vec::new() };
+        let Some(relid) = t.relid else { return Vec::new() };
+        t.fields.iter().filter(|f| f.attnum > 0 && matches!(self.resolve_domain(f.type_oid), oid::JSON | oid::JSONB)).map(|f| (relid, f.attnum)).collect()
+    }
+
+    /// The type model of a stored row of the relation whose row type `oid` is: a JSON column a
+    /// CHECK holds to a JSON Schema is the values it admits ([`TypeRegistry::documents`]). A row
+    /// value of the same type built by a statement was held to no CHECK, and renders as
+    /// [`TypeRegistry::render`] does.
+    pub fn render_row(&self, oid: u32) -> crate::types::Type {
+        use crate::types::Type;
+        let relid = self.get(oid).and_then(|t| t.relid);
+        match (self.render(oid), relid) {
+            (Type::Composite { name, fields }, Some(relid)) => {
+                let attnums: Vec<i32> = self.get(oid).map(|t| t.fields.iter().map(|f| f.attnum).collect()).unwrap_or_default();
+                let fields = fields
+                    .into_iter()
+                    .zip(attnums.into_iter().chain(std::iter::repeat(0)))
+                    .map(|(f, attnum)| match (f.ty, self.documents.get(&(relid, attnum))) {
+                        (Type::Json { schema: None }, Some(schema)) => crate::types::Field { ty: Type::Json { schema: Some(schema.clone()) }, ..f },
+                        (ty, _) => crate::types::Field { ty, ..f },
+                    })
+                    .collect();
+                Type::Composite { name, fields }
+            }
+            (ty, _) => ty,
+        }
+    }
+
     /// The type model for one oid.
     pub fn render(&self, oid: u32) -> crate::types::Type {
         self.render_at(oid, 0)
@@ -353,7 +400,7 @@ impl TypeRegistry {
                 // A row value whose columns were not read: no driver parses one, so it reaches
                 // the caller as its text form, and so does an array of them.
                 (TypeKind::Composite, _, _) => return Type::Scalar { name: "record".into() },
-                (TypeKind::Base, _, _) if matches!(t.oid, oid::JSON | oid::JSONB) => return Type::Json,
+                (TypeKind::Base, _, _) if matches!(t.oid, oid::JSON | oid::JSONB) => return Type::Json { schema: None },
                 _ => return Type::Scalar { name: t.name.clone() },
             }
         }
@@ -381,9 +428,9 @@ mod tests {
             assert_eq!(
                 registry.get(90001).unwrap().fields,
                 vec![
-                    Attribute { name: "id".into(), type_oid: 20, not_null: true },
-                    Attribute { name: "name".into(), type_oid: 25, not_null: false },
-                    Attribute { name: "tags".into(), type_oid: 1009, not_null: false },
+                    Attribute { name: "id".into(), type_oid: 20, not_null: true, attnum: 0 },
+                    Attribute { name: "name".into(), type_oid: 25, not_null: false, attnum: 0 },
+                    Attribute { name: "tags".into(), type_oid: 1009, not_null: false, attnum: 0 },
                 ]
             );
             let users = Type::Composite {

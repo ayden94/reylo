@@ -38,7 +38,7 @@ export type Need =
 
 export type Described = { params: { oid: number }[]; columns: { name: string; oid: number; table: number; attnum: number }[] };
 /** MySQL's prepare metadata: the protocol type code, the flags (bit 1 is NOT NULL), the charset (63 is binary), the display length and the table the column is one of (empty for an expression). */
-export type MysqlDescribed = { kind: "mysql"; columns: { name: string; type: number; flags: number; charset: number; length: number; org_table: string }[]; params: { type: number; flags: number; charset: number }[] };
+export type MysqlDescribed = { kind: "mysql"; columns: { name: string; type: number; flags: number; charset: number; length: number; org_table: string; org_name: string }[]; params: { type: number; flags: number; charset: number }[] };
 export type DbError = { message: string; code?: string; position?: number };
 export type Answer =
   | { describe: { params: number[]; columns: Described["columns"] } }

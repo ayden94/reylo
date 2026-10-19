@@ -101,7 +101,7 @@ test("a MySQL statement nested to the bound is analyzed, and one far past it fal
   const engine = await loaded();
   const mysql: EngineIo = {
     async describe() {
-      return { kind: "mysql", columns: [{ name: "x", type: 8, flags: 1, charset: 63, length: 20, org_table: "" }], params: [] };
+      return { kind: "mysql", columns: [{ name: "x", type: 8, flags: 1, charset: 63, length: 20, org_table: "", org_name: "" }], params: [] };
     },
     async query() {
       return [];

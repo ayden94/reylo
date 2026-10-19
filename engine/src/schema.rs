@@ -84,8 +84,10 @@ impl Type {
                 let items = of.json_schema(opts.inside_json());
                 json!({"type": "array", "items": if *nullable_items { nullable(items) } else { items }})
             }
-            // Any JSON, null included.
-            Type::Json | Type::Unknown => json!({}),
+            // The values a CHECK's JSON Schema admits, as the engine reduced it; else any JSON,
+            // null included.
+            Type::Json { schema: Some(schema) } => schema.clone(),
+            Type::Json { schema: None } | Type::Unknown => json!({}),
         }
     }
 }
@@ -206,13 +208,15 @@ mod tests {
         // Elements are nullable only where the statement builds the array from a value that may be NULL.
         assert_eq!(Type::Array { of: Box::new(s("text")), nullable_items: Some(true) }.json_schema(WIRE), json!({"type": "array", "items": {"type": ["string", "null"]}}));
         assert_eq!(Type::Array { of: Box::new(s("text")), nullable_items: Some(false) }.json_schema(WIRE), json!({"type": "array", "items": {"type": "string"}}));
-        assert_eq!(Type::Json.json_schema(WIRE), json!({}));
+        assert_eq!(Type::Json { schema: None }.json_schema(WIRE), json!({}));
+        let checked = json!({"type": "object", "properties": {"a": {"type": "string"}}, "additionalProperties": true});
+        assert_eq!(Type::Json { schema: Some(checked.clone()) }.json_schema(WIRE), checked);
         assert_eq!(Type::Unknown.json_schema(IN_JSON), json!({}));
     }
 
     #[test]
     fn a_composites_columns_stand_where_the_row_does() {
-        let users = Type::Composite { name: "users".into(), fields: vec![field("id", s("int8"), false), field("name", s("text"), true), field("meta", Type::Json, true)] };
+        let users = Type::Composite { name: "users".into(), fields: vec![field("id", s("int8"), false), field("name", s("text"), true), field("meta", Type::Json { schema: None }, true)] };
         assert_eq!(
             users.json_schema(WIRE),
             json!({

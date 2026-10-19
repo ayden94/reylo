@@ -20,6 +20,7 @@ pub mod pgtypes;
 pub mod postgres;
 pub mod returning;
 pub mod schema;
+pub mod schema_type;
 pub mod sqlite;
 pub mod sqlite_tree;
 pub mod stack;

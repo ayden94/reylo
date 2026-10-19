@@ -623,7 +623,10 @@ impl ResolveCtx<'_> {
                 (Type::List { of: Box::new(of), nullable_items: !items_non_null }, *non_null)
             }
             Shape::Column { probe, index } => match self.probes.get(*probe).and_then(|o| o.as_ref()).and_then(|o| o.columns.get(*index)) {
-                Some(col) if col.type_oid != oid::UNKNOWN => (self.registry.render(col.type_oid), !col.nullable),
+                Some(col) if col.type_oid != oid::UNKNOWN => {
+                    let ty = if col.whole_row { self.registry.render_row(col.type_oid) } else { self.registry.render(col.type_oid) };
+                    (crate::postgres::with_document(ty, col.document.as_ref()), !col.nullable)
+                }
                 _ => {
                     unresolved.push(display_path(path));
                     (Type::Unknown, false)
@@ -639,7 +642,7 @@ impl ResolveCtx<'_> {
                                 unresolved.push(display_path(&join(path, &col.name)));
                                 Type::Unknown
                             } else {
-                                self.registry.render(col.type_oid)
+                                crate::postgres::with_document(self.registry.render(col.type_oid), col.document.as_ref())
                             };
                             Field { name: col.name.clone(), ty, nullable: col.nullable }
                         })
@@ -1117,7 +1120,7 @@ mod tests {
     const BYTEA: u32 = 17;
 
     fn column(name: &str, type_oid: u32, type_name: &str, nullable: bool) -> DescribedColumn {
-        DescribedColumn { name: name.into(), type_oid, type_name: type_name.into(), nullable, nullable_items: None, values: None }
+        DescribedColumn { name: name.into(), type_oid, type_name: type_name.into(), nullable, nullable_items: None, values: None, document: None, whole_row: false }
     }
 
     fn scalar(name: &str) -> Type {

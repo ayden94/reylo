@@ -572,7 +572,8 @@ fn line(analysis: &Value) -> String {
     out
 }
 
-/// A type in one short line: `int4`, `'a' | 'b'`, `text[]`, `{ id: int4 }`, `[{ … }?]`. An array
+/// A type in one short line: `int4`, `'a' | 'b'`, `text[]`, `{ id: int4 }`, `[{ … }?]`,
+/// `json {"type":"string"}`. An array
 /// the statement builds says what it knows of its elements: `(text?)[]` when one may be NULL,
 /// `(text!)[]` when none can be.
 fn render(ty: &Value) -> String {
@@ -597,7 +598,12 @@ fn render(ty: &Value) -> String {
         Some("object") => fields(&ty["fields"]),
         Some("composite") => format!("{}{}", ty["name"].as_str().unwrap_or("record"), fields(&ty["fields"])),
         Some("list") => format!("[{}{}]", render(&ty["of"]), if ty["nullable_items"].as_bool().unwrap_or(false) { "?" } else { "" }),
-        Some("json") => "json".into(),
+        // A JSON column a CHECK holds to a JSON Schema: `json` and the canonical schema of the
+        // values it admits.
+        Some("json") => match ty.get("schema") {
+            Some(schema) => format!("json {schema}"),
+            None => "json".into(),
+        },
         Some("unknown") => "unknown".into(),
         _ => ty.to_string(),
     }
