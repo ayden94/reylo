@@ -97,7 +97,8 @@ const LONGLONG = 8;
 /** What a column's values need after a driver: a truth value made a boolean, a BIGINT a BigInt. */
 type Fix = (v: unknown, name: string) => unknown;
 const toBool: Fix = truth;
-const toBigInt: Fix = (v, name) => (typeof v === "string" || typeof v === "number" || typeof v === "bigint" ? bigInteger(v, name) : v);
+// A BIGINT's text is always its digits: BigInt reads it straight.
+const toBigInt: Fix = (v, name) => (typeof v === "string" ? BigInt(v) : typeof v === "number" || typeof v === "bigint" ? bigInteger(v, name) : v);
 
 /**
  * The fix a column of `kind` needs, if any: `bool` a boolean, `int8` (a BIGINT, or an integer a
@@ -133,16 +134,14 @@ export async function mysql2(m: AnyClient, text: string, values: unknown[], colu
     const fix = byKind(kinds?.[i]![1]) ?? (f.columnType === LONGLONG ? toBigInt : undefined);
     if (fix) fixes.push([f.name, fix]);
   });
-  fixRows(rows as Record<string, unknown>[], fixes);
-  const dates = described.filter((f) => f.columnType === DATETIME || f.columnType === TIMESTAMP || (f.columnType === TIME && f.decimals > 0));
-  if (dates.length) {
-    for (const row of rows as Record<string, unknown>[]) {
-      for (const f of dates) {
-        const v = row[f.name];
-        if (typeof v === "string") row[f.name] = wallClock(v, f.decimals > 6 ? 0 : f.decimals, f.columnType);
-      }
+  // A DATETIME's, TIMESTAMP's and TIME's text, padded to the column's own fraction digits.
+  for (const f of described) {
+    if (f.columnType === DATETIME || f.columnType === TIMESTAMP || (f.columnType === TIME && f.decimals > 0)) {
+      const decimals = f.decimals > 6 ? 0 : f.decimals, type = f.columnType;
+      fixes.push([f.name, (v) => (typeof v === "string" ? wallClock(v, decimals, type) : v)]);
     }
   }
+  fixRows(rows as Record<string, unknown>[], fixes);
   return rows;
 }
 
