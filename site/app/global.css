@@ -81,6 +81,9 @@ button {
   --tw-prose-headings: var(--color-fd-headings);
   --tw-prose-links: var(--color-fd-foreground);
   --tw-prose-code: var(--color-fd-headings);
+  /* Bold text takes the headings' colour, so the lead phrase of each item in the feature list
+     under the opening example stands out from the item's text. */
+  --tw-prose-bold: var(--color-fd-headings);
 }
 
 /* zod.dev rules the title off from the page, as it does every h2. */
@@ -89,6 +92,12 @@ button {
   letter-spacing: -0.02em;
   border-bottom: 1px solid var(--color-fd-border);
   @apply pb-3;
+}
+
+/* The subheader under the title ("Import SQL files into TypeScript.") sits close above the first
+   paragraph; Fumadocs' `mb-8` left it 75px away, detached from the text it introduces. */
+#nd-page h1 + p {
+  margin-bottom: 0;
 }
 
 /* The page opens with its first paragraph right under the title. The body is a flex item, so its
@@ -249,8 +258,16 @@ html .prose {
    instead of passing under it half faded, and the first entry starts clear of the fade.
    (`#nd-toc > .overflow-auto` outranks Fumadocs' `mask-[…]` class.) */
 #nd-toc > .overflow-auto {
-  padding-block: 1.25rem;
-  mask-image: linear-gradient(to bottom, transparent, #000 1.25rem, #000 calc(100% - 1.25rem), transparent);
+  padding-block: 1rem;
+  mask-image: linear-gradient(to bottom, transparent, #000 1rem, #000 calc(100% - 1rem), transparent);
+}
+
+/* The whole table fits on one screen, as the maintainer asked on 2026-10-20: its 18 entries fit
+   without scrolling in a window 800px tall (the page leaves out the h3s of Configuration and
+   Examples). Fumadocs' entries are 32px apart (`py-1.5`); 24px
+   still reads as a list, not a block. */
+#nd-toc a[href^='#'] {
+  padding-block: 0.125rem;
 }
 
 /* A code token in the table of contents (and in its popover below xl) is a chip, like inline code
@@ -548,18 +565,45 @@ code {
   }
 }
 
-/* The Dialects tables line up, and a short type in a cell (`Row | null`) stays on one line. */
-#nd-page .prose table td:first-child {
-  width: 10rem;
+/* A table of two columns (the Data types tables, "SQL type | TypeScript") splits the width in
+   halves, as the maintainer asked; its columns once came out 197px beside 603px and then, sized by
+   their content, the other way round. A wider table shares its width by its content. The What and
+   Where tables in How it works keep a first column of 10rem, so their short labels line up from
+   one dialect's tab to the next, except on a phone, where it would squeeze the second column. */
+#nd-page .prose table:has(tr > :nth-child(2):last-child) {
+  table-layout: fixed;
+  width: 100%;
 }
 
-#nd-page .prose td code {
-  white-space: nowrap;
+/* On a phone, the four columns of the `types` table fit the text column in a smaller face and
+   tighter cells, instead of scrolling sideways. */
+@media (max-width: 639px) {
+  #nd-page .prose table {
+    font-size: 0.8125rem;
+  }
+
+  #nd-page .prose :is(th, td) {
+    padding-inline: 0.25rem;
+  }
+
+}
+
+@media (min-width: 640px) {
+  #nd-page .prose .reylo-details-body table :is(th, td):first-child {
+    width: 10rem;
+  }
+
+  /* A short type in a cell (`Row | null`) stays on one line where the column has the room; on a
+     phone the table would scroll sideways instead. */
+  #nd-page .prose td code {
+    white-space: nowrap;
+  }
 }
 
 /* ── <Details> ───────────────────────────────────────────────────────────────
-   A secondary detail: one small muted line with a chevron, no box, so it reads as an aside and
-   not as the most important thing in its section; opened, its text hangs from a thin rule. */
+   A secondary detail: one muted line with a chevron, no box, so it reads as an aside and not as
+   the most important thing in its section; opened, its text hangs from a thin rule. The line is
+   the size of the text around it: a smaller one read as a footnote set apart from the page. */
 
 #nd-page .reylo-details {
   margin-block: 0.75rem;
@@ -571,7 +615,6 @@ code {
   gap: 0.5em;
   cursor: pointer;
   list-style: none;
-  font-size: 0.875rem;
   color: var(--color-fd-muted-foreground);
   transition: color 80ms;
 }

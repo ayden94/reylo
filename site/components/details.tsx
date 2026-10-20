@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 
 /**
- * A detail the reader can open, drawn quietly: a small muted line with a chevron, and the opened
+ * A detail the reader can open, drawn quietly: a muted line with a chevron, and the opened
  * text set off by a thin rule on its left. Fumadocs' accordion is a bordered card, which reads as
  * the most important thing on the page; the maintainer asked on 2026-10-11 for something that
  * "looks more like a detailed summary thing so that it doesn't seem so visually important".

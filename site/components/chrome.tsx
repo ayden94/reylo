@@ -48,10 +48,15 @@ export function TocHeader() {
  * arrow is a static drawing: the link (icon and "GitHub") is about 64px wide, so its bottom middle
  * is (32, 32) and the tip sits 6px under it, at (32, 38). The note is in the accent that carries
  * text (ochre by day, yellow by night), so it keeps its contrast in both themes.
+ *
+ * The note is drawn over the footer's bottom padding, which ends 8px above the window's edge. 48px
+ * of padding would hold the note alone and leave it just above that edge, where the address bubble
+ * Chrome shows in the window's bottom-left corner while a link is hovered (about 24px tall) covered
+ * it; the 40px beyond those 48 keep the note clear of the bubble at every window height.
  */
 export function TocFooter() {
   return (
-    <div className="mt-6 border-t pt-3 pb-[48px]">
+    <div className="mt-6 border-t pt-3 pb-[88px]">
       <div className="flex items-center justify-between gap-3">
         <div className="relative">
           <a href={githubUrl} rel="noreferrer noopener" target="_blank" className={`${linkClass} py-1.5`}>

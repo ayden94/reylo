@@ -55,6 +55,26 @@ export function twoslashOptions() {
   };
 }
 
+/**
+ * A block with a `// @hover: <names>` line, written as Twoslash writes its own flags, keeps the
+ * popups of the identifiers it names, every occurrence of each, and no other: the rest of its code
+ * renders as plain highlighted code, with no popup and no dotted underline. The names are separated
+ * by spaces or commas, and several such lines add up. A block without the line keeps every popup.
+ * Errors and `^?` queries are kept whatever the line says, since they are not hovers.
+ *
+ * The line is taken out before Twoslash sees the code, not left to Twoslash as a custom tag:
+ * Shiki's transformer passes Twoslash its own default tags on every call, which win over a
+ * `customTags` given here, so Twoslash would refuse `@hover` as an unknown compiler flag.
+ */
+const hoverLine = /^\/\/\s?@hover:\s?(.*)\n?/gm;
+
+function hoverNames(code: string): { code: string; names?: Set<string> } {
+  const lines = [...code.matchAll(hoverLine)];
+  if (!lines.length) return { code };
+  const names = new Set(lines.flatMap((line) => line[1].split(/[\s,]+/).filter(Boolean)));
+  return { code: code.replace(hoverLine, ''), names };
+}
+
 export function reyloTwoslash() {
   const options = twoslashOptions();
   // Each block's result is kept on disk under a hash of its code, which holds its hidden setup (the
@@ -68,7 +88,7 @@ export function reyloTwoslash() {
     .update(readFileSync(path.join(site, 'pnpm-lock.yaml'), 'utf8'))
     .digest('hex')
     .slice(0, 12);
-  return transformerTwoslash({
+  const transformer = transformerTwoslash({
     twoslashOptions: options,
     typesCache: createFileSystemTypesCache({ cwd: site, dir: `.next/cache/twoslash/${key}` }),
     rendererRich: {
@@ -80,4 +100,18 @@ export function reyloTwoslash() {
       processHoverDocs: (docs) => (docs.length > 400 ? '' : docs),
     },
   });
+  // The `@hover` line (`hoverNames` above) comes out before Twoslash runs, and Twoslash's result is
+  // narrowed after it is read from the cache or made, so the cache keeps every block's whole result
+  // and stays correct whatever the line says. The narrowing comes before Shiki splits the tokens at
+  // each node and the renderer wraps them: the transformer keeps the result it renders on
+  // `this.meta.twoslash`, the same object its later hooks read.
+  const preprocess = transformer.preprocess!;
+  transformer.preprocess = function (source, options) {
+    const { code, names } = hoverNames(source);
+    const result = preprocess.call(this, code, options);
+    const twoslash = this.meta.twoslash;
+    if (names && twoslash) twoslash.nodes = twoslash.nodes.filter((node) => node.type !== 'hover' || names.has(node.target));
+    return result;
+  };
+  return transformer;
 }

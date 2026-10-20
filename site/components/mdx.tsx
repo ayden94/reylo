@@ -6,6 +6,7 @@ import { Heading } from './heading';
 import { Dialect, DialectTabs } from './dialect-tabs';
 import { CodeTabs } from './code-tabs';
 import { Details } from './details';
+import { HowItWorksDiagram } from './how-it-works-diagram';
 import type { MDXComponents } from 'mdx/types';
 import type { ComponentProps } from 'react';
 
@@ -20,6 +21,8 @@ export function getMDXComponents(components?: MDXComponents) {
     Accordions,
     // A secondary detail, opened on demand and drawn quietly (components/details.tsx).
     Details,
+    // The figure under How it works (components/how-it-works-diagram.tsx).
+    HowItWorksDiagram,
     Tab,
     Tabs,
     // One dialect choice for the page: <DialectTabs> with a strip, <DialectTabs follow> without,

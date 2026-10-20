@@ -2,7 +2,8 @@ import { source } from '@/lib/source';
 import { TocFooter, TocHeader, TopRow } from '@/components/chrome';
 import { getMDXComponents } from '@/components/mdx';
 import { DocsLayout } from 'fumadocs-ui/layouts/docs';
-import { DocsBody, DocsPage, DocsTitle } from 'fumadocs-ui/layouts/docs/page';
+import { DocsBody, DocsDescription, DocsPage, DocsTitle } from 'fumadocs-ui/layouts/docs/page';
+import type { TOCItemType } from 'fumadocs-core/toc';
 import type { Metadata } from 'next';
 import type { CSSProperties } from 'react';
 import { notFound } from 'next/navigation';
@@ -19,6 +20,21 @@ const LEFT_TOC = {
   '--fd-layout-width': '78rem',
 } as CSSProperties;
 
+/** The h2s whose h3s stay out of the table of contents: the examples, and the keys of `.reylo.yaml`. */
+const FOLDED = new Set(['#configuration', '#examples']);
+
+/**
+ * The table of contents without the h3s of the sections in FOLDED: the maintainer wants the whole
+ * table to fit on one screen, a window 800px tall. The headings stay on the page, with their anchors.
+ */
+function tableOfContents(toc: TOCItemType[]): TOCItemType[] {
+  let folded = false;
+  return toc.filter((item) => {
+    if (item.depth === 2) folded = FOLDED.has(item.url);
+    return !(folded && item.depth > 2);
+  });
+}
+
 export default async function Page({ params }: Props) {
   const page = source.getPage((await params).slug ?? []);
   if (!page) notFound();
@@ -30,7 +46,7 @@ export default async function Page({ params }: Props) {
     <DocsLayout tree={source.getPageTree()} sidebar={{ enabled: false }} nav={{ enabled: false }} containerProps={{ style: LEFT_TOC }}>
       <TopRow />
       <DocsPage
-        toc={page.data.toc}
+        toc={tableOfContents(page.data.toc)}
         tableOfContent={{
           style: 'clerk',
           header: <TocHeader />,
@@ -40,9 +56,11 @@ export default async function Page({ params }: Props) {
         breadcrumb={{ enabled: false }}
         footer={{ enabled: false }}
       >
-        {/* No description under the title, as on Motherload's docs: the first paragraph says it one
-            line later. The frontmatter's description is the page's metadata (below). */}
+        {/* The frontmatter's description is the subheader under the title, "Import SQL files into
+            TypeScript.", which the maintainer asked for on 2026-10-20, and the page's metadata
+            (below). */}
         <DocsTitle>{page.data.title}</DocsTitle>
+        <DocsDescription>{page.data.description}</DocsDescription>
         <DocsBody>
           <MDX components={getMDXComponents()} />
         </DocsBody>
