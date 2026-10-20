@@ -1,7 +1,7 @@
 // The JSON Schema of a query's input and output: `query.inputSchema`, `query.outputSchema` (the
 // maintainer, 2026-10-20: "just createAccounts.inputSchema and createAccounts.outputSchema"), and
 // Standard Schema's `jsonSchema` converter. A build step writes both into the module. The
-// spellings are the engine's (engine/src/schema.rs, the framework's encoding table); what differs
+// spellings are the engine's (engine/core/src/schema.rs, the framework's encoding table); what differs
 // is where a value stands. The output is the result as JSON writes it (`Json<T>` in src/index.ts)
 // of the value `run` returns, which is each type's one representation (src/values.ts, the same
 // table the run time decodes with): a 64-bit integer and a decimal their text, a timestamptz the

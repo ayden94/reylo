@@ -1,8 +1,12 @@
-// The analysis engine: `engine/reylo_engine.wasm`, a WASI reactor, loaded once per process.
-// The engine is pure. `analyze` replays it: every round it either answers or names what it
-// still needs — statements to describe, catalog queries to run — and this module fulfils
-// those through the project's own driver and calls again.
+// The analysis engine: one WASI reactor per database, `engine.wasm` of the database's own npm
+// package (`@reylosql/postgres`, `@reylosql/sqlite`, `@reylosql/mysql`), which a project installs
+// beside reylo and which is found from the project first, then from reylo's own install; each
+// loads once per process. The engine is pure. `analyze` replays it: every round it either answers
+// or names what it still needs — statements to describe, catalog queries to run — and this module
+// fulfils those through the project's own driver and calls again.
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import type { WASI as WasiClass } from "node:wasi";
 import type { EngineType } from "./engine-type.ts";
 
@@ -25,7 +29,7 @@ export type Analysis = {
   unresolved: string[];
   /** Each structured parameter in insert position, with the lists of `rewritten.sql` (UTF-8 byte offsets) the run time writes again for a call that leaves keys out. */
   structured?: { name: string; lists: { start: number; end: number; entries: string[] }[] }[];
-  /** The catalog facts the analysis relied on, and the query that reads them (engine/src/fresh.rs). */
+  /** The catalog facts the analysis relied on, and the query that reads them (engine/core/src/fresh.rs). */
   fresh?: { query: string; rows: string[][]; inserts: string[] };
 };
 
@@ -60,7 +64,7 @@ export interface EngineIo {
 }
 
 type Response =
-  | { status: "ok"; version: string; fingerprint: string }
+  | { status: "ok"; version: string; fingerprint: string; database?: Dialect }
   | { status: "lexed"; lexed: Lexed }
   | { status: "need"; needs: Need[] }
   | { status: "analysis"; analysis: Analysis }
@@ -68,7 +72,102 @@ type Response =
   | { status: "configError"; error: { message: string; start: number; end: number } }
   | { status: "error"; message: string };
 
-const WASM_PATH = new URL("../engine/reylo_engine.wasm", import.meta.url);
+/**
+ * Each database's engine: an npm package that carries its artifact, `engine.wasm`, and nothing else.
+ * Each is an optional peer of reylo's, at reylo's own version, so a project installs the ones for
+ * its databases. Every one carries the same core, which lexes and reads the project file.
+ */
+export const ENGINE_PACKAGES: Record<Dialect, string> = { postgres: "@reylosql/postgres", sqlite: "@reylosql/sqlite", mysql: "@reylosql/mysql" };
+
+/** The version of reylo, which every engine package it loads must have. */
+const REYLO_VERSION: string = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
+
+/** An engine reylo cannot load: none installed, another version than reylo's, or another database's. Reported as the project's error. */
+export class MissingEngine extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MissingEngine";
+  }
+
+  /** No engine of `dialect` where the project or reylo finds packages. */
+  static of(dialect: Dialect): MissingEngine {
+    const pkg = ENGINE_PACKAGES[dialect];
+    return new MissingEngine(`${dialect} statements need ${pkg}: npm install -D ${pkg}`);
+  }
+
+  /** No engine at all, so not even the project file can be read. */
+  static none(): MissingEngine {
+    return new MissingEngine(`reylo reads the project file with a database's engine, and none is installed: npm install -D @reylosql/postgres, @reylosql/mysql or @reylosql/sqlite, the one for your database`);
+  }
+}
+
+/**
+ * Where `dialect`'s engine is: the project's own install first, as its drivers are found
+ * (src/describe.ts), then reylo's. `from` is where reylo looks after the project, its own module
+ * unless a test says otherwise.
+ */
+export function enginePath(dialect: Dialect, projectDir: string, from: string = import.meta.url): string | undefined {
+  for (const base of [join(projectDir, "package.json"), from]) {
+    try {
+      return createRequire(base).resolve(`${ENGINE_PACKAGES[dialect]}/engine.wasm`);
+    } catch {}
+  }
+  return undefined;
+}
+
+const engines = new Map<string, Promise<Engine>>();
+
+/**
+ * The engine of one database as `projectDir` finds it, loaded once per process and file. It
+ * rejects with a MissingEngine where none is installed, where the package is another version than
+ * reylo, and where its artifact reads another database's statements.
+ */
+export function engine(dialect: Dialect, projectDir: string, from?: string): Promise<Engine> {
+  const path = enginePath(dialect, projectDir, from);
+  if (!path) return Promise.reject(MissingEngine.of(dialect));
+  let loading = engines.get(path);
+  if (!loading) {
+    loading = (async () => {
+      const pkg = ENGINE_PACKAGES[dialect];
+      let version: string | undefined;
+      try {
+        version = JSON.parse(readFileSync(join(dirname(path), "package.json"), "utf8")).version;
+      } catch {}
+      if (version !== REYLO_VERSION) {
+        throw new MissingEngine(`reylo ${REYLO_VERSION} runs with ${pkg} ${REYLO_VERSION}, and the one installed is ${version ?? "of no version"} (${dirname(path)}): npm install -D ${pkg}@${REYLO_VERSION}`);
+      }
+      const loaded = await Engine.load(path);
+      const ping = loaded.call({ op: "ping" });
+      if (ping.status !== "ok" || ping.database !== dialect) {
+        const reads = ping.status === "ok" && ping.database ? `${ping.database} statements` : "no one database's statements";
+        throw new MissingEngine(`${pkg} (${dirname(path)}) carries an engine that reads ${reads}, not ${dialect} ones: npm install -D ${pkg}@${REYLO_VERSION}`);
+      }
+      return loaded;
+    })();
+    // A failure is not kept: the package may be installed or replaced while the process runs.
+    loading.catch(() => engines.delete(path));
+    engines.set(path, loading);
+  }
+  return loading;
+}
+
+/**
+ * An engine to read the project file with, before the URL in it names the database: every
+ * database's engine carries the same core, which parses the file, so the first installed will do.
+ * A MissingEngine where none is installed, or where none that is installed loads.
+ */
+export async function anyEngine(projectDir: string, from?: string): Promise<Engine | MissingEngine> {
+  let failed: MissingEngine | undefined;
+  for (const dialect of ["postgres", "mysql", "sqlite"] as const) {
+    if (!enginePath(dialect, projectDir, from)) continue;
+    try {
+      return await engine(dialect, projectDir, from);
+    } catch (e) {
+      failed ??= e instanceof MissingEngine ? e : new MissingEngine((e as Error).message);
+    }
+  }
+  return failed ?? MissingEngine.none();
+}
 
 // The WebAssembly namespace is a global in every runtime reylo supports; it is typed here
 // rather than through the DOM lib.
@@ -111,7 +210,7 @@ export class Engine {
     this.#call = e.reylo_call;
   }
 
-  static async load(path: URL | string = WASM_PATH): Promise<Engine> {
+  static async load(path: URL | string): Promise<Engine> {
     const module = await WA.compile(readFileSync(path));
     const { WASI } = loadWasi();
     const wasi = new WASI({ version: "preview1", args: ["reylo-engine"], env: {} });
@@ -226,10 +325,4 @@ export class AnswerCache {
   clear() {
     this.#entries.clear();
   }
-}
-
-let loaded: Promise<Engine> | undefined;
-/** The process-wide engine instance. */
-export function engine(): Promise<Engine> {
-  return (loaded ??= Engine.load());
 }

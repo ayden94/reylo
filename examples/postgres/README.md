@@ -1,6 +1,6 @@
 # Reylo example: Postgres
 
-A sample project that imports `.sql` files as typed queries, checked by TypeScript 7.1 through the `reylo` content mapper and run through the `postgres` driver.
+A sample project that imports `.sql` files as typed queries, checked by TypeScript 7.1 through the `reylo` content mapper with the Postgres engine, `@reylosql/postgres`, and run through the `postgres` driver. Both Reylo packages are linked from this repository; a project of its own installs them with `npm install reylo` and `npm install -D @reylosql/postgres`.
 
 ## Run it
 

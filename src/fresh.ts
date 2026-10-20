@@ -2,7 +2,7 @@
 // 2026-10-20: any change fails). A module a build step writes carries the catalog facts its
 // statement relied on, the columns it names with their types, whether each is not null and whether
 // it has a default, and for an insert's table the columns that need a value, beside the catalog
-// query that read them (engine/src/fresh.rs). Before a query runs, the run time runs that query
+// query that read them (engine/core/src/fresh.rs). Before a query runs, the run time runs that query
 // through the caller's own client and compares: any difference fails the call, naming the table
 // and the column, rather than letting the query run against a schema its types were not made for.
 //
@@ -39,7 +39,7 @@ const yes = (v: string) => v === "true" || v === "1";
 const describe = (r: readonly string[]) => `${r[2]}${yes(r[3]!) ? " not null" : ""}${yes(r[4]!) ? " with a default" : ""}`;
 const table = (name: string) => name.replace(/^"|"$/g, "").replace(/"\."/g, ".");
 
-/** The catalog query's columns, as engine/src/fresh.rs names them. */
+/** The catalog query's columns, as engine/core/src/fresh.rs names them. */
 const COLUMNS = ["fresh_table", "fresh_column", "fresh_type", "fresh_not_null", "fresh_default"] as const;
 
 /**

@@ -1,37 +1,62 @@
-// Builds the publishable package into dist/: the sources compiled to JavaScript with their
-// declarations, the engine's WebAssembly, the README, and a package.json whose exports and
-// content mapper name the compiled files. Node strips no types under node_modules, so an
-// installed copy that ships TypeScript fails to load in the mapper, the bundler adapters and at
-// run time. The repository's own package.json keeps pointing at the sources, so the tests and
-// the labs run them without a build; `npm publish dist` publishes the build, and the root is
-// private so that it cannot be published by mistake. dist/ keeps the repository's layout
-// (src/, engine/), so `src/engine.ts` finds `../engine/reylo_engine.wasm` in both.
+// Builds every publishable package into dist/, one directory each, published with
+// `npm publish dist/<name>`:
+// - dist/reylo: the sources compiled to JavaScript with their declarations, the README, and a
+//   package.json whose exports and content mapper name the compiled files. Node strips no types
+//   under node_modules, so an installed copy that ships TypeScript fails to load in the mapper, the
+//   bundler adapters and at run time. It carries no engine: each database's is a package of its
+//   own, an optional peer at reylo's exact version, which `src/engine.ts` finds from the project.
+// - dist/postgres, dist/sqlite, dist/mysql: `@reylosql/<database>`, its `engine.wasm` (built by
+//   engine/build.sh and committed) and its package.json and README, at reylo's version.
+// The repository's own package.json files keep pointing at the sources, so the tests and the labs
+// run them without a build; every one of them is private, so that none can be published by
+// mistake.
 import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join } from "node:path";
 
 const root = join(import.meta.dirname, "..");
 const dist = join(root, "dist");
 const js = (path: string) => path.replace(/\.ts$/, ".js");
+const DATABASES = ["postgres", "sqlite", "mysql"] as const;
 
 rmSync(dist, { recursive: true, force: true });
+const reylo = join(dist, "reylo");
 execFileSync(join(root, "node_modules/.bin/tsc"), ["-p", join(root, "tsconfig.build.json")], { stdio: "inherit" });
-mkdirSync(join(dist, "engine"));
-copyFileSync(join(root, "engine/reylo_engine.wasm"), join(dist, "engine/reylo_engine.wasm"));
-copyFileSync(join(root, "README.md"), join(dist, "README.md"));
+copyFileSync(join(root, "README.md"), join(reylo, "README.md"));
 
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const { private: _private, scripts: _scripts, devDependencies: _dev, bin, exports, typescript, ...rest } = pkg;
+// The engines are peers at reylo's own version: reylo refuses another (src/engine.ts).
+for (const db of DATABASES) {
+  const name = `@reylosql/${db}`;
+  if (rest.peerDependencies?.[name] !== pkg.version) throw new Error(`package.json: the peer ${name} is ${rest.peerDependencies?.[name]}, and reylo is ${pkg.version}; they move together`);
+  if (!rest.peerDependenciesMeta?.[name]?.optional) throw new Error(`package.json: the peer ${name} must be optional, since a project installs only its databases' engines`);
+}
 const built = {
   ...rest,
   bin: Object.fromEntries(Object.entries(bin as Record<string, string>).map(([name, path]) => [name, js(path)])),
   exports: Object.fromEntries(Object.entries(exports as Record<string, string>).map(([key, path]) => [key, { types: path.replace(/\.ts$/, ".d.ts"), default: js(path) }])),
   typescript: { ...typescript, contentMapper: { ...typescript.contentMapper, exec: (typescript.contentMapper.exec as string[]).map(js) } },
 };
-writeFileSync(join(dist, "package.json"), JSON.stringify(built, null, 2) + "\n");
+writeFileSync(join(reylo, "package.json"), JSON.stringify(built, null, 2) + "\n");
 
-// Nothing TypeScript ships but declarations.
-const files = readdirSync(dist, { recursive: true, encoding: "utf8" });
+// Nothing TypeScript ships but declarations, and no engine ships inside reylo.
+const files = readdirSync(reylo, { recursive: true, encoding: "utf8" });
 const source = files.filter((f) => /\.(c|m)?ts$/.test(f) && !/\.d\.(c|m)?ts$/.test(f));
-if (source.length) throw new Error(`dist/ holds TypeScript sources: ${source.join(", ")}`);
-console.log(`dist/: ${files.length} files, package ${built.name}@${built.version}`);
+if (source.length) throw new Error(`dist/reylo holds TypeScript sources: ${source.join(", ")}`);
+const wasm = files.filter((f) => f.endsWith(".wasm"));
+if (wasm.length) throw new Error(`dist/reylo holds an engine: ${wasm.join(", ")}`);
+console.log(`dist/reylo: ${files.length} files, package ${built.name}@${built.version}`);
+
+for (const db of DATABASES) {
+  const from = join(root, "packages", db);
+  const to = join(dist, db);
+  mkdirSync(to);
+  const { private: _p, ...engine } = JSON.parse(readFileSync(join(from, "package.json"), "utf8"));
+  if (engine.version !== pkg.version) throw new Error(`packages/${db}/package.json is ${engine.version}, and reylo is ${pkg.version}; they move together`);
+  writeFileSync(join(to, "package.json"), JSON.stringify(engine, null, 2) + "\n");
+  copyFileSync(join(from, "engine.wasm"), join(to, "engine.wasm"));
+  copyFileSync(join(from, "README.md"), join(to, "README.md"));
+  const size = readFileSync(join(to, "engine.wasm")).length;
+  console.log(`dist/${db}: package ${engine.name}@${engine.version}, engine.wasm ${size} bytes`);
+}

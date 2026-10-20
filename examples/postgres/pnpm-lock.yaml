@@ -8,13 +8,16 @@ importers:
 
   .:
     dependencies:
-      reylo:
-        specifier: link:../..
-        version: link:../..
       postgres:
         specifier: ^3.4.9
         version: 3.4.9
+      reylo:
+        specifier: link:../..
+        version: link:../..
     devDependencies:
+      '@reylosql/postgres':
+        specifier: link:../../packages/postgres
+        version: link:../../packages/postgres
       '@types/node':
         specifier: ^26.6.1
         version: 26.6.1

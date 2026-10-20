@@ -4,7 +4,7 @@
 import { createHash } from "node:crypto";
 import { dirname } from "node:path";
 import { serve } from "./rpc.ts";
-import { engine, type Analysis } from "./engine.ts";
+import { anyEngine, type Analysis } from "./engine.ts";
 import { declaredType, ident, renderParamType, renderType } from "./render.ts";
 import { resolveProject, type Dialect } from "./project.ts";
 import { Session } from "./analyze.ts";
@@ -38,7 +38,7 @@ serve({
     const projectDir = dirname(p.configFileName);
     // Every setting lives in the project file, which PorgREST and Reylo Framework read too.
     const optionDiagnostics = Object.keys(p.options ?? {}).map((key) => ({ path: [key], messageText: `reylo reads its settings from .reylo.yaml, not from the content mapper's options; move "${key}" there.`, code: 104 }));
-    const resolved = resolveProject(await engine(), projectDir);
+    const resolved = resolveProject(await anyEngine(projectDir), projectDir);
     projects.set(p.projectHandle, { dialect: resolved.dialect, strict: resolved.strict, session: Session.open(projectDir) });
     const configIdentity = createHash("sha1").update(JSON.stringify([resolved.file ?? null, resolved.dialect, resolved.strict, resolved.url ?? null, resolved.error ?? null, p.options ?? null])).digest("hex");
     return { configIdentity, watchedFiles: resolved.watched, optionDiagnostics };
@@ -83,8 +83,9 @@ serve({
     // at its place; until then nothing is proved, so the row count is `many`.
     let names: string[] = [];
     let placeholders: { name: string; start: number; end: number }[] = [];
+    const session = await project.session;
     try {
-      ({ params: names, placeholders } = (await engine()).lex(sql, project.dialect));
+      ({ params: names, placeholders } = session.lex(sql));
     } catch {}
     const cardinality = "many";
     // `strict: true`: a parameter nothing in the statement types is an error at its first use.
@@ -98,7 +99,6 @@ serve({
         diagnostics.push(diag(`Nothing in the statement gives the parameter ${written} a type; cast it, as in cast(${written} as integer), or remove strict: true from .reylo.yaml.`, at?.start ?? 0, at ? at.end - at.start : 1, 12));
       }
     };
-    const session = await project.session;
     const outcome = await session.analyze(sql);
     if (!outcome.ok) {
       diagnostics.push(diag(outcome.message, 0, 1, outcome.code));

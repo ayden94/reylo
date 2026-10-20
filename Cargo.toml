@@ -22,7 +22,6 @@ members = [
   "engine/wasm/postgres",
   "engine/wasm/sqlite",
   "engine/wasm/mysql",
-  "engine/wasm/all",
   "framework/engine",
   "pg-extension",
   "oracle",
@@ -34,7 +33,8 @@ pg_query = { path = "engine/postgres/.patched/pg_query" }
 [profile.release]
 # 3 rather than "s": 7 µs less CPU on a 50-row read (71 against 78 with the other fixes), for a
 # Reylo Framework binary 31 % larger (20.3 to 26.6 MB stripped, measured 2026-10-03). The engine's wasm
-# stays "s": engine/build.sh sets CARGO_PROFILE_RELEASE_OPT_LEVEL for its own build.
+# stays "s" and without LTO: engine/build.sh sets CARGO_PROFILE_RELEASE_OPT_LEVEL and _LTO for its own
+# build.
 opt-level = 3
 lto = true
 codegen-units = 1

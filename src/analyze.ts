@@ -7,7 +7,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import { engine, reason, AnswerCache, Unreachable, type Analysis, type Engine, type EngineIo } from "./engine.ts";
+import { anyEngine, engine, reason, AnswerCache, MissingEngine, Unreachable, type Analysis, type Engine, type EngineIo } from "./engine.ts";
 import { packageDir, resolveProject, type ResolvedProject } from "./project.ts";
 import { openPostgresDescriber } from "./describe.ts";
 import { openMysqlDescriber } from "./mysql-describe.ts";
@@ -36,11 +36,22 @@ const BUILD_IDLE = 250;
 
 const sessions = new Map<string, Session>();
 
+/**
+ * The project a directory belongs to, its file read with whichever database's engine is installed,
+ * and the engine of its own database, or why that cannot be loaded.
+ */
+async function openProject(dir: string, env: Record<string, string | undefined>): Promise<{ project: ResolvedProject; engine: Engine | MissingEngine }> {
+  const project = resolveProject(await anyEngine(dir), dir, env);
+  const own = await engine(project.dialect, project.root).catch((e: unknown) => (e instanceof MissingEngine ? e : new MissingEngine((e as Error).message)));
+  return { project, engine: own };
+}
+
 export class Session {
   readonly project: ResolvedProject;
   /** The project's directory, which holds `.reylo/`. */
   readonly root: string;
-  readonly #engine: Engine;
+  /** The engine of the project's database, or why there is none, which an analysis reports. */
+  readonly #engine: Engine | MissingEngine;
   readonly #engineFingerprint: string;
   readonly #answers = new AnswerCache();
   readonly #idle: number;
@@ -49,30 +60,29 @@ export class Session {
   #timer: ReturnType<typeof setTimeout> | undefined;
   #schema: { value: string | null; at: number; error?: string; fatal?: boolean } | undefined;
 
-  private constructor(engine: Engine, project: ResolvedProject, idle: number) {
+  private constructor(engine: Engine | MissingEngine, project: ResolvedProject, idle: number) {
     this.#engine = engine;
     this.project = project;
     this.root = project.root;
     this.#idle = idle;
-    const ping = engine.call({ op: "ping" });
-    this.#engineFingerprint = ping.status === "ok" ? ping.fingerprint : "unknown";
+    const ping = engine instanceof MissingEngine ? undefined : engine.call({ op: "ping" });
+    this.#engineFingerprint = ping?.status === "ok" ? ping.fingerprint : "unknown";
   }
 
   /** The build steps' session for the project a file or directory belongs to: one per project (and connection) and process. */
   static async for(from: string, env: Record<string, string | undefined> = process.env): Promise<Session> {
-    const e = await engine();
     // From the package's directory, so that a message names a file as the project sees it.
-    const project = resolveProject(e, packageDir(from), env);
-    const key = JSON.stringify([project.root, project.url ?? null, project.error ?? null]);
+    const { project, engine } = await openProject(packageDir(from), env);
+    const key = JSON.stringify([project.root, project.url ?? null, project.error ?? null, engine instanceof MissingEngine ? engine.message : null]);
     let session = sessions.get(key);
-    if (!session) sessions.set(key, (session = new Session(e, project, BUILD_IDLE)));
+    if (!session) sessions.set(key, (session = new Session(engine, project, BUILD_IDLE)));
     return session;
   }
 
   /** A session of its own, for a caller that must not share one (the type check, a test); it keeps its connection until closed. */
   static async open(from: string, env: Record<string, string | undefined> = process.env, idle = Infinity): Promise<Session> {
-    const e = await engine();
-    return new Session(e, resolveProject(e, from, env), idle);
+    const { project, engine } = await openProject(from, env);
+    return new Session(engine, project, idle);
   }
 
   /** Every build-step session this process opened, for a caller that ends them (`reylo generate`). */
@@ -81,6 +91,7 @@ export class Session {
   }
 
   lex(sql: string) {
+    if (this.#engine instanceof MissingEngine) throw this.#engine;
     return this.#engine.lex(sql, this.project.dialect);
   }
 
@@ -105,6 +116,9 @@ export class Session {
   async #analyze(sql: string, options: { force?: boolean }): Promise<Outcome> {
     if (this.project.error) return { ok: false, message: this.project.error, code: 11 };
     if (!this.project.url) return { ok: false, message: `No database URL: set DATABASE_URL in the environment, .env.local or .env, or "url" in .reylo.yaml.`, code: 4 };
+    // The URL names the database, whose engine package the project has to have installed.
+    const engine = this.#engine;
+    if (engine instanceof MissingEngine) return { ok: false, message: engine.message, code: 11 };
     const file = this.entryFile(sql);
     const entry = options.force ? undefined : readEntry(file);
     const schema = await this.schema();
@@ -115,7 +129,7 @@ export class Session {
     }
     let analysis: Analysis;
     try {
-      analysis = await this.#engine.analyze(sql, this.project.dialect, await this.#connection(), this.#answers);
+      analysis = await engine.analyze(sql, this.project.dialect, await this.#connection(), this.#answers);
     } catch (e) {
       // A dead connection is reopened by the next call; a server error is reported.
       if (e instanceof Unreachable) {

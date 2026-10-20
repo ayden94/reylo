@@ -3,8 +3,12 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { engine } from "../src/engine.ts";
 import { findProjectFile, resolveProject } from "../src/project.ts";
+
+// Any engine reads the project file; the repository's own install has every one.
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 // A project tree: `files` maps a path under a fresh directory to its text.
 function tree(files: Record<string, string>): string {
@@ -17,7 +21,7 @@ function tree(files: Record<string, string>): string {
 }
 
 test("without a project file, DATABASE_URL comes from the environment, then .env.local, then .env", async () => {
-  const e = await engine();
+  const e = await engine("postgres", ROOT);
   const root = tree({ "app/package.json": "{}", "app/.env": "DATABASE_URL=postgres://from-env-file/db\n", "app/.env.local": "DATABASE_URL=postgres://from-local/db\n" });
   const dir = join(root, "app");
   assert.equal(findProjectFile(dir, {}), undefined);
@@ -28,7 +32,7 @@ test("without a project file, DATABASE_URL comes from the environment, then .env
 });
 
 test("the project file sits beside package.json, and its url, env files and strict apply", async () => {
-  const e = await engine();
+  const e = await engine("postgres", ROOT);
   const root = tree({
     "package.json": "{}",
     ".reylo.yaml": "url: postgres://pooler/app\ndirect_url: mysql://root:${DB_PASSWORD}@127.0.0.1:3306/app\nenv: [secrets.env]\nstrict: true\napi:\n  routes: api\n",
@@ -55,7 +59,7 @@ test("the project file sits beside package.json, and its url, env files and stri
 });
 
 test("a types section, removed on 2026-10-20, is refused where it stands, whatever it holds; package.json decides no type", async () => {
-  const e = await engine();
+  const e = await engine("postgres", ROOT);
   for (const types of ["types:\n  dates: temporal\n", "types: {}\n", "types:\n  datez: Date\n"]) {
     const root = tree({ "package.json": JSON.stringify({ dependencies: { mariadb: "^3", "@planetscale/database": "^1" } }), ".reylo.yaml": `url: mysql://root@127.0.0.1:3306/app\n\n${types}` });
     const r = resolveProject(e, root, {});
@@ -69,7 +73,7 @@ test("a types section, removed on 2026-10-20, is refused where it stands, whatev
 });
 
 test("a key the library does not know, and a variable nothing sets, are errors that say where", async () => {
-  const e = await engine();
+  const e = await engine("postgres", ROOT);
   const typo = tree({ "package.json": "{}", ".reylo.yaml": "url: postgres://x/db\n\nstirct: true\n" });
   assert.match(resolveProject(e, typo, {}).error!, /^\.reylo\.yaml:3:1: unknown field `stirct`/);
   const unset = tree({ "package.json": "{}", ".reylo.yaml": "url: ${NOPE}\n" });

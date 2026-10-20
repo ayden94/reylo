@@ -5,6 +5,7 @@ This lab answers whether `node --import reylo/register` makes a `.sql` import wo
 ```sh
 cd lab/jest
 nub install && ln -sfn ../../.. node_modules/reylo   # nub install removes the symlink; link it again after every install
+mkdir -p node_modules/@reylosql && ln -sfn ../../../../packages/sqlite node_modules/@reylosql/sqlite   # the SQLite engine, likewise
 node setup.mjs                                      # lab.db; .reylo.yaml points at it with file:./lab.db
 nub run test:cjs                                    # reylo/jest, CommonJS run: query.test.cjs
 nub run test:esm                                    # reylo/jest, --experimental-vm-modules: query.test.cjs and query.test.mjs

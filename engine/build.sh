@@ -118,13 +118,6 @@ done
 export CARGO_PROFILE_RELEASE_OPT_LEVEL=s CARGO_PROFILE_RELEASE_LTO=false
 TARGET_DIR="${CARGO_TARGET_DIR:-$(cd .. && pwd)/target}"
 cargo build --release --target wasm32-wasip1 "${PACKAGES[@]}"
-# Until the loader loads each database's package, `reylo_engine.wasm` beside this script is all
-# three in one artifact (`wasm/all`), built with them.
-if [ $# -eq 0 ]; then
-  cargo build --release --target wasm32-wasip1 -p reylo-engine-all-wasm
-  cp "$TARGET_DIR/wasm32-wasip1/release/reylo_engine_all_wasm.wasm" reylo_engine.wasm
-  ls -l reylo_engine.wasm
-fi
 for db in "${WANTED[@]}"; do
   mkdir -p "../packages/$db"
   cp "$TARGET_DIR/wasm32-wasip1/release/reylo_engine_${db}_wasm.wasm" "../packages/$db/engine.wasm"

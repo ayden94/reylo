@@ -3023,17 +3023,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "reylo-engine-all-wasm"
-version = "0.0.0"
-dependencies = [
- "reylo-engine-core",
- "reylo-engine-mysql",
- "reylo-engine-postgres",
- "reylo-engine-sqlite",
- "serde_json",
-]
-
-[[package]]
 name = "reylo-engine-build"
 version = "0.0.0"
 

@@ -5,7 +5,7 @@
     "allowImportingTsExtensions": false,
     "declaration": true,
     "rootDir": ".",
-    "outDir": "dist"
+    "outDir": "dist/reylo"
   },
   "include": ["src"]
 }

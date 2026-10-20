@@ -64,8 +64,11 @@ Reylo needs:
 
 ```sh
 npm install reylo
+npm install -D @reylosql/postgres  # or @reylosql/mysql, @reylosql/sqlite
 npm install -D typescript@beta
 ```
+
+`reylo` is the content mapper, the run time, the bundler plugins, the preload and the CLI. The engine that reads your database's statements is a package of its own, one per database, at Reylo's version: install the one for each database the project uses. A development dependency does, since a built module carries its analysis; a program run under the preload analyzes as it imports, and needs it installed. Without it, a `.sql` import reports what to install: `postgres statements need @reylosql/postgres: npm install -D @reylosql/postgres`.
 
 Name Reylo in `tsconfig.json`, and type-check with `--runExternalCode`, the flag that lets `tsc` run content mappers:
 

@@ -61,7 +61,7 @@ export function renderType(t: EngineType, inJson = false, dialect: Dialect = "po
 
 /**
  * The TypeScript type of a JSON value the engine's canonical JSON Schema describes: the values a
- * CHECK's schema admits (engine/src/schema_type.rs). An object that may hold keys besides the ones
+ * CHECK's schema admits (engine/core/src/schema_type.rs). An object that may hold keys besides the ones
  * it names says so with an index signature, `unknown` beside named keys, since TypeScript requires
  * every named key's type, `undefined` included for an optional one, to fit the signature.
  */

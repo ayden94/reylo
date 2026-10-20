@@ -7,7 +7,7 @@
 // behaves as if it held `url: ${DATABASE_URL}`.
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import type { Engine } from "./engine.ts";
+import { type Engine, MissingEngine } from "./engine.ts";
 
 export type Dialect = "postgres" | "sqlite" | "mysql";
 
@@ -94,7 +94,11 @@ function place(text: string, offset: number): string {
  */
 const TYPES_KEY = /^types[ \t]*:/m;
 
-export function resolveProject(engine: Engine, projectDir: string, env: Record<string, string | undefined> = process.env): ResolvedProject {
+/**
+ * The project `projectDir` belongs to. `engine` reads the project file: any database's engine does
+ * (src/engine.ts, `anyEngine`), and where none is installed a project file is the project's error.
+ */
+export function resolveProject(engine: Engine | MissingEngine, projectDir: string, env: Record<string, string | undefined> = process.env): ResolvedProject {
   const file = findProjectFile(projectDir, env);
   const root = file ? dirname(file) : packageDir(projectDir);
   const shown = (path: string) => (isAbsolute(path) ? relative(projectDir, path) || path : path);
@@ -111,10 +115,13 @@ export function resolveProject(engine: Engine, projectDir: string, env: Record<s
     if (types) {
       error = `${shown(file!)}:${place(text!, Buffer.byteLength(text!.slice(0, types.index)))}: types: the types section was removed on 2026-10-20. Reylo now gives every value one type on every driver, whatever the driver's settings: a 64-bit integer and a decimal are their exact text, a timestamptz a Date, a date and a timestamp their text, JSON parsed and binary data a Uint8Array. Delete the section.`;
     } else if (text !== undefined) {
-      const r = engine.call({ op: "config", text });
-      if (r.status === "config") config = r.config as ProjectFile;
-      else if (r.status === "configError") error = `${shown(file)}:${place(text, r.error.start)}: ${r.error.message}`;
-      else error = `${shown(file)}: ${r.status === "error" ? r.message : `unexpected ${r.status}`}`;
+      if (engine instanceof MissingEngine) error = `${shown(file)}: ${engine.message}`;
+      else {
+        const r = engine.call({ op: "config", text });
+        if (r.status === "config") config = r.config as ProjectFile;
+        else if (r.status === "configError") error = `${shown(file)}:${place(text, r.error.start)}: ${r.error.message}`;
+        else error = `${shown(file)}: ${r.status === "error" ? r.message : `unexpected ${r.status}`}`;
+      }
     }
   }
   const envFiles = (config.env ?? DEFAULT_ENV_FILES).map((f) => resolve(root, f));

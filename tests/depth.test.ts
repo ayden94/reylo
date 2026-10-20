@@ -4,13 +4,14 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Engine, type EngineIo } from "../src/engine.ts";
+import { fileURLToPath } from "node:url";
+import { Engine, enginePath, type Dialect, type EngineIo } from "../src/engine.ts";
 import { Session } from "../src/analyze.ts";
 
 // How deeply a statement may nest for the engine to read it: libpg_query hands over at most 1,000
-// levels of a parse tree (engine/src/stack.rs), the same in the WebAssembly engine as in every
+// levels of a parse tree (engine/core/src/stack.rs), the same in the WebAssembly engine as in every
 // native host, and the embedded SQLite half SQLite's own bound of 1,000. These are the deepest
-// statements of each shape that parse, as engine/src/stack.rs's tests have them.
+// statements of each shape that parse, as engine/core/src/stack.rs's tests have them.
 function nested(shape: string, n: number): string {
   const fold = (start: string, f: (s: string, i: number) => string) => Array.from({ length: n }, (_, i) => i).reduce(f, start);
   switch (shape) {
@@ -29,7 +30,7 @@ function nested(shape: string, n: number): string {
 const POSTGRES_BOUNDS: [string, number][] = [["sum", 496], ["concat", 496], ["and_or", 495], ["case", 493], ["coalesce", 495], ["json", 495], ["subquery", 164]];
 const SQLITE_BOUNDS: [string, number][] = [["sum", 500], ["and_or", 498], ["case", 498], ["coalesce", 499], ["subquery", 29]];
 // MySQL's statements are read by sqlparser with the same bound, which counts each operator of a
-// chain (`id = 0 or (…)` is two a level), as engine/src/mysql.rs's tests have them.
+// chain (`id = 0 or (…)` is two a level), as engine/mysql/src/mysql.rs's tests have them.
 const MYSQL_BOUNDS: [string, number][] = [["sum", 501], ["and_or", 248], ["case", 495], ["coalesce", 496], ["subquery", 247]];
 
 // A server that describes every statement as one int4 column and answers every catalog query with
@@ -48,15 +49,16 @@ const io: EngineIo = {
 // Node gives its main thread, which the engine shares with its caller.
 const HOST_FRAMES = 4_000;
 const deep = <T>(n: number, f: () => T): T => (n === 0 ? f() : deep(n - 1, f));
-async function loaded(): Promise<Engine> {
-  const engine = await Engine.load();
+/** A fresh instance of the dialect's engine, as the repository installs it, whose calls this file wraps. */
+async function loaded(dialect: Dialect): Promise<Engine> {
+  const engine = await Engine.load(enginePath(dialect, fileURLToPath(new URL("..", import.meta.url)))!);
   const call = engine.call.bind(engine);
   engine.call = (request: object) => deep(HOST_FRAMES, () => call(request));
   return engine;
 }
 
 test("a Postgres statement nested to the bound is read whole, one level past it falls back to the describe, and the engine goes on", async () => {
-  const engine = await loaded();
+  const engine = await loaded("postgres");
   for (const [shape, n] of POSTGRES_BOUNDS) {
     const at = await engine.analyze(nested(shape, n), "postgres", io);
     assert.equal(at.kind, "select", `${shape} at ${n}`);
@@ -98,7 +100,7 @@ test("a SQLite statement nested to the engine's bound is typed, and one level pa
 });
 
 test("a MySQL statement nested to the bound is analyzed, and one far past it falls back to the describe, without exhausting the stack", async () => {
-  const engine = await loaded();
+  const engine = await loaded("mysql");
   const mysql: EngineIo = {
     async describe() {
       return { kind: "mysql", columns: [{ name: "x", type: 8, flags: 1, charset: 63, length: 20, org_table: "", org_name: "" }], params: [] };

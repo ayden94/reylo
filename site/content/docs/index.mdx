@@ -128,8 +128,9 @@ Set up Reylo in this project. Reylo lets TypeScript import .sql files, with type
 inferred from the live database. Its docs are one page, https://reylo.dev: follow the
 section linked at each step.
 
-1. Check the requirements and install Reylo with TypeScript 7.1 beta or later:
-   https://reylo.dev/#install
+1. Check the requirements and install Reylo, the engine of the project's database
+   (@reylosql/postgres, @reylosql/mysql or @reylosql/sqlite) and TypeScript 7.1 beta
+   or later: https://reylo.dev/#install
 2. Add Reylo to tsconfig.json as a content mapper, and add a typecheck script that runs
    tsc --noEmit --runExternalCode: https://reylo.dev/#typescript
 3. Point Reylo at the development database with DATABASE_URL: https://reylo.dev/#url
@@ -157,6 +158,7 @@ Reylo needs:
 
 ```sh
 npm install reylo
+npm install -D @reylosql/postgres  # or mysql, sqlite
 npm install -D typescript@beta
 ```
 
