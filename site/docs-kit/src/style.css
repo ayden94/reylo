@@ -30,6 +30,8 @@
   --dk-wash-toc-active: 22%;
   --dk-wash-summary: 10%;
   --dk-wash-selection: 35%;
+  /* The dotted rule under a name with a Twoslash popup, as a share of the code's colour. */
+  --dk-hover-rule: 40%;
   /* The "Leave a star!" note under the GitHub link. */
   --dk-star: var(--color-fd-primary);
   --dk-popover-shadow: 0 8px 24px -8px rgb(15 23 42 / 0.18);
@@ -297,7 +299,7 @@ html .prose {
    (Motherload's docs do the same). Its cursor is the code's text cursor (Cursors, at the end). */
 .twoslash .twoslash-hover {
   transition: border-color 80ms;
-  border-bottom-color: color-mix(in oklab, currentColor 40%, transparent);
+  border-bottom-color: color-mix(in oklab, currentColor var(--dk-hover-rule), transparent);
 }
 
 /* The open token's rule is 2px, drawn as its 1px border plus a 1px shadow under it: a thicker
@@ -449,6 +451,14 @@ code {
   align-items: center;
 }
 
+/* A tab strip wraps instead of scrolling sideways when its tabs outrun the column: in the 40rem
+   column, Reylo's eight SQLite drivers ran 39px past the edge and Motherload's hero, main.ts and
+   its seven files, 60px, each hiding its last tab ("No code block … scrolls sideways"). */
+#nd-page [role='tablist'] {
+  flex-wrap: wrap;
+  row-gap: 0;
+}
+
 .dk-code-tabs-file {
   margin-inline-start: auto;
   display: inline-flex;
@@ -534,16 +544,9 @@ code {
 }
 
 /* ── Phones ──────────────────────────────────────────────────────────────────
-   A tab strip wraps instead of hiding tabs past the edge (a group can have more tabs than a
-   phone's width), and a tabs panel pads less, so a nested code line keeps
-   more of the narrow column. An untitled block's copy button floats over its first line, so that
-   line stops short of it. */
+   A tabs panel pads less, so a nested code line keeps more of the narrow column. An untitled
+   block's copy button floats over its first line, so that line stops short of it. */
 @media (width < 48rem) {
-  #nd-page .dk-code-tabs [role='tablist'] {
-    flex-wrap: wrap;
-    row-gap: 0;
-  }
-
   #nd-page .dk-variant-tabs > .dk-variant-panel {
     padding: 0.5rem;
   }
