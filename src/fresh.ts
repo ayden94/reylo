@@ -26,16 +26,19 @@ const checked = new WeakMap<object, number>();
 
 // The clock is `performance.now()`, not `Date.now()`: an interval needs only a monotonic clock, and
 // Next.js's Cache Components refuse `Date.now()` while a page prerenders, which failed `next build`
-// on every page that ran a query (examples/nextjs, Next.js 16.4).
+// on every page that ran a query (examples/nextjs, Next.js 16.4). It is reached through
+// `globalThis`, typed here, since a project that type-checks Reylo's sources need not have the
+// DOM's types or Node's, which declare it (the labs' type checks failed with "Cannot find name").
+const clock = (globalThis as unknown as { performance: { now(): number } }).performance;
 
 /** Whether `query` is due for a check now. */
-export function due(query: object, now = performance.now()): boolean {
+export function due(query: object, now = clock.now()): boolean {
   const at = checked.get(query);
   return at === undefined || now - at >= FRESH_FOR;
 }
 
 /** Records a check of `query` that passed, or that could not run. */
-export function passed(query: object, now = performance.now()): void {
+export function passed(query: object, now = clock.now()): void {
   checked.set(query, now);
 }
 
