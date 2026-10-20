@@ -25,7 +25,8 @@ const FOLDED = new Set(['#configuration', '#examples']);
 
 /**
  * The table of contents without the h3s of the sections in FOLDED: the maintainer wants the whole
- * table to fit on one screen, a window 800px tall. The headings stay on the page, with their anchors.
+ * table to fit on one screen (a window 900px tall, at Fumadocs' spacing). The headings stay on the
+ * page, with their anchors.
  */
 function tableOfContents(toc: TOCItemType[]): TOCItemType[] {
   let folded = false;

@@ -258,16 +258,8 @@ html .prose {
    instead of passing under it half faded, and the first entry starts clear of the fade.
    (`#nd-toc > .overflow-auto` outranks Fumadocs' `mask-[…]` class.) */
 #nd-toc > .overflow-auto {
-  padding-block: 1rem;
-  mask-image: linear-gradient(to bottom, transparent, #000 1rem, #000 calc(100% - 1rem), transparent);
-}
-
-/* The whole table fits on one screen, as the maintainer asked on 2026-10-20: its 18 entries fit
-   without scrolling in a window 800px tall (the page leaves out the h3s of Configuration and
-   Examples). Fumadocs' entries are 32px apart (`py-1.5`); 24px
-   still reads as a list, not a block. */
-#nd-toc a[href^='#'] {
-  padding-block: 0.125rem;
+  padding-block: 1.25rem;
+  mask-image: linear-gradient(to bottom, transparent, #000 1.25rem, #000 calc(100% - 1.25rem), transparent);
 }
 
 /* A code token in the table of contents (and in its popover below xl) is a chip, like inline code
