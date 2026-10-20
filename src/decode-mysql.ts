@@ -7,10 +7,12 @@
 //   with backslash escapes, which matched every row of a table under NO_BACKSLASH_ESCAPES). Its
 //   per-query options make a BIGINT and a date the server's text, and Reylo's per-query `typeCast`
 //   reads a DECIMAL and a JSON value as their text, which the app's `decimalNumbers` and
-//   `jsonStrings` (read from the app's config only) would otherwise decide. `decimalNumbers` is
-//   never passed per query: mysql2 keys its row-parser cache, shared by every pool in the process,
-//   by the per-query value and builds the parser from the app's, so one query would poison
-//   another pool's parser.
+//   `jsonStrings` (read from the app's config only) would otherwise decide; it runs only where a
+//   statement or the app's settings need it, since mysql2 calls it for every value. A date's
+//   dropped zero fraction comes back from the result's fields. `decimalNumbers` is never passed
+//   per query: mysql2 keys its row-parser cache, shared by every pool in the process, by the
+//   per-query value and builds the parser from the app's, so one query would poison another
+//   pool's parser.
 // - mariadb takes every option per query, both ways, and its `metaAsArray: false` keeps the rows
 //   an array of rows. A SET comes back an array, which no option prevents: Reylo joins it.
 // - PlanetScale takes a `cast` per query, which replaces the app's: Reylo's is the driver's own

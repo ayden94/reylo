@@ -321,7 +321,9 @@ Reylo is bring-your-own-driver: `run` takes a client from any of these, or a tra
 | MySQL | mysql2, mariadb, PlanetScale 1.x, Bun.sql |
 | SQLite | better-sqlite3, `node:sqlite`, `bun:sqlite`, libSQL, Cloudflare D1, sqlite3, sqlite, Bun.sql |
 
-The type check reads the schema through `pg` or postgres.js on Postgres and through mysql2 on MySQL, so an app on another driver adds one of those as a dev dependency. Reylo types each value the way your driver returns it: a MySQL `BIGINT` is a `number` with mysql2, for example, and a `bigint` with mariadb.
+The type check reads the schema through `pg` or postgres.js on Postgres and through mysql2 on MySQL, so an app on another driver adds one of those as a dev dependency.
+
+Every driver gives Reylo's queries the same values, however your app set it up: Reylo decodes each value of its own queries itself, on your client, and leaves your other queries alone. A 64-bit integer and a decimal are their exact text, an instant (`timestamptz`) is a `Date`, a date or a time without a zone is the text the database wrote (`"2026-10-20"`, `"2026-10-20T10:00:00.123"`), JSON is parsed and binary data is a `Uint8Array`; on SQLite an integer past 2^53 is an error naming its column, never a rounded number.
 
 ## Configuration
 
@@ -330,8 +332,6 @@ Reylo needs no configuration when the database is `DATABASE_URL`. Settings go in
 ```yaml
 url: ${DATABASE_URL}  # the default
 strict: true          # a parameter nothing in the statement types is an error
-types:
-  dates: string       # for a driver set up to return dates as strings
 ```
 
 ## Documentation

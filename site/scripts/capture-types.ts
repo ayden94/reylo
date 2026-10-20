@@ -129,7 +129,6 @@ async function render(session: Session, written: string, sql: string, json: Map<
   };
   const emit = (paramsType: string, rowType: string, cardinality: string, names: string[], valuesType = 'unknown[]') =>
     [
-      ...(project.repr.dates === 'temporal' ? [`/// <reference lib="esnext.temporal" />`] : []),
       `import type { Query } from "reylo";`,
       `export type Params = ${paramsType};`,
       `export type Values = ${valuesType};`,
@@ -158,8 +157,8 @@ async function render(session: Session, written: string, sql: string, json: Map<
   const inferred = analysis.cardinality;
   const order = names;
   if (dialect === 'postgres' && analysis.kind === '') return { error: 'the statement is empty' };
-  const columns = analysis.columns.map((c) => `${ident(c.name)}: ${renderType(c.type, false, dialect, project.repr)}${c.nullable ? ' | null' : ''}`);
-  const typed = analysis.params.map((q) => [q.name, paramType(q, renderParamType(q.type, dialect, project.repr))] as const);
+  const columns = analysis.columns.map((c) => `${ident(c.name)}: ${renderType(c.type, false, dialect)}${c.nullable ? ' | null' : ''}`);
+  const typed = analysis.params.map((q) => [q.name, paramType(q, renderParamType(q.type, dialect))] as const);
   const paramTypes = typed.map(([name, type]) => `${ident(name)}: ${type}`);
   const types = new Map(typed);
   const labels = order.map((n) => (/^\d+$/.test(n) ? `$${n}` : n));

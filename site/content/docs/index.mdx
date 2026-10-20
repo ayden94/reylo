@@ -62,7 +62,7 @@ create table users (
   email varchar(255) unique,                                 -- email: string | null
   role enum('admin', 'member') not null default 'member',    -- role: string
   tags json not null default (json_array()),                 -- tags: unknown
-  created_at datetime not null default current_timestamp     -- created_at: Date
+  created_at datetime not null default current_timestamp     -- created_at: string
 );
 
 create table posts (
@@ -953,69 +953,6 @@ With `strict: true`, an [untyped parameter](#a-parameter-nothing-types) is an er
 strict: true
 ```
 
-### `types`
-
-What your driver returns for the values drivers disagree on. Reylo types each value as your driver returns it by default; if you set the driver to decode a type another way, set the matching key:
-
-```yaml title=".reylo.yaml"
-types:
-  dates: string
-  bigint: bigint
-```
-
-| Key | Values | Default | Applies to |
-| --- | --- | --- | --- |
-| `dates` | `Date`, `string`, `temporal` | `Date` | `timestamptz`, `timestamp`, `date`; MySQL `DATETIME`, `TIMESTAMP`, `DATE` |
-| `bigint` | `string`, `number`, `bigint` | `string` on Postgres, `number` on MySQL and SQLite | `bigint`; MySQL `BIGINT`; SQLite `INTEGER` |
-| `decimal` | `string`, `number` | `string` | `numeric`; MySQL `DECIMAL` |
-| `json` | `parsed`, `string` | `parsed` | `json`, `jsonb` and JSON the statement builds; MySQL `JSON` |
-| `binary` | `Uint8Array`, `Buffer`, `ArrayBuffer`, `number[]` | `Uint8Array` | `bytea`; MySQL `BINARY`, `BLOB`; SQLite `BLOB` |
-
-<Details summary="The driver options behind each setting">
-
-- `dates: string`: `pg` with a timestamp `types.setTypeParser`, postgres.js with its `types` option, mysql2 and mariadb with `dateStrings: true`
-- `bigint: bigint`: `pg` with a BigInt parser for `int8`, postgres.js with `postgres.BigInt`, Bun.sql with `bigint: true`, better-sqlite3 with `defaultSafeIntegers(true)`, node:sqlite with `readBigInts`, bun:sqlite with `safeIntegers`, libSQL with `intMode: "bigint"`
-- `bigint: string`: mysql2 with `supportBigNumbers` and `bigNumberStrings`, libSQL with `intMode: "string"`
-- `bigint: number`: mariadb with `bigIntAsNumber`
-- `decimal: number`: mysql2 with `decimalNumbers`, mariadb with `decimalAsNumber`
-- `json: string`: mysql2 and mariadb with `jsonStrings`
-
-</Details>
-
-<Details summary="Binary, date and JSON values, in and out">
-
-- A `Buffer` is typed `Uint8Array`, which it extends. `binary: Buffer` types it `Buffer`, in a project with `@types/node`.
-- A binary parameter takes a `Uint8Array`, a `Buffer` or not, on every driver: mariadb, which writes any other value as JSON, gets it from Reylo as a `Buffer`.
-- On Postgres, an array parameter takes a JavaScript array on every driver, for a SQL array (`any(:ids)`, `:tags::text[]`) and for JSON (`:data::jsonb`) alike: Reylo writes it in the form the driver binds right.
-- A `timestamptz` parameter takes a `Date`, or a string that names its zone: `"2026-10-12T19:06:48Z"`, `"2026-10-12 19:06:48+09"`, `"2026-10-12 19:06:48 Asia/Tokyo"`. A `timestamp` or `date` parameter, and on MySQL a `DATETIME`, `TIMESTAMP` or `DATE` one, has no zone and takes the wall-clock text, `"2026-10-12 19:06:48"` or `"2026-10-12"`: drivers write a `Date`'s time in different zones, the app's, the server's or UTC, so Reylo refuses one before the statement runs. Format a `Date` the driver returned for such a column before passing it back.
-- A parameter the statement reads as JSON (`:data::jsonb`, `cast(:data as json)`, a `json` column) takes any JSON value, and the database receives its JSON text on every driver: a string is a JSON string, so `'{"a":1}'` is stored as the string `"{\"a\":1}"`, not as an object. To pass JSON text you already hold, cast it from text: `:data::text::jsonb`.
-- With `dates: temporal`, the driver builds `Temporal` values, typed by TypeScript's `esnext.temporal` lib.
-- The settings do not reach inside nested JSON: there the database writes each value as JSON.
-
-</Details>
-
-Reylo types each value as your app's driver returns it, and finds that driver in `package.json`: one in `dependencies` before one in `devDependencies`, and your driver before the `pg`, postgres.js or mysql2 the type check needs. A few drivers return values of their own:
-
-<DialectTabs>
-<Dialect value="Postgres">
-
-PGlite returns `bigint` as a `number`, or as a `bigint` above 2^53, and Reylo types it so. The type check needs `pg` or postgres.js as well, and PGlite beside it in `dependencies` is the driver Reylo follows; PGlite kept in `devDependencies` for tests leaves an app on `pg` typed as `pg` returns.
-
-On `pg`, pg-promise, Neon's Pool and Client, and PGlite, Reylo decodes the types those drivers leave as text or objects (enum and other arrays, `interval`, `numeric[]`), so the rows match the [Data types](#data-types) tables; it does so for its own queries only, and a parser you registered still wins. Two drivers return their own forms there: Neon's `neon()` returns enum arrays as text, `interval` as an object and `numeric[]` as numbers, and Bun.sql returns enum, `uuid`, `citext` and range arrays as text.
-
-</Dialect>
-<Dialect value="MySQL">
-
-mariadb returns `BIGINT` as a `bigint`, and PlanetScale returns dates and `BIGINT` as strings, and Reylo types them so. The type check needs `mysql2` too, and mariadb or PlanetScale beside it is the driver Reylo follows. mariadb returns two values in forms of its own: it returns `SET` as an array and `BIT(1)` as a boolean.
-
-</Dialect>
-<Dialect value="SQLite">
-
-libSQL returns `BLOB` as an `ArrayBuffer`, and Cloudflare D1 as a `number[]`. Reylo follows each, found as `@libsql/client` and as `wrangler` (D1's). With two drivers in the same list, it takes the first of better-sqlite3, libSQL, `sqlite3`, `sqlite` and `wrangler`.
-
-</Dialect>
-</DialectTabs>
-
 ### `cli`
 
 The `.sql` files `reylo generate` analyzes, the command that fills `.reylo/` ahead of a build without a database ([In CI](#in-ci)). The globs are relative to `.reylo.yaml`: `include` replaces the default, every `.sql` file, and `exclude` adds to what is always left out: `node_modules`, build output, directories whose names start with a dot, and what git ignores. The type check reads the files `tsconfig.json` includes instead.
@@ -1211,7 +1148,7 @@ Reylo keys each entry by the server it came from (scheme, user, host, port and d
 
 ## Supported drivers
 
-Reylo is bring-your-own-driver: pass `run` a client from any of these, or a transaction, savepoint or connection taken from one (see [Run statements in a transaction](#run-statements-in-a-transaction)). The type check reads the schema through `pg` or postgres.js on Postgres and through mysql2 on MySQL, so an app on another driver adds one of those as a dev dependency.
+Reylo is bring-your-own-driver: pass `run` a client from any of these, or a transaction, savepoint or connection taken from one (see [Run statements in a transaction](#run-statements-in-a-transaction)). The type check reads the schema through `pg` or postgres.js on Postgres and through mysql2 on MySQL, so an app on another driver adds one of those as a dev dependency. Every driver gives Reylo's queries the same values, whatever it is set up to return for yours ([Data types](#data-types)).
 
 **Postgres**
 
@@ -1404,30 +1341,33 @@ Each takes its transactions too: libSQL's `transaction()`, Bun.sql's `begin` and
 
 ## Data types
 
-What each type becomes with `pg`, postgres.js, mysql2 and better-sqlite3 at their defaults; [`types`](#types) covers the other drivers and settings.
+Reylo gives every value one type, the same on every driver, whatever the driver is set up to return: it decodes each value of its own queries itself, on your client, and leaves your other queries as your driver decodes them. A 64-bit integer and a decimal are their exact text, an instant is a `Date`, a date or a time without a zone is the text the database wrote, JSON is parsed and binary data is a `Uint8Array`.
 
 <DialectTabs>
 <Dialect value="Postgres">
 
 | SQL type | TypeScript |
 | --- | --- |
-| `smallint`, `integer` | `number` |
+| `smallint`, `integer`, `oid` | `number` |
 | `bigint` | `string` |
 | `real`, `double precision` | `number` |
-| `numeric` | `string` |
+| `numeric`, `money` | `string` |
 | `text`, `varchar`, `char` | `string` |
 | `boolean` | `boolean` |
 | `uuid` | `string` |
-| `date`, `timestamp`, `timestamptz` | `Date` |
+| `date` | `string`, as `2026-10-20` |
+| `timestamp` | `string`, as `2026-10-20T10:00:00.123456` |
+| `timestamptz` | `Date` |
 | `time`, `timetz`, `interval` | `string` |
 | `json`, `jsonb` | `unknown` |
 | `json`, `jsonb` a JSON Schema `CHECK` holds (`jsonb_matches_schema(…)`) | what the schema admits |
 | `jsonb_build_object(…)`, `jsonb_agg(…)` | the object or array it builds |
 | `bytea` | `Uint8Array` |
-| An array | an array of its element type |
+| An array | an array of its element type, a `NULL` element `null` |
 | An enum | the union of its labels |
 | A domain | its base type |
-| `inet`, `cidr`, `money`, ranges | `string` |
+| A row value | `string` |
+| Every other type (`inet`, `cidr`, ranges, `point`, `tsvector`, `xml`, …) | `string`, as the database writes it |
 
 A call to a function has the type the function declares.
 
@@ -1436,21 +1376,23 @@ A call to a function has the type the function declares.
 
 | SQL type | TypeScript |
 | --- | --- |
-| `TINYINT`, `SMALLINT`, `INT`, `YEAR` | `number` |
+| `TINYINT`, `SMALLINT`, `MEDIUMINT`, `INT`, `YEAR` | `number` |
 | `BOOLEAN` | `number` (0 or 1) |
-| `BIGINT` | `number` |
+| `BIGINT`, `count(*)` | `string` |
 | `DECIMAL` | `string` |
 | `FLOAT`, `DOUBLE` | `number` |
 | `CHAR`, `VARCHAR`, `TEXT` | `string` |
-| `ENUM`, `SET` | `string` |
-| `DATE`, `DATETIME`, `TIMESTAMP` | `Date` |
+| `ENUM` | `string` |
+| `SET` | `string`, as `a,b` |
+| `DATE` | `string`, as `2026-10-20` |
+| `DATETIME`, `TIMESTAMP` | `string`, as `2026-10-20T10:00:00.123` |
 | `TIME` | `string` |
 | `JSON` | `unknown` |
 | `JSON` a JSON Schema `CHECK` holds (`json_schema_valid(…)`) | what the schema admits |
 | `json_object(…)`, `json_arrayagg(…)` | the object or array it builds |
-| `BINARY`, `BLOB` | `Uint8Array` |
+| `BINARY`, `VARBINARY`, `BLOB`, `BIT` | `Uint8Array` |
 
-A column may be `null` where the server says it may: exact for a `NOT NULL` column, and cautious for some string and date functions, which can be typed `| null` when they never return it.
+A column may be `null` where the server says it may: exact for a `NOT NULL` column, and cautious for some string and date functions, which can be typed `| null` when they never return it. An expression whose type the bound value decides is either: `:n + 1` is `string | number`, a `BIGINT` or a `DOUBLE`.
 
 </Dialect>
 <Dialect value="SQLite">
@@ -1465,13 +1407,48 @@ A column may be `null` where the server says it may: exact for a `NOT NULL` colu
 | No type, or `ANY` in a `STRICT` table | `unknown` |
 | `json_object(…)`, `json_group_array(…)` | `string` |
 
+- An integer past ±(2^53 − 1), which a `number` cannot hold, is an error that names its column, never a rounded number. Cast it to text in the statement to read it.
 - Declare tables `strict` to make these types exact: without it, a declared type is an affinity, and a column can hold a value of another type.
 - SQLite has no date, time or boolean type, so a date in a `text` column is a `string`.
-- `json_extract`, `->`, `->>` and the functions your application registers are `unknown`, and JSON the statement builds is the `string` the driver returns.
+- `json_extract`, `->`, `->>` and the functions your application registers are `unknown`, and JSON the statement builds is its text.
 - A `check` constraint narrows no type, since `pragma ignore_check_constraints` lets a connection write past it.
 
 </Dialect>
 </DialectTabs>
+
+<Details summary="How Reylo decodes on each driver">
+
+Each driver reads the database's protocol as it always does; Reylo makes only the choice per type that follows, for its own query, on the client you pass. A parser or option you set for your own queries does not reach Reylo's, and none of Reylo's reaches yours.
+
+- `pg`, pg-promise, Neon and `@vercel/postgres` take a decoder table with each query, and Reylo's answers every type. PGlite takes one too, naming the statement's types.
+- postgres.js hands Reylo each value's text (`.raw()`), and Reylo builds the row with the query's own column names, so a `transform` that renames your columns does not rename Reylo's.
+- mysql2 takes Reylo's options with each query (`execute`), mariadb every option, and PlanetScale Reylo's `cast`.
+- better-sqlite3, `node:sqlite` and `bun:sqlite` run a statement Reylo prepares once per database, with its own integer setting, whatever the database's.
+- Bun.sql, libSQL, D1, `sqlite3` and `sqlite` take nothing per query, and Reylo converts the values they give.
+
+Reylo refuses what would change its values and that it cannot undo: a `pg` client set up with `binary: true`, a pg-promise database whose `receive` event rewrites results, and a postgres.js client with a `transform.row`.
+
+</Details>
+
+<Details summary="What a driver loses before Reylo sees the value">
+
+- Bun.sql keeps a `timestamp`'s and a `DATETIME`'s milliseconds, not their microseconds, writes no fraction digits that are all zero, drops a `TIME`'s fraction, and throws on a `NULL` inside an `int4[]` or a `float4[]`.
+- A `real` (`float4`) or a MySQL `FLOAT` is a 32-bit float: a driver that reads the binary protocol (Bun.sql, mysql2) gives its exact value, `1.100000023841858`, and one that reads the database's text gives the shorter text's, `1.1`.
+- `sqlite3`, `sqlite`, Cloudflare D1, and Bun.sql without `safeIntegers` round an integer past 2^53 before Reylo sees it, so Reylo refuses it; libSQL at its default `intMode` refuses it itself. With libSQL's `intMode: "string"`, an integer in a column with no type is its digits.
+- JSON is parsed by `JSON.parse`, so an integer past 2^53 inside a document is rounded, on every driver.
+
+</Details>
+
+<Details summary="Binary, date and JSON values, in and out">
+
+- A `Buffer`, which several drivers return for binary data, is a `Uint8Array`.
+- A binary parameter takes a `Uint8Array`, a `Buffer` or not, on every driver: mariadb, which writes any other value as JSON, gets it from Reylo as a `Buffer`.
+- On Postgres, an array parameter takes a JavaScript array on every driver, for a SQL array (`any(:ids)`, `:tags::text[]`) and for JSON (`:data::jsonb`) alike: Reylo writes it in the form the driver binds right.
+- A `timestamptz` parameter takes a `Date`, or a string that names its zone: `"2026-10-12T19:06:48Z"`, `"2026-10-12 19:06:48+09"`, `"2026-10-12 19:06:48 Asia/Tokyo"`. A `timestamp` or `date` parameter, and on MySQL a `DATETIME`, `TIMESTAMP` or `DATE` one, has no zone and takes the wall-clock text, `"2026-10-12 19:06:48"` or `"2026-10-12"`, which is also what Reylo returns for such a column: drivers write a `Date`'s time in different zones, the app's, the server's or UTC, so Reylo refuses one before the statement runs.
+- A parameter the statement reads as JSON (`:data::jsonb`, `cast(:data as json)`, a `json` column) takes any JSON value, and the database receives its JSON text on every driver: a string is a JSON string, so `'{"a":1}'` is stored as the string `"{\"a\":1}"`, not as an object. To pass JSON text you already hold, cast it from text: `:data::text::jsonb`.
+- Inside nested JSON the database writes each value as JSON: a `bigint` is a number there and a date its text.
+
+</Details>
 
 ## Examples
 
@@ -1703,15 +1680,10 @@ import nextPage from "./next_page.sql";
 
 // the first page: a cursor after every row
 const page = await nextPage.run(db, { created_at: "3000-01-01 00:00:00", id: 0 });
-const last = page.at(-1)!;
-const next = await nextPage.run(db, {
-  // mysql2 returns a DATETIME as a Date in local time; the parameter takes the text
-  created_at: last.created_at.toLocaleString("sv"),
-  id: last.id,
-});
+// a DATETIME is its text, which the parameter takes back
+const next = await nextPage.run(db, page.at(-1)!);
+//    ^?
 ```
-
-A `DATETIME` parameter takes wall-clock text, `"2026-10-12 19:06:48"`, and `toLocaleString("sv")` writes a `Date` in that form.
 
 </Dialect>
 <Dialect value="SQLite">
