@@ -48,25 +48,29 @@ test("inside a JSON document a composite is an object of its JSON-encoded fields
 test("one type per SQL type, on every driver: what the run time returns (src/values.ts)", () => {
   const wire = (name: string, dialect: "postgres" | "mysql" = "postgres") => renderType(scalar(name), false, dialect);
   assert.deepEqual(["bool", "int2", "int4", "oid", "float4", "float8"].map((n) => wire(n)), ["boolean", "number", "number", "number", "number", "number"]);
-  assert.deepEqual(["int8", "numeric", "money", "date", "timestamp", "time", "timetz", "interval", "uuid", "text"].map((n) => wire(n)), Array(10).fill("string"));
-  assert.equal(wire("timestamptz"), "Date");
+  assert.equal(wire("int8"), "bigint");
+  assert.deepEqual(["numeric", "money", "date", "timestamp", "timestamptz", "time", "timetz", "interval", "uuid", "text"].map((n) => wire(n)), Array(10).fill("string"));
   assert.equal(wire("bytea"), "Uint8Array");
   assert.equal(renderType({ kind: "json" }), "unknown");
   // Every other type is its text: Reylo owns every oid, so no driver parses one.
   assert.deepEqual(["point", "xid", "int4range", "void", "record", "tsvector", "citext"].map((n) => wire(n)), Array(7).fill("string"));
   // An array of each, an enum's labels, a row value's array its text.
-  assert.equal(renderType({ kind: "array", of: scalar("timestamptz") }), "Date[]");
-  assert.equal(renderType({ kind: "array", of: scalar("int8") }), "string[]");
+  assert.equal(renderType({ kind: "array", of: scalar("timestamptz") }), "string[]");
+  assert.equal(renderType({ kind: "array", of: scalar("int8") }), "bigint[]");
   assert.equal(renderType({ kind: "array", of: { kind: "enum", name: "mood", labels: ["ok", "sad"] } }), `("ok" | "sad")[]`);
-  // MySQL's types are the same names: a BIGINT and a DECIMAL their text, a DATETIME its text, a BIT its bytes.
-  assert.deepEqual(["int8", "numeric", "timestamp", "date", "time", "text"].map((n) => wire(n, "mysql")), Array(6).fill("string"));
+  // MySQL's types are the same names: a BIGINT a BigInt, a DECIMAL its text, a DATETIME its text, a
+  // BIT its bytes, and a truth value (a TINYINT(1), a BIT(1), a comparison) a boolean.
+  assert.equal(wire("int8", "mysql"), "bigint");
+  assert.deepEqual(["numeric", "timestamp", "date", "time", "text"].map((n) => wire(n, "mysql")), Array(5).fill("string"));
   assert.equal(wire("bytea", "mysql"), "Uint8Array");
+  assert.equal(wire("bool", "mysql"), "boolean");
 });
 
 test("a scalar that names two types is either", () => {
-  // What MySQL answers with by what is bound for a placeholder: a BIGINT is its text, a DOUBLE a number.
-  assert.equal(renderType(scalar("int8|float8"), false, "mysql"), "string | number");
-  assert.equal(renderType(scalar("int8|int4"), false, "mysql"), "string | number");
+  // What MySQL answers with by what is bound for a placeholder: a BIGINT is a BigInt, a DOUBLE a
+  // number; an INT a temporary table may widen to a BIGINT is a BigInt either way.
+  assert.equal(renderType(scalar("int8|float8"), false, "mysql"), "bigint | number");
+  assert.equal(renderType(scalar("int8|int4"), false, "mysql"), "bigint");
   assert.equal(renderType(scalar("numeric|float8"), false, "mysql"), "string | number");
   assert.equal(renderType(scalar("date|timestamp"), false, "mysql"), "string");
   assert.equal(renderType({ kind: "array", of: scalar("numeric|float8") }, false, "mysql"), "(string | number)[]");

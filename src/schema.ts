@@ -4,11 +4,12 @@
 // spellings are the engine's (engine/core/src/schema.rs, the framework's encoding table); what differs
 // is where a value stands. The output is the result as JSON writes it (`Json<T>` in src/index.ts)
 // of the value `run` returns, which is each type's one representation (src/values.ts, the same
-// table the run time decodes with): a 64-bit integer and a decimal their text, a timestamptz the
-// ISO text of its Date, a date and a timestamp the wall-clock text the server wrote. The input is
-// the parameters the caller passes.
+// table the run time decodes with): a 64-bit integer, a BigInt, as the JSON integer it is (what a
+// serializer that writes a BigInt exactly writes, `JSON.rawJSON(String(v))`; JSON.stringify itself
+// refuses a BigInt), a decimal its text, a timestamptz its ISO text in UTC, a date and a timestamp
+// the wall-clock text the server wrote. The input is the parameters the caller passes.
 import type { EngineType, JsonSchema } from "./engine-type.ts";
-import { scalarKind } from "./values.ts";
+import { scalarKind, type ScalarKind } from "./values.ts";
 
 type Dialect = "postgres" | "mysql" | "sqlite";
 type Schema = { [key: string]: unknown };
@@ -29,16 +30,26 @@ function nullable(schema: Schema | JsonSchema): Schema | JsonSchema {
 function scalar(name: string, dialect: Dialect, inJson: boolean, input: boolean): Schema {
   if (name.includes("|")) return { anyOf: name.split("|").map((part) => scalar(part, dialect, inJson, input)) };
   if (dialect === "sqlite") {
-    switch (name) {
-      // A SQLite INTEGER is a number, as a parameter (src/render.ts) and as a value (src/values.ts).
-      case "integer": return { type: "integer", format: "int64" };
-      case "real": return { type: "number", format: "double" };
-      case "text": return { type: "string" };
-      case "blob": return { type: "string", format: "byte", contentEncoding: "base64" };
-      case "numeric": return { type: ["number", "string"] };
-      case "bool": return { type: "boolean" };
-      default: return {};
+    // A SQLite INTEGER is a number as a parameter (src/render.ts), and its JSON spelling inside a
+    // document; as `run` returns it, its kind's.
+    if (inJson || input) {
+      switch (name) {
+        case "integer": return { type: "integer", format: "int64" };
+        case "real": return { type: "number", format: "double" };
+        case "text": return { type: "string" };
+        case "blob": return { type: "string", format: "byte", contentEncoding: "base64" };
+        case "numeric": return { type: ["number", "string"] };
+        case "bool": return { type: "boolean" };
+        default: return {};
+      }
     }
+    const kinds = scalarKind(name, dialect).split("|");
+    if (kinds.length > 1) {
+      // A NUMERIC: whichever storage class the row stored, an integer being a number too.
+      const types = [...new Set(kinds.map((k) => kindSchema(k as ScalarKind, name, dialect).type as string))];
+      return { type: types.includes("number") ? types.filter((t) => t !== "integer") : types };
+    }
+    return kindSchema(kinds[0] as ScalarKind, name, dialect);
   }
   if (inJson) {
     // As the database writes the value inside a document.
@@ -55,27 +66,37 @@ function scalar(name: string, dialect: Dialect, inJson: boolean, input: boolean)
       case "timestamp": return { type: "string", format: "date-time" };
     }
   }
-  // As `run` returns it, once JSON: each kind's one representation.
-  switch (scalarKind(name, dialect)) {
-    case "bool": return { type: "boolean" };
-    case "int": return name === "oid" ? { type: "integer", format: "int64" } : { type: "integer", format: "int32" };
-    case "float": return name === "float4" ? { type: "number", format: "float" } : { type: "number", format: "double" };
-    case "int8": return { type: "string", format: "int64" };
-    case "decimal": return { type: "string", format: "decimal" };
-    case "timestamptz": return { type: "string", format: "date-time" };
-    case "date": return { type: "string", format: "date" };
-    // A date and a time with no zone, which RFC 3339's date-time does not admit.
-    case "timestamp": return { type: "string", description: "a date and time without a time zone, as the database wrote it (2026-10-20T10:00:00.123456)" };
-    case "bytes": return { type: "string", format: "byte", contentEncoding: "base64" };
-    case "json": return {};
-    case "unknown": return {};
-  }
+  const kind = scalarKind(name, dialect);
+  if (kind.includes("|")) return { anyOf: kind.split("|").map((k) => kindSchema(k as ScalarKind, name, dialect)) };
+  const schema = kindSchema(kind as ScalarKind, name, dialect);
+  if (kind !== "text") return schema;
   switch (name) {
     case "text": case "varchar": case "bpchar": case "name": case "char": case "citext": return { type: "string" };
     case "uuid": return { type: "string", format: "uuid" };
     case "time": return { type: "string", format: "time" };
     case "unknown": return {};
     default: return { type: "string", description: `${dialect === "mysql" ? "MySQL" : "pg"} type ${name}` };
+  }
+}
+
+/** The JSON form of a value of `kind` as `run` returns it, once JSON: each kind's one representation (src/values.ts). */
+function kindSchema(kind: ScalarKind, name: string, dialect: Dialect): Schema {
+  switch (kind) {
+    case "bool": return { type: "boolean" };
+    // A SQLite INTEGER is 64 bits wide, and so is an oid's range past int4's.
+    case "int": return name === "oid" || dialect === "sqlite" ? { type: "integer", format: "int64" } : { type: "integer", format: "int32" };
+    case "float": return name === "float4" ? { type: "number", format: "float" } : { type: "number", format: "double" };
+    // A BigInt, as the JSON integer it is.
+    case "int8": return { type: "integer", format: "int64" };
+    case "decimal": return { type: "string", format: "decimal" };
+    case "timestamptz": return { type: "string", format: "date-time" };
+    case "date": return { type: "string", format: "date" };
+    // A date and a time with no zone, which RFC 3339's date-time does not admit.
+    case "timestamp": return { type: "string", description: "a date and time without a time zone, as the database wrote it (2026-10-20T10:00:00.123456)" };
+    case "bytes": return { type: "string", format: "byte", contentEncoding: "base64" };
+    case "text": return { type: "string" };
+    case "json": return {};
+    case "unknown": return {};
   }
 }
 

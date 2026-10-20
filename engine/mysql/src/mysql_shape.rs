@@ -561,6 +561,113 @@ fn written(e: &Expr) -> Written {
     }
 }
 
+/// Per result column of a statement the engine reads as the server does, whether it is a truth
+/// value, which MySQL computes as the integer 1 or 0 (or NULL) and nothing else: a comparison,
+/// `IS`, `IN`, `BETWEEN`, `LIKE`, `REGEXP`, `EXISTS`, `NOT`, `AND`, `OR`, `XOR`, `TRUE` or `FALSE`,
+/// and a `CASE`, `IF`, `COALESCE`, `IFNULL`, `NULLIF` or scalar subquery whose every value is one
+/// (a NULL among them). Every arm of a set operation must agree. `width` is the result's columns:
+/// the items before a wildcard count from the start and those after the last one from the end,
+/// and what a wildcard expands to is no truth value. Empty where a form the walk does not read
+/// leaves the positions unknown.
+pub fn truths(q: &Query, width: usize) -> Vec<bool> {
+    let Some(items) = body_truths(q.body.as_ref()) else { return Vec::new() };
+    let head = items.iter().take_while(|i| i.is_some()).count();
+    if head == items.len() {
+        return if items.len() == width { items.into_iter().map(|b| b == Some(Bit::Truth)).collect() } else { Vec::new() };
+    }
+    let tail = items.iter().rev().take_while(|i| i.is_some()).count();
+    if head + tail > width {
+        return Vec::new();
+    }
+    (0..width)
+        .map(|i| {
+            let item = if i < head { items[i] } else if i >= width - tail { items[items.len() - (width - i)] } else { None };
+            item == Some(Bit::Truth)
+        })
+        .collect()
+}
+
+/// What an expression computes, as far as a truth value goes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Bit {
+    Truth,
+    Null,
+    Other,
+}
+
+/// Each select item's [`Bit`], `None` for a wildcard; `None` for a body the walk does not read,
+/// and for a set operation with a wildcard, whose arms may line up otherwise.
+fn body_truths(body: &SetExpr) -> Option<Vec<Option<Bit>>> {
+    match body {
+        SetExpr::Select(select) => Some(
+            select
+                .projection
+                .iter()
+                .map(|item| match item {
+                    SelectItem::UnnamedExpr(e) | SelectItem::ExprWithAlias { expr: e, .. } => Some(bit(e)),
+                    _ => None,
+                })
+                .collect(),
+        ),
+        SetExpr::Query(q) => body_truths(q.body.as_ref()),
+        SetExpr::SetOperation { left, right, .. } => {
+            let (left, right) = (body_truths(left)?, body_truths(right)?);
+            let whole = |side: &[Option<Bit>]| side.iter().all(Option::is_some);
+            (left.len() == right.len() && whole(&left) && whole(&right)).then(|| left.into_iter().zip(right).map(|(l, r)| Some(both(&[l?, r?]))).collect())
+        }
+        _ => None,
+    }
+}
+
+/// A value that is one of `bits`: a truth value where each is one or NULL, and one is.
+fn both(bits: &[Bit]) -> Bit {
+    if bits.iter().any(|b| *b == Bit::Other) {
+        Bit::Other
+    } else if bits.contains(&Bit::Truth) {
+        Bit::Truth
+    } else {
+        Bit::Null
+    }
+}
+
+/// Whether the server computes an expression as a truth value. A parenthesis and a unary plus are
+/// not there for the server; a function is the built-in only under its plain name ([`name`]).
+fn bit(e: &Expr) -> Bit {
+    use ast::{BinaryOperator as B, UnaryOperator as U};
+    match e {
+        Expr::Nested(inner) | Expr::UnaryOp { op: U::Plus, expr: inner } => bit(inner),
+        Expr::Value(v) => match v.value {
+            Value::Boolean(_) => Bit::Truth,
+            Value::Null => Bit::Null,
+            _ => Bit::Other,
+        },
+        Expr::BinaryOp { op: B::Eq | B::NotEq | B::Lt | B::LtEq | B::Gt | B::GtEq | B::Spaceship | B::And | B::Or | B::Xor, .. } => Bit::Truth,
+        Expr::UnaryOp { op: U::Not, .. } => Bit::Truth,
+        Expr::IsNull(_) | Expr::IsNotNull(_) | Expr::IsTrue(_) | Expr::IsNotTrue(_) | Expr::IsFalse(_) | Expr::IsNotFalse(_) | Expr::IsUnknown(_) | Expr::IsNotUnknown(_) => Bit::Truth,
+        Expr::InList { .. } | Expr::InSubquery { .. } | Expr::Between { .. } | Expr::Like { .. } | Expr::RLike { .. } | Expr::Exists { .. } => Bit::Truth,
+        // A scalar subquery is its one item's value, or NULL where it finds no row.
+        Expr::Subquery(q) => match body_truths(q.body.as_ref()).as_deref() {
+            Some([Some(b)]) => both(&[*b, Bit::Null]),
+            _ => Bit::Other,
+        },
+        Expr::Case { conditions, else_result, .. } => {
+            let mut bits: Vec<Bit> = conditions.iter().map(|when| bit(&when.result)).collect();
+            bits.push(else_result.as_deref().map_or(Bit::Null, bit));
+            both(&bits)
+        }
+        Expr::Function(f) if f.over.is_none() => {
+            let Some(args) = args(f) else { return Bit::Other };
+            match (name(f).as_str(), args.as_slice()) {
+                ("coalesce", [_, ..]) | ("ifnull", [_, _]) => both(&args.iter().map(|a| bit(a)).collect::<Vec<_>>()),
+                ("if", [_, then, otherwise]) => both(&[bit(then), bit(otherwise)]),
+                ("nullif", [first, _]) => both(&[bit(first), Bit::Null]),
+                _ => Bit::Other,
+            }
+        }
+        _ => Bit::Other,
+    }
+}
+
 fn is_boolean_literal(e: &Expr) -> bool {
     match e {
         Expr::Nested(inner) => is_boolean_literal(inner),

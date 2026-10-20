@@ -261,7 +261,7 @@ async function executeAsync(c: AnyClient | null | undefined, query: QueryModule,
       const m = typeof c.promise === "function" ? c.promise() : c;
       if (typeof m.execute === "function") {
         // mysql2 has query() beside execute(); PlanetScale's Connection, Client and transaction do not.
-        return typeof m.query === "function" ? await mysql2(m, text, values, query.columns) : await planetscale(m, text, values);
+        return typeof m.query === "function" ? await mysql2(m, text, values, query.columns) : await planetscale(m, text, values, query.columns);
       }
       break;
     }

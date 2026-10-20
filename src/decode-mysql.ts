@@ -8,17 +8,22 @@
 //   per-query options make a BIGINT and a date the server's text, and Reylo's per-query `typeCast`
 //   reads a DECIMAL and a JSON value as their text, which the app's `decimalNumbers` and
 //   `jsonStrings` (read from the app's config only) would otherwise decide; it runs only where a
-//   statement or the app's settings need it, since mysql2 calls it for every value. A date's
-//   dropped zero fraction comes back from the result's fields. `decimalNumbers` is never passed
-//   per query: mysql2 keys its row-parser cache, shared by every pool in the process, by the
-//   per-query value and builds the parser from the app's, so one query would poison another
-//   pool's parser.
-// - mariadb takes every option per query, both ways, and its `metaAsArray: false` keeps the rows
-//   an array of rows. A SET comes back an array, which no option prevents: Reylo joins it.
+//   statement or the app's settings need it, since mysql2 calls it for every value. A BIGINT's
+//   exact text becomes a BigInt, by the result's own column type, and a date's dropped zero
+//   fraction comes back from the result's fields. `decimalNumbers` is never passed per query:
+//   mysql2 keys its row-parser cache, shared by every pool in the process, by the per-query value
+//   and builds the parser from the app's, so one query would poison another pool's parser.
+// - mariadb takes every option per query, both ways: a BIGINT is its own BigInt, and
+//   `metaAsArray: false` keeps the rows an array of rows. A SET comes back an array, which no
+//   option prevents: Reylo joins it.
 // - PlanetScale takes a `cast` per query, which replaces the app's: Reylo's is the driver's own
-//   default, with a DATETIME's `T`.
+//   default, with a BIGINT a BigInt and a DATETIME's `T`.
 // - Bun.sql takes nothing per query: its values are converted (src/decode.ts, `bunRows`).
-import { coerce, utf8, type Columns } from "./values.ts";
+//
+// MySQL has no boolean type: a TINYINT(1), a BIT(1) and a comparison are integers to every driver,
+// and a column whose kind is `bool` (src/values.ts) is made a boolean after the driver, a value
+// other than 0 or 1 refused (`truth`).
+import { bigInteger, coerce, truth, utf8, type Columns, type Kind } from "./values.ts";
 
 type AnyClient = Record<string, any>;
 
@@ -86,11 +91,50 @@ function needsCast(m: AnyClient, columns: Columns | undefined): boolean {
   return config === undefined || typeof config.typeCast === "function" || config.decimalNumbers === true || config.jsonStrings === true;
 }
 
+/** mysql2's protocol type of a BIGINT (MYSQL_TYPE_LONGLONG). */
+const LONGLONG = 8;
+
+/** What a column's values need after a driver: a truth value made a boolean, a BIGINT a BigInt. */
+type Fix = (v: unknown, name: string) => unknown;
+const toBool: Fix = truth;
+const toBigInt: Fix = (v, name) => (typeof v === "string" || typeof v === "number" || typeof v === "bigint" ? bigInteger(v, name) : v);
+
+/**
+ * The fix a column of `kind` needs, if any: `bool` a boolean, `int8` (a BIGINT, or an integer a
+ * temporary table may widen to one) a BigInt from whatever the driver gave, a SET's members joined.
+ */
+function byKind(kind: Kind | undefined): Fix | undefined {
+  if (kind === "bool") return toBool;
+  if (kind === "int8") return toBigInt;
+  return undefined;
+}
+
+/** Applies each column's fix, in place: the drivers build new rows per call. */
+function fixRows(rows: Record<string, unknown>[], fixes: (readonly [string, Fix])[]): void {
+  if (!fixes.length) return;
+  for (const row of rows) {
+    for (const [name, fix] of fixes) {
+      const v = row[name];
+      if (v !== null && v !== undefined) row[name] = fix(v, name);
+    }
+  }
+}
+
 /** mysql2's execute(), resolving to [rows, fields]. */
 export async function mysql2(m: AnyClient, text: string, values: unknown[], columns: Columns | undefined): Promise<unknown[]> {
   const [rows, fields] = await m.execute({ sql: text, ...MYSQL2_OPTIONS, typeCast: needsCast(m, columns) ? mysql2Cast : true }, values);
   if (!Array.isArray(rows)) return [];
-  const dates = ((fields ?? []) as Mysql2Column[]).filter((f) => f.columnType === DATETIME || f.columnType === TIMESTAMP || (f.columnType === TIME && f.decimals > 0));
+  const described = (fields ?? []) as Mysql2Column[];
+  // The module's kinds where its columns are the result's; a BIGINT by the result's own type, which
+  // says it of an either too (`:n + 1`, a BIGINT or a DOUBLE by what is bound).
+  const kinds = columns && columns.length === described.length ? columns : undefined;
+  const fixes: (readonly [string, Fix])[] = [];
+  described.forEach((f, i) => {
+    const fix = byKind(kinds?.[i]![1]) ?? (f.columnType === LONGLONG ? toBigInt : undefined);
+    if (fix) fixes.push([f.name, fix]);
+  });
+  fixRows(rows as Record<string, unknown>[], fixes);
+  const dates = described.filter((f) => f.columnType === DATETIME || f.columnType === TIMESTAMP || (f.columnType === TIME && f.decimals > 0));
   if (dates.length) {
     for (const row of rows as Record<string, unknown>[]) {
       for (const f of dates) {
@@ -105,12 +149,16 @@ export async function mysql2(m: AnyClient, text: string, values: unknown[], colu
 // ---------------------------------------------------------------------------------------------
 // mariadb
 
-/** Every decoding option, each laid over the app's for this query (mariadb's parser.js: Object.assign(Object.create(connOpts), opts)). */
+/**
+ * Every decoding option, each laid over the app's for this query (mariadb's parser.js:
+ * Object.assign(Object.create(connOpts), opts)): with `bigIntAsNumber` and `supportBigNumbers` off a
+ * BIGINT is mariadb's own BigInt, and with `decimalAsNumber` off too a DECIMAL its text.
+ */
 const MARIADB_OPTIONS = {
   bigIntAsNumber: false,
   decimalAsNumber: false,
-  supportBigNumbers: true,
-  bigNumberStrings: true,
+  supportBigNumbers: false,
+  bigNumberStrings: false,
   checkNumberRange: false,
   dateStrings: true,
   jsonStrings: false,
@@ -145,6 +193,8 @@ export async function mariadb(c: AnyClient, text: string, values: unknown[], col
         .map((m) => ({ name: typeof m.name === "function" ? m.name() : m.name, type: m.type, set: (typeof m.isSet === "function" && m.isSet()) || m.type === "SET" }))
         .filter((m): m is { name: string; type: string | undefined; set: boolean } => m.name !== undefined && (m.set || m.type === "DATETIME" || m.type === "TIMESTAMP"))
         .map((m) => ({ name: m.name, date: !m.set }));
+  // A truth value a boolean; an INT a temporary table may widen to a BIGINT a BigInt, as the BIGINT is.
+  fixRows(result as Record<string, unknown>[], columnFixes(columns));
   if (!work.length) return result;
   for (const row of result as Record<string, unknown>[]) {
     for (const { name, date } of work) {
@@ -155,6 +205,16 @@ export async function mariadb(c: AnyClient, text: string, values: unknown[], col
     }
   }
   return result;
+}
+
+/** The fixes the module's kinds call for, for a driver that tells each type by its value. */
+function columnFixes(columns: Columns | undefined): (readonly [string, Fix])[] {
+  const fixes: (readonly [string, Fix])[] = [];
+  for (const [name, kind] of columns ?? []) {
+    const fix = byKind(kind);
+    if (fix) fixes.push([name, fix]);
+  }
+  return fixes;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -168,12 +228,13 @@ const bytesOf = (s: string) => {
   return out;
 };
 
-/** PlanetScale's own default cast (cast.js), with a DATETIME's and a TIMESTAMP's `T`: it replaces any cast of the app's for this query. */
+/** PlanetScale's own default cast (cast.js), with a BIGINT a BigInt and a DATETIME's and a TIMESTAMP's `T`: it replaces any cast of the app's for this query. */
 function planetscaleCast(field: PlanetscaleField, value: string | null): unknown {
   if (value === null || value === undefined) return value;
   switch (field.type) {
     case "INT64":
     case "UINT64":
+      return BigInt(value);
     case "DATE":
     case "TIME":
     case "DECIMAL":
@@ -202,7 +263,7 @@ function planetscaleCast(field: PlanetscaleField, value: string | null): unknown
 }
 
 /** PlanetScale's execute(): 1.x binds parameters; 2.0 takes none, and its options come second. */
-export async function planetscale(m: AnyClient, text: string, values: unknown[]): Promise<unknown[]> {
+export async function planetscale(m: AnyClient, text: string, values: unknown[], columns: Columns | undefined): Promise<unknown[]> {
   const options = { as: "object", cast: planetscaleCast };
   let result;
   try {
@@ -212,5 +273,7 @@ export async function planetscale(m: AnyClient, text: string, values: unknown[])
     if (values.length) throw new TypeError(`@planetscale/database 2.0 binds no parameters, so reylo cannot pass this statement's values to it; use its 1.x line, or mysql2 on PlanetScale's MySQL endpoint.`, { cause: error });
     result = await m.execute(text, options);
   }
-  return Array.isArray(result?.rows) ? result.rows : [];
+  if (!Array.isArray(result?.rows)) return [];
+  fixRows(result.rows, columnFixes(columns));
+  return result.rows;
 }

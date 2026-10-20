@@ -1,10 +1,10 @@
 aggregate_beside_subquery.sql: one () -> { c: int8, n: int8 }
 coalesce_sum_subquery.sql: many () -> { id: int4, total: numeric }
 count_subquery.sql: many () -> { id: int4, name: text, email: text?, n: int8 }
-exists_item.sql: many () -> { id: int4, has_posts: int8|int4 }
+exists_item.sql: many () -> { id: int4, has_posts: bool }
 grouped_subquery.sql: many () -> { id: int4, n: int8? }
 having_subquery.sql: many () -> { id: int4, n: int8? }
-in_item.sql: many () -> { id: int4, listed: int8|int4? }
+in_item.sql: many () -> { id: int4, listed: bool? }
 limit_count_subquery.sql: many () -> { id: int4, n: int8? }
 limit_subquery.sql: many () -> { id: int4, first: text? }
 max_subquery.sql: many () -> { id: int4, last: int4|int8? }

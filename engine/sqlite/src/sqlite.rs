@@ -224,8 +224,20 @@ fn run(sql: &str, lexed: &Lexed, ddl: &[String], extras: &Extras) -> SqliteAnaly
         return failed(bare(sql, lexed, Dialect::Sqlite, diagnostics));
     }
     let a = Analyzer { tree: &t, extras, skipping: &skipping, nullable_params: guarded_params(&t), level: std::cell::RefCell::new(Level::default()) };
-    let (columns, kind) = a.columns();
+    let (mut columns, kind) = a.columns();
     let booleans = a.booleans();
+    // A truth value, and a column declared BOOLEAN, are booleans to the loader's run time, which
+    // reads 0 and 1 and refuses any other value (src/values.ts). A truth value SQLite computes is
+    // named `bool`, which the oracle holds to 0 and 1; a column keeps its affinity's name, since it
+    // holds whatever was stored in it.
+    for ((column, flag), computed) in columns.iter_mut().zip(a.flags()).zip(&booleans) {
+        if flag {
+            column.ty = Type::Scalar { name: "bool".into() };
+            if *computed {
+                column.type_name = "bool".into();
+            }
+        }
+    }
     let params = a.params(lexed);
     let (cardinality, reason) = a.cardinality();
     let analysis = Analysis {
@@ -748,11 +760,24 @@ impl Analyzer<'_> {
 
     /// Per result column, whether it is a truth value ([`SqliteAnalysis::booleans`]).
     fn booleans(&self) -> Vec<bool> {
+        self.result_truths(false)
+    }
+
+    /// Per result column, whether its values are booleans to a host that decodes them: a truth
+    /// value, or a column of a table that declares it `BOOLEAN` or `BOOL`, as Prisma's and other
+    /// schemas do, read through any subquery or view, or what passes one of those through. SQLite
+    /// holds such a column to nothing (`BOOLEAN` is a NUMERIC affinity), so a host reads 0 and 1
+    /// and refuses any other value it finds there.
+    fn flags(&self) -> Vec<bool> {
+        self.result_truths(true)
+    }
+
+    fn result_truths(&self, declared: bool) -> Vec<bool> {
         let t = self.tree;
         let truths: Vec<bool> = if let Some(returning) = &t.returning {
-            returning.iter().map(|c| self.truth(&c.expr, &Vec::new())).collect()
+            returning.iter().map(|c| self.truth(&c.expr, &Vec::new(), declared)).collect()
         } else if let (Some(sel), None) = (&t.statement, &t.dml) {
-            (0..sel.columns.len()).map(|i| self.select_truth(sel, i, &Vec::new())).collect()
+            (0..sel.columns.len()).map(|i| self.select_truth(sel, i, &Vec::new(), declared)).collect()
         } else {
             Vec::new()
         };
@@ -760,12 +785,12 @@ impl Analyzer<'_> {
     }
 
     /// Whether column `i` of a select is a truth value in every arm of a compound.
-    fn select_truth(&self, sel: &Sel, i: usize, scope: &ScopeStack) -> bool {
+    fn select_truth(&self, sel: &Sel, i: usize, scope: &ScopeStack, declared: bool) -> bool {
         let mut s = Some(sel);
         while let Some(arm) = s {
             let mut inner = scope.clone();
             inner.push(&arm.from);
-            if !arm.columns.get(i).is_some_and(|c| self.truth(&c.expr, &inner)) || !arm.rows.iter().all(|row| row.get(i).is_some_and(|e| self.truth(e, &inner))) {
+            if !arm.columns.get(i).is_some_and(|c| self.truth(&c.expr, &inner, declared)) || !arm.rows.iter().all(|row| row.get(i).is_some_and(|e| self.truth(e, &inner, declared))) {
                 return false;
             }
             s = arm.prior.as_deref();
@@ -775,15 +800,16 @@ impl Analyzer<'_> {
 
     /// Whether an expression is a truth value: what a comparison, a test or a logical operator
     /// answers, and what passes one through unchanged. A NULL arm is no counterexample (`CASE`
-    /// without `ELSE`), and nullability is [`Analyzer::type_of`]'s business.
-    fn truth(&self, n: &Node, scope: &ScopeStack) -> bool {
+    /// without `ELSE`), and nullability is [`Analyzer::type_of`]'s business. `declared`: a table's
+    /// column declared `BOOLEAN` or `BOOL` counts as one too ([`Analyzer::flags`]).
+    fn truth(&self, n: &Node, scope: &ScopeStack, declared: bool) -> bool {
         let every = |nodes: &mut dyn Iterator<Item = &Node>| {
             let mut any = false;
             for x in nodes {
                 if x.op == "null" {
                     continue;
                 }
-                if !self.truth(x, scope) {
+                if !self.truth(x, scope, declared) {
                     return false;
                 }
                 any = true;
@@ -792,10 +818,10 @@ impl Analyzer<'_> {
         };
         match n.op.as_str() {
             "=" | "!=" | "<" | "<=" | ">" | ">=" | "is" | "is not" | "isnull" | "notnull" | "in" | "between" | "exists" | "and" | "or" | "not" | "truefalse" => true,
-            "collate" => n.left.as_deref().is_some_and(|l| self.truth(l, scope)),
+            "collate" => n.left.as_deref().is_some_and(|l| self.truth(l, scope, declared)),
             "function" if !n.agg && !n.window => match n.name.as_deref().unwrap_or("") {
                 "like" | "glob" | "regexp" | "match" => self.extras.function(n.name.as_deref().unwrap_or(""), n.args.len()).is_none(),
-                "likely" | "unlikely" | "likelihood" => n.args.first().is_some_and(|a| self.truth(a, scope)),
+                "likely" | "unlikely" | "likelihood" => n.args.first().is_some_and(|a| self.truth(a, scope, declared)),
                 "coalesce" | "ifnull" => every(&mut n.args.iter()),
                 "iif" | "if" => every(&mut n.args.iter().skip(1)),
                 _ => false,
@@ -806,14 +832,17 @@ impl Analyzer<'_> {
                 let otherwise = if n.list.len() % 2 == 1 { n.list.last() } else { None };
                 every(&mut results.chain(otherwise))
             }
-            "select" => n.select.as_deref().is_some_and(|sub| self.select_truth(sub, 0, scope)),
+            "select" => n.select.as_deref().is_some_and(|sub| self.select_truth(sub, 0, scope, declared)),
             "column" => {
                 for froms in scope.iter().rev() {
                     if let Some(f) = froms.iter().find(|f| f.cursor == n.cursor) {
-                        return f.subquery.as_deref().is_some_and(|sub| self.select_truth(sub, n.index.max(0) as usize, scope));
+                        if let Some(sub) = f.subquery.as_deref() {
+                            return self.select_truth(sub, n.index.max(0) as usize, scope, declared);
+                        }
+                        break;
                     }
                 }
-                false
+                declared && !n.rowid && n.declared.as_deref().is_some_and(is_boolean_declared)
             }
             _ => false,
         }
@@ -1817,6 +1846,12 @@ fn i_of(slot: Slot) -> usize {
     }
 }
 
+/// Whether a column's declared type is `BOOLEAN` or `BOOL`, in any case.
+fn is_boolean_declared(declared: &str) -> bool {
+    let d = declared.trim();
+    d.eq_ignore_ascii_case("boolean") || d.eq_ignore_ascii_case("bool")
+}
+
 /// SQLite's five affinity rules over a declared type.
 pub fn affinity(declared: &str) -> &'static str {
     let d = declared.to_ascii_uppercase();
@@ -2700,7 +2735,9 @@ mod tests {
         assert!(r.analysis.diagnostics.is_empty(), "{:?}", r.analysis.diagnostics);
         assert!(!r.readonly);
         assert_eq!((r.analysis.kind.as_str(), r.analysis.cardinality.as_str()), ("insert", "one"));
-        assert_eq!(col(&r.analysis, "done"), ("numeric".into(), false));
+        // A column declared BOOLEAN is a boolean to the loader's run time, which refuses a value
+        // other than 0 or 1 in it.
+        assert_eq!(col(&r.analysis, "done"), ("bool".into(), false));
         // The unique keys of the table it read: the primary key's index and the UNIQUE constraint's.
         assert_eq!(r.unique_keys.len(), 1, "{:?}", r.unique_keys);
         let mut keys = r.unique_keys["todos"].clone();
@@ -2789,7 +2826,7 @@ mod tests {
     }
 
     #[test]
-    fn truth_values_are_marked_and_stay_integers() {
+    fn truth_values_are_marked_and_typed_boolean() {
         let r = analyze_ddl(
             "select id = 1 as a, exists (select 1 from posts) as b, name like 'x%' as c, not (score > 1) as d, case when id > 1 then true end as e, coalesce(email is null, false) as f, email in ('a', 'b') as g, id as h, id + 1 as i, (select p.id > 1 from posts p limit 1) as j, iif(id > 1, 0, 1) as k from users",
             &ddl(),
@@ -2797,9 +2834,10 @@ mod tests {
         );
         assert!(r.analysis.diagnostics.is_empty(), "{:?}", r.analysis.diagnostics);
         assert_eq!(r.booleans, [true, true, true, true, true, true, true, false, false, true, false]);
-        // The storage class is what the value is: an integer, 0 or 1.
-        assert_eq!(col(&r.analysis, "a"), ("integer".into(), false));
-        assert_eq!(col(&r.analysis, "b"), ("integer".into(), false));
+        // The storage class is an integer, 0 or 1, which the type says is a boolean.
+        assert_eq!(col(&r.analysis, "a"), ("bool".into(), false));
+        assert_eq!(col(&r.analysis, "b"), ("bool".into(), false));
+        assert_eq!(col(&r.analysis, "h"), ("integer".into(), false));
         // Through a subquery's column, and across every arm of a compound.
         let r = analyze_ddl("select t.x, t.y from (select id > 1 as x, id as y from users) t", &ddl(), &Extras::default());
         assert_eq!(r.booleans, [true, false]);
@@ -2811,6 +2849,24 @@ mod tests {
         let r = analyze_ddl("insert into users (name) values ('a') returning id, id > 0 as positive", &ddl(), &Extras::default());
         assert_eq!(r.booleans, [false, true]);
         assert!(analyze_ddl("select nope from users", &ddl(), &Extras::default()).booleans.is_empty());
+    }
+
+    #[test]
+    fn a_column_declared_boolean_is_typed_boolean_and_no_truth_value() {
+        let ddl = vec!["CREATE TABLE flags (id INTEGER PRIMARY KEY, done BOOLEAN NOT NULL, b bool, n INTEGER, t TINYINT(1))".to_string(), "CREATE VIEW v AS SELECT done FROM flags".to_string()];
+        let r = analyze_ddl("select f.done, b, n, t, f.done + 0 as plus, coalesce(b, f.done) as either, coalesce(b, 0) as zero, case when n > 0 then f.done end as c, (select done from flags limit 1) as sub, x.done as derived from flags f, (select done from flags) x", &ddl, &Extras::default());
+        assert!(r.analysis.diagnostics.is_empty(), "{:?}", r.analysis.diagnostics);
+        let types: Vec<String> = r.analysis.columns.iter().map(|c| scalar_name(&c.ty).unwrap_or("?").to_string()).collect();
+        assert_eq!(types, ["bool", "bool", "integer", "integer", "real", "bool", "real", "bool", "bool", "bool"]);
+        // The framework's truth values are the ones SQLite computes alone.
+        assert_eq!(r.booleans, [false; 10]);
+        // Through a view, and across a compound only where every arm is one.
+        let r = analyze_ddl("select done from v", &ddl, &Extras::default());
+        assert_eq!(col(&r.analysis, "done"), ("bool".into(), false));
+        let r = analyze_ddl("select done from flags union all select 5", &ddl, &Extras::default());
+        assert_ne!(scalar_name(&r.analysis.columns[0].ty), Some("bool"));
+        let r = analyze_ddl("select done from flags union all select id > 1 from flags", &ddl, &Extras::default());
+        assert_eq!(scalar_name(&r.analysis.columns[0].ty), Some("bool"));
     }
 
     #[test]

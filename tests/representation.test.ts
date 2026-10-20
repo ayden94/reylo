@@ -46,8 +46,11 @@ async function built(root: string, url: string, name: string, sql: string) {
   }
 }
 
-/** Rows compared by value: a driver's own row prototype and a Buffer's are not Reylo's to set. */
-const plain = (v: unknown): unknown => (v instanceof Uint8Array ? { bytes: [...v] } : v instanceof Date ? { date: Number.isNaN(v.getTime()) ? "invalid" : v.toISOString() } : Array.isArray(v) ? v.map(plain) : v !== null && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, plain(x)])) : v);
+/** Rows compared by value: a driver's own row prototype and a Buffer's are not Reylo's to set. No value Reylo returns is a Date. */
+const plain = (v: unknown): unknown => {
+  if (v instanceof Date) throw new assert.AssertionError({ message: `a Date in Reylo's rows: ${v.toISOString()}` });
+  return v instanceof Uint8Array ? { bytes: [...v] } : Array.isArray(v) ? v.map(plain) : v !== null && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, plain(x)])) : v;
+};
 
 const PG_SCHEMA = `create type mood as enum ('ok', 'sad');
 create domain posint as int check (value > 0);
@@ -64,13 +67,13 @@ insert into t values (1, 9007199254740993, true, 2, 1.5, 2.2, 123456789012345678
 const PG_SELECT = "select * from t order by id";
 const PG_ROWS = [
   {
-    id: 1, created_by: "9007199254740993", b: true, i2: 2, f4: 1.5, f8: 2.2, n: "12345678901234567890.123456789", d: "2026-10-20", ts: "2026-10-20T10:00:00.123456",
-    tstz: { date: "2026-10-20T08:00:00.123Z" }, tm: "10:00:00", iv: "1 year 2 mons 3 days 04:05:06.789", j: { a: 1 }, jb: { big: 1 }, by: { bytes: [1, 2, 255] }, e: "sad",
-    u: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", p: '(1,"x,y")', r: "[1,5)", a_i4: [1, null, 3], a_i8: ["9007199254740993"], a_n: ["1.5", "12345678901234567890.1"],
-    a_tx: ["a", null, "NULL", "b,c"], a_e: ["ok", "sad"], a_dom: [1, 2], a_p: '{"(1,x)"}', a_ts: ["2026-10-20T10:00:00.5"], a_tstz: [{ date: "2026-10-20T10:00:00.000Z" }], a_by: [{ bytes: [1] }], a_iv: ["1 day"],
+    id: 1, created_by: 9007199254740993n, b: true, i2: 2, f4: 1.5, f8: 2.2, n: "12345678901234567890.123456789", d: "2026-10-20", ts: "2026-10-20T10:00:00.123456",
+    tstz: "2026-10-20T08:00:00.123456Z", tm: "10:00:00", iv: "1 year 2 mons 3 days 04:05:06.789", j: { a: 1 }, jb: { big: 1 }, by: { bytes: [1, 2, 255] }, e: "sad",
+    u: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", p: '(1,"x,y")', r: "[1,5)", a_i4: [1, null, 3], a_i8: [9007199254740993n], a_n: ["1.5", "12345678901234567890.1"],
+    a_tx: ["a", null, "NULL", "b,c"], a_e: ["ok", "sad"], a_dom: [1, 2], a_p: '{"(1,x)"}', a_ts: ["2026-10-20T10:00:00.5"], a_tstz: ["2026-10-20T10:00:00Z"], a_by: [{ bytes: [1] }], a_iv: ["1 day"],
   },
   {
-    id: 2, created_by: null, b: null, i2: null, f4: null, f8: null, n: null, d: "infinity", ts: "0044-03-15T12:00:00 BC", tstz: { date: "0001-01-01T00:00:00.000Z" }, tm: null, iv: null,
+    id: 2, created_by: null, b: null, i2: null, f4: null, f8: null, n: null, d: "infinity", ts: "0044-03-15T12:00:00 BC", tstz: "0001-01-01T00:00:00Z", tm: null, iv: null,
     j: null, jb: null, by: null, e: null, u: null, p: null, r: null, a_i4: null, a_i8: null, a_n: null, a_tx: null, a_e: null, a_dom: null, a_p: null, a_ts: null, a_tstz: null, a_by: null, a_iv: null,
   },
 ];
@@ -95,13 +98,15 @@ test("Postgres: one row on every driver, however the app set its driver up; the 
     await setup.query(PG_SCHEMA);
     await setup.end();
     const q = await built(root, url.href, "all_types", PG_SELECT);
-    // pg, with a global int8 parser to BigInt and numeric to a float, a pool table and a connect listener.
-    pg.types.setTypeParser(20, BigInt);
+    // pg, with a global int8 parser that returns a string and numeric to a float, a pool table and a connect listener.
+    pg.types.setTypeParser(20, (x: string) => `${x}`);
     pg.types.setTypeParser(1700, parseFloat);
     const client = new pg.Client(url.href);
     await client.connect();
     assert.deepEqual(plain(await q.run(client)), PG_ROWS, "pg Client with a global int8 parser");
-    assert.equal(typeof (await client.query("select created_by from t where id = 1")).rows[0].created_by, "bigint", "the control: the app's own query");
+    const control = (await client.query("select created_by, tstz from t where id = 1")).rows[0];
+    assert.equal(control.created_by, "9007199254740993", "the control: the app's own query, an int8 its text");
+    assert.ok(control.tstz instanceof Date, "the control: pg's own timestamptz, a Date");
     await client.end();
     const pool = new pg.Pool({ connectionString: url.href, max: 2, types: { getTypeParser: (oid: number, f?: string) => (oid === 1184 ? (x: string) => `app:${x}` : pg.types.getTypeParser(oid, f)) } });
     pool.on("connect", (c: any) => c.setTypeParser(1082, (x: string) => `connect:${x}`));
@@ -138,12 +143,13 @@ test("Postgres: one row on every driver, however the app set its driver up; the 
     await assert.rejects(q.run(rowTransform), /transform\.row rewrites every row/);
     await rowTransform.end();
     // PGlite, with the same schema and the app's own parsers on the instance.
-    const lite = await PGlite.create({ parsers: { 20: (x: string) => BigInt(x), 1184: (x: string) => `lite:${x}` } });
+    const lite = await PGlite.create({ parsers: { 20: (x: string) => Number(x), 1184: (x: string) => new Date(x) } });
     await lite.exec(PG_SCHEMA);
     assert.deepEqual(plain(await q.run(lite)), PG_ROWS, "PGlite");
     assert.deepEqual(plain(await q.run(lite)), PG_ROWS, "PGlite, a later run");
     assert.deepEqual(plain(await lite.transaction((t: unknown) => q.run(t))), PG_ROWS, "PGlite transaction");
-    assert.equal(typeof (await lite.query("select created_by from t where id = 1")).rows[0].created_by, "bigint", "the control: the app's own query");
+    const liteControl = (await lite.query("select created_by, tstz from t where id = 1")).rows[0];
+    assert.deepEqual([typeof liteControl.created_by, liteControl.tstz instanceof Date], ["number", true], "the control: the app's own query");
     await lite.close();
   } finally {
     pg.types.setTypeParser(20, parsers[20]);
@@ -156,10 +162,13 @@ test("Postgres: one row on every driver, however the app set its driver up; the 
 const MYSQL_SCHEMA = [
   "create table t (id int primary key, a datetime(3), a0 datetime, c date, d bigint unsigned, d2 bigint, e decimal(30,18), f json, g bit(1), h bit(8), i set('x','y','z'), j enum('a','b'), k tinyint(1), l year, n double, o varbinary(4), q time(2), s text)",
   "insert into t values (1, '2026-03-08 09:31:00.000', '2026-03-08 09:31:00', '2026-03-08', 18446744073709551615, -9007199254740993, 1.100000000000000001, '{\"k\": [1, 2]}', b'1', b'10000001', 'x,z', 'b', 1, 2026, 2.2, x'0102ff', '10:00:00.5', 'hi'), (2, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null)",
+  // A TINYINT(1) holds any TINYINT: the failing control of a boolean column.
+  "create table odd (id int primary key, ok boolean)",
+  "insert into odd values (1, 2)",
 ];
 const MYSQL_ROWS = [
-  { id: 1, a: "2026-03-08T09:31:00.000", a0: "2026-03-08T09:31:00", c: "2026-03-08", d: "18446744073709551615", d2: "-9007199254740993", e: "1.100000000000000001", f: { k: [1, 2] }, g: { bytes: [1] }, h: { bytes: [129] }, i: "x,z", j: "b", k: 1, l: 2026, n: 2.2, o: { bytes: [1, 2, 255] }, q: "10:00:00.50", s: "hi", n2: "2" },
-  { id: 2, a: null, a0: null, c: null, d: null, d2: null, e: null, f: null, g: null, h: null, i: null, j: null, k: null, l: null, n: null, o: null, q: null, s: null, n2: "2" },
+  { id: 1, a: "2026-03-08T09:31:00.000", a0: "2026-03-08T09:31:00", c: "2026-03-08", d: 18446744073709551615n, d2: -9007199254740993n, e: "1.100000000000000001", f: { k: [1, 2] }, g: true, h: { bytes: [129] }, i: "x,z", j: "b", k: true, l: 2026, n: 2.2, o: { bytes: [1, 2, 255] }, q: "10:00:00.50", s: "hi", n2: 2n, first: true },
+  { id: 2, a: null, a0: null, c: null, d: null, d2: null, e: null, f: null, g: null, h: null, i: null, j: null, k: null, l: null, n: null, o: null, q: null, s: null, n2: 2n, first: false },
 ];
 
 test("MySQL: one row on mysql2 and mariadb, however the app set them up; mysql2's decimalNumbers gives Reylo the exact DECIMAL", { skip: mysqlLive, timeout: 120_000 }, async () => {
@@ -176,11 +185,15 @@ test("MySQL: one row on mysql2 and mariadb, however the app set them up; mysql2'
     const setup = await mysql.createConnection(url.href);
     for (const statement of MYSQL_SCHEMA) await setup.query(statement);
     await setup.end();
-    const q = await built(root, url.href, "all_types", "select t.*, count(*) over () as n2 from t order by id");
+    const q = await built(root, url.href, "all_types", "select t.*, count(*) over () as n2, t.id = 1 as first from t order by id");
+    const odd = await built(root, url.href, "odd", "select ok from odd");
+    const refused = /Column "ok" is a boolean, stored as 0 or 1, and holds 2/;
     const hostile = mysql.createPool({ uri: url.href, decimalNumbers: true, jsonStrings: true, rowsAsArray: true, supportBigNumbers: false, dateStrings: ["DATE"], typeCast: (f: { type: string }, next: () => unknown) => (f.type === "TINY" ? next() === 1 : next()) });
     assert.deepEqual(plain(await q.run(hostile)), MYSQL_ROWS, "mysql2 pool with decimalNumbers, jsonStrings, rowsAsArray, supportBigNumbers off and a typeCast");
     const [[own]] = await hostile.query("select e, d2 from t where id = 1");
     assert.deepEqual(own, [1.1, -9007199254740992], "the control: the app's own query, lossy");
+    await assert.rejects(odd.run(hostile), refused);
+    assert.deepEqual((await hostile.query("select ok from odd"))[0], [[false]], "the control: the app's own typeCast reads the 2 as false");
     const conn = await hostile.getConnection();
     await conn.beginTransaction();
     assert.deepEqual(plain(await q.run(conn)), MYSQL_ROWS, "mysql2 PoolConnection in a transaction");
@@ -189,6 +202,7 @@ test("MySQL: one row on mysql2 and mariadb, however the app set them up; mysql2'
     await hostile.end();
     const pool = mariadb.createPool({ host: url.hostname, port: Number(url.port), user: url.username || "root", password: decodeURIComponent(url.password), database: name, bigIntAsNumber: true, decimalAsNumber: true, jsonStrings: true, rowsAsArray: true, metaAsArray: true, connectionLimit: 2 });
     assert.deepEqual(plain(await q.run(pool)), MYSQL_ROWS, "mariadb pool with bigIntAsNumber, decimalAsNumber, jsonStrings, rowsAsArray and metaAsArray");
+    await assert.rejects(odd.run(pool), refused);
     await pool.end();
   } finally {
     await admin.query(`drop database if exists ${name}`);
@@ -196,7 +210,7 @@ test("MySQL: one row on mysql2 and mariadb, however the app set them up; mysql2'
   }
 });
 
-test("SQLite: one row on every driver, whatever its integer setting; an integer past 2^53 an error naming its column", { skip: drivers === true ? false : drivers, timeout: 60_000 }, async () => {
+test("SQLite: one row on every driver, whatever its integer setting; an integer past 2^53 and a BOOLEAN column's 2 an error naming its column", { skip: drivers === true ? false : drivers, timeout: 60_000 }, async () => {
   const Database = require("better-sqlite3");
   const { createClient } = require("@libsql/client");
   const sqlite3 = require("sqlite3");
@@ -206,13 +220,18 @@ test("SQLite: one row on every driver, whatever its integer setting; an integer 
   const setup = new DatabaseSync(file);
   setup.exec(`create table t (id integer primary key, n integer not null, r real, s text, b blob, flag boolean, x, z numeric);
     insert into t values (1, 5, 1.5, 'hi', x'0102ff', 1, 7, 2.5), (2, 6, null, null, null, 0, x'01', 'abc');
-    create table big (id integer primary key, v integer); insert into big values (1, 9007199254740993)`);
+    create table big (id integer primary key, v integer); insert into big values (1, 9007199254740993);
+    create table odd (id integer primary key, ok boolean); insert into odd values (1, 2)`);
   setup.close();
-  const q = await built(root, "file:./app.db", "all_types", "select * from t order by id");
+  // A column declared BOOLEAN and a comparison are booleans.
+  const q = await built(root, "file:./app.db", "all_types", "select *, n > 5 as more from t order by id");
   const big = await built(root, "file:./app.db", "big", "select id, v from big");
+  const odd = await built(root, "file:./app.db", "odd", "select ok from odd");
+  // libSQL's intMode "string" hands the 2 over as its digits.
+  const refused = /Column "ok" is a boolean, stored as 0 or 1, and holds "?2"?, which is neither/;
   const rows = [
-    { id: 1, n: 5, r: 1.5, s: "hi", b: { bytes: [1, 2, 255] }, flag: 1, x: 7, z: 2.5 },
-    { id: 2, n: 6, r: null, s: null, b: null, flag: 0, x: { bytes: [1] }, z: "abc" },
+    { id: 1, n: 5, r: 1.5, s: "hi", b: { bytes: [1, 2, 255] }, flag: true, x: 7, z: 2.5, more: false },
+    { id: 2, n: 6, r: null, s: null, b: null, flag: false, x: { bytes: [1] }, z: "abc", more: true },
   ];
   const bigError = /Column "v" holds .*9007199254740992|Column "v" holds 9007199254740993/;
   // better-sqlite3 with every integer a BigInt: Reylo's statement reads numbers, the app's keep its setting.
@@ -222,19 +241,25 @@ test("SQLite: one row on every driver, whatever its integer setting; an integer 
   assert.deepEqual(plain(db.transaction(() => q.runSync(db))()), rows, "better-sqlite3 in db.transaction");
   assert.equal(typeof db.prepare("select n from t").get().n, "bigint", "the control: the app's own statement");
   assert.throws(() => big.runSync(db), bigError);
+  assert.throws(() => odd.runSync(db), refused);
+  assert.equal(db.prepare("select ok from odd").get().ok, 2n, "the control: SQLite lets the 2 in");
   db.close();
   const node = new DatabaseSync(file, { readBigInts: true });
   assert.deepEqual(plain(await q.run(node)), rows, "node:sqlite with readBigInts");
   await assert.rejects(big.run(node), bigError);
+  await assert.rejects(odd.run(node), refused);
   node.close();
-  for (const intMode of ["number", "bigint"]) {
+  for (const intMode of ["number", "bigint", "string"]) {
     const client = createClient({ url: `file:${file}`, intMode });
-    assert.deepEqual(plain(await q.run(client)), rows, `libSQL with intMode ${intMode}`);
+    // Under intMode "string" an integer in a column with no type is its digits (docs/driver-decoding.md).
+    if (intMode !== "string") assert.deepEqual(plain(await q.run(client)), rows, `libSQL with intMode ${intMode}`);
+    await assert.rejects(odd.run(client), refused);
     client.close();
   }
   const s3 = new sqlite3.Database(file);
   assert.deepEqual(plain(await q.run(s3)), rows, "sqlite3");
   await assert.rejects(big.run(s3), /Column "v" holds an integer past .* already rounded to 9007199254740992/);
+  await assert.rejects(odd.run(s3), refused);
   await new Promise((resolve) => s3.close(resolve));
   const wrapper = await open({ filename: file, driver: sqlite3.Database });
   assert.deepEqual(plain(await q.run(wrapper)), rows, "sqlite");

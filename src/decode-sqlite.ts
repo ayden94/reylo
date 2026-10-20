@@ -19,7 +19,7 @@
 //   normalized. sqlite3 and sqlite are not cached: a statement left open makes the app's close()
 //   fail with SQLITE_BUSY. An INTEGER the driver already rounded (sqlite3, sqlite, D1, Bun.SQL
 //   without safeIntegers) is refused in an INTEGER column, where a number past 2^53 can only be one.
-import { coerce, exactInteger, type Columns, type Kind } from "./values.ts";
+import { bigInteger, coerce, exactInteger, refuseTruth, truth, type Columns, type Kind } from "./values.ts";
 
 type AnyClient = Record<string, any>;
 type Statement = AnyClient;
@@ -60,8 +60,9 @@ function statementFor(db: AnyClient, text: string, typed: boolean): Kept {
  * promise, which `runSync` refuses.
  */
 export function runSyncSqlite(db: AnyClient, text: string, values: unknown[], columns: Columns | undefined): unknown[] | Promise<unknown[]> {
-  // Every column typed: a number past 2^53 in one can be told as rounded (src/values.ts).
-  const typed = columns !== undefined && columns.length > 0 && !columns.some(([, kind]) => kind === "unknown");
+  // Every column typed: a number past 2^53 in one can be told as rounded (src/values.ts). A column
+  // read as a BigInt (`int8`) needs the statement's integers exact.
+  const typed = columns !== undefined && columns.length > 0 && !columns.some(([, kind]) => kind === "unknown" || kind.split("|").includes("int8"));
   const { st, exact } = statementFor(db, text, typed);
   // better-sqlite3 refuses all() on a statement that returns no rows.
   if (st.reader === false) {
@@ -87,11 +88,20 @@ type Plan = {
   num: ((v: number) => unknown) | undefined;
   /** A string, where it may need converting: JSON, a truth value, libSQL's integer under intMode "string". */
   str: ((v: string) => unknown) | undefined;
+  /** A BLOB in a column that cannot hold one: a column declared BOOLEAN. */
+  blob?: () => never;
 };
 
-/** What each column's values need, worked out once per call rather than per value. */
+/**
+ * What each column's values need, worked out once per call rather than per value. A truth value is
+ * 0 or 1 in every SQLite driver, and a column declared BOOLEAN holds whatever was stored in it, which
+ * SQLite does not check: any other value is refused, naming the column (src/values.ts, `truth`).
+ */
 function plan(name: string, kind: Kind, exact: boolean): Plan {
-  if (kind === "bool") return { name, big: (v) => v !== BigInt(0), num: (v) => v !== 0, str: (v) => coerce(kind, v, name) };
+  if (kind === "bool") return { name, big: (v) => truth(v, name), num: (v) => truth(v, name), str: (v) => truth(v, name), blob: () => refuseTruth(name, "a BLOB") };
+  // An INTEGER as a BigInt, were the table to say so: a number past 2^53 is a rounded one where the
+  // driver did not read integers exact; a number is a REAL where it did.
+  if (kind === "int8") return { name, big: (v) => v, num: exact ? undefined : (v) => bigInteger(v, name), str: (v) => bigInteger(v, name) };
   if (kind === "json") return { name, big: (v) => exactInteger(v, name), num: undefined, str: (v) => JSON.parse(v) };
   if (kind === "text") return { name, big: String, num: undefined, str: undefined };
   if (kind === "int") return { name, big: (v) => exactInteger(v, name), num: exact ? undefined : (v) => exactInteger(v, name), str: (v) => coerce(kind, v, name) };
@@ -130,6 +140,7 @@ export function normalize(rows: unknown[], columns: Columns | undefined, { exact
           if (p.str) row[p.name] = p.str(v);
           break;
         case "object":
+          if (p.blob) p.blob();
           // libSQL's ArrayBuffer, D1's array of numbers.
           if (!(v instanceof Uint8Array) && (v instanceof ArrayBuffer || (d1 && Array.isArray(v)))) row[p.name] = coerce("bytes", v, p.name);
           break;

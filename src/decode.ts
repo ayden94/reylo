@@ -348,11 +348,12 @@ export async function postgresJs(c: AnyClient, text: string, params: unknown[], 
 // Bun.sql (Postgres and MySQL): Bun decodes in native code, so its values are converted to Reylo's.
 
 /**
- * The kinds Bun.sql can give in another form: a BIGINT as a BigInt (`bigint: true`), a date and a
- * timestamp as a Date read as UTC, an int4[] and float4[] as a typed array, an array of a type Bun
- * does not parse (an enum's, uuid, name, a range) as its text, MySQL's BIT(1) as a boolean.
+ * The kinds Bun.sql can give in another form: a BIGINT as its digits (a BigInt with `bigint: true`),
+ * a date and a timestamp as a Date read as UTC, a timestamptz as a Date, an int4[] and float4[] as a
+ * typed array, an array of a type Bun does not parse (an enum's, uuid, name, a range) as its text,
+ * MySQL's TINYINT(1) and a comparison as a number or a BIGINT's digits, and its BIT(1) as a boolean.
  */
-const BUN_KINDS = /^(int8|date|timestamp|bytes)$|\[\]$|\|/;
+const BUN_KINDS = /^(bool|int8|date|timestamp|timestamptz|bytes)$|\[\]$|\|/;
 
 export function bunRows(rows: unknown[], columns: Columns | undefined): unknown[] {
   if (!Array.isArray(rows) || !rows.length) return Array.isArray(rows) ? rows : [];
@@ -364,15 +365,21 @@ export function bunRows(rows: unknown[], columns: Columns | undefined): unknown[
     for (const [name, kind] of work) {
       const v = row[name];
       if (v === null || v === undefined) continue;
-      row[name] = kind === "unknown" ? byType(v, name) : coerce(kind, v, name);
+      row[name] = kind === "unknown" ? byType(v, name) : bunValue(kind, v, name);
     }
   }
   return rows;
 }
 
-/** A value whose kind is not known: a BigInt is an int8's text, a typed array an array. */
+/** A value of `kind` as Bun.sql gave it: an either's digits are a MySQL BIGINT's, which Bun gives as a string. */
+function bunValue(kind: Kind, v: unknown, name: string): unknown {
+  if (typeof v === "string" && kind.includes("|") && kind.split("|").includes("int8") && /^[+-]?\d+$/.test(v)) return BigInt(v);
+  return coerce(kind, v, name);
+}
+
+/** A value whose kind is not known: a typed array an array, and a Date, which no kind is, the instant's text. */
 function byType(v: unknown, name: string): unknown {
-  if (typeof v === "bigint") return String(v);
+  if (v instanceof Date) return coerce("timestamptz", v, name);
   if (ArrayBuffer.isView(v) && !(v instanceof Uint8Array) && !(v instanceof DataView)) return coerce("float[]", v, name);
   return v;
 }

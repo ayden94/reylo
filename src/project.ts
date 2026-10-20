@@ -113,7 +113,7 @@ export function resolveProject(engine: Engine | MissingEngine, projectDir: strin
     }
     const types = text === undefined ? null : TYPES_KEY.exec(text);
     if (types) {
-      error = `${shown(file!)}:${place(text!, Buffer.byteLength(text!.slice(0, types.index)))}: types: the types section was removed on 2026-10-20. Reylo now gives every value one type on every driver, whatever the driver's settings: a 64-bit integer and a decimal are their exact text, a timestamptz a Date, a date and a timestamp their text, JSON parsed and binary data a Uint8Array. Delete the section.`;
+      error = `${shown(file!)}:${place(text!, Buffer.byteLength(text!.slice(0, types.index)))}: types: the types section was removed on 2026-10-20. Reylo now gives every value one type on every driver, whatever the driver's settings: a 64-bit integer is a BigInt, a decimal its exact text, a timestamptz its ISO 8601 text in UTC, a date and a timestamp their text, JSON parsed and binary data a Uint8Array. Delete the section.`;
     } else if (text !== undefined) {
       if (engine instanceof MissingEngine) error = `${shown(file)}: ${engine.message}`;
       else {

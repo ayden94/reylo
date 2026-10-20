@@ -6,13 +6,15 @@
 // one representation per SQL type.
 //
 // A value's representation is its kind, which the build writes into the module for each output
-// column (`columns`, as `[name, kind]`): `bool` is a boolean; `int` and `float` a number; `int8`
-// and `decimal` the exact decimal text; `date` the text `YYYY-MM-DD`; `timestamp` the server's
-// wall-clock text with `T` between the date and the time; `timestamptz` a Date, the instant;
-// `json` the parsed value; `bytes` a Uint8Array (a Buffer is one); `text` the server's text, which
-// every other type is (time, interval, uuid, an enum's label, a range, a row value); `unknown`
-// whatever the driver gives (a SQLite column with no declared type). `k[]` is an array of `k`, a
-// NULL element `null`, and `a|b` either (a MySQL expression whose type the bound value decides).
+// column (`columns`, as `[name, kind]`): `bool` is a boolean; `int` and `float` a number; `int8` a
+// BigInt; `decimal` the exact decimal text; `date` the text `YYYY-MM-DD`; `timestamp` the server's
+// wall-clock text with `T` between the date and the time; `timestamptz` the instant's ISO 8601 text
+// in UTC, with `Z` and the server's fraction; `json` the parsed value; `bytes` a Uint8Array (a
+// Buffer is one); `text` the server's text, which every other type is (time, interval, uuid, an
+// enum's label, a range, a row value); `unknown` whatever the driver gives (a SQLite column with no
+// declared type). `k[]` is an array of `k`, a NULL element `null`, and `a|b` either (a MySQL
+// expression whose type the bound value decides). No kind is a JavaScript Date (the maintainer,
+// 2026-10-20: "I really dislike using JavaScript dates anywhere here").
 //
 // This module runs in every generated module's process, so it names no Node type: a Buffer is
 // reached through `globalThis` where one exists.
@@ -32,12 +34,12 @@ export const TS_TYPE: Readonly<Record<ScalarKind, string>> = {
   bool: "boolean",
   int: "number",
   float: "number",
-  int8: "string",
+  int8: "bigint",
   decimal: "string",
   text: "string",
   date: "string",
   timestamp: "string",
-  timestamptz: "Date",
+  timestamptz: "string",
   json: "unknown",
   bytes: "Uint8Array",
   unknown: "unknown",
@@ -67,9 +69,11 @@ const SQL_KINDS: Readonly<Record<string, ScalarKind>> = {
 };
 
 /**
- * SQLite's: the engine names a column by its affinity. An INTEGER is a number, exact or an error;
- * a NUMERIC holds whichever storage class the row stored; a column with no declared type, or ANY
- * in a STRICT table, is whatever the driver gives.
+ * SQLite's: the engine names a column by its affinity. An INTEGER is a number, exact or an error
+ * (`int8` here would make it a BigInt on every SQLite driver: src/decode-sqlite.ts reads either);
+ * a NUMERIC holds whichever storage class the row stored; `bool` is a truth value or a column
+ * declared BOOLEAN; a column with no declared type, or ANY in a STRICT table, is whatever the
+ * driver gives.
  */
 const SQLITE_KINDS: Readonly<Record<string, Kind>> = {
   integer: "int",
@@ -80,10 +84,15 @@ const SQLITE_KINDS: Readonly<Record<string, Kind>> = {
   bool: "bool",
 };
 
-/** The kind of a base type by its engine name, `a|b` naming either. */
+/**
+ * The kind of a base type by its engine name, `a|b` naming either. An integer that may be a BIGINT
+ * or a narrower integer (a MySQL expression a temporary table may widen, `int8|int4`) is a BIGINT's,
+ * a BigInt either way, where no float shares the column: there a number may be either.
+ */
 export function scalarKind(name: string, dialect: Dialect): Kind {
-  const kinds = name.split("|").map((part) => (dialect === "sqlite" ? (SQLITE_KINDS[part] ?? "unknown") : (SQL_KINDS[part] ?? "text")));
-  return [...new Set(kinds.flatMap((k) => k.split("|")))].join("|");
+  const kinds = [...new Set(name.split("|").flatMap((part) => (dialect === "sqlite" ? (SQLITE_KINDS[part] ?? "unknown") : (SQL_KINDS[part] ?? "text")).split("|")))];
+  const wide = kinds.includes("int8") && !kinds.includes("float") ? kinds.filter((k) => k !== "int") : kinds;
+  return wide.join("|");
 }
 
 /** The kind of a value of the engine's type `t`, standing in a result row (not inside a JSON document). */
@@ -129,23 +138,71 @@ const number: Decoder = (x) => +x;
 const timestamp: Decoder = (x) => x.replace(" ", "T");
 
 // timestamptz in DateStyle ISO: `2026-10-20 03:03:00.123456-07`, offsets with seconds before
-// standard time (`-07:52:58`), five-digit years, ` BC`. `new Date(text)`, which postgres.js and
+// standard time (`-07:52:58`), years past 9999, ` BC`. `new Date(text)`, which postgres.js and
 // PGlite use, returns Invalid Date for the last three and reads year 0001 as 2001
-// (docs/driver-decoding/spike/postgres.md).
+// (docs/driver-decoding/spike/postgres.md); and a Date holds milliseconds, not the server's
+// microseconds. So Reylo moves the wall-clock time to UTC itself, in whole seconds on a day count,
+// and keeps the fraction as the server wrote it.
 const TSTZ = /^(\d{4,})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d)(\.\d{1,6})?([+-])(\d\d)(?::(\d\d))?(?::(\d\d))?( BC)?$/;
 
-/** A timestamptz's text as the instant it names; ±infinity is an Invalid Date. */
-export function timestamptz(x: string): Date {
+/** Days from 1970-01-01 to a date of the proleptic Gregorian calendar, year 0 being 1 BC (Howard Hinnant's days_from_civil). */
+function daysFromCivil(y: number, m: number, d: number): number {
+  y -= m <= 2 ? 1 : 0;
+  const era = Math.floor(y / 400);
+  const yoe = y - era * 400;
+  const doy = Math.floor((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5) + d - 1;
+  const doe = yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy;
+  return era * 146097 + doe - 719468;
+}
+
+/** The date `days` after 1970-01-01, the inverse of `daysFromCivil`. */
+function civilFromDays(days: number): [number, number, number] {
+  const z = days + 719468;
+  const era = Math.floor(z / 146097);
+  const doe = z - era * 146097;
+  const yoe = Math.floor((doe - Math.floor(doe / 1460) + Math.floor(doe / 36524) - Math.floor(doe / 146096)) / 365);
+  const doy = doe - (365 * yoe + Math.floor(yoe / 4) - Math.floor(yoe / 100));
+  const mp = Math.floor((5 * doy + 2) / 153);
+  const d = doy - Math.floor((153 * mp + 2) / 5) + 1;
+  const m = mp + (mp < 10 ? 3 : -9);
+  return [era * 400 + yoe + (m <= 2 ? 1 : 0), m, d];
+}
+
+const pad = (n: number, width = 2) => String(n).padStart(width, "0");
+
+/**
+ * An ISO 8601 year: four digits from 0000 (1 BC) to 9999, and the extended form, a sign and six
+ * digits, outside them (`+010000`, `-000001` for 2 BC), as `Temporal.Instant` reads and writes it.
+ */
+const isoYear = (y: number) => (y >= 0 && y <= 9999 ? pad(y, 4) : `${y < 0 ? "-" : "+"}${pad(Math.abs(y), 6)}`);
+
+/**
+ * A timestamptz's text as the instant's ISO 8601 text in UTC: `2026-10-20 10:00:00.123456+02` is
+ * `2026-10-20T08:00:00.123456Z`, the fraction as the server wrote it (trailing zeros dropped, none
+ * for a whole second), which `Temporal.Instant.from` reads. `infinity` and `-infinity` stay those
+ * words.
+ */
+export function instant(x: string): string {
   const m = TSTZ.exec(x);
-  if (m === null) return new Date(NaN);
+  if (m === null) return x;
   const year = m[12] === undefined ? +m[1]! : 1 - +m[1]!;
-  const ms = m[7] === undefined ? 0 : Math.trunc(+m[7] * 1000);
-  const offset = (m[8] === "-" ? -1 : 1) * (+m[9]! * 3600 + (m[10] === undefined ? 0 : +m[10] * 60) + (m[11] === undefined ? 0 : +m[11])) * 1000;
-  if (year >= 100) return new Date(Date.UTC(year, +m[2]! - 1, +m[3]!, +m[4]!, +m[5]!, +m[6]!, ms) - offset);
-  const d = new Date(0);
-  d.setUTCFullYear(year, +m[2]! - 1, +m[3]!);
-  d.setUTCHours(+m[4]!, +m[5]!, +m[6]!, ms);
-  return new Date(d.getTime() - offset);
+  const offset = (m[8] === "-" ? -1 : 1) * (+m[9]! * 3600 + (m[10] === undefined ? 0 : +m[10] * 60) + (m[11] === undefined ? 0 : +m[11]));
+  const seconds = daysFromCivil(year, +m[2]!, +m[3]!) * 86400 + +m[4]! * 3600 + +m[5]! * 60 + +m[6]! - offset;
+  const days = Math.floor(seconds / 86400);
+  const s = seconds - days * 86400;
+  const [y, mo, d] = civilFromDays(days);
+  return `${isoYear(y)}-${pad(mo)}-${pad(d)}T${pad(Math.floor(s / 3600))}:${pad(Math.floor(s / 60) % 60)}:${pad(s % 60)}${m[7] ?? ""}Z`;
+}
+
+/**
+ * The instant a driver already decoded to a Date (Bun.sql's timestamptz), as the same text: to the
+ * millisecond, which is all a Date holds, with its fraction's trailing zeros dropped as the server
+ * drops them, so that a value the driver did not cut reads alike on every driver.
+ */
+export function instantOfDate(d: Date): string {
+  const t = d.getTime();
+  if (Number.isNaN(t)) return "infinity";
+  return d.toISOString().replace(/\.?0+Z$/, "Z");
 }
 
 type BufferClass = { from(data: string, encoding: string): Uint8Array; isBuffer(v: unknown): boolean };
@@ -184,12 +241,12 @@ const TEXT_DECODERS: Readonly<Record<ScalarKind, Decoder>> = {
   bool: (x) => x === "t",
   int: number,
   float: number,
-  int8: identity,
+  int8: (x) => BigInt(x),
   decimal: identity,
   text: identity,
   date: identity,
   timestamp,
-  timestamptz,
+  timestamptz: instant,
   json: (x) => JSON.parse(x),
   bytes: bytea,
   unknown: identity,
@@ -269,7 +326,55 @@ function outOfRange(value: string, column: string, rounded = false): DecodeError
   );
 }
 
-const pad = (n: number, width = 2) => String(n).padStart(width, "0");
+const INTEGER = /^[+-]?\d+$/;
+
+/**
+ * A 64-bit integer as a BigInt, from the driver's BigInt, its digits, or a number: a number past
+ * ±(2^53 - 1) is one the driver already rounded, which no BigInt makes exact again, so it is
+ * refused. Anything else (a SQLite REAL a column of INTEGER affinity kept) is left as it is.
+ */
+export function bigInteger(v: number | bigint | string, column: string): unknown {
+  if (typeof v === "bigint") return v;
+  if (typeof v === "string") return INTEGER.test(v) ? BigInt(v) : v;
+  if (Number.isSafeInteger(v)) return BigInt(v);
+  if (Number.isInteger(v)) throw new DecodeError(`Column "${column}" is a 64-bit integer, and the driver already rounded its value to ${v}, past ±(2^53 - 1): Reylo refuses it rather than return a BigInt of a rounded value.`);
+  return v;
+}
+
+/**
+ * A truth value as a boolean: true, false, 1, 0, `1n`, `0n`, `t`, `f`, `true`, `false`, `1`, `0`,
+ * and a BIT(1)'s one byte. MySQL and SQLite have no boolean type and store one as an integer (a
+ * TINYINT(1), a BIT(1), a column SQLite declares BOOLEAN), which neither database holds to 0 and 1:
+ * any other value is refused, naming the column, rather than read as true.
+ */
+export function truth(v: unknown, column: string): boolean {
+  switch (typeof v) {
+    case "boolean":
+      return v;
+    case "number":
+      if (v === 0 || v === 1) return v === 1;
+      break;
+    case "bigint":
+      if (v === BigInt(0) || v === BigInt(1)) return v === BigInt(1);
+      break;
+    case "string":
+      if (v === "t" || v === "true" || v === "1") return true;
+      if (v === "f" || v === "false" || v === "0") return false;
+      break;
+    case "object":
+      if (v instanceof Uint8Array && v.length === 1 && v[0]! <= 1) return v[0] === 1;
+      break;
+  }
+  const shown = v instanceof Uint8Array ? `the bytes 0x${Array.from(v, (b) => b.toString(16).padStart(2, "0")).join("")}` : typeof v === "string" ? JSON.stringify(v) : String(v);
+  return refuseTruth(column, shown);
+}
+
+/** The error for a value of a boolean column that is not 0 or 1, `shown` as the message names it. */
+export function refuseTruth(column: string, shown: string): never {
+  throw new DecodeError(
+    `Column "${column}" is a boolean, stored as 0 or 1, and holds ${shown}, which is neither: the database does not hold the column to 0 and 1, so Reylo refuses the value rather than guess its truth. Store 0 or 1 in it, or read the stored number with ${column} + 0 in the statement.`,
+  );
+}
 
 /**
  * A Date a driver read as UTC (Bun.sql's date and timestamp) back to the wall-clock text the server
@@ -305,10 +410,7 @@ export function coerce(kind: Kind, v: unknown, column: string): unknown {
   if (kind.includes("|")) return coerceEither(kind, v, column);
   switch (kind as ScalarKind) {
     case "bool":
-      if (typeof v === "boolean") return v;
-      if (typeof v === "number" || typeof v === "bigint") return v != 0;
-      if (typeof v === "string") return v === "t" || v === "true" || (v !== "f" && v !== "false" && v !== "0" && v !== "");
-      return v;
+      return truth(v, column);
     case "int":
     case "float":
       if (typeof v === "number") return kind === "int" ? exactInteger(v, column) : v;
@@ -316,6 +418,8 @@ export function coerce(kind: Kind, v: unknown, column: string): unknown {
       if (typeof v === "string" && v !== "" && !Number.isNaN(+v)) return kind === "int" && /^[+-]?\d+$/.test(v) ? exactInteger(BigInt(v), column) : +v;
       return v;
     case "int8":
+      if (typeof v === "bigint" || typeof v === "number" || typeof v === "string") return bigInteger(v, column);
+      return v;
     case "decimal":
       if (typeof v === "bigint" || typeof v === "number") return String(v);
       return v;
@@ -326,7 +430,10 @@ export function coerce(kind: Kind, v: unknown, column: string): unknown {
       if (v === Infinity || v === -Infinity) return v > 0 ? "infinity" : "-infinity";
       return v;
     case "timestamptz":
-      if (typeof v === "string") return timestamptz(v);
+      if (typeof v === "string") return instant(v);
+      if (v instanceof Date) return instantOfDate(v);
+      // Bun.sql's `infinity`.
+      if (v === Infinity || v === -Infinity) return v > 0 ? "infinity" : "-infinity";
       return v;
     case "json":
       return typeof v === "string" ? JSON.parse(v) : v;
@@ -349,18 +456,22 @@ export function coerce(kind: Kind, v: unknown, column: string): unknown {
   }
 }
 
-/** A value of `a|b`: by what the driver gave, since only the value says which it is. */
+/**
+ * A value of `a|b`: by what the driver gave, since only the value says which it is. A string is a
+ * DECIMAL's or a text's, never a BIGINT's: each MySQL driver's BIGINT reaches here as a BigInt
+ * already (src/decode-mysql.ts reads it by the result's own column type, and mariadb gives one).
+ */
 function coerceEither(kind: Kind, v: unknown, column: string): unknown {
   const kinds = kind.split("|");
-  // A MySQL BIGINT is the int8 text; a SQLite INTEGER a number, exact or refused.
-  if (typeof v === "bigint") return kinds.includes("int8") ? String(v) : exactInteger(v, column);
+  // A MySQL BIGINT is a BigInt; a SQLite INTEGER a number, exact or refused.
+  if (typeof v === "bigint") return kinds.includes("int8") ? v : exactInteger(v, column);
   if (typeof v === "number") {
     // Where the column may hold a float, a number past 2^53 may be one.
     if (kinds.includes("float") || !Number.isInteger(v)) return v;
-    if (kinds.includes("int8")) return String(v);
-    return kinds.includes("int") ? exactInteger(v, column) : v;
+    if (kinds.includes("int")) return exactInteger(v, column);
+    return kinds.includes("int8") ? bigInteger(v, column) : v;
   }
-  if (v instanceof Date) return kinds.includes("timestamp") ? utcText(v, "timestamp") : kinds.includes("date") ? utcText(v, "date") : v;
+  if (v instanceof Date) return kinds.includes("timestamp") ? utcText(v, "timestamp") : kinds.includes("date") ? utcText(v, "date") : kinds.includes("timestamptz") ? instantOfDate(v) : v;
   if (v instanceof ArrayBuffer || (Array.isArray(v) && kinds.includes("bytes"))) return coerce("bytes", v, column);
   return v;
 }

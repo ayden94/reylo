@@ -1042,6 +1042,10 @@ async fn check(server: &mut Server, state: &mut State<'_>, statements: &[(String
                             let name = col["name"].as_str().unwrap_or("?");
                             match row.get(i) {
                                 Some(My::NULL) if !col["nullable"].as_bool().unwrap_or(true) => found.push(format!("{file}: column {name} typed non-null is NULL with ({shown})")),
+                                // A truth value the statement computes is 1 or 0; a TINYINT(1) or
+                                // BIT(1) column holds what was stored, which the run time refuses
+                                // unless it is one of them.
+                                Some(value) if col["type_name"] == "boolean" && !matches!(value, My::NULL) && !is_truth(value) => found.push(format!("{file}: column {name} typed bool holds {value:?} with ({shown})")),
                                 Some(My::Bytes(bytes)) if returned.get(i).is_some_and(|c| c.code == 245) => {
                                     if let Some(why) = serde_json::from_slice::<Value>(bytes).ok().and_then(|document| json_contradiction(&col["type"], &document, col["nullable"].as_bool().unwrap_or(true), "")) {
                                         found.push(format!("{file}: column {name} {why} with ({shown})"));
@@ -1171,21 +1175,32 @@ fn returned_type(code: u8, charset: u16) -> Option<&'static str> {
     })
 }
 
+/// Whether a value is a truth value as MySQL computes one: the integer 1 or 0, in either protocol.
+fn is_truth(value: &My) -> bool {
+    match value {
+        My::Int(n) => *n == 0 || *n == 1,
+        My::UInt(n) => *n == 0 || *n == 1,
+        My::Bytes(bytes) => bytes.as_slice() == b"0" || bytes.as_slice() == b"1",
+        _ => false,
+    }
+}
+
 /// Why the type the execution gave a column contradicts the engine's, if it does. The integers
 /// below 64 bits and the floats are one type, a number in every driver; a 64-bit integer is not,
-/// being a BigInt or a string where the project asks for one. A scalar typed as either of several
-/// types (`int8|float8`) may come back as any of them.
+/// being a BigInt. A scalar typed as either of several types (`int8|float8`) may come back as any
+/// of them. A truth value is an integer of any width to the protocol, or a BIT(1)'s byte.
 fn type_contradiction(ty: &Value, code: u8, charset: u16) -> Option<String> {
     let class = |name: &str| match name {
-        "int2" | "int4" | "float4" | "float8" => "number".to_string(),
-        other => other.to_string(),
+        "int2" | "int4" | "float4" | "float8" => vec!["number".to_string()],
+        "bool" => vec!["number".to_string(), "int8".to_string(), "bytea".to_string()],
+        other => vec![other.to_string()],
     };
     let typed: Vec<String> = match ty["kind"].as_str() {
-        Some("scalar") => ty["name"].as_str().unwrap_or("?").split('|').map(class).collect(),
+        Some("scalar") => ty["name"].as_str().unwrap_or("?").split('|').flat_map(class).collect(),
         Some("json" | "object" | "list") => vec!["json".to_string()],
         _ => return None,
     };
-    let returned = class(returned_type(code, charset)?);
+    let returned = class(returned_type(code, charset)?).remove(0);
     (!typed.contains(&returned)).then(|| format!("typed {} came back as {returned} (protocol type {code})", typed.join(" or ")))
 }
 
@@ -1334,6 +1349,13 @@ mod tests {
         assert_eq!(type_contradiction(&scalar("int8|float8"), 8, 63), None);
         assert_eq!(type_contradiction(&scalar("int8|float8"), 246, 63).as_deref(), Some("typed int8 or number came back as numeric (protocol type 246)"));
         assert_eq!(type_contradiction(&scalar("date|timestamp"), 12, 63), None);
+        // A truth value: a TINYINT(1), a BIT(1), or a comparison the server computes as a BIGINT.
+        for code in [1, 16, 8, 3] {
+            assert_eq!(type_contradiction(&scalar("bool"), code, 63), None);
+        }
+        assert_eq!(type_contradiction(&scalar("bool"), 253, 33).as_deref(), Some("typed number or int8 or bytea came back as text (protocol type 253)"));
+        assert!(is_truth(&My::Int(1)) && is_truth(&My::UInt(0)) && is_truth(&My::Bytes(b"1".to_vec())));
+        assert!(!is_truth(&My::Int(2)) && !is_truth(&My::Bytes(b"-1".to_vec())));
         // The NULL type carries no value, and an unknown type claims nothing.
         assert_eq!(type_contradiction(&scalar("int8"), 6, 63), None);
         assert_eq!(type_contradiction(&json!({ "kind": "unknown" }), 8, 63), None);

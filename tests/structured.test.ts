@@ -197,12 +197,12 @@ test("Postgres: a rows insert keeps the array's order and exact 64-bit ids, a ke
     assert.deepEqual(a.columns.map((c) => [c.name, c.nullable]), [["id", false], ["status", false], ["amount", true]]);
     const q = await built(root, url.href, "insert_events", insert);
     // postgres.js serializes a JSON parameter itself; pg takes its text.
-    assert.deepEqual(plain(await q.run(sql, { events: [{ id: 9007199254740993n, ts: new Date("2026-10-20T10:00:00Z"), status: "done", amount: "1.50", meta: { a: 1 } }] })), [{ id: "9007199254740993", status: "done", amount: "1.50" }]);
+    assert.deepEqual(plain(await q.run(sql, { events: [{ id: 9007199254740993n, ts: new Date("2026-10-20T10:00:00Z"), status: "done", amount: "1.50", meta: { a: 1 } }] })), [{ id: 9007199254740993n, status: "done", amount: "1.50" }]);
     const pg = require("pg");
     const client = new pg.Client(url.href);
     await client.connect();
     try {
-      assert.deepEqual(plain(await q.run(client, { events: [{ id: 2, ts: "2026-10-20 12:00:00+02" }] })), [{ id: "2", status: "new", amount: null }]);
+      assert.deepEqual(plain(await q.run(client, { events: [{ id: 2, ts: "2026-10-20 12:00:00+02" }] })), [{ id: 2n, status: "new", amount: null }]);
       await assert.rejects(q.run(client, { events: [{ id: 3, ts: new Date(), amount: "1.234" }] }), /would be rounded/);
     } finally {
       await client.end();
@@ -212,15 +212,15 @@ test("Postgres: a rows insert keeps the array's order and exact 64-bit ids, a ke
     const many = Array.from({ length: 1000 }, (_, i) => ({ email: `u${i}@x`, name: `n${1000 - i}` }));
     const returned = await users.run(sql, { users: many });
     assert.deepEqual(returned.map((r: { email: string }) => r.email), many.map((u) => u.email));
-    assert.deepEqual(returned.map((r: { id: string }) => Number(r.id)), many.map((_, i) => i + 1));
+    assert.deepEqual(returned.map((r: { id: bigint }) => r.id), many.map((_, i) => BigInt(i + 1)));
     // One row.
     const user = await built(root, url.href, "insert_user", "insert into users :user::row(email text not null, name text not null) returning id");
-    assert.deepEqual(plain(await user.run(sql, { user: { email: "a@x", name: "Ada" } })), [{ id: "1001" }]);
+    assert.deepEqual(plain(await user.run(sql, { user: { email: "a@x", name: "Ada" } })), [{ id: 1001n }]);
     // Elsewhere, a table whose not null keys are never null.
     const read = "select e.id, e.amount from :events::rows(id int8 not null, amount numeric) as e order by e.id";
     assert.deepEqual((await analysis(root, url.href, read)).columns.map((c) => [c.name, c.nullable]), [["id", false], ["amount", true]]);
     const r = await built(root, url.href, "read_events", read);
-    assert.deepEqual(plain(await r.run(sql, { events: [{ id: 2 }, { id: 1, amount: 3 }] })), [{ id: "1", amount: "3" }, { id: "2", amount: null }]);
+    assert.deepEqual(plain(await r.run(sql, { events: [{ id: 2 }, { id: 1, amount: 3 }] })), [{ id: 1n, amount: "3" }, { id: 2n, amount: null }]);
     // A typed JSON parameter: Postgres receives `$1::jsonb`, and the run time fills its defaults and checks it.
     const typed = await built(root, url.href, "typed_users", `insert into users (email, name)
 select x.email, x.name from jsonb_to_recordset(:users::jsonb('{"type": "array", "items": {"type": "object", "properties": {"email": {"type": "string", "format": "email"}, "name": {"type": "string", "default": "anon"}}, "required": ["email", "name"]}}')) as x(email text, name text)
@@ -287,8 +287,8 @@ test("MySQL: a rows insert reads each column with ERROR ON ERROR, keeps a 64-bit
     assert.deepEqual((await analysis(root, url.href, "insert into events :e::rows(id bigint not null, ts datetime(6) not null)")).diagnostics, []);
     // A typed JSON parameter: MySQL receives `cast(? as json)`.
     const typed = await built(root, url.href, "typed_events", `select j.id from json_table(:ids::json('{"type": "array", "items": {"type": "integer", "minimum": 1}}'), '$[*]' columns (id bigint path '$' error on error)) as j order by j.id`);
-    // A BIGINT is its exact text (src/values.ts).
-    assert.deepEqual(plain(await typed.run(db, { ids: [3, 1] })), [{ id: "1" }, { id: "3" }]);
+    // A BIGINT is a BigInt (src/values.ts).
+    assert.deepEqual(plain(await typed.run(db, { ids: [3, 1] })), [{ id: 1n }, { id: 3n }]);
     await assert.rejects(typed.run(db, { ids: [0] }), /Parameter "ids" at \/0 must be at least 1/);
     const [rows] = await db.query("select cast(id as char) as id, status, amount, meta from events order by id");
     assert.deepEqual(plain(rows), [

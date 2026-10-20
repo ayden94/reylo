@@ -1,6 +1,6 @@
-all_columns.sql: many () -> { id: int4, tiny: int2?, small: int2?, medium: int4?, whole: int4?, big: int8?, utiny: int2?, usmall: int2?, umedium: int4?, uwhole: int4?, ubig: int8?, flag: int2, price: numeric?, exact: numeric?, f: float4?, d: float8?, c: text?, v: text?, tt: text?, tx: text?, mt: text?, lt: text?, b: bytea?, vb: bytea?, tb: bytea?, bl: bytea?, mb: bytea?, lb: bytea?, kind: text?, flags: text?, day: date?, at: timestamp?, at6: timestamp?, ts: timestamp?, t: time?, y: int2?, doc: json?, bits: bytea?, one_bit: bytea?, pt: unknown? }
+all_columns.sql: many () -> { id: int4, tiny: int2?, small: int2?, medium: int4?, whole: int4?, big: int8?, utiny: int2?, usmall: int2?, umedium: int4?, uwhole: int4?, ubig: int8?, flag: bool, price: numeric?, exact: numeric?, f: float4?, d: float8?, c: text?, v: text?, tt: text?, tx: text?, mt: text?, lt: text?, b: bytea?, vb: bytea?, tb: bytea?, bl: bytea?, mb: bytea?, lb: bytea?, kind: text?, flags: text?, day: date?, at: timestamp?, at6: timestamp?, ts: timestamp?, t: time?, y: int2?, doc: json?, bits: bytea?, one_bit: bool?, pt: unknown? }
 arithmetic.sql: many () -> { plus: int8?, times: int8?, divided: numeric?, quotient: int8?, remainder: int8?, negated: int8?, doubled: numeric?, f1: float8?, n15: numeric?, d1: float8?, narrow: int8|int4?, below: int8|int4? }
-binary_columns.sql: many () -> { b: bytea?, vb: bytea?, tb: bytea?, bl: bytea?, mb: bytea?, lb: bytea?, bits: bytea?, one_bit: bytea?, pt: unknown? }
+binary_columns.sql: many () -> { b: bytea?, vb: bytea?, tb: bytea?, bl: bytea?, mb: bytea?, lb: bytea?, bits: bytea?, one_bit: bool?, pt: unknown? }
 casts.sql: many () -> { c: text?, s: int8?, u: int8?, n: numeric?, d: float8?, f: float4?, day: date?, at: timestamp?, t: time?, y: int2?, j: json?, b: bytea?, wj: json? }
 conditional.sql: many () -> { i: numeric?, c: text?, co: numeric?, ifn: text?, nf: int4|int8?, g: numeric?, l: int8?, dt: timestamp?, dtt: timestamp?, dv: text?, wj: text?, gd: timestamp?, fw: float8?, tb2: int8?, ub2: int8? }
 decimal_columns.sql: many () -> { price: numeric?, exact: numeric?, f: float4?, d: float8? }
@@ -16,9 +16,9 @@ insert_set.sql: none (body: text, score: int4) -> {  }
 insert_set_member.sql: none (flags: text?) -> {  }
 insert_two_rows.sql: none (a: text, b: text, n: int4) -> {  }
 insert_values.sql: none (body: text, author: text?, score: int4) -> {  }
-integer_columns.sql: many () -> { tiny: int2?, small: int2?, medium: int4?, whole: int4?, big: int8?, utiny: int2?, usmall: int2?, umedium: int4?, uwhole: int4?, ubig: int8?, flag: int2, y: int2? }
+integer_columns.sql: many () -> { tiny: int2?, small: int2?, medium: int4?, whole: int4?, big: int8?, utiny: int2?, usmall: int2?, umedium: int4?, uwhole: int4?, ubig: int8?, flag: bool, y: int2? }
 json_column.sql: many () -> { doc: json?, a: json?, a_text: text?, e: json?, kind: text? }
-literals.sql: one () -> { i: int8|int4, n: numeric, f: float8, s: text, nothing: unknown?, t: int8|int4, h: bytea, b: bytea, d: date, tm: time, ts: timestamp, huge: int8, huger: numeric }
+literals.sql: one () -> { i: int8|int4, n: numeric, f: float8, s: text, nothing: unknown?, t: bool, h: bytea, b: bytea, d: date, tm: time, ts: timestamp, huge: int8, huger: numeric }
 param_abs.sql: one (n: float8, m: numeric, o: float8, p: float8, q: float8, r: int4, t: float8, u: numeric) -> { a: float8|int8|numeric?, r: numeric|int8|float8?, f: float8|int8|numeric?, c: float8|int8|numeric?, s: int8?, md: int8|float8|numeric?, pw: float8|int8|numeric?, tr: numeric|int8|float8? }
 param_aggregate.sql: one (n: int4, m: text, c: text, a: float8, d: date?) -> { s: numeric|int8|float8?, m: text?, c: int8, a: float8|int8|numeric?, d: date|timestamp|time|text? }
 param_bare.sql: one (x: text) -> { x: text? }
@@ -30,7 +30,7 @@ param_case_operand.sql: one (n: int4) -> { word: text }
 param_cast.sql: one (a: int4, b: text, c: numeric, d: date, e: json, f: float8, g: int4, h: timestamp, i: timestamp, j: bytea, k: int4, l: float8) -> { a: int8?, b: text?, c: numeric?, d: date?, e: json?, f: float8?, g: int8?, h: timestamp?, i: time?, j: bytea?, k: int2?, l: float4? }
 param_coalesce.sql: many (v: text?) -> { id: int4 }
 param_coalesce_column.sql: many (n: int4?, m: int4) -> { n: int8|float8|numeric?, m: int8|float8|numeric? }
-param_comparison.sql: many (n: int4, m: int4, o: int4, p: text?, q: int4) -> { bigger: int8|int4?, same: int8|int4?, listed: int8|int4?, missing: int8|int4, inside: int8|int4? }
+param_comparison.sql: many (n: int4, m: int4, o: int4, p: text?, q: int4) -> { bigger: bool?, same: bool?, listed: bool?, missing: bool, inside: bool? }
 param_date_arithmetic.sql: one (at: date, start: timestamp, a: timestamp, b: timestamp, c: timestamp) -> { next: date|timestamp|time|text?, later: timestamp|date|time|text?, days: int8|int4?, y: int2? }
 param_decimal.sql: many (price: numeric, exact: numeric) -> { id: int4 }
 param_derived.sql: many (n: int4, m: int4?) -> { x: int8|float8|numeric?, y: int8|float8|numeric }

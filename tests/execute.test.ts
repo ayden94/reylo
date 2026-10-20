@@ -37,7 +37,7 @@ test("postgres: pg-promise gets a { text, values } object, so it binds instead o
   // With Reylo's decoder table, which answers every oid itself.
   const { types, ...bound } = calls[0]!.args[0] as { text: string; values: unknown[]; types: { getTypeParser(oid: number): (text: string) => unknown } };
   assert.deepEqual(bound, { text: "select '$2' as literal, $1::int as id", values: [1] });
-  assert.equal(types.getTypeParser(20)("9007199254740993"), "9007199254740993");
+  assert.equal(types.getTypeParser(20)("9007199254740993"), 9007199254740993n);
 });
 
 test("postgres: unsafe(text, values) → rows, as on postgres.js and Bun.sql and their transactions", async () => {

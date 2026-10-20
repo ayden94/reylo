@@ -4,8 +4,9 @@ import { DatabaseSync } from "node:sqlite";
 import { execute, type QueryModule } from "../src/execute.ts";
 import { renderType } from "../src/render.ts";
 import { typeSchema } from "../src/schema.ts";
-import { coerce, columnKind, DecodeError, kindType, scalarKind, textDecoder, timestamptz } from "../src/values.ts";
+import { coerce, columnKind, DecodeError, instant, kindType, scalarKind, textDecoder } from "../src/values.ts";
 import type { EngineType } from "../src/engine-type.ts";
+import type { Columns } from "../src/values.ts";
 
 // The one table (src/values.ts): the kind of each SQL type, the TypeScript type the module declares
 // for it, the JSON Schema of its JSON form, and the value the run time gives it, which must agree.
@@ -14,6 +15,7 @@ const scalar = (name: string): EngineType => ({ kind: "scalar", name });
 /** The TypeScript type a value is, as the declared type names it. */
 function typeOf(v: unknown): string {
   if (v === null) return "null";
+  // No value Reylo returns is one.
   if (v instanceof Date) return "Date";
   if (v instanceof Uint8Array) return "Uint8Array";
   if (Array.isArray(v)) return `${typeOf(v.find((x) => x !== null))}[]`;
@@ -40,10 +42,12 @@ test("every Postgres type's decoded value is the type the module declares for it
     const values = textDecoder(columnKind(array, "postgres"))(`{${JSON.stringify(text)},NULL}`) as unknown[];
     assert.equal(values[1], null, name);
     if (declared !== "unknown") assert.equal(`${typeOf(values[0])}[]`, renderType(array, false, "postgres"), name);
-    // What JSON.stringify writes of the value has the schema's JSON type.
+    // The value written as JSON, a BigInt as the integer it is, has the schema's JSON type.
     const schema = typeSchema(t, "postgres") as { type?: string | string[] };
     if (schema.type !== undefined) {
-      const json = JSON.parse(JSON.stringify(value instanceof Uint8Array ? Buffer.from(value).toString("base64") : value));
+      const written = JSON.stringify(value instanceof Uint8Array ? Buffer.from(value).toString("base64") : value, (_, x) => (typeof x === "bigint" ? (JSON as unknown as { rawJSON(text: string): unknown }).rawJSON(String(x)) : x));
+      assert.equal(written, typeof value === "bigint" ? String(value) : written, name);
+      const json = JSON.parse(written);
       const jsonType = typeof json === "number" ? (Number.isInteger(json) ? ["integer", "number"] : ["number"]) : [typeof json];
       assert.ok([schema.type].flat().some((t) => jsonType.includes(t)), `${name}: ${JSON.stringify(json)} against ${JSON.stringify(schema)}`);
     }
@@ -52,7 +56,10 @@ test("every Postgres type's decoded value is the type the module declares for it
 
 test("the representation, value by value", () => {
   const d = (name: string, text: string) => textDecoder(scalarKind(name, "postgres"))(text);
-  assert.equal(d("int8", "9007199254740993"), "9007199254740993");
+  assert.equal(d("int8", "9007199254740993"), 9007199254740993n);
+  assert.equal(d("int8", "-9223372036854775808"), -9223372036854775808n);
+  assert.deepEqual(textDecoder(scalarKind("int8", "postgres") + "[]")("{1,NULL,9223372036854775807}"), [1n, null, 9223372036854775807n]);
+  assert.equal(d("timestamptz", "2026-10-20 10:00:00.123456+02"), "2026-10-20T08:00:00.123456Z");
   assert.equal(d("numeric", "12345678901234567890.123456789"), "12345678901234567890.123456789");
   assert.equal(d("date", "2026-10-20"), "2026-10-20");
   assert.equal(d("timestamp", "2026-10-20 10:00:00.123456"), "2026-10-20T10:00:00.123456");
@@ -67,17 +74,40 @@ test("the representation, value by value", () => {
   assert.equal(d("float8", "-Infinity"), -Infinity);
 });
 
-test("timestamptz: Reylo's parser, which new Date(text) gets wrong for BC, year 1 and offsets with seconds", () => {
+test("timestamptz: the instant's ISO 8601 text in UTC, the server's fraction kept, which new Date(text) gets wrong for BC, year 1 and offsets with seconds", () => {
+  const Temporal = (globalThis as unknown as { Temporal: { Instant: { from(text: string): { toString(): string; epochNanoseconds: bigint } } } }).Temporal;
   for (const [text, iso] of [
-    ["2026-10-20 03:03:00.123456-07", "2026-10-20T10:03:00.123Z"],
-    ["0001-01-01 00:00:00+00", "0001-01-01T00:00:00.000Z"],
-    ["1883-11-18 12:00:00-07:52:58", "1883-11-18T19:52:58.000Z"],
-    ["0044-03-15 12:00:00+00 BC", "-000043-03-15T12:00:00.000Z"],
-    ["12345-01-01 00:00:00+05:30", "+012344-12-31T18:30:00.000Z"],
-  ] as const) assert.equal(timestamptz(text).toISOString(), iso, text);
-  assert.ok(Number.isNaN(timestamptz("infinity").getTime()));
-  // The failing control: what postgres.js and PGlite use.
+    ["2026-10-20 03:03:00.123456-07", "2026-10-20T10:03:00.123456Z"],
+    ["2026-10-20 10:00:00+00", "2026-10-20T10:00:00Z"],
+    ["2026-10-20 10:00:00.5+05:30", "2026-10-20T04:30:00.5Z"],
+    ["2026-12-31 23:30:00-01", "2027-01-01T00:30:00Z"],
+    ["0001-01-01 00:00:00+00", "0001-01-01T00:00:00Z"],
+    ["0001-01-01 00:30:00+01", "0000-12-31T23:30:00Z"],
+    ["1883-11-18 12:00:00-07:52:58", "1883-11-18T19:52:58Z"],
+    ["1900-01-01 00:00:00+00:00:36", "1899-12-31T23:59:24Z"],
+    ["0001-12-31 23:59:59.999999+00 BC", "0000-12-31T23:59:59.999999Z"],
+    ["0002-06-01 12:00:00+00 BC", "-000001-06-01T12:00:00Z"],
+    ["0044-03-15 12:00:00+00 BC", "-000043-03-15T12:00:00Z"],
+    ["4713-11-24 00:00:00+00 BC", "-004712-11-24T00:00:00Z"],
+    ["9999-12-31 23:59:59.999999-01", "+010000-01-01T00:59:59.999999Z"],
+    ["12345-01-01 00:00:00+05:30", "+012344-12-31T18:30:00Z"],
+    ["2000-02-29 12:00:00+00", "2000-02-29T12:00:00Z"],
+    ["1900-03-01 00:00:00+01", "1900-02-28T23:00:00Z"],
+  ] as const) {
+    assert.equal(instant(text), iso, text);
+    // Temporal reads each back to the same text: an ISO 8601 instant, the year extended outside 0000 to 9999.
+    assert.equal(Temporal.Instant.from(iso).toString(), iso, iso);
+  }
+  // Each to the nanosecond against Temporal's own reading of the server's offset (its microseconds kept).
+  assert.equal(Temporal.Instant.from(instant("2026-10-20 03:03:00.123456-07")).epochNanoseconds, Temporal.Instant.from("2026-10-20T03:03:00.123456-07:00").epochNanoseconds);
+  // Past Temporal's range (±10^8 days), which Postgres's reaches (294276 AD): still ISO 8601 text.
+  assert.equal(instant("294276-12-31 23:59:59.999999+00"), "+294276-12-31T23:59:59.999999Z");
+  assert.throws(() => Temporal.Instant.from("+294276-12-31T23:59:59.999999Z"), RangeError);
+  assert.equal(instant("infinity"), "infinity");
+  assert.equal(instant("-infinity"), "-infinity");
+  // The failing control: what postgres.js and PGlite use, and what a Date holds.
   assert.equal(new Date("0001-01-01 00:00:00+00").getUTCFullYear(), 2001);
+  assert.equal(new Date("2026-10-20T03:03:00.123456-07:00").toISOString(), "2026-10-20T10:03:00.123Z");
 });
 
 test("SQLite: the kinds, and a NUMERIC column of either", () => {
@@ -86,28 +116,63 @@ test("SQLite: the kinds, and a NUMERIC column of either", () => {
 });
 
 test("coerce: a value a driver decoded, given its kind; an integer a number cannot hold is refused, naming the column", () => {
-  assert.equal(coerce("int8", 9007199254740993n, "c"), "9007199254740993");
+  assert.equal(coerce("int8", 9007199254740993n, "c"), 9007199254740993n);
+  assert.equal(coerce("int8", "9007199254740993", "c"), 9007199254740993n, "a driver's exact text");
+  assert.equal(coerce("int8", 42, "c"), 42n);
+  assert.throws(() => coerce("int8", 9007199254740992, "big_id"), (e: Error) => e instanceof DecodeError && /^Column "big_id" is a 64-bit integer, and the driver already rounded its value to 9007199254740992/.test(e.message));
+  assert.deepEqual(coerce("int8[]", ["1", 2n], "c"), [1n, 2n]);
+  assert.equal(coerce("decimal", 1.5, "c"), "1.5");
   assert.equal(coerce("date", new Date("2026-10-20T00:00:00Z"), "c"), "2026-10-20");
   assert.equal(coerce("timestamp", new Date("2026-10-20T10:00:00.500Z"), "c"), "2026-10-20T10:00:00.5");
+  assert.equal(coerce("timestamptz", new Date("2026-10-20T10:00:00.500Z"), "c"), "2026-10-20T10:00:00.5Z", "Bun.sql's Date, to its millisecond");
+  assert.equal(coerce("timestamptz", new Date("2026-10-20T10:00:00Z"), "c"), "2026-10-20T10:00:00Z");
+  assert.equal(coerce("timestamptz", "2026-10-20 10:00:00.123456+02", "c"), "2026-10-20T08:00:00.123456Z");
+  assert.equal(coerce("timestamptz", -Infinity, "c"), "-infinity");
   assert.deepEqual(coerce("int[]", Int32Array.of(1, 2), "c"), [1, 2]);
   assert.deepEqual(coerce("text[]", "{a,NULL}", "c"), ["a", null]);
   assert.equal(coerce("text", ["x", "z"], "c"), "x,z", "mariadb's SET");
-  assert.deepEqual(coerce("bytes", true, "c"), Uint8Array.of(1), "Bun.sql's and mariadb's BIT(1)");
+  assert.deepEqual(coerce("bytes", true, "c"), Uint8Array.of(1), "Bun.sql's and mariadb's BIT(1) where it is no boolean (a view's)");
   assert.deepEqual(coerce("bytes", [1, 2], "c"), Uint8Array.of(1, 2), "D1's BLOB");
   assert.deepEqual(coerce("bytes", Uint8Array.of(3).buffer, "c"), Uint8Array.of(3), "libSQL's BLOB");
-  assert.equal(coerce("bool", 1n, "c"), true);
   assert.deepEqual(coerce("json", '{"a":1}', "c"), { a: 1 });
   assert.equal(coerce("int", 9007199254740991n, "c"), 9007199254740991);
   assert.throws(() => coerce("int", 9007199254740993n, "big_id"), (e: Error) => e instanceof DecodeError && /^Column "big_id" holds 9007199254740993, an integer past ±\(2\^53 - 1\)/.test(e.message));
   assert.throws(() => coerce("int", 9007199254740992, "big_id"), /Column "big_id" holds an integer past ±\(2\^53 - 1\), which the driver already rounded to 9007199254740992/);
   // A NUMERIC may hold a REAL past 2^53, which is no rounded integer.
   assert.equal(coerce("int|float|text", 1e20, "c"), 1e20);
-  assert.equal(coerce("int8|int", 1n, "c"), "1", "a MySQL comparison, a BIGINT");
+  // A MySQL either: a BIGINT a BigInt, a DOUBLE a number, a DECIMAL its text.
+  assert.equal(coerce("int8|float|decimal", 1n, "c"), 1n);
+  assert.equal(coerce("int8|float|decimal", 2.5, "c"), 2.5);
+  assert.equal(coerce("int8|float|decimal", "1.10", "c"), "1.10");
+});
+
+test("a truth value: 0 or 1 in every form a driver gives it, and any other value refused, naming the column", () => {
+  for (const v of [true, 1, 1n, "1", "t", "true", Uint8Array.of(1)]) assert.equal(coerce("bool", v, "c"), true, String(v));
+  for (const v of [false, 0, 0n, "0", "f", "false", Uint8Array.of(0)]) assert.equal(coerce("bool", v, "c"), false, String(v));
+  // The failing control: a MySQL TINYINT(1) or a SQLite BOOLEAN holds any integer the database lets in.
+  for (const [v, shown] of [[2, "2"], [-1, "-1"], [255n, "255"], ["yes", '"yes"'], [0.5, "0.5"], [Uint8Array.of(2), "the bytes 0x02"]] as const) {
+    assert.throws(() => coerce("bool", v, "active"), (e: Error) => e instanceof DecodeError && e.message.startsWith(`Column "active" is a boolean, stored as 0 or 1, and holds ${shown}, which is neither`), String(v));
+  }
+});
+
+test("the kinds: a BIGINT is a BigInt, and an integer a temporary table may widen to one is too; a timestamptz a string; no kind a Date", () => {
+  assert.deepEqual(["int8", "int8|int4", "int4|int8", "int8|float8|numeric", "int4|int8|float8|numeric", "bool", "timestamptz"].map((n) => scalarKind(n, "mysql")), ["int8", "int8", "int8", "int8|float|decimal", "int|int8|float|decimal", "bool", "timestamptz"]);
+  assert.deepEqual(["int8", "int8|int4", "int8|float8|numeric", "bool", "timestamptz", "date"].map((n) => kindType(scalarKind(n, "mysql"))), ["bigint", "bigint", "bigint | number | string", "boolean", "string", "string"]);
+  assert.equal(renderType({ kind: "array", of: scalar("int8") }), "bigint[]");
+  assert.equal(renderType(scalar("int8"), true), "number", "inside a JSON document, as the database writes it");
+  assert.deepEqual(typeSchema(scalar("int8"), "postgres"), { type: "integer", format: "int64" });
+  assert.deepEqual(typeSchema(scalar("int8"), "postgres", true), { type: ["integer", "string"], format: "int64" }, "a parameter, as every driver binds it");
+  assert.deepEqual(typeSchema(scalar("timestamptz"), "postgres"), { type: "string", format: "date-time" });
+  assert.deepEqual(typeSchema(scalar("bool"), "mysql"), { type: "boolean" });
+  assert.deepEqual(typeSchema(scalar("bool"), "sqlite"), { type: "boolean" });
+  assert.deepEqual(typeSchema(scalar("integer"), "sqlite"), { type: "integer", format: "int64" });
+  assert.deepEqual(typeSchema(scalar("numeric"), "sqlite"), { type: ["number", "string"] });
+  for (const kind of ["bool", "int", "float", "int8", "decimal", "text", "date", "timestamp", "timestamptz", "json", "bytes", "unknown"]) assert.notEqual(kindType(kind), "Date", kind);
 });
 
 test("SQLite: Reylo's own statement per database and text, with integers read as BigInts whatever the database's setting, and the app's statements unchanged", () => {
   const db = new DatabaseSync(":memory:", { readBigInts: true, returnArrays: true });
-  db.exec("create table t (id integer primary key, n integer, r real, b blob, doc text, flag integer, x); insert into t values (1, 5, 1.5, x'0102', '{\"a\":1}', 1, 7), (2, 9007199254740993, null, null, null, 0, null)");
+  db.exec("create table t (id integer primary key, n integer, r real, b blob, doc text, flag integer, x); insert into t values (1, 5, 1.5, x'0102', '{\"a\":1}', 1, 7), (2, 9007199254740993, null, null, null, 0, null), (3, 1, null, null, null, 2, null)");
   const q: QueryModule<"sqlite"> = { dialect: "sqlite", sql: "select id, n, r, b, doc, flag, x from t where id = :id", params: ["id"], columns: [["id", "int"], ["n", "int"], ["r", "float"], ["b", "bytes"], ["doc", "json"], ["flag", "bool"], ["x", "unknown"]] };
   const [row] = execute(db, q, { id: 1 }) as Record<string, unknown>[];
   // A plain object, as on every other driver: node:sqlite's own rows have a null prototype.
@@ -115,6 +180,8 @@ test("SQLite: Reylo's own statement per database and text, with integers read as
   // The failing control: the app's own statement keeps its database's settings.
   assert.deepEqual(db.prepare("select n from t where id = 1").get(), [5n]);
   assert.throws(() => execute(db, q, { id: 2 }), (e: Error) => e instanceof DecodeError && e instanceof TypeError && /^Column "n" holds 9007199254740993/.test(e.message));
+  // A boolean column holding 2, which SQLite lets in: refused, naming it.
+  assert.throws(() => execute(db, q, { id: 3 }), /^TypeError: Column "flag" is a boolean, stored as 0 or 1, and holds 2/);
   // A query defined by hand: integers exact, nothing else known.
   const [bare] = execute(db, { dialect: "sqlite", sql: "select n, doc from t where id = 1", params: [] }) as Record<string, unknown>[];
   assert.deepEqual(bare, { n: 5, doc: '{"a":1}' });
@@ -150,12 +217,13 @@ test("mysql2: per-query options and Reylo's typeCast, never decimalNumbers; a DE
         geo: cast(field("GEOMETRY", "wkb"), () => ({ x: 1, y: 2 })),
         big: cast(field("LONGLONG", null), () => "9007199254740993"),
       };
-      const fields = [["at", 12, 3], ["at6", 12, 6], ["latest", 12, 0], ["t", 11, 2]].map(([name, columnType, decimals]) => ({ name, columnType, decimals }));
+      const fields = [["amount", 246, 18], ["doc", 245, 0], ["at", 12, 3], ["at6", 12, 6], ["latest", 12, 0], ["t", 11, 2], ["geo", 255, 0], ["big", 8, 0]].map(([name, columnType, decimals]) => ({ name, columnType, decimals }));
       return [[row], fields];
     },
   };
   const [row] = (await execute(pool as never, { dialect: "mysql", sql: "select 1", params: [] })) as Record<string, unknown>[];
-  assert.deepEqual(row, { amount: "1.100000000000000001", doc: { big: 9007199254740992 }, at: "2026-03-08T09:31:00.000", at6: "2026-03-08T09:31:00.123456", latest: "2026-03-08T09:31:00", t: "10:00:00.50", geo: Buffer.from("wkb"), big: "9007199254740993" });
+  // A BIGINT's exact text a BigInt, by the result's own column type (LONGLONG).
+  assert.deepEqual(row, { amount: "1.100000000000000001", doc: { big: 9007199254740992 }, at: "2026-03-08T09:31:00.000", at6: "2026-03-08T09:31:00.123456", latest: "2026-03-08T09:31:00", t: "10:00:00.50", geo: Buffer.from("wkb"), big: 9007199254740993n });
   assert.equal("decimalNumbers" in sent, false, "a per-query decimalNumbers poisons mysql2's parser cache for every pool");
   assert.equal("jsonStrings" in sent, false);
 });
@@ -166,7 +234,8 @@ test("mariadb: every option per query, metaAsArray off, a SET joined and a DATET
   const conn = { batch: async () => ({}), query: async (options: Record<string, any>) => ((sent = options), Object.assign([{ tags: ["x", "z"], at: "2026-03-08 09:31:00.000", id: 1 }], { meta })) };
   assert.deepEqual([...((await execute(conn as never, { dialect: "mysql", sql: "select 1", params: [] })) as unknown[])], [{ tags: "x,z", at: "2026-03-08T09:31:00.000", id: 1 }]);
   assert.equal(sent.metaAsArray, false);
-  assert.equal(sent.bigIntAsNumber, false);
+  // A BIGINT mariadb's own BigInt, a DECIMAL its text.
+  assert.deepEqual([sent.bigIntAsNumber, sent.supportBigNumbers, sent.bigNumberStrings, sent.decimalAsNumber], [false, false, false, false]);
   assert.equal(sent.typeCast, undefined, "an app's typeCast is switched off");
   await execute(conn as never, { dialect: "mysql", sql: "select 1", params: [], columns: [["shape", "unknown"]] });
   assert.equal(typeof sent.typeCast, "function");
@@ -179,7 +248,7 @@ test("PlanetScale: Reylo's cast per query, the driver's own default with a DATET
   const bytes = (s: string) => String.fromCharCode(...Buffer.from(s, "utf8"));
   assert.deepEqual(
     [cast({ type: "INT64" }, "9007199254740993"), cast({ type: "DATETIME" }, "2026-03-08 09:31:00.000"), cast({ type: "DECIMAL" }, "1.10"), cast({ type: "JSON" }, bytes('{"é":1}')), cast({ type: "INT32" }, "7"), cast({ type: "FLOAT64" }, "2.2"), cast({ type: "VARBINARY", charset: 63 }, "\u0001ÿ"), cast({ type: "VARCHAR", charset: 255 }, bytes("é")), cast({ type: "INT64" }, null)],
-    ["9007199254740993", "2026-03-08T09:31:00.000", "1.10", { é: 1 }, 7, 2.2, Uint8Array.of(1, 255), "é", null],
+    [9007199254740993n, "2026-03-08T09:31:00.000", "1.10", { é: 1 }, 7, 2.2, Uint8Array.of(1, 255), "é", null],
   );
 });
 
@@ -215,4 +284,35 @@ test("mysql2: Reylo's typeCast only where it is needed, since mysql2 calls it fo
   await execute(pool({ typeCast: () => null }) as never, q([["n", "int"]]));
   await execute(pool(undefined) as never, q([["n", "int"]]));
   assert.deepEqual(sent, [true, "cast", "cast", "cast", "cast", "cast", "cast", "cast"]);
+});
+
+test("MySQL: a truth value is a boolean on every driver, whatever form it gives it in, and a BIGINT a BigInt; a TINYINT(1) holding 2 refused", async () => {
+  const columns: Columns = [["done", "bool"], ["same", "bool"], ["one_bit", "bool"], ["n", "int8"], ["widened", "int8"], ["either", "int8|float|decimal"]];
+  const q: QueryModule<"mysql"> = { dialect: "mysql", sql: "select 1", params: [], columns };
+  const expected = [{ done: true, same: false, one_bit: true, n: 9007199254740993n, widened: 7n, either: 2.5 }];
+  // mysql2: a TINYINT(1) a number, a comparison a BIGINT's text (bigNumberStrings), a BIT(1) a Buffer, an INT a temporary table may widen a number.
+  const mysql2Row = (done: unknown) => ({ done, same: "0", one_bit: Buffer.of(1), n: "9007199254740993", widened: 7, either: 2.5 });
+  const fields = [["done", 1], ["same", 8], ["one_bit", 16], ["n", 8], ["widened", 3], ["either", 5]].map(([name, columnType]) => ({ name, columnType, decimals: 0 }));
+  const mysql2 = (done: unknown) => ({ query: async () => [[], []], execute: async () => [[mysql2Row(done)], fields] });
+  assert.deepEqual(await execute(mysql2(1) as never, q), expected);
+  await assert.rejects(execute(mysql2(2) as never, q) as Promise<unknown>, /^TypeError: Column "done" is a boolean, stored as 0 or 1, and holds 2, which is neither/);
+  // A query defined by hand: a BIGINT by the result's own type, a TINYINT(1) as it is.
+  assert.deepEqual(await execute(mysql2(2) as never, { ...q, columns: undefined }), [{ ...mysql2Row(2), same: 0n, n: 9007199254740993n }]);
+  // mariadb: a BIGINT its own BigInt, a BIT(1) a Buffer (bitOneIsBoolean off).
+  const mariadb = (done: unknown) => ({ batch: async () => ({}), query: async () => [{ done, same: 0n, one_bit: Buffer.of(1), n: 9007199254740993n, widened: 7, either: 2.5 }] });
+  assert.deepEqual([...((await execute(mariadb(1) as never, q)) as unknown[])], expected);
+  await assert.rejects(execute(mariadb(-1) as never, q) as Promise<unknown>, /Column "done" is a boolean, stored as 0 or 1, and holds -1/);
+  // PlanetScale: Reylo's cast, then the kinds.
+  const planetscale = (done: string) => ({
+    execute: async (_: string, __: unknown, options: { cast: (f: { type: string; charset?: number }, v: string | null) => unknown }) => ({
+      statement: "",
+      rows: [{ done: options.cast({ type: "INT8" }, done), same: options.cast({ type: "INT64" }, "0"), one_bit: options.cast({ type: "BIT", charset: 63 }, "\u0001"), n: options.cast({ type: "INT64" }, "9007199254740993"), widened: options.cast({ type: "INT32" }, "7"), either: options.cast({ type: "FLOAT64" }, "2.5") }],
+    }),
+  });
+  assert.deepEqual(await execute(planetscale("1") as never, q), expected);
+  await assert.rejects(execute(planetscale("2") as never, q) as Promise<unknown>, /Column "done" is a boolean/);
+  // Bun.sql: a BIT(1) a boolean, a BIGINT its digits.
+  const bun = (done: unknown) => ({ unsafe: async () => [{ done, same: "0", one_bit: true, n: "9007199254740993", widened: 7, either: 2.5 }], commitDistributed: async () => {} });
+  assert.deepEqual(await execute(bun(1) as never, q), expected);
+  await assert.rejects(execute(bun(5) as never, q) as Promise<unknown>, /Column "done" is a boolean, stored as 0 or 1, and holds 5/);
 });

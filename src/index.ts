@@ -13,8 +13,14 @@ export type Cardinality = "many" | "one" | "maybeOne" | "none";
 
 export type Materialize<Row, C extends Cardinality> = C extends "many" ? Row[] : C extends "one" ? Row : C extends "none" ? void : Row | null;
 
-/** The JSON.stringify shape of a row value: a Date, a Temporal value, a BigInt or a byte array becomes text. */
-export type Json<T> = T extends Date | bigint | Uint8Array | { toJSON(): string }
+/**
+ * The shape of a row value as JSON: a BigInt is the integer it is (JSON.stringify refuses one, so a
+ * serializer writes it, as `JSON.rawJSON(String(v))` does), and a Temporal value or a byte array
+ * becomes text.
+ */
+export type Json<T> = T extends bigint
+  ? number
+  : T extends Date | Uint8Array | { toJSON(): string }
   ? string
   : T extends readonly (infer U)[]
     ? Json<U>[]
@@ -49,7 +55,7 @@ export interface Query<Params, Row, C extends Cardinality, D extends Dialect, Va
   readonly cardinality: C;
   /** The JSON Schema (2020-12) of the parameters, as the object `run` takes. */
   readonly inputSchema: Record<string, unknown>;
-  /** The JSON Schema (2020-12) of the result as JSON: what `run` returns, once JSON.stringify has written it. */
+  /** The JSON Schema (2020-12) of the result as JSON: what `run` returns, written as JSON, a BigInt as the integer it is. */
   readonly outputSchema: Record<string, unknown>;
   readonly "~standard": StandardJSONSchemaV1.Props<Params, Materialize<Row, C>>;
   readonly "~reylo": ReyloTypes<Params, Row, C, Values>;

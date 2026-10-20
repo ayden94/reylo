@@ -785,6 +785,12 @@ pub fn check_sqlite(db: &rusqlite::Connection, statements: &[(String, String, Va
                                 Some(rusqlite::types::Value::Null) if !col["nullable"].as_bool().unwrap_or(true) => {
                                     found.push(format!("{file}: column {name} typed non-null is NULL with ({shown})"));
                                 }
+                                // A truth value SQLite computes is 1 or 0; a column declared
+                                // BOOLEAN holds what was stored, which the run time refuses unless
+                                // it is one of them.
+                                Some(value) if col["type_name"] == "bool" && !matches!(value, rusqlite::types::Value::Null | rusqlite::types::Value::Integer(0 | 1)) => {
+                                    found.push(format!("{file}: column {name} typed bool holds {value:?} with ({shown})"));
+                                }
                                 Some(rusqlite::types::Value::Text(text)) => {
                                     if let Some(why) = contradiction(&col["type"], text) {
                                         found.push(format!("{file}: column {name} {why} with ({shown})"));
