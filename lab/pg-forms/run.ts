@@ -31,7 +31,8 @@ import types from "./types.sql";
 // cte_dml.sql and param_insert.sql write rows, so this script leaves both to the type check.
 const sql = postgres(process.env["DATABASE_URL"] ?? "postgres://localhost:5432/postgres");
 const show = (name: string, cardinality: string, value: unknown) =>
-  console.log(`${name} [${cardinality}] ${JSON.stringify(value)}`);
+  // A 64-bit integer is a BigInt, which JSON.stringify refuses: printed with its `n`.
+  console.log(`${name} [${cardinality}] ${JSON.stringify(value, (_, v) => (typeof v === "bigint" ? `${v}n` : v))}`);
 
 show("json_agg", jsonAgg.cardinality, await jsonAgg.run(sql, { id: 1 }));
 show("arrays", arrays.cardinality, await arrays.run(sql, { id: 1 }));

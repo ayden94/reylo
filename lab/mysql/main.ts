@@ -9,13 +9,14 @@ type ExpectedRow = {
   id: number;
   name: string;
   email: string | null;
-  big: string;
+  big: bigint;
   n: string;
   at: string;
   j: unknown;
-  flag: number;
+  // A TINYINT(1), which BOOLEAN creates, read straight from its table: 0 or 1, or an error.
+  flag: boolean;
   raw: Uint8Array | null;
-  next_id: string;
+  next_id: bigint;
 };
 const a: ExpectedRow = null! as Row;
 const b: Row = null! as ExpectedRow;
@@ -26,13 +27,13 @@ const e: Row | null = await query.run(conn, { id: 1, skip: "" });
 const f: readonly ["id", "skip"] = q.params;
 // @ts-expect-error a postgres pool cannot run a mysql query
 await query.run({ query: async () => ({ rows: [] }) }, { id: 1, skip: "" });
-// An ungrouped aggregate is exactly one row; `count(*)` is a BIGINT, its exact text on every driver, and
+// An ungrouped aggregate is exactly one row; `count(*)` is a BIGINT, a BigInt on every driver, and
 // a DATETIME its text (src/values.ts); `max` of a NOT NULL column is nullable because the server says so
 // (no rows, no maximum).
-const g: { n: string; latest: string | null } = null! as CountRow;
-const h: CountRow = null! as { n: string; latest: string | null };
+const g: { n: bigint; latest: string | null } = null! as CountRow;
+const h: CountRow = null! as { n: bigint; latest: string | null };
 const i: { pattern: string } = null! as CountParams;
-const j: { n: string; latest: string | null } = await count.run(conn, { pattern: "a%" });
+const j: { n: bigint; latest: string | null } = await count.run(conn, { pattern: "a%" });
 // MySQL has no RETURNING, so a data-modifying statement returns nothing; the `?` in a VALUES
 // list is typed by the column it fills, and :email, written whole to a nullable column, may be null.
 const k: { name: string; email: string | null } = null! as InsertParams;
@@ -45,8 +46,9 @@ const l2: void = await insert.run(conn, { name: "eve", email: null });
 // aggregate subquery is never null; `json_object` never is; `tag` is nullable in the table.
 // The server flags `u.id` nullable next to a correlated aggregate subquery; the engine prepares
 // the statement without the subqueries and takes NOT NULL from there. `count(*)` in an ungrouped
-// subquery is one row and never null; `max` is null over no rows.
-type ExpectedNested = { id: number; posts: { id: number; title: string; tag: string | null }[]; meta: { email: string | null; flag: number }; n_posts: string; last_post: string | number | null };
+// subquery is one row and never null; `max` is null over no rows, and an INT a temporary table may
+// widen to a BIGINT, a BigInt either way. Inside a document MySQL writes the TINYINT(1) as the number.
+type ExpectedNested = { id: number; posts: { id: number; title: string; tag: string | null }[]; meta: { email: string | null; flag: number }; n_posts: bigint; last_post: bigint | null };
 const m: ExpectedNested = null! as NestedRow;
 const n: NestedRow = null! as ExpectedNested;
 const o: ExpectedNested | null = await nested.run(conn, { id: 1 });

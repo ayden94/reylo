@@ -299,18 +299,19 @@ export function queries(d: Dialect, typed = true) {
 // Reylo's one representation per SQL type (src/values.ts) of the `typed` fixture's row, on every driver.
 const TYPED: Record<Dialect, Record<string, unknown>> = {
   postgres: {
-    id: 1, big: "9007199254740993", amount: "12345678901234567890.123456789", day: "2026-10-20", at: "2026-10-20T10:00:00.123", stamp: new Date("2026-10-20T08:00:00.123Z"),
+    id: 1, big: 9007199254740993n, amount: "12345678901234567890.123456789", day: "2026-10-20", at: "2026-10-20T10:00:00.123", stamp: "2026-10-20T08:00:00.123Z",
     doc: { a: [1, 2] }, docb: { b: true }, raw: Uint8Array.of(1, 2, 255), flag: true, f8: 2.5, tags: ["a", null, "NULL", "b,c"], ints: [1, 2, 3], moods: ["ok", "sad"], span: "1 day 02:00:00", uid: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
   },
   mysql: {
-    id: 1, big: "-9007199254740993", ubig: "18446744073709551615", amount: "1.100000000000000001", day: "2026-10-20", at: "2026-10-20T10:00:00.123", doc: { a: [1, 2] },
-    bit1: Uint8Array.of(1), raw: Uint8Array.of(1, 2, 255), tags: "x,z", kind: "b", flag: 1, yr: 2026, f8: 2.5, tm: "10:00:00", s: "hi",
+    id: 1, big: -9007199254740993n, ubig: 18446744073709551615n, amount: "1.100000000000000001", day: "2026-10-20", at: "2026-10-20T10:00:00.123", doc: { a: [1, 2] },
+    bit1: true, raw: Uint8Array.of(1, 2, 255), tags: "x,z", kind: "b", flag: true, yr: 2026, f8: 2.5, tm: "10:00:00", s: "hi",
   },
   sqlite: { id: 1, n: 5, r: 1.5, s: "hi", b: Uint8Array.of(1, 2, 255), doc: { a: [1, 2] }, flag: true, x: 7 },
 };
 const TYPED_COLUMNS: Record<Dialect, [string, string][]> = {
   postgres: [["id", "int"], ["big", "int8"], ["amount", "decimal"], ["day", "date"], ["at", "timestamp"], ["stamp", "timestamptz"], ["doc", "json"], ["docb", "json"], ["raw", "bytes"], ["flag", "bool"], ["f8", "float"], ["tags", "text[]"], ["ints", "int[]"], ["moods", "text[]"], ["span", "text"], ["uid", "text"]],
-  mysql: [["id", "int"], ["big", "int8"], ["ubig", "int8"], ["amount", "decimal"], ["day", "date"], ["at", "timestamp"], ["doc", "json"], ["bit1", "bytes"], ["raw", "bytes"], ["tags", "text"], ["kind", "text"], ["flag", "int"], ["yr", "int"], ["f8", "float"], ["tm", "text"], ["s", "text"]],
+  // A BIT(1) and a TINYINT(1) column are truth values, as the engine types them (engine/mysql).
+  mysql: [["id", "int"], ["big", "int8"], ["ubig", "int8"], ["amount", "decimal"], ["day", "date"], ["at", "timestamp"], ["doc", "json"], ["bit1", "bool"], ["raw", "bytes"], ["tags", "text"], ["kind", "text"], ["flag", "bool"], ["yr", "int"], ["f8", "float"], ["tm", "text"], ["s", "text"]],
   // A SQLite JSON column and truth value as the engine types them where it can tell, a column with no type unknown.
   sqlite: [["id", "int"], ["n", "int"], ["r", "float"], ["s", "text"], ["b", "bytes"], ["doc", "json"], ["flag", "bool"], ["x", "unknown"]],
 };

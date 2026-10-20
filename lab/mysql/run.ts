@@ -10,5 +10,6 @@ await conn.beginTransaction();
 const inserted = await insert.run(conn, { name: "eve", email: null });
 const after = await count.run(conn, { pattern: "%" });
 await conn.rollback();
-console.log(JSON.stringify({ dialect: query.dialect, ada: await query.run(conn, { id: 1, skip: "" }), nobody: await query.run(conn, { id: 99, skip: "" }), count: await count.run(conn, { pattern: "a%" }), inserted, after, nested: await nested.run(conn, { id: 1 }), positional: await positional.run(conn, { 1: 1, 2: "a%" }), escaped: await escaped.run(conn, { id: 1 }) }));
+// A BigInt, which JSON.stringify refuses, is printed with its `n`.
+console.log(JSON.stringify({ dialect: query.dialect, ada: await query.run(conn, { id: 1, skip: "" }), nobody: await query.run(conn, { id: 99, skip: "" }), count: await count.run(conn, { pattern: "a%" }), inserted, after, nested: await nested.run(conn, { id: 1 }), positional: await positional.run(conn, { 1: 1, 2: "a%" }), escaped: await escaped.run(conn, { id: 1 }) }, (_, v) => (typeof v === "bigint" ? `${v}n` : v)));
 await conn.end();

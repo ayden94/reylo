@@ -6,8 +6,8 @@ import listPosts from "../queries/list_posts.sql";
 const sql = postgres(process.env["DATABASE_URL"]!);
 
 const user = await getUser.run(sql, { id: 1 });
-//    ^? { id: number; name: string; email: string | null; role: "admin" | "member"; created_at: Date } | null
-if (user) console.log(`${user.name} (${user.role}) joined ${user.created_at.toISOString()}`);
+//    ^? { id: number; name: string; email: string | null; role: "admin" | "member"; created_at: string } | null
+if (user) console.log(`${user.name} (${user.role}) joined ${user.created_at}`);
 
 const post = await createPost.run(sql, { user_id: 1, title: "From main.ts", body: null });
 //    ^? { id: number; title: string }

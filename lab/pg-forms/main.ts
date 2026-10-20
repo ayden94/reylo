@@ -79,13 +79,13 @@ const rows2: Awaited<ReturnType<typeof rows.run>> = null! as RowsRow | null;
 // ---------------------------------------------------------------------------
 import aggPlain from "./agg_plain.sql";
 type AggPlainRow = {
-  n: string;
-  total: string | null;
+  n: bigint;
+  total: bigint | null;
   mean: string | null;
-  latest: Date | null;
+  latest: string | null;
   titles: string | null;
   all_viewed: boolean | null;
-  published: string;
+  published: bigint;
 };
 const aggPlain1: AggPlainRow = null! as Awaited<ReturnType<typeof aggPlain.run>>;
 const aggPlain2: Awaited<ReturnType<typeof aggPlain.run>> = null! as AggPlainRow;
@@ -94,16 +94,16 @@ declare const client: { query(text: string, values?: unknown[]): Promise<{ rows:
 const aggPlain3: Promise<AggPlainRow> = aggPlain.run(client);
 // Right throughout: an ungrouped aggregate is exactly one row (`one`), count and
 // `count(*) filter (...)` are never NULL, every other aggregate is NULL over an empty set,
-// sum(int4) is int8 and avg(int4) is numeric, so both are text under `bigint`/`numeric`.
+// sum(int4) is int8, a BigInt, and avg(int4) is numeric, its text (src/values.ts).
 
 import aggGrouped from "./agg_grouped.sql";
 type AggGroupedRow = {
   user_id: number;
-  n: string;
+  n: bigint;
   // A GROUP BY group is never empty and `views` is NOT NULL, so this sum cannot be NULL.
-  total: string;
-  viewed: string;
-  groups: string;
+  total: bigint;
+  viewed: bigint;
+  groups: bigint;
 };
 const aggGrouped1: AggGroupedRow[] = null! as Awaited<ReturnType<typeof aggGrouped.run>>;
 const aggGrouped2: Awaited<ReturnType<typeof aggGrouped.run>> = null! as AggGroupedRow[];
@@ -119,7 +119,7 @@ type CtePlainRow = {
   title: string;
   body: string | null;
   // The CTE's own `where published_at is not null` proves it.
-  published_at: Date;
+  published_at: string;
 };
 const ctePlain1: CtePlainRow[] = null! as Awaited<ReturnType<typeof ctePlain.run>>;
 const ctePlain2: Awaited<ReturnType<typeof ctePlain.run>> = null! as CtePlainRow[];
@@ -167,7 +167,7 @@ type FnScalarRow = {
   email_or: string;
   not_ada: string | null;
   // now() and gen_random_uuid() never return NULL.
-  ts: Date;
+  ts: string;
   fresh: string;
   lowered: string | null;
 };
@@ -186,18 +186,18 @@ type FnSetofRow = {
   user_id: number | null;
   title: string | null;
   body: string | null;
-  published_at: Date | null;
+  published_at: string | null;
   views: number | null;
 };
 const fnSetof1: FnSetofRow[] = null! as Awaited<ReturnType<typeof fnSetof.run>>;
 const fnSetof2: Awaited<ReturnType<typeof fnSetof.run>> = null! as FnSetofRow[];
 
 import fnTable from "./fn_table.sql";
-type FnTableRow = { user_id: number | null; n: string | null };
+type FnTableRow = { user_id: number | null; n: bigint | null };
 const fnTable1: FnTableRow[] = null! as Awaited<ReturnType<typeof fnTable.run>>;
 const fnTable2: Awaited<ReturnType<typeof fnTable.run>> = null! as FnTableRow[];
 // Right: `returns table(user_id int, n bigint)` declares no NOT NULL, so nullable is the
-// truth, and int/bigint map to number/string.
+// truth, and int/bigint map to number/bigint.
 
 import fnSrf from "./fn_srf.sql";
 type FnSrfRow = { id: number; k: unknown };
@@ -222,15 +222,15 @@ type ColumnsRow = {
   tags: string[];
   meta: unknown;
   score: string | null;
-  big: string;
+  big: bigint;
   blob: Uint8Array | null;
-  created_at: Date;
+  created_at: string;
 };
 const columns1: ColumnsRow[] = null! as Awaited<ReturnType<typeof columns.run>>;
 const columns2: Awaited<ReturnType<typeof columns.run>> = null! as ColumnsRow[];
 // Right throughout: the enum becomes its label union, the domain over text becomes the base
-// type with the column's NOT NULL, uuid/timestamptz/numeric/int8 follow the representation
-// options, bytea is Uint8Array, text[] is string[], jsonb is unknown.
+// type with the column's NOT NULL, uuid, timestamptz and numeric are text and int8 a BigInt
+// (src/values.ts), bytea is Uint8Array, text[] is string[], jsonb is unknown.
 
 // ---------------------------------------------------------------------------
 // 9. Nullability through joins
@@ -345,8 +345,8 @@ type ViewsRow = {
   id: number;
   name: string;
   email: string | null;
-  posts: string;
-  last_at: Date | null;
+  posts: bigint;
+  last_at: string | null;
 };
 const views1: ViewsRow[] = null! as Awaited<ReturnType<typeof views.run>>;
 const views2: Awaited<ReturnType<typeof views.run>> = null! as ViewsRow[];
@@ -364,7 +364,7 @@ type CastsRow = {
   score_int: number | null;
   big_num: string;
   day: string;
-  since: Date;
+  since: string;
   k: number | null;
   nothing: number | null;
 };

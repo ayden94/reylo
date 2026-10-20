@@ -45,8 +45,8 @@ const declared = {
   span: "1 year 2 mons 3 days 04:05:06.789",
   spans: ["1 day", "02:00:00"],
   amounts: ["1.5", "12345678901234567890.1"],
-  big: "9007199254740993",
-  at: new Date("2024-01-15T10:30:00.123Z"),
+  big: 9007199254740993n,
+  at: "2024-01-15T10:30:00.123Z",
   wall: "2024-01-15T10:30:00.123456",
   day: "2024-01-15",
   id: 1,
@@ -78,9 +78,9 @@ try {
   await setup.query(schema);
   await setup.end();
 
-  // pg's global table, set up by the app: an int8 a BigInt, a numeric a float, a timestamptz tagged.
+  // pg's global table, set up by the app: an int8 its text, a numeric a float, a timestamptz tagged.
   const defaults = { 20: pg.types.getTypeParser(20), 1700: pg.types.getTypeParser(1700), 1184: pg.types.getTypeParser(1184) };
-  pg.types.setTypeParser(20, BigInt);
+  pg.types.setTypeParser(20, String);
   pg.types.setTypeParser(1700, parseFloat);
   pg.types.setTypeParser(1184, (x) => `global:${x}`);
 
@@ -90,7 +90,7 @@ try {
     await client.connect();
     client.setTypeParser(1082, (x) => `client:${x}`);
     const control = (await client.query(direct, [1])).rows[0];
-    check("pg Client control (no reylo): the app's parsers", control.big === 9007199254740993n && String(control.at).startsWith("global:") && control.day === "client:2024-01-15" && control.roles === "{admin,member,NULL}" && typeof control.span === "object", show(control));
+    check("pg Client control (no reylo): the app's parsers", control.big === "9007199254740993" && String(control.at).startsWith("global:") && control.day === "client:2024-01-15" && control.roles === "{admin,member,NULL}" && typeof control.span === "object", show(control));
     await both("pg Client", client);
     same("pg Client, the app's own query after reylo's", (await client.query(direct, [1])).rows[0], control);
     // A type created after reylo read the catalog: decoded after one lookup of its oid.
@@ -191,10 +191,10 @@ try {
 
   // PGlite with the app's parsers on the instance, a later run and a transaction.
   {
-    const lite = await PGlite.create({ parsers: { 20: (x) => BigInt(x), 1184: (x) => `lite:${x}` } });
+    const lite = await PGlite.create({ parsers: { 20: (x) => Number(x), 1184: (x) => `lite:${x}` } });
     await lite.exec(schema);
     const control = (await lite.query(direct, [1])).rows[0];
-    check("PGlite control (no reylo): the instance's parsers", control.big === 9007199254740993n && String(control.at).startsWith("lite:"), show(control));
+    check("PGlite control (no reylo): the instance's parsers", control.big === 9007199254740992 && String(control.at).startsWith("lite:"), show(control));
     await both("PGlite", lite);
     same("PGlite, a later run", await q.run(lite, { id: 1 }), declared);
     same("PGlite transaction through run", await lite.transaction((tx) => built.run(tx, { id: 1 })), declared);

@@ -19,5 +19,8 @@ const kinds = (row: Record<string, unknown> | null | undefined) => row && Object
 const reylo = await query.run(sql, { id: 1 });
 // The app runs the same statement itself: `query.sql` is the text Reylo sends, with `$1`.
 const [app] = await sql.unsafe(query.sql, [1]);
-console.log(JSON.stringify({ reylo: kinds(reylo), app: kinds(app), values: reylo }));
+// Reylo's instant is the app's Temporal.Instant, read from its text to the microsecond.
+const sameInstant = reylo !== null && Temporal.Instant.from(reylo.created_at).equals(app!.created_at as Temporal.Instant);
+// A BigInt, which JSON.stringify refuses, is printed with its `n`.
+console.log(JSON.stringify({ reylo: kinds(reylo), app: kinds(app), sameInstant, values: reylo }, (_, v) => (typeof v === "bigint" ? `${v}n` : v)));
 await sql.end();
