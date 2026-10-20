@@ -124,58 +124,23 @@ create table events (
 <AgentPrompt>
 
 ```text
-Set up Reylo in this project, so that .sql files can be imported from TypeScript with
-types inferred from the database.
+Set up Reylo in this project. Reylo lets TypeScript import .sql files, with types
+inferred from the live database. Its docs are one page, https://reylo.dev: follow the
+section linked at each step.
 
-1. Install Reylo, and TypeScript 7.1 (beta or later), the first release with content
-   mappers, with the project's package manager:
-     npm install reylo
-     npm install -D typescript@beta
-
-2. In tsconfig.json, add this top-level key, beside compilerOptions:
-     "contentMappers": [{ "package": "reylo", "extensions": [".sql"] }]
-   Leave .sql files that are not one query (migrations, schema dumps) out of the type
-   check with "exclude". A new project also needs "module": "nodenext", "strict": true,
-   "types": ["node"] and @types/node, and "type": "module" in package.json.
-
-3. Add the script "typecheck": "tsc --noEmit --runExternalCode" to package.json. The
-   flag lets tsc run content mappers.
-
-4. Set DATABASE_URL in .env to the development database: postgres://..., mysql://...
-   or file:./app.db for SQLite. Reylo reads every type from the live database, so it
-   must be running and reachable from the type check and the editor. On Postgres the
-   type check connects through pg or postgres (postgres.js), and on MySQL through
-   mysql2: if the app uses another driver, add one of those as a dev dependency.
-
-5. Make .sql imports load at run time, for each way this project runs code:
-   - Node: node --env-file=.env --import reylo/register main.ts
-   - Bun: preload = ["reylo/register"] in bunfig.toml
-   - nub: "preload": ["reylo/register"] in nub.jsonc
-   - Vite and Vitest: import reylo from "reylo/vite", and reylo() in plugins
-   - esbuild and Bun.build: import reylo from "reylo/esbuild", and reylo() in plugins
-   - webpack and Rspack: { test: /\.sql$/, use: "reylo/webpack-loader" } in
-     module.rules
-   - Next.js: in next.config.ts, a turbopack rule for "*.sql" with
-     loaders: ["reylo/webpack-loader"], condition: { not: "browser" } and as: "*.js";
-     the webpack rule above when isServer; typescript.ignoreBuildErrors: true; and
-     "next typegen && tsc --noEmit --runExternalCode" before next build in the
-     build script, since next build's own type check cannot run content mappers
-   - Jest: transform: { "\\.sql$": "reylo/jest" } and extensionsToTreatAsEsm: [".sql"],
-     run with NODE_OPTIONS=--experimental-vm-modules
-
-6. For VS Code or Cursor: recommend the "TypeScript 7" extension
-   (TypeScriptTeam.native-preview) in .vscode/extensions.json, and put
-     "js/ts.experimental.useTsgo": true,
-     "js/ts.tsdk.path": "./node_modules/typescript"
-   in .vscode/settings.json. The extension asks once to use the workspace's
-   TypeScript, and runs content mappers only in a trusted workspace.
-
-7. Check the setup with one statement per .sql file and a :name per parameter:
-     get_user.sql:  select id, name from users where id = :id
-     main.ts:       import getUser from "./get_user.sql";
-                    const user = await getUser.run(db, { id: 1 });
-   where db is a client of the project's own driver. Run the typecheck script: user is
-   typed from the table, and an error in a .sql file shows at its line and column.
+1. Check the requirements and install Reylo with TypeScript 7.1 beta or later:
+   https://reylo.dev/#install
+2. Add Reylo to tsconfig.json as a content mapper, and add a typecheck script that runs
+   tsc --noEmit --runExternalCode: https://reylo.dev/#typescript
+3. Point Reylo at the development database with DATABASE_URL: https://reylo.dev/#url
+4. Make .sql imports load wherever the project runs code, with Node's --import
+   (https://reylo.dev/#node) or the plugin for its runtime, bundler or framework
+   (https://reylo.dev/#plugins).
+5. Set up the editor the project uses: https://reylo.dev/#editors
+6. Write a first query and run it with the project's own driver:
+   https://reylo.dev/#usage and https://reylo.dev/#supported-drivers
+7. Run the typecheck script. The query's types come from the database, and an error in
+   a .sql file shows at its line and column.
 ```
 
 </AgentPrompt>
