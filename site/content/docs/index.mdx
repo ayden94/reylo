@@ -134,6 +134,8 @@ files, with types inferred from the live database. Its docs are one
 page, https://reylo.dev: follow the section linked at each step.
 Each setup also has a complete, working example project to copy:
 https://github.com/colinhacks/reylo/tree/main/examples
+In each, the README's "How Reylo is wired in" lists every line
+Reylo needs. Install from npm: the examples link local builds.
 
 1. Check the requirements and install Reylo, the engine of the
    project's database (@reylosql/postgres, @reylosql/mysql or
@@ -147,6 +149,9 @@ https://github.com/colinhacks/reylo/tree/main/examples
 4. Make .sql imports load wherever the project runs code, with
    Node's --import (https://reylo.dev/#node) or the plugin for its
    runtime, bundler or framework (https://reylo.dev/#plugins).
+   The example for that setup shows it end to end:
+   https://github.com/colinhacks/reylo/tree/main/examples/<name>
+   (node, nub, bun, vite, nextjs, esbuild, webpack, rspack, jest)
 5. Set up the editor the project uses: https://reylo.dev/#editors
 6. Write a first query and run it with the project's own driver:
    https://reylo.dev/#usage and https://reylo.dev/#supported-drivers

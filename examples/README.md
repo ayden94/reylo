@@ -16,9 +16,22 @@ One complete, working project for each setup the [docs](https://reylo.dev/#setup
 
 Every example has the same two tables, `users` and `posts`, and the same three queries: `get_user.sql` (a row or `null`), `list_posts.sql` (an array) and `create_post.sql` (an insert). Every one also carries the editor settings of [Editors](https://reylo.dev/#editors) for VS Code, Cursor and Zed.
 
-## Running one
+## Using one in your own project
 
-Reylo is not on npm yet, so each example links the packages built from this repository, `dist/reylo` and `dist/<database>`, as `link:` dependencies. Build them once at the repository root, and again after a change to `src/`:
+Open the example for your setup and read its README's "How Reylo is wired in": every line Reylo needs, file by file, with the reason for each. Copy those lines, and install the packages from npm instead of copying the example's dependencies, which link this repository's builds:
+
+```sh
+npm install reylo
+npm install -D @reylosql/postgres typescript@beta   # or @reylosql/mysql, @reylosql/sqlite
+```
+
+Each README's "In your own project" lists anything else that exists only because the example lives in this repository: `.npmrc` (`minimumReleaseAge=0`, because this machine holds fresh releases back), and in Next.js the Turbopack root.
+
+The examples pin TypeScript to `7.1.0-beta` exactly: a range such as `^7.1.0-beta`, which `npm install -D typescript@beta` writes, also takes the 7.1 nightlies, which sort above the beta.
+
+## Running one here
+
+Each example links the packages built from this repository, `dist/reylo` and `dist/<database>`, as `link:` dependencies. Build them once at the repository root, and again after a change to `src/`:
 
 ```sh
 nub run build            # writes dist/
@@ -27,9 +40,3 @@ nub install              # or pnpm install; npm does not take link: dependencies
 ```
 
 Then follow the example's README: it names the database to point `DATABASE_URL` at, the setup that creates the tables, and each command with what it prints. `scripts/gates.sh` runs every example this way, each against a database of its own (`scripts/gates.sh --only example`).
-
-## In your own project
-
-Install from npm instead of linking: `npm install reylo`, and `npm install -D @reylosql/<database> typescript@beta`. Each README lists anything else that exists only because the example lives in this repository: `.npmrc` (`minimumReleaseAge=0`, because this machine holds fresh releases back), and in Next.js the Turbopack root.
-
-The examples pin TypeScript to `7.1.0-beta` exactly: a range such as `^7.1.0-beta`, which `npm install -D typescript@beta` writes, also takes the 7.1 nightlies, which sort above the beta.
