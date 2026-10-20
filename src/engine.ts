@@ -24,6 +24,8 @@ export type Analysis = {
   unresolved: string[];
   /** Each structured parameter in insert position, with the lists of `rewritten.sql` (UTF-8 byte offsets) the run time writes again for a call that leaves keys out. */
   structured?: { name: string; lists: { start: number; end: number; entries: string[] }[] }[];
+  /** The catalog facts the analysis relied on, and the query that reads them (engine/src/fresh.rs). */
+  fresh?: { query: string; rows: string[][]; inserts: string[] };
 };
 
 export type Lexed = {

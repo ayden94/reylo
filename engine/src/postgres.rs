@@ -313,6 +313,7 @@ pub(crate) fn bare(sql: &str, lexed: &Lexed, dialect: Dialect, diagnostics: Vec<
         diagnostics,
         unresolved: Vec::new(),
         structured: Vec::new(),
+        fresh: None,
     }
 }
 
@@ -509,6 +510,7 @@ impl<'a> Engine<'a> {
             diagnostics,
             unresolved,
             structured: Vec::new(),
+            fresh: None,
         })
     }
 

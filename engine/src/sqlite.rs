@@ -224,6 +224,7 @@ fn run(sql: &str, lexed: &Lexed, ddl: &[String], extras: &Extras) -> SqliteAnaly
         diagnostics,
         unresolved: Vec::new(),
         structured: Vec::new(),
+        fresh: None,
     };
     let unique_keys = t.tables.iter().map(|(name, info)| (name.clone(), info.unique_keys.clone())).collect();
     SqliteAnalysis { analysis, declared: t.columns.iter().map(|c| c.declared.clone()).collect(), readonly: t.readonly, unique_keys, booleans }

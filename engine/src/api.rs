@@ -180,6 +180,10 @@ pub struct Analysis {
     /// writes again for a call that leaves keys out ([`crate::structured`]).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub structured: Vec<crate::structured::Info>,
+    /// The facts the analysis relied on, which a deployed query checks against its database
+    /// ([`crate::fresh`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fresh: Option<crate::fresh::Fresh>,
 }
 
 #[derive(Debug, Serialize)]
@@ -210,7 +214,7 @@ fn analyze(sql: &str, dialect: Dialect, answers: &HashMap<String, Answer>) -> Re
     // analyzed here, with the server answering its needs.
     if server == Server::Same && !crate::structured::present(sql, dialect) {
         match extension::analyze(sql, &host) {
-            Some(Some(analysis)) => return Response::Analysis { analysis },
+            Some(Some(analysis)) => return with_facts(analysis, dialect, &host),
             Some(None) => {}
             None => return Response::Need { needs: host.needs() },
         }
@@ -220,12 +224,23 @@ fn analyze(sql: &str, dialect: Dialect, answers: &HashMap<String, Answer>) -> Re
         _ => crate::postgres::analyze(sql, dialect, &host),
     };
     match analysis {
-        Some(analysis) => Response::Analysis { analysis },
+        Some(analysis) => with_facts(analysis, dialect, &host),
         None => {
             let needs = host.needs();
             let bundled = matches!(server, Server::Same | Server::Other { answers: true }) && !extension::bundle_failed(&needs, answers);
             Response::Need { needs: if bundled { extension::bundle(needs) } else { needs } }
         }
+    }
+}
+
+/// The analysis with the facts it relied on, read in one more round ([`crate::fresh`]).
+fn with_facts(mut analysis: Analysis, dialect: Dialect, host: &crate::host::Host) -> Response {
+    match crate::fresh::facts(&analysis, dialect, host) {
+        Some(fresh) => {
+            analysis.fresh = fresh;
+            Response::Analysis { analysis }
+        }
+        None => Response::Need { needs: host.needs() },
     }
 }
 

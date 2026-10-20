@@ -439,6 +439,7 @@ pub fn analyze(sql: &str, lexed: &Lexed, text: Option<MysqlText>, host: &Host) -
         diagnostics,
         unresolved: Vec::new(),
         structured: Vec::new(),
+        fresh: None,
     })
 }
 

@@ -11,6 +11,7 @@ import { lexPlaceholders } from "./lex.ts";
 import type { JsonSchema } from "./engine-type.ts";
 import { validate, withDefaults } from "./json-schema.ts";
 import { prepareRows, variant, zoned, type Structured } from "./rows.ts";
+import { differences, due, passed, staleError, type Fresh } from "./fresh.ts";
 
 export type Dialect = "postgres" | "mysql" | "sqlite";
 
@@ -111,6 +112,10 @@ export type QueryModule<D extends Dialect = Dialect> = {
   readonly inputs?: Inputs | undefined;
   /** Each structured parameter in insert position, with the lists of `text` the run time writes again for the keys a call carries. */
   readonly structured?: readonly Structured[] | undefined;
+  /** The catalog facts the statement relied on, checked before it runs (src/fresh.ts). */
+  readonly fresh?: Fresh | undefined;
+  /** The `.sql` file the module was built from, relative to the project, for messages. */
+  readonly source?: string | undefined;
 };
 
 /**
@@ -158,6 +163,15 @@ export function executeSync<D extends Dialect>(client: SyncClientFor<D>, query: 
 }
 
 function executeSyncSqlite(c: AnyClient, query: QueryModule, params: ParamsInput): unknown[] | Promise<unknown[]> {
+  if (query.fresh && due(query)) {
+    let rows: unknown[] | undefined;
+    try {
+      rows = c.prepare(query.fresh.query).all();
+    } catch {}
+    const lines = rows ? differences(query.fresh, rows) : [];
+    if (lines.length) throw staleError(query.source, lines);
+    passed(query);
+  }
   const { text, values } = statement(query, params);
   const prepared = c.prepare(text);
   // better-sqlite3 refuses all() on a statement that returns no rows.
@@ -183,6 +197,17 @@ function isSyncSqlite(c: AnyClient | null | undefined): boolean {
 
 async function executeAsync(c: AnyClient | null | undefined, query: QueryModule, params: ParamsInput): Promise<unknown[]> {
   if (c == null || (typeof c !== "object" && typeof c !== "function")) throw unsupported(c, query.dialect);
+  // The catalog facts the statement relied on, read again through the same client.
+  if (query.fresh && due(query)) {
+    const fresh = query.fresh;
+    let rows: unknown[] | undefined;
+    try {
+      rows = await executeAsync(c, { dialect: query.dialect, sql: fresh.query, params: [], text: fresh.query, order: [] }, {});
+    } catch {}
+    const lines = rows ? differences(fresh, rows) : [];
+    if (lines.length) throw staleError(query.source, lines);
+    passed(query);
+  }
   const { text, values, names } = statement(query, params);
   const type = (i: number) => query.inputs?.[names[i]!]?.type;
   const isJsonParam = (v: unknown, i: number) => isJsonValue(query, names[i]!, v);

@@ -8,6 +8,7 @@ pub mod cardinality;
 pub mod config;
 pub mod dialect;
 pub mod extension;
+pub mod fresh;
 pub mod host;
 pub mod infer;
 pub mod jsonshape;

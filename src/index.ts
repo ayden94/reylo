@@ -3,6 +3,7 @@
 import { execute, executeSync, type ClientFor, type Dialect, type Inputs, type SyncClientFor } from "./execute.ts";
 import type { StandardJSONSchemaV1, StandardTypedV1 } from "./standard.ts";
 import type { Structured } from "./rows.ts";
+import type { Fresh } from "./fresh.ts";
 
 export type { ClientFor, Dialect, Inputs, SyncClientFor } from "./execute.ts";
 
@@ -73,6 +74,10 @@ export type QueryDefinition = {
   inputs?: Inputs;
   /** Each structured parameter in insert position, with the lists of `text` the run time writes again for the keys a call carries. */
   structured?: readonly Structured[];
+  /** The catalog facts the statement relied on, which the run time checks before it runs (src/fresh.ts). */
+  fresh?: Fresh;
+  /** The `.sql` file, relative to the project, for messages. */
+  source?: string;
   cardinality?: Cardinality;
   jsonSchema?: { input: Record<string, unknown>; output: Record<string, unknown> };
 };
@@ -84,7 +89,7 @@ export function defineQuery<Params, Row, C extends Cardinality, D extends Dialec
   const missingSchema = () => {
     throw new Error(`No JSON Schema is available for this query: a module a build step writes carries it, and a query defined by hand has none.`);
   };
-  const query: Query<Params, Row, C, D, Values> & { text?: string | undefined; order?: readonly string[] | undefined; inputs?: Inputs | undefined; structured?: readonly Structured[] | undefined } = {
+  const query: Query<Params, Row, C, D, Values> & { text?: string | undefined; order?: readonly string[] | undefined; inputs?: Inputs | undefined; structured?: readonly Structured[] | undefined; fresh?: Fresh | undefined; source?: string | undefined } = {
     dialect: def.dialect,
     sql: def.sql,
     params: def.params,
@@ -92,6 +97,8 @@ export function defineQuery<Params, Row, C extends Cardinality, D extends Dialec
     order: def.order,
     inputs: def.inputs,
     structured: def.structured,
+    fresh: def.fresh,
+    source: def.source,
     cardinality,
     get inputSchema() {
       return def.jsonSchema?.input ?? missingSchema();

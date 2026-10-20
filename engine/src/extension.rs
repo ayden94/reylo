@@ -99,6 +99,7 @@ pub fn analyze(sql: &str, host: &Host) -> Lazy<Option<Analysis>> {
         diagnostics: remote.diagnostics,
         unresolved: remote.unresolved,
         structured: Vec::new(),
+        fresh: None,
     }))
 }
 

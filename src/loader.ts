@@ -4,7 +4,7 @@
 // database. The analysis comes from `src/analyze.ts`: `.reylo/` when it holds the statement for the
 // current schema, else the database. A build that has neither fails, because a module built
 // without the analysis would not do what its types say.
-import { dirname } from "node:path";
+import { dirname, relative } from "node:path";
 import { Session } from "./analyze.ts";
 import { querySchemas } from "./schema.ts";
 
@@ -50,7 +50,7 @@ export async function sqlModule(path: string, sql: string): Promise<SqlModule> {
     `import { defineQuery } from "reylo";`,
     `export const sql = ${JSON.stringify(sql)};`,
     `export const params = ${JSON.stringify(params)};`,
-    `export default defineQuery({ dialect: ${JSON.stringify(session.project.dialect)}, sql, params, cardinality: ${JSON.stringify(analysis.cardinality)}, text: ${JSON.stringify(text)}, order: ${JSON.stringify(analysis.rewritten.order)}, inputs: ${JSON.stringify(inputs)}${structured.length ? `, structured: ${JSON.stringify(structured)}` : ""}, jsonSchema: ${JSON.stringify(querySchemas(analysis, session.project.dialect, session.project.repr))} });`,
+    `export default defineQuery({ dialect: ${JSON.stringify(session.project.dialect)}, sql, params, cardinality: ${JSON.stringify(analysis.cardinality)}, text: ${JSON.stringify(text)}, order: ${JSON.stringify(analysis.rewritten.order)}, inputs: ${JSON.stringify(inputs)}${structured.length ? `, structured: ${JSON.stringify(structured)}` : ""}${analysis.fresh ? `, fresh: ${JSON.stringify(analysis.fresh)}, source: ${JSON.stringify(relative(session.project.root, path))}` : ""}, jsonSchema: ${JSON.stringify(querySchemas(analysis, session.project.dialect, session.project.repr))} });`,
     ``,
   ].join("\n");
   return { code, entry: outcome.entry };
