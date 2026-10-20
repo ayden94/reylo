@@ -37,7 +37,7 @@ create table users (
   email text unique,                         -- email: string | null
   role user_role not null default 'member',  -- role: "admin" | "member"
   tags text[] not null default '{}',         -- tags: string[]
-  created_at timestamptz                     -- created_at: Date
+  created_at timestamptz                     -- created_at: string
     not null default now()
 );
 
@@ -1367,7 +1367,7 @@ Each takes its transactions too: libSQL's `transaction()`, Bun.sql's `begin` and
 
 ## Data types
 
-Reylo gives every value one type, the same on every driver, whatever the driver is set up to return: it decodes each value of its own queries itself, on your client, and leaves your other queries as your driver decodes them. A 64-bit integer and a decimal are their exact text, an instant is a `Date`, a date or a time without a zone is the text the database wrote, JSON is parsed and binary data is a `Uint8Array`.
+Reylo gives every value one type, the same on every driver, whatever the driver is set up to return: it decodes each value of its own queries itself, on your client, and leaves your other queries as your driver decodes them. A 64-bit integer is a `bigint`, a decimal its exact text, an instant the ISO 8601 text of the instant in UTC, which `Temporal.Instant.from` reads, a date or a time without a zone the text the database wrote, a truth value a `boolean`, JSON is parsed and binary data is a `Uint8Array`. No value is a `Date`.
 
 <DialectTabs>
 <Dialect value="Postgres">
@@ -1375,7 +1375,7 @@ Reylo gives every value one type, the same on every driver, whatever the driver 
 | SQL type | TypeScript |
 | --- | --- |
 | `smallint`, `integer`, `oid` | `number` |
-| `bigint` | `string` |
+| `bigint` | `bigint` |
 | `real`, `double precision` | `number` |
 | `numeric`, `money` | `string` |
 | `text`, `varchar`, `char` | `string` |
@@ -1383,7 +1383,7 @@ Reylo gives every value one type, the same on every driver, whatever the driver 
 | `uuid` | `string` |
 | `date` | `string`, as `2026-10-20` |
 | `timestamp` | `string`, as `2026-10-20T10:00:00.123456` |
-| `timestamptz` | `Date` |
+| `timestamptz` | `string`, the instant in UTC, as `2026-10-20T08:00:00.123456Z` |
 | `time`, `timetz`, `interval` | `string` |
 | `json`, `jsonb` | `unknown` |
 | `json`, `jsonb` a JSON Schema `CHECK` holds (`jsonb_matches_schema(…)`) | what the schema admits |
@@ -1403,8 +1403,9 @@ A call to a function has the type the function declares.
 | SQL type | TypeScript |
 | --- | --- |
 | `TINYINT`, `SMALLINT`, `MEDIUMINT`, `INT`, `YEAR` | `number` |
-| `BOOLEAN` | `number` (0 or 1) |
-| `BIGINT`, `count(*)` | `string` |
+| `BOOLEAN` (a `TINYINT(1)`), `BIT(1)` | `boolean` |
+| A comparison, `IS NULL`, `IN`, `BETWEEN`, `LIKE`, `EXISTS`, `NOT`, `AND`, `OR` | `boolean` |
+| `BIGINT`, `count(*)` | `bigint` |
 | `DECIMAL` | `string` |
 | `FLOAT`, `DOUBLE` | `number` |
 | `CHAR`, `VARCHAR`, `TEXT` | `string` |
@@ -1416,9 +1417,11 @@ A call to a function has the type the function declares.
 | `JSON` | `unknown` |
 | `JSON` a JSON Schema `CHECK` holds (`json_schema_valid(…)`) | what the schema admits |
 | `json_object(…)`, `json_arrayagg(…)` | the object or array it builds |
-| `BINARY`, `VARBINARY`, `BLOB`, `BIT` | `Uint8Array` |
+| `BINARY`, `VARBINARY`, `BLOB`, `BIT` wider than 1 | `Uint8Array` |
 
-A column may be `null` where the server says it may: exact for a `NOT NULL` column, and cautious for some string and date functions, which can be typed `| null` when they never return it. An expression whose type the bound value decides is either: `:n + 1` is `string | number`, a `BIGINT` or a `DOUBLE`.
+A column may be `null` where the server says it may: exact for a `NOT NULL` column, and cautious for some string and date functions, which can be typed `| null` when they never return it. An expression whose type the bound value decides is either: `:n + 1` is `bigint | number | string`, a `BIGINT`, a `DOUBLE` or a `DECIMAL`.
+
+- MySQL has no boolean type: a `BOOLEAN` column is a `TINYINT(1)`, which holds any number from −128 to 127. Reylo reads 0 and 1 as `false` and `true`, and any other value is an error that names its column. A column read through a view, and an expression over one (`max(active)`), stay numbers.
 
 </Dialect>
 <Dialect value="SQLite">
@@ -1429,13 +1432,15 @@ A column may be `null` where the server says it may: exact for a `NOT NULL` colu
 | `REAL` | `number` |
 | `TEXT` | `string` |
 | `BLOB` | `Uint8Array` |
-| `NUMERIC`, `BOOLEAN`, `DATE`, `DATETIME` | `number \| string` |
+| `BOOLEAN`, `BOOL` | `boolean` |
+| A comparison, `IS NULL`, `IN`, `BETWEEN`, `LIKE`, `EXISTS`, `NOT`, `AND`, `OR` | `boolean` |
+| `NUMERIC`, `DATE`, `DATETIME` | `number \| string` |
 | No type, or `ANY` in a `STRICT` table | `unknown` |
 | `json_object(…)`, `json_group_array(…)` | `string` |
 
 - An integer past ±(2^53 − 1), which a `number` cannot hold, is an error that names its column, never a rounded number. Cast it to text in the statement to read it.
 - Declare tables `strict` to make these types exact: without it, a declared type is an affinity, and a column can hold a value of another type.
-- SQLite has no date, time or boolean type, so a date in a `text` column is a `string`.
+- SQLite has no date or time type, so a date in a `text` column is a `string`. It has no boolean type either, so a column declared `BOOLEAN` holds any value: Reylo reads 0 and 1 as `false` and `true`, and any other value is an error that names its column.
 - `json_extract`, `->`, `->>` and the functions your application registers are `unknown`, and JSON the statement builds is its text.
 - A `check` constraint narrows no type, since `pragma ignore_check_constraints` lets a connection write past it.
 
@@ -1458,7 +1463,7 @@ Reylo refuses what would change its values and that it cannot undo: a `pg` clien
 
 <Details summary="What a driver loses before Reylo sees the value">
 
-- Bun.sql keeps a `timestamp`'s and a `DATETIME`'s milliseconds, not their microseconds, writes no fraction digits that are all zero, drops a `TIME`'s fraction, and throws on a `NULL` inside an `int4[]` or a `float4[]`.
+- Bun.sql keeps a `timestamp`'s, a `timestamptz`'s and a `DATETIME`'s milliseconds, not their microseconds, writes no fraction digits that are all zero, drops a `TIME`'s fraction, and throws on a `NULL` inside an `int4[]` or a `float4[]`.
 - A `real` (`float4`) or a MySQL `FLOAT` is a 32-bit float: a driver that reads the binary protocol (Bun.sql, mysql2) gives its exact value, `1.100000023841858`, and one that reads the database's text gives the shorter text's, `1.1`.
 - `sqlite3`, `sqlite`, Cloudflare D1, and Bun.sql without `safeIntegers` round an integer past 2^53 before Reylo sees it, so Reylo refuses it; libSQL at its default `intMode` refuses it itself. With libSQL's `intMode: "string"`, an integer in a column with no type is its digits.
 - JSON is parsed by `JSON.parse`, so an integer past 2^53 inside a document is rounded, on every driver.
@@ -1470,9 +1475,10 @@ Reylo refuses what would change its values and that it cannot undo: a `pg` clien
 - A `Buffer`, which several drivers return for binary data, is a `Uint8Array`.
 - A binary parameter takes a `Uint8Array`, a `Buffer` or not, on every driver: mariadb, which writes any other value as JSON, gets it from Reylo as a `Buffer`.
 - On Postgres, an array parameter takes a JavaScript array on every driver, for a SQL array (`any(:ids)`, `:tags::text[]`) and for JSON (`:data::jsonb`) alike: Reylo writes it in the form the driver binds right.
-- A `timestamptz` parameter takes a `Date`, or a string that names its zone: `"2026-10-12T19:06:48Z"`, `"2026-10-12 19:06:48+09"`, `"2026-10-12 19:06:48 Asia/Tokyo"`. A `timestamp` or `date` parameter, and on MySQL a `DATETIME`, `TIMESTAMP` or `DATE` one, has no zone and takes the wall-clock text, `"2026-10-12 19:06:48"` or `"2026-10-12"`, which is also what Reylo returns for such a column: drivers write a `Date`'s time in different zones, the app's, the server's or UTC, so Reylo refuses one before the statement runs.
+- A `timestamptz` parameter takes a `Date`, or a string that names its zone: `"2026-10-12T19:06:48Z"`, `"2026-10-12 19:06:48+09"`, `"2026-10-12 19:06:48 Asia/Tokyo"`, so the text Reylo returns for a `timestamptz` goes back in as it is. A `timestamp` or `date` parameter, and on MySQL a `DATETIME`, `TIMESTAMP` or `DATE` one, has no zone and takes the wall-clock text, `"2026-10-12 19:06:48"` or `"2026-10-12"`, which is also what Reylo returns for such a column: drivers write a `Date`'s time in different zones, the app's, the server's or UTC, so Reylo refuses one before the statement runs.
 - A parameter the statement reads as JSON (`:data::jsonb`, `cast(:data as json)`, a `json` column) takes any JSON value, and the database receives its JSON text on every driver: a string is a JSON string, so `'{"a":1}'` is stored as the string `"{\"a\":1}"`, not as an object. To pass JSON text you already hold, cast it from text: `:data::text::jsonb`.
 - Inside nested JSON the database writes each value as JSON: a `bigint` is a number there and a date its text.
+- `JSON.stringify` refuses a `bigint`, so a row with one goes out of your API as you write it: its text (`String(v)`), or the integer itself (`JSON.rawJSON(String(v))`), which is what `outputSchema` describes.
 
 </Details>
 
@@ -1517,7 +1523,7 @@ const users = await listUsers.run(db, { role: "member", limit: 20 });
 An aggregate without `group by` is exactly one row.
 
 ```sql title="count_users.sql" tab="Postgres" tab-group="dialect"
--- count(*) is a bigint, a string; count(*)::int is a number
+-- count(*) is a bigint, a BigInt; count(*)::int is a number
 select count(*) as total from users where role = :role
 ```
 
