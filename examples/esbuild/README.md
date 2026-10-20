@@ -23,7 +23,7 @@ With `dev` or `start` running:
 $ curl localhost:3000/posts
 [{"id":1,"title":"Hello","body":"first post","author":"ada"},{"id":2,"title":"Again","body":null,"author":"ada"}]
 $ curl localhost:3000/users/1
-{"id":1,"name":"ada","email":"ada@example.com","role":"admin","created_at":"2026-10-20T21:36:53.759Z"}
+{"id":1,"name":"ada","email":"ada@example.com","role":"admin","created_at":"2026-10-20T23:18:27.299365Z"}
 $ curl -w ' %{http_code}\n' localhost:3000/users/99
 {"error":"not found"} 404
 $ curl -d '{"user_id":2,"title":"From curl"}' localhost:3000/posts

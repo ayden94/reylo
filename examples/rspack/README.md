@@ -23,7 +23,7 @@ The server answers three routes, the same in `dev` and from the bundle:
 $ curl localhost:3000/posts
 [{"id":1,"title":"Hello","body":"first post","author":"ada"},{"id":2,"title":"Again","body":null,"author":"ada"}]
 $ curl localhost:3000/users/1
-{"id":1,"name":"ada","email":"ada@example.com","role":"admin","created_at":"2026-10-20T21:45:00.858Z"}
+{"id":1,"name":"ada","email":"ada@example.com","role":"admin","created_at":"2026-10-20T23:18:31.828199Z"}
 $ curl localhost:3000/users/99
 {"error":"no such user"}
 $ curl -X POST -d '{"user_id":2,"title":"From bob"}' localhost:3000/posts

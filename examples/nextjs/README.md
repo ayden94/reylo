@@ -22,7 +22,7 @@ With `dev` or `start` running, `/` lists the posts with a form that adds one, an
 
 ```text
 $ curl localhost:3000/api/users/1
-{"id":1,"name":"ada","email":"ada@example.com","role":"admin","created_at":"2026-10-20T21:38:02.622Z"}
+{"id":1,"name":"ada","email":"ada@example.com","role":"admin","created_at":"2026-10-20T23:17:58.136786Z"}
 $ curl -w ' %{http_code}\n' localhost:3000/api/users/99
 {"error":"not found"} 404
 ```
