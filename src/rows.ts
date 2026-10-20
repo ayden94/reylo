@@ -153,14 +153,7 @@ function scalar(name: string, written: string, v: unknown, dialect: Dialect, fai
   }
   const range = INTEGERS[name];
   if (range) {
-    let n: bigint;
-    if (typeof v === "bigint") n = v;
-    else if (typeof v === "number" && Number.isInteger(v)) {
-      if (!Number.isSafeInteger(v)) fail(`is ${written}; ${v} is past 2^53 - 1, where a number stops being exact, so pass it as a BigInt or a string of digits.`);
-      n = BigInt(v);
-    } else if (typeof v === "string" && /^[+-]?\d+$/.test(v.trim()) && name === "int8") n = BigInt(v.trim());
-    else return fail(`is ${written}, an integer; got ${describe(v)}.`);
-    if (n < range[0] || n > range[1]) fail(`is ${written}, from ${range[0]} to ${range[1]}; got ${n}.`);
+    const n = integer(range, name === "int8", written, v, fail);
     if (!WIDE.has(name)) return Number(n);
     return dialect === "postgres" ? n.toString() : new Raw(n.toString());
   }
@@ -206,6 +199,8 @@ function scalar(name: string, written: string, v: unknown, dialect: Dialect, fai
       // Binary data travels as hexadecimal text: Postgres's own `\x` form, and bare digits that
       // MySQL's and SQLite's readers decode with unhex().
       if (!(v instanceof Uint8Array)) return fail(`is ${written}, binary data, a Uint8Array; got ${describe(v)}.`);
+      const n = /\(\s*(\d+)\s*\)/.exec(written)?.[1];
+      if (n !== undefined && v.length > Number(n)) fail(`is ${written}, at most ${n} bytes; got ${v.length}, which the database would refuse or cut.`);
       let hex = dialect === "postgres" ? "\\x" : "";
       for (const byte of v) hex += (byte < 16 ? "0" : "") + byte.toString(16);
       return hex;
@@ -216,6 +211,89 @@ function scalar(name: string, written: string, v: unknown, dialect: Dialect, fai
       if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") return v;
       return fail(`is ${written}; got ${describe(v)}.`);
   }
+}
+
+/** An integer in `range`, as a number, a BigInt or, where `digits`, a string of its digits. */
+function integer(range: readonly [bigint, bigint], digits: boolean, written: string, v: unknown, fail: (message: string) => never): bigint {
+  let n: bigint;
+  if (typeof v === "bigint") n = v;
+  else if (typeof v === "number" && Number.isInteger(v)) {
+    if (!Number.isSafeInteger(v)) fail(`is ${written}; ${v} is past 2^53 - 1, where a number stops being exact, so pass it as a BigInt${digits ? " or a string of digits" : ""}.`);
+    n = BigInt(v);
+  } else if (typeof v === "string" && /^[+-]?\d+$/.test(v.trim()) && digits) n = BigInt(v.trim());
+  else return fail(`is ${written}, an integer; got ${describe(v)}.`);
+  if (n < range[0] || n > range[1]) fail(`is ${written}, from ${range[0]} to ${range[1]}; got ${n}.`);
+  return n;
+}
+
+/** MySQL's integer types as a `::` cast names them, each with its range; `unsigned` doubles it from 0. */
+const MYSQL_INTEGERS: Record<string, readonly [bigint, bigint]> = {
+  tinyint: [-128n, 127n],
+  smallint: INTEGERS.int2!,
+  int2: INTEGERS.int2!,
+  mediumint: [-8388608n, 8388607n],
+  int: INTEGERS.int4!,
+  integer: INTEGERS.int4!,
+  int4: INTEGERS.int4!,
+  bigint: INTEGERS.int8!,
+  int8: INTEGERS.int8!,
+  signed: INTEGERS.int8!,
+};
+
+/**
+ * Checks the value of a parameter written `:p::type` on MySQL or SQLite, whose cast turns a value
+ * it cannot read into 0 or NULL instead of failing (`CAST('abc' AS SIGNED)` is 0, and SQLite's
+ * `CAST('1.9' AS INTEGER)` is 1), against the type as written, before the statement runs; the
+ * value is bound as it is. `type` is the engine's type for the parameter. On SQLite every integer
+ * is 64 bits, whatever the cast calls it.
+ */
+export function checkCast(name: string, written: string, type: EngineType, v: unknown, dialect: Dialect): void {
+  if (v === null || v === undefined) return;
+  const fail = (message: string): never => {
+    throw new TypeError(`Parameter "${name}" ${message}`);
+  };
+  const base = written.replace(/\s*\(.*$/, "");
+  const signed = dialect === "sqlite" ? (/int/i.test(base) ? INTEGERS.integer : undefined) : MYSQL_INTEGERS[base.replace(/\s*unsigned$/, "") || "bigint"];
+  if (signed) {
+    const range: readonly [bigint, bigint] = dialect === "mysql" && base.endsWith("unsigned") ? [0n, signed[1] * 2n + 1n] : signed;
+    integer(range, dialect === "mysql" && range[1] >= INTEGERS.int8![1], written, v, fail);
+    return;
+  }
+  if (base === "uuid") {
+    scalar("uuid", written, v, dialect, fail);
+    return;
+  }
+  if (dialect === "mysql" && (base === "date" || base === "time" || base === "datetime" || base === "timestamp")) {
+    wallClock(base, written, v, fail);
+    return;
+  }
+  check(type, written, v, dialect, fail);
+}
+
+/**
+ * A date, a time of day or both, as text MySQL's CAST reads without changing it; it turns other
+ * text into NULL, an impossible date included, and rounds a fraction finer than the type keeps
+ * (`::time` keeps none, and `::datetime` is written as DATETIME(6)).
+ */
+function wallClock(base: string, written: string, v: unknown, fail: (message: string) => never): void {
+  const example = base === "date" ? `"2026-10-12"` : base === "time" ? `"19:06:48"` : `"2026-10-12 19:06:48.282"`;
+  if (typeof v !== "string") return void fail(`is ${written}, which takes its text (${example}), not ${describe(v)}${v instanceof Date ? ": drivers write a Date's time in different zones" : ""}.`);
+  const s = v.trim();
+  const keeps = Number(/\(\s*(\d+)\s*\)/.exec(written)?.[1] ?? (base === "time" ? 0 : 6));
+  const m =
+    base === "time"
+      ? /^(-?)(\d{1,3}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$/.exec(s)
+      : /^(\d{4})-(\d{2})-(\d{2})(?:(?:[T ])(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?)?$/.exec(s);
+  const ok = (() => {
+    if (!m) return false;
+    if (base === "time") return Number(m[2]) <= 838 && Number(m[3]) < 60 && Number(m[4] ?? 0) < 60 && (m[5] ?? "").length <= keeps;
+    const [year, month, day] = [Number(m[1]), Number(m[2]), Number(m[3])];
+    const days = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    if (month < 1 || month > 12 || day < 1 || day > days) return false;
+    if (base === "date") return m[4] === undefined;
+    return Number(m[4] ?? 0) < 24 && Number(m[5] ?? 0) < 60 && Number(m[6] ?? 0) < 60 && (m[7] ?? "").length <= keeps;
+  })();
+  if (!ok) fail(`is ${written}, as text like ${example}${keeps > 0 && base !== "date" ? ` with at most ${keeps} digits after the second's point` : base === "time" ? " with no fraction of a second" : ""}; got ${describe(v)}, which MySQL's CAST would make NULL or change.`);
 }
 
 /**

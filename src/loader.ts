@@ -41,7 +41,7 @@ export async function sqlModule(path: string, sql: string): Promise<SqlModule> {
   const descriptor = analysis.diagnostics.find((d) => d.code === 20 || d.code === 21);
   if (descriptor) throw new Error(`${path}: ${descriptor.message}`);
   // Each parameter's type, for the drivers that bind an array or a JSON value wrong (src/execute.ts).
-  const inputs = Object.fromEntries(analysis.params.map((p) => [p.name, p.schema === undefined ? { type: p.type } : { type: p.type, schema: p.schema }]));
+  const inputs = Object.fromEntries(analysis.params.map((p) => [p.name, { type: p.type, ...(p.schema === undefined ? {} : { schema: p.schema }), ...(p.cast === undefined ? {} : { cast: p.cast }) }]));
   // A structured parameter's lists, at JavaScript's offsets into the statement (the engine's are
   // UTF-8 bytes).
   const text = analysis.rewritten.sql;

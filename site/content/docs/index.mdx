@@ -781,7 +781,7 @@ Each `:name` in a statement is a parameter, and `run` takes them as an object. R
 
 ### Casts
 
-Most parameters need no cast. Where nothing types one, cast it, in the dialect's own syntax. Here only Postgres needs one:
+Most parameters need no cast. Where nothing types one, cast it, with `::type` on every dialect or with the dialect's own `cast(… as …)`. Here only Postgres needs one:
 
 ```sql title="users_named.sql" tab="Postgres" tab-group="dialect"
 select id, name from users
@@ -822,6 +822,8 @@ SQLite types `:prefix` from `||`, which joins strings, so it needs no cast.
 
 </Dialect>
 </DialectTabs>
+
+On MySQL and SQLite, Reylo writes `::type` as the dialect's own cast: `:n::int` is `cast(? as signed)` on MySQL and `cast(? as integer)` on SQLite. Their casts turn a value they cannot read into 0 or `null`, so Reylo checks the value against the type before the statement runs.
 
 ### `null`
 

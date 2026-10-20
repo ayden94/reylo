@@ -22,13 +22,23 @@
 //! SQLite, `JSON_TABLE` with `ERROR ON ERROR` on every column on MySQL (which otherwise turns a
 //! value it cannot read into NULL without a warning; `docs/structured-params/verify.md`).
 //!
-//! The column list is written in the cast's parentheses, or as one string there; the two forms
-//! read alike until the maintainer picks one (asked on 2026-10-20). A member is `name[?] type
-//! [not null]`: `?` lets the caller leave a `not null` key out so that the column's default
+//! The column list is written bare in the cast's parentheses (the maintainer, 2026-10-20: "Bare in
+//! the parentheses"). A member is `name[?] type [not null]`: `?` lets the caller leave a `not null` key out so that the column's default
 //! applies, a member without `not null` may be null or left out, and `json('…')` or `jsonb('…')`
 //! types a JSON column by the JSON Schema in its string. Strings in the column list are read the
 //! standard way on every dialect, `''` for a quote and no backslash escapes, since the database
 //! never reads them.
+//!
+//! The same pass writes a parameter's `::type` cast on MySQL and SQLite, which have no `::`, as the
+//! dialect's own cast (the maintainer, 2026-10-20: `::` everywhere, beside each dialect's own cast
+//! syntax, converted by the compiler). The types are written as on Postgres, and each dialect
+//! takes its own spelling of one: MySQL's `CAST` takes `SIGNED` for an integer and `CHAR` for
+//! text, and SQLite's reads a type by its affinity, which for a date or a boolean is NUMERIC and
+//! turns `'2026-10-12'` into 2026, so a date is cast to TEXT, as SQLite keeps one. MySQL refuses an
+//! expression in `LIMIT` and `OFFSET`, which type a placeholder as an integer themselves, so a cast
+//! there is the bare placeholder. Both databases' casts turn a value they cannot read into 0 or
+//! NULL instead of failing, so the run time checks such a parameter against its type before the
+//! statement runs.
 
 use crate::api::{Analysis, Diagnostic};
 use crate::dialect::Dialect;
@@ -86,6 +96,17 @@ pub struct Found {
     pub table: Option<(usize, usize)>,
     /// A typed JSON parameter (`:p::jsonb('…')`) instead of a column list.
     pub json: Option<JsonCast>,
+    /// A `::type` cast on MySQL or SQLite instead of a column list.
+    pub plain: Option<PlainCast>,
+}
+
+/// A `::type` cast on a dialect that has no `::`: the type as written, and the text the expansion
+/// writes before and after the placeholder, or none where it writes the bare placeholder (MySQL's
+/// `LIMIT` and `OFFSET`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlainCast {
+    pub written: String,
+    pub around: Option<(String, String)>,
 }
 
 /// A typed JSON parameter, `:p::jsonb('…')` or `:p::json('…')` (docs/typed-json-params.md): its
@@ -155,6 +176,133 @@ fn json_cast_at(sql: &str, end: usize) -> Option<(bool, usize, usize)> {
     (b.get(paren) == Some(&b'(')).then_some((jsonb, paren, word_end))
 }
 
+/// After a placeholder ending at `end`: `::type`, as `(the type as written, lowercased and spaced
+/// once, the end of the cast)`. A type is a name, a second word where SQL spells one type in two
+/// (`double precision`, `character varying`, `unsigned`), a parenthesized modifier list, and `[]`.
+fn plain_cast_at(sql: &str, end: usize) -> Option<(String, usize)> {
+    let b = sql.as_bytes();
+    let mut i = skip_space(b, end);
+    if !(b.get(i) == Some(&b':') && b.get(i + 1) == Some(&b':')) {
+        return None;
+    }
+    i = skip_space(b, i + 2);
+    let word = |i: usize| i + b[i..].iter().take_while(|c| c.is_ascii_alphanumeric() || **c == b'_').count();
+    let first = word(i);
+    if first == i {
+        return None;
+    }
+    let mut written = sql[i..first].to_ascii_lowercase();
+    let mut j = first;
+    let after = skip_space(b, j);
+    let second = word(after);
+    if second > after && matches!((written.as_str(), sql[after..second].to_ascii_lowercase().as_str()), ("double", "precision") | ("character", "varying") | (_, "unsigned")) {
+        written = format!("{written} {}", sql[after..second].to_ascii_lowercase());
+        j = second;
+    }
+    let paren = skip_space(b, j);
+    if b.get(paren) == Some(&b'(') {
+        let close = paren + b[paren..].iter().position(|&c| c == b')')?;
+        if sql[paren + 1..close].chars().all(|c| c.is_ascii_digit() || c == ',' || c.is_whitespace()) {
+            written.push_str(&format!("({})", sql[paren + 1..close].chars().filter(|c| !c.is_whitespace()).collect::<String>()));
+            j = close + 1;
+        }
+    }
+    if sql[j..].starts_with("[]") {
+        written.push_str("[]");
+        j += 2;
+    }
+    Some((written, j))
+}
+
+/// Whether the placeholder at `start` is a MySQL `LIMIT` or `OFFSET` value, `LIMIT a, b`'s
+/// first included.
+fn in_limit(sql: &str, start: usize) -> bool {
+    let b = sql.as_bytes();
+    let back = |mut i: usize| {
+        while i > 0 && b[i - 1].is_ascii_whitespace() {
+            i -= 1;
+        }
+        i
+    };
+    let word_before = |end: usize| {
+        let mut s = end;
+        while s > 0 && (b[s - 1].is_ascii_alphanumeric() || b[s - 1] == b'_') {
+            s -= 1;
+        }
+        sql[s..end].to_ascii_lowercase()
+    };
+    let mut i = back(start);
+    if i > 0 && b[i - 1] == b',' {
+        // `LIMIT a, b`: past the comma, the first value and the keyword before it.
+        i = back(i - 1);
+        while i > 0 && !b[i - 1].is_ascii_whitespace() && b[i - 1] != b',' {
+            i -= 1;
+        }
+        return word_before(back(i)) == "limit";
+    }
+    matches!(word_before(i).as_str(), "limit" | "offset")
+}
+
+/// Whether a type as written is an integer: `int`, `bigint unsigned`, `signed`.
+fn integer_type(written: &str) -> bool {
+    let base = written.split('(').next().unwrap_or(written).trim_end_matches(" unsigned");
+    matches!(base, "int" | "int2" | "int4" | "int8" | "integer" | "bigint" | "smallint" | "tinyint" | "mediumint" | "signed" | "unsigned")
+}
+
+/// What a `::type` cast after a parameter is written as on MySQL or SQLite: the text before and
+/// after the placeholder, none for the bare placeholder, or why the dialect cannot cast to it.
+fn cast_around(written: &str, dialect: Dialect, limit: bool) -> Result<Option<(String, String)>, String> {
+    let db = if dialect == Dialect::Mysql { "MySQL" } else { "SQLite" };
+    if written.ends_with("[]") {
+        return Err(format!("{db} has no arrays: `::{written}` cannot be written as its cast."));
+    }
+    if dialect == Dialect::Mysql && limit {
+        return if integer_type(written) { Ok(None) } else { Err(format!("`LIMIT` and `OFFSET` take an integer, as in `::int`, not `::{written}`.")) };
+    }
+    let cast = |t: &str| Ok(Some(("CAST(".to_string(), format!(" AS {t})"))));
+    let (base, modifiers) = match written.find('(') {
+        Some(k) => (&written[..k], &written[k..]),
+        None => (written, ""),
+    };
+    if dialect == Dialect::Sqlite {
+        return match base {
+            // SQLite's own conversions of JSON text, which fail on text that is not JSON; a value
+            // passed as text alone reads as a string inside SQLite's JSON functions.
+            "json" | "jsonb" => Ok(Some((format!("{base}("), ")".to_string()))),
+            "bool" | "boolean" => Err(format!("SQLite has no boolean type, and its CAST to `{base}` reads a value as the number it starts with: pass 1 or 0 and write `::integer`.")),
+            // SQLite keeps dates, times and UUIDs as text; its CAST to `date` reads `'2026-10-12'`
+            // as 2026.
+            "date" | "time" | "timestamp" | "timestamptz" | "datetime" | "uuid" => cast("TEXT"),
+            "numeric" | "decimal" => cast("NUMERIC"),
+            _ => match affinity(written) {
+                "INTEGER" => cast("INTEGER"),
+                "TEXT" => cast("TEXT"),
+                "REAL" => cast("REAL"),
+                "BLOB" if base == "blob" => cast("BLOB"),
+                _ => Err(format!("SQLite has no type `{written}`, and its CAST would read the value as a number: write `::integer`, `::real`, `::numeric`, `::text` or `::blob`.")),
+            },
+        };
+    }
+    // MySQL's CAST takes neither `int` nor `text`.
+    match base {
+        b if integer_type(b) && b.ends_with("unsigned") => cast("UNSIGNED"),
+        b if integer_type(b) => cast("SIGNED"),
+        "numeric" | "decimal" | "dec" | "fixed" => cast(&format!("DECIMAL{modifiers}")),
+        "float4" | "real" | "float" => cast("FLOAT"),
+        "float8" | "double" | "double precision" => cast("DOUBLE"),
+        "text" | "varchar" | "char" | "character" | "character varying" | "bpchar" => cast(&format!("CHAR{modifiers}")),
+        "uuid" => cast("CHAR(36)"),
+        "date" => cast("DATE"),
+        "time" => cast(&format!("TIME{modifiers}")),
+        "timestamp" | "datetime" => cast(&if modifiers.is_empty() { "DATETIME(6)".to_string() } else { format!("DATETIME{modifiers}") }),
+        "json" | "jsonb" => cast("JSON"),
+        "bytea" | "binary" | "varbinary" | "blob" => cast(&format!("BINARY{modifiers}")),
+        "timestamptz" => Err("MySQL has no type for an instant with its zone: DATETIME keeps the wall-clock time and drops the zone. Write `::datetime` for a wall-clock time.".to_string()),
+        "bool" | "boolean" => Err(format!("MySQL has no boolean type to cast to: `::{written}` would make the value a number. Compare the parameter instead, or pass 1 or 0 and write `::int`.")),
+        _ => Err(format!("MySQL's CAST has no type for `::{written}`: write MySQL's own `CAST(… AS …)`, whose types are SIGNED, UNSIGNED, DECIMAL, FLOAT, DOUBLE, CHAR, DATE, TIME, DATETIME, YEAR, JSON and BINARY.")),
+    }
+}
+
 fn skip_space(b: &[u8], mut i: usize) -> usize {
     while b.get(i).is_some_and(|c| c.is_ascii_whitespace()) {
         i += 1;
@@ -174,12 +322,13 @@ pub fn find(sql: &str, dialect: Dialect) -> Result<Vec<Found>, DescriptorError> 
             continue;
         }
         if let Some((jsonb, paren, word_end)) = json_cast_at(sql, p.end) {
-            let (content, close) = descriptor_text(sql, paren)?;
-            let span = (skip_space(sql.as_bytes(), paren + 1), close);
-            if sql.as_bytes().get(span.0) != Some(&b'\'') {
+            let start = skip_space(sql.as_bytes(), paren + 1);
+            if sql.as_bytes().get(start) != Some(&b'\'') {
+                let close = descriptor_text(sql, paren).map(|(_, close)| close).unwrap_or(sql.len() - 1);
                 return error(format!("`{}(…)` takes one string, the JSON Schema of the values, as in `{}::{}('{{\"type\": \"object\"}}')`.", if jsonb { "jsonb" } else { "json" }, &sql[p.start..p.end], if jsonb { "jsonb" } else { "json" }), paren, close + 1);
             }
-            let text: String = content.iter().map(|&(c, _, _)| c).collect();
+            let (text, close) = schema_string(sql, start)?;
+            let span = (start, close);
             let schema = match serde_json::from_str::<Value>(&text) {
                 Ok(schema) => schema,
                 Err(e) => return error(format!("The schema in the cast of {} is not JSON: {e}.", &sql[p.start..p.end]), span.0, span.1),
@@ -187,11 +336,20 @@ pub fn find(sql: &str, dialect: Dialect) -> Result<Vec<Found>, DescriptorError> 
             if let Some(message) = profile(&schema, "") {
                 return error(message, span.0, span.1);
             }
-            found.push(Found { name: p.name.clone(), placeholder: (p.start, p.end), one: false, members: Vec::new(), region: (p.start, close + 1), head: (p.start, p.end), alias: None, insert: false, table: None, json: Some(JsonCast { jsonb, schema, schema_span: span }) });
+            found.push(Found { name: p.name.clone(), placeholder: (p.start, p.end), one: false, members: Vec::new(), region: (p.start, close + 1), head: (p.start, p.end), alias: None, insert: false, table: None, json: Some(JsonCast { jsonb, schema, schema_span: span }), plain: None });
             let _ = word_end;
             continue;
         }
-        let Some((one, paren, word_end)) = cast_at(sql, p.end) else { continue };
+        let Some((one, paren, word_end)) = cast_at(sql, p.end) else {
+            // Any other `::type` on a dialect that has no `::`.
+            if dialect != Dialect::Postgres {
+                if let Some((written, end)) = plain_cast_at(sql, p.end) {
+                    let around = cast_around(&written, dialect, in_limit(sql, p.start)).map_err(|message| DescriptorError { message, start: p.end, end })?;
+                    found.push(Found { name: p.name.clone(), placeholder: (p.start, p.end), one: false, members: Vec::new(), region: (p.start, end), head: (p.start, end), alias: None, insert: false, table: None, json: None, plain: Some(PlainCast { written, around }) });
+                }
+            }
+            continue;
+        };
         if lex::is_positional(&p.name) {
             return error("A rows or row parameter is named: write :name::rows(…), not a positional placeholder.", p.start, word_end);
         }
@@ -216,41 +374,49 @@ pub fn find(sql: &str, dialect: Dialect) -> Result<Vec<Found>, DescriptorError> 
                 );
             }
         }
-        found.push(Found { name: p.name.clone(), placeholder: (p.start, p.end), one, members, region, head: (p.start, word_end), alias, insert, table, json: None });
+        found.push(Found { name: p.name.clone(), placeholder: (p.start, p.end), one, members, region, head: (p.start, word_end), alias, insert, table, json: None, plain: None });
     }
     Ok(found)
 }
 
-/// One character of a column list's text and the bytes of the author's text it stands for (two
-/// for a quote doubled inside a string).
+/// One character of a column list's text and the bytes of the author's text it stands for.
 type Text = Vec<(char, usize, usize)>;
 
+/// A typed JSON parameter's schema: the string opening at `start`, read the standard way (`''`
+/// for a quote), and the offset of the parenthesis that must follow it.
+fn schema_string(sql: &str, start: usize) -> Result<(String, usize), DescriptorError> {
+    let b = sql.as_bytes();
+    let mut text = String::new();
+    let mut i = start + 1;
+    loop {
+        let Some(c) = sql[i..].chars().next() else { return error("The schema's string has no closing quote.", start, sql.len()) };
+        if c == '\'' {
+            if b.get(i + 1) == Some(&b'\'') {
+                text.push('\'');
+                i += 2;
+                continue;
+            }
+            break;
+        }
+        text.push(c);
+        i += c.len_utf8();
+    }
+    let close = skip_space(b, i + 1);
+    if b.get(close) != Some(&b')') {
+        return error("The schema's string is the only thing in the parentheses, as in `::jsonb('{\"type\": \"object\"}')`.", i + 1, close + 1);
+    }
+    Ok((text, close))
+}
+
 /// The column list from the parenthesis at `paren`: its characters with their offsets, and the
-/// offset of the closing parenthesis. The list is the parentheses' content, or one string there.
+/// offset of the closing parenthesis.
 fn descriptor_text(sql: &str, paren: usize) -> Result<(Text, usize), DescriptorError> {
     let b = sql.as_bytes();
     let start = skip_space(b, paren + 1);
+    // The column list is written bare in the parentheses (the maintainer, 2026-10-20); a string
+    // there is the form he did not take.
     if b.get(start) == Some(&b'\'') {
-        let mut text = Text::new();
-        let mut i = start + 1;
-        loop {
-            let Some(c) = sql[i..].chars().next() else { return error("The column list's string has no closing quote.", start, sql.len()) };
-            if c == '\'' {
-                if b.get(i + 1) == Some(&b'\'') {
-                    text.push(('\'', i, i + 2));
-                    i += 2;
-                    continue;
-                }
-                break;
-            }
-            text.push((c, i, i + c.len_utf8()));
-            i += c.len_utf8();
-        }
-        let close = skip_space(b, i + 1);
-        if b.get(close) != Some(&b')') {
-            return error("A column list written as a string is the only thing in the parentheses: `::rows('id int8 not null, …')`.", i + 1, close + 1);
-        }
-        return Ok((text, close));
+        return error("A column list is written bare in the parentheses, as in `::rows(id int8 not null, name text)`, not as a string.", start, start + 1);
     }
     // The parentheses' content, up to the one that closes them, past strings and quoted names.
     let mut depth = 0usize;
@@ -682,6 +848,10 @@ fn not_null_filter(ms: &[Member], table: &str, dialect: Dialect) -> String {
 pub fn lower(found: &Found, dialect: Dialect, placeholder: &str) -> Lowered {
     // A typed JSON parameter is the dialect's JSON parameter, its schema left out: Postgres
     // receives `$1::jsonb`, MySQL `cast(? as json)` and SQLite `?` (docs/typed-json-params.md).
+    if let Some(cast) = &found.plain {
+        let (before, after) = cast.around.clone().unwrap_or_default();
+        return Lowered { placeholder: (before.len(), before.len() + placeholder.len()), text: format!("{before}{placeholder}{after}"), members: Vec::new(), lists: Vec::new() };
+    }
     if let Some(cast) = &found.json {
         let (before, after) = match dialect {
             Dialect::Postgres => ("", if cast.jsonb { "::jsonb" } else { "::json" }),
@@ -917,6 +1087,7 @@ pub fn probe(found: &Found, dialect: Dialect, placeholder: &str) -> (String, Low
     let mut f = found.clone();
     f.insert = false;
     f.table = None;
+    f.plain = None;
     f.alias = Some(quote("reylo.probe", dialect));
     for m in &mut f.members {
         m.optional = false;
@@ -958,7 +1129,7 @@ pub fn analyze(sql: &str, dialect: Dialect, host: &Host, inner: &dyn Fn(&str) ->
         .found
         .iter()
         .map(|f| {
-            if f.json.is_some() {
+            if f.json.is_some() || f.plain.is_some() {
                 return (Lowered { text: String::new(), placeholder: (0, 0), members: Vec::new(), lists: Vec::new() }, Some(crate::postgres::bare_of("", dialect, Vec::new())));
             }
             let (text, lowered) = probe(f, dialect, &sql[f.placeholder.0..f.placeholder.1]);
@@ -986,6 +1157,20 @@ pub fn analyze(sql: &str, dialect: Dialect, host: &Host, inner: &dyn Fn(&str) ->
     }
 
     for ((f, (lowered, probe)), table) in expanded.found.iter().zip(&probed).zip(&columns) {
+        // A `::type` written as the dialect's own cast: the analysis typed it; the run time checks
+        // its value, since that cast converts what it cannot read.
+        if let Some(cast) = &f.plain {
+            if let Some(p) = analysis.params.iter_mut().find(|p| p.name == f.name) {
+                p.cast = Some(cast.written.clone());
+                // SQLite's `json(?)` takes JSON text, and the parameter is a JSON value, written
+                // as its text as every MySQL and SQLite JSON parameter is.
+                if dialect == Dialect::Sqlite && matches!(cast.written.as_str(), "json" | "jsonb") {
+                    p.ty = Type::Json { schema: None };
+                    p.type_name = cast.written.clone();
+                }
+            }
+            continue;
+        }
         if let Some(cast) = &f.json {
             if let Some(p) = analysis.params.iter_mut().find(|p| p.name == f.name) {
                 p.ty = Type::Json { schema: Some(crate::schema_type::type_schema(&input_view(&cast.schema), &crate::schema_type::REYLO)) };
@@ -1450,27 +1635,59 @@ mod tests {
     }
 
     #[test]
-    fn a_bare_column_list_and_a_string_one_read_alike() {
-        let bare = "insert into events :events::rows(id int8 not null, status? text not null, amount numeric(12, 2), tags text [], meta jsonb('{\"type\": \"object\"}')) returning id";
-        let string = "insert into events :events::rows('id int8 not null, status? text not null, amount numeric(12, 2), tags text [], meta jsonb(''{\"type\": \"object\"}'')') returning id";
-        for sql in [bare, string] {
-            let f = one(sql, Dialect::Postgres);
-            assert!(f.insert && !f.one);
-            let shape: Vec<_> = f.members.iter().map(|m| (m.name.as_str(), m.ty.as_str(), m.not_null, m.optional)).collect();
-            assert_eq!(shape, vec![("id", "int8", true, false), ("status", "text", true, true), ("amount", "numeric(12,2)", false, false), ("tags", "text[]", false, false), ("meta", "jsonb", false, false)]);
-            assert_eq!(f.members[4].schema, Some(serde_json::json!({"type": "object"})));
-            assert_eq!(&sql[f.region.0..f.region.1], &sql[19..sql.len() - " returning id".len()]);
-            assert_eq!(&sql[f.head.0..f.head.1], ":events::rows");
-        }
+    fn a_column_list_is_written_bare_and_never_as_a_string() {
+        let sql = "insert into events :events::rows(id int8 not null, status? text not null, amount numeric(12, 2), tags text [], meta jsonb('{\"type\": \"object\"}')) returning id";
+        let f = one(sql, Dialect::Postgres);
+        assert!(f.insert && !f.one);
+        let shape: Vec<_> = f.members.iter().map(|m| (m.name.as_str(), m.ty.as_str(), m.not_null, m.optional)).collect();
+        assert_eq!(shape, vec![("id", "int8", true, false), ("status", "text", true, true), ("amount", "numeric(12,2)", false, false), ("tags", "text[]", false, false), ("meta", "jsonb", false, false)]);
+        assert_eq!(f.members[4].schema, Some(serde_json::json!({"type": "object"})));
+        assert_eq!(&sql[f.region.0..f.region.1], &sql[19..sql.len() - " returning id".len()]);
+        assert_eq!(&sql[f.head.0..f.head.1], ":events::rows");
+        assert!(err("insert into events :events::rows('id int8 not null')", Dialect::Postgres).contains("written bare in the parentheses"));
     }
 
     #[test]
-    fn offsets_inside_a_string_column_list_point_into_the_author_text() {
-        let sql = "insert into t :p::rows('a int8 not null, b ''x''')";
+    fn offsets_in_a_column_list_point_into_the_author_text() {
+        let sql = "insert into t :p::rows(a int8 not null, b jsonb('{\"const\": \"it''s\"}'))";
         let f = one(sql, Dialect::Postgres);
         assert_eq!(&sql[f.members[0].name_span.0..f.members[0].name_span.1], "a");
-        assert_eq!(&sql[f.members[1].type_span.0..f.members[1].type_span.1], "''x''");
-        assert_eq!(f.members[1].ty, "'x'");
+        assert_eq!(&sql[f.members[1].type_span.0..f.members[1].type_span.1], "jsonb('{\"const\": \"it''s\"}')");
+        assert_eq!(f.members[1].schema, Some(serde_json::json!({"const": "it's"})));
+        let f = one("select :p::jsonb('{\"const\": \"it''s\"}')", Dialect::Postgres);
+        assert_eq!(f.json.map(|c| c.schema), Some(serde_json::json!({"const": "it's"})));
+        assert!(err("select :p::jsonb('{}' || '')", Dialect::Postgres).contains("only thing in the parentheses"));
+        assert!(err("select :p::jsonb(x)", Dialect::Postgres).contains("takes one string"));
+    }
+
+    #[test]
+    fn a_cast_on_mysql_and_sqlite_is_the_dialects_own() {
+        let my = |sql: &str| expand(sql, find(sql, Dialect::Mysql).unwrap(), Dialect::Mysql).sql;
+        assert_eq!(
+            my("select id from events where amount > :min::numeric(10, 2) and id = :id :: int8 order by id limit :n::int"),
+            "select id from events where amount > CAST(:min AS DECIMAL(10,2)) and id = CAST(:id AS SIGNED) order by id limit :n"
+        );
+        assert_eq!(my("select 1 from t limit :a::int, :b::int"), "select 1 from t limit :a, :b");
+        assert_eq!(my("select 1 from t limit 5 offset :o::bigint"), "select 1 from t limit 5 offset :o");
+        assert_eq!(my("select :a::text, :b::varchar(20), :c::datetime, :d::double precision, :e::json, :f::int unsigned, ?::date, :u::uuid"), "select CAST(:a AS CHAR), CAST(:b AS CHAR(20)), CAST(:c AS DATETIME(6)), CAST(:d AS DOUBLE), CAST(:e AS JSON), CAST(:f AS UNSIGNED), CAST(? AS DATE), CAST(:u AS CHAR(36))");
+        assert!(err("select :p::bool", Dialect::Mysql).contains("no boolean type"));
+        assert!(err("select :p::timestamptz", Dialect::Mysql).contains("drops the zone"));
+        assert!(err("select :p::interval", Dialect::Mysql).contains("has no type for `::interval`"));
+        assert!(err("select :p::int[]", Dialect::Mysql).contains("no arrays"));
+        assert!(err("select 1 from t limit :n::text", Dialect::Mysql).contains("take an integer"));
+        assert_eq!(my("select 1 from t where a = ?::int or b = ? :: smallint"), "select 1 from t where a = CAST(? AS SIGNED) or b = CAST(? AS SIGNED)");
+        let lite = |sql: &str| expand(sql, find(sql, Dialect::Sqlite).unwrap(), Dialect::Sqlite).sql;
+        assert_eq!(lite("select * from t where n > :n::int8 limit :k::int"), "select * from t where n > CAST(:n AS INTEGER) limit CAST(:k AS INTEGER)");
+        assert_eq!(lite("select json_extract(:doc::json, '$.a'), :s::varchar(3), :f::double precision, :m::decimal(10, 2), :b::blob"), "select json_extract(json(:doc), '$.a'), CAST(:s AS TEXT), CAST(:f AS REAL), CAST(:m AS NUMERIC), CAST(:b AS BLOB)");
+        // SQLite's CAST to `date` would read '2026-10-12' as 2026; it keeps a date as text.
+        assert_eq!(lite("select * from t where born > :d::date and at < :t::timestamptz"), "select * from t where born > CAST(:d AS TEXT) and at < CAST(:t AS TEXT)");
+        assert!(err("select :p::boolean", Dialect::Sqlite).contains("no boolean type"));
+        assert!(err("select :p::money", Dialect::Sqlite).contains("no type `money`"));
+        assert!(err("select ?1::text[]", Dialect::Sqlite).contains("no arrays"));
+        // Postgres reads `::` itself.
+        assert!(find("select :p::int8 limit :n::int", Dialect::Postgres).unwrap().is_empty());
+        // A `::` inside a string or after something other than a parameter is no cast of one.
+        assert!(find("select ':p::int', col from t", Dialect::Mysql).unwrap().is_empty());
     }
 
     #[test]

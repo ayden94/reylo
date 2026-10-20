@@ -10,7 +10,7 @@ import type { EngineType } from "./engine-type.ts";
 import { lexPlaceholders } from "./lex.ts";
 import type { JsonSchema } from "./engine-type.ts";
 import { cloneJson, validate, withDefaults } from "./json-schema.ts";
-import { prepareRows, variant, zoned, type Structured } from "./rows.ts";
+import { checkCast, prepareRows, variant, zoned, type Structured } from "./rows.ts";
 import { differences, due, passed, staleError, type Fresh } from "./fresh.ts";
 
 export type Dialect = "postgres" | "mysql" | "sqlite";
@@ -127,9 +127,10 @@ export type QueryModule<D extends Dialect = Dialect> = {
  * Each parameter by name: `type` is the engine's type for it. The run time reads it where a
  * driver binds a value of one type wrong (an array to a SQL array on postgres.js and Bun.sql, to
  * JSON on pg); a query without it, defined by hand or built before 2026-10-12, binds every value
- * as it is. Typed JSON parameters (docs/typed-json-params.md) will carry their schema beside it.
+ * as it is. A typed JSON parameter (docs/typed-json-params.md) carries its schema beside it, and
+ * a parameter cast with `::` on MySQL or SQLite the type as written (src/rows.ts, `checkCast`).
  */
-export type Inputs = Readonly<Record<string, { readonly type: EngineType; readonly schema?: JsonSchema }>>;
+export type Inputs = Readonly<Record<string, { readonly type: EngineType; readonly schema?: JsonSchema; readonly cast?: string }>>;
 
 type AnyClient = Record<string, any> & ((...args: any[]) => any);
 
@@ -349,6 +350,10 @@ function statement(query: QueryModule, input: ParamsInput) {
       if (structured) bound.text = variant(bound.text, structured, type.fields, prepared.present);
       return;
     }
+    // A `::type` written on MySQL or SQLite, whose cast turns a value it cannot read into 0 or
+    // NULL: the value is checked against the type as written.
+    const cast = query.inputs?.[name]?.cast;
+    if (cast !== undefined && type !== undefined) checkCast(name, cast, type, bound.values[i], query.dialect);
     checkTime(type, name, bound.values[i]);
   });
   // Every MySQL and SQLite driver binds JSON text as text, which the database reads as JSON (a

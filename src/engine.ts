@@ -14,7 +14,8 @@ export type Diagnostic = { message: string; start: number; length: number; code:
 export type Analysis = {
   kind: string;
   /** `nullable`: the statement lets the caller pass null (it tests the parameter for null, coalesces it, or writes it whole to a nullable column). */
-  params: { name: string; type: EngineType; type_name: string; nullable: boolean; schema?: import("./engine-type.ts").JsonSchema }[];
+  /** `cast`: a `::type` written on MySQL or SQLite, which the run time checks a value against (src/rows.ts). */
+  params: { name: string; type: EngineType; type_name: string; nullable: boolean; schema?: import("./engine-type.ts").JsonSchema; cast?: string }[];
   columns: { name: string; type: EngineType; nullable: boolean; type_name: string }[];
   cardinality: "one" | "maybeOne" | "many" | "none";
   cardinalityReason?: string;

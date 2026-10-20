@@ -148,6 +148,10 @@ pub struct Param {
     /// run time checks a value against; its type is the schema as the engine reads it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schema: Option<Value>,
+    /// A `::type` written on MySQL or SQLite as the dialect's own cast, which turns a value it
+    /// cannot read into 0, so the run time checks the parameter's value against its type.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cast: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
