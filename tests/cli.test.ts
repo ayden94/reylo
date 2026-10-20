@@ -22,11 +22,13 @@ test("reylo generate analyzes every .sql file of the project, and prints each fi
   const db = new DatabaseSync(join(root, "app.db"));
   db.exec("create table users (id integer primary key, name text not null)");
   db.close();
-  for (const dir of ["src/queries", "migrations", "node_modules/dep", ".next", "generated"]) mkdirSync(join(root, dir), { recursive: true });
+  for (const dir of ["src/queries", "migrations", "node_modules/dep", ".next", "generated", "app/.server/queries"]) mkdirSync(join(root, dir), { recursive: true });
   writeFileSync(join(root, "src", "queries", "user.sql"), "select id, name from users where id = :id");
   writeFileSync(join(root, "src", "queries", "count.sql"), "select count(*) as n from users");
   writeFileSync(join(root, "src", "queries", "bad.sql"), "select id\nfrom nope");
   writeFileSync(join(root, "src", "queries", "typo.sql"), "selec id from users");
+  // React Router's server-only directory is the one dot directory searched.
+  writeFileSync(join(root, "app", ".server", "queries", "names.sql"), "select name from users");
   // A migration is skipped: it is not one query.
   writeFileSync(join(root, "migrations", "0001.sql"), "create table posts (id integer primary key);\ncreate index posts_id on posts (id);");
   writeFileSync(join(root, "migrations", "0002.sql"), "alter table posts add column title text");
@@ -43,10 +45,11 @@ test("reylo generate analyzes every .sql file of the project, and prints each fi
   assert.equal(first.err, "");
   assert.equal(first.out, [
     `sqlite at ${join(root, "app.db")} (DATABASE_URL in the environment)`,
-    `  src/queries/bad.sql    ✗`,
-    `  src/queries/count.sql  ✓`,
-    `  src/queries/typo.sql   ✗`,
-    `  src/queries/user.sql   ✓`,
+    `  app/.server/queries/names.sql  ✓`,
+    `  src/queries/bad.sql            ✗`,
+    `  src/queries/count.sql          ✓`,
+    `  src/queries/typo.sql           ✗`,
+    `  src/queries/user.sql           ✓`,
     ``,
     // SQLite names no place for this error, so no line of the statement is shown.
     `src/queries/bad.sql:1:1: no such table: nope`,
@@ -58,9 +61,14 @@ test("reylo generate analyzes every .sql file of the project, and prints each fi
     ``,
     `Skipped 2 files that are not one query (a migration?): migrations/0001.sql, migrations/0002.sql`,
     ``,
-    `✗ 2 of 4 queries failed (_ s)`,
+    `✗ 2 of 5 queries failed (_ s)`,
     ``,
   ].join("\n"));
+
+  // A run that finds no query fails, so that a CI job does not carry an empty .reylo/ to a build.
+  const none = reylo(root, "generate", "migrations");
+  assert.equal(none.status, 1, none.err);
+  assert.match(none.out, /^Skipped 2 files that are not one query \(a migration\?\): .*\n\nNo query under migrations: name the directory that holds them, or set cli\.include in \.reylo\.yaml\.\n$/m);
 
   // .reylo.yaml narrows the files; a file named on the command line is analyzed as named.
   writeFileSync(join(root, ".reylo.yaml"), `cli:\n  include: ["src/**/*.sql"]\n  exclude: ["**/bad.sql", "**/typo.sql"]\n`);

@@ -17,7 +17,11 @@ export type SqlModule = {
 
 export async function sqlModule(path: string, sql: string): Promise<SqlModule> {
   const session = await Session.for(dirname(path));
-  const outcome = await session.analyze(sql);
+  let outcome = await session.analyze(sql);
+  // A statement the database refuses may have been analyzed against a schema read a few seconds
+  // before a migration (a session reads it again at most every 5 seconds, and SQLite's analysis
+  // replays it): it is analyzed again when the schema has changed since.
+  if (outcome.ok && outcome.analysis.diagnostics.some((d) => d.code === 6) && (await session.recheck())) outcome = await session.analyze(sql);
   if (!outcome.ok) throw new Error(`${path}: ${outcome.message}`);
   const { analysis } = outcome;
   // A statement whose placeholders break a rule fails the build: one the engine could not read
@@ -41,6 +45,11 @@ export async function sqlModule(path: string, sql: string): Promise<SqlModule> {
   // the build too.
   const descriptor = analysis.diagnostics.find((d) => d.code === 20 || d.code === 21);
   if (descriptor) throw new Error(`${path}: ${descriptor.message}`);
+  // So does a statement the database refuses (6: a misspelled column, a dropped table), at its line
+  // and column, as the type check reports it: its module would run a statement nothing typed, with
+  // no columns and any number of rows.
+  const refused = analysis.diagnostics.find((d) => d.code === 6);
+  if (refused) throw new Error(`${path}:${place(sql, refused.start)}: ${refused.message}`);
   // Each parameter's type, for the drivers that bind an array or a JSON value wrong (src/execute.ts).
   const inputs = Object.fromEntries(analysis.params.map((p) => [p.name, { type: p.type, ...(p.schema === undefined ? {} : { schema: p.schema }), ...(p.cast === undefined ? {} : { cast: p.cast }) }]));
   // Each output column's name and kind, from the table the declared types come from: what the run
@@ -61,6 +70,12 @@ export async function sqlModule(path: string, sql: string): Promise<SqlModule> {
     ``,
   ].join("\n");
   return { code, entry: outcome.entry };
+}
+
+/** The line and column, from 1, of a UTF-8 byte offset into `text`. */
+function place(text: string, bytes: number): string {
+  const before = text.slice(0, utf16(text, bytes));
+  return `${before.split("\n").length}:${before.length - before.lastIndexOf("\n")}`;
 }
 
 /** The JavaScript offset into `text` of a UTF-8 byte offset. */

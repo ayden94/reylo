@@ -5,6 +5,7 @@
 // those as they are (docs/mysql-sources.md); this side only carries them, and
 // runs the engine's catalog queries.
 import { createRequire } from "node:module";
+import { loadDriver } from "./describe.ts";
 import { Unreachable, type MysqlDescribed } from "./engine.ts";
 
 export type { MysqlDescribed } from "./engine.ts";
@@ -24,7 +25,7 @@ export async function openMysqlDescriber(projectDir: string, url: string): Promi
   } catch {
     throw new Error(`No MySQL client found in ${projectDir}; install "mysql2".`);
   }
-  const mysql = (await import(path)).default as { createConnection(url: string): Promise<any> };
+  const mysql = loadDriver(require, path) as { createConnection(url: string): Promise<any> };
   // The server's answer to a statement carries a SQLSTATE; mysql2 marks `fatal` the errors that
   // end the connection (a refused socket, a handshake the server rejects, a lost connection).
   const rethrow = (e: unknown): never => {

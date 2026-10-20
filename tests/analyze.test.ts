@@ -110,6 +110,20 @@ test("the module a build step emits carries the analysis and reads nothing at ru
   }
 });
 
+test("a build fails on a statement the database refuses, at its line and column as the type check places it", async () => {
+  const { root, env } = project();
+  writeFileSync(join(root, ".env"), `DATABASE_URL=${env.DATABASE_URL}\n`);
+  try {
+    // The offset is in UTF-8 bytes; the column counts characters, past the two-byte é.
+    const sql = "select 'é' as e,\n  nmae from users";
+    const file = join(root, "bad.sql");
+    writeFileSync(file, sql);
+    await assert.rejects(sqlModule(file, sql), /bad\.sql:2:3: no such column: nmae$/);
+  } finally {
+    for (const session of Session.opened()) await session.close();
+  }
+});
+
 test("a parameter written twice is an error at each later use, which the type check places and a build fails on; a with reads the value twice", async () => {
   const { root, env } = project();
   writeFileSync(join(root, ".env"), `DATABASE_URL=${env.DATABASE_URL}\n`);

@@ -110,13 +110,14 @@ test("SQLite: Reylo's own statement per database and text, with integers read as
   db.exec("create table t (id integer primary key, n integer, r real, b blob, doc text, flag integer, x); insert into t values (1, 5, 1.5, x'0102', '{\"a\":1}', 1, 7), (2, 9007199254740993, null, null, null, 0, null)");
   const q: QueryModule<"sqlite"> = { dialect: "sqlite", sql: "select id, n, r, b, doc, flag, x from t where id = :id", params: ["id"], columns: [["id", "int"], ["n", "int"], ["r", "float"], ["b", "bytes"], ["doc", "json"], ["flag", "bool"], ["x", "unknown"]] };
   const [row] = execute(db, q, { id: 1 }) as Record<string, unknown>[];
-  assert.deepEqual({ ...row }, { id: 1, n: 5, r: 1.5, b: Uint8Array.of(1, 2), doc: { a: 1 }, flag: true, x: 7 });
+  // A plain object, as on every other driver: node:sqlite's own rows have a null prototype.
+  assert.deepEqual(row, { id: 1, n: 5, r: 1.5, b: Uint8Array.of(1, 2), doc: { a: 1 }, flag: true, x: 7 });
   // The failing control: the app's own statement keeps its database's settings.
   assert.deepEqual(db.prepare("select n from t where id = 1").get(), [5n]);
   assert.throws(() => execute(db, q, { id: 2 }), (e: Error) => e instanceof DecodeError && e instanceof TypeError && /^Column "n" holds 9007199254740993/.test(e.message));
   // A query defined by hand: integers exact, nothing else known.
   const [bare] = execute(db, { dialect: "sqlite", sql: "select n, doc from t where id = 1", params: [] }) as Record<string, unknown>[];
-  assert.deepEqual({ ...bare }, { n: 5, doc: '{"a":1}' });
+  assert.deepEqual(bare, { n: 5, doc: '{"a":1}' });
 });
 
 test("SQLite: the asynchronous drivers' rows normalized: libSQL's BigInt, string and ArrayBuffer, D1's array, a rounded integer refused", async () => {

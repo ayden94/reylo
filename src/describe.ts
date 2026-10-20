@@ -49,6 +49,18 @@ export function forPostgresJs(url: string): { url: string; ssl?: "verify-full" }
   return binding === "require" ? { url: stripped, ssl: "verify-full" } : { url: stripped };
 }
 
+/**
+ * The project's driver, as `require.resolve` found it. `require` rather than `import()`: a bundler
+ * that runs Reylo's loader reads this file too (Turbopack bundles it; webpack parses it for its
+ * build dependencies), and warns on an `import()` of a path it cannot follow, which the compiled
+ * file has, since tsc wraps the path. The module is the same file either way.
+ */
+export function loadDriver(require: NodeJS.Require, path: string): any {
+  const loaded = require(path);
+  // An ES module comes back as its namespace.
+  return loaded?.[Symbol.toStringTag] === "Module" ? loaded.default : loaded;
+}
+
 export async function openPostgresDescriber(projectDir: string, url: string): Promise<Describer> {
   const require = createRequire(projectDir.replace(/\/?$/, "/package.json"));
   const resolve = (name: string) => { try { return require.resolve(name); } catch { return undefined; } };
@@ -56,7 +68,7 @@ export async function openPostgresDescriber(projectDir: string, url: string): Pr
 
   const porsager = resolve("postgres");
   if (porsager) {
-    const postgres = (await import(porsager)).default as (url: string, o?: object) => any;
+    const postgres = loadDriver(require, porsager) as (url: string, o?: object) => any;
     const target = forPostgresJs(url);
     const sql = postgres(target.url, { max: 1, prepare: false, onnotice: () => {}, connect_timeout: CONNECT_TIMEOUT_SECONDS, ...(target.ssl && { ssl: target.ssl }) });
     // postgres.js runs these queries one at a time and connects again for each one queued behind
@@ -97,12 +109,21 @@ export async function openPostgresDescriber(projectDir: string, url: string): Pr
 
   const pgPath = resolve("pg");
   if (pgPath) {
-    const pg = (await import(pgPath)).default as any;
+    const pg = loadDriver(require, pgPath);
     const client = new pg.Client({ connectionString: url, connectionTimeoutMillis: CONNECT_TIMEOUT_SECONDS * 1000 });
     // A connection that drops while idle is reported as an event; unheard, it ends the process.
     // The next call fails on the closed client and reopens it.
     client.on("error", () => {});
     await client.connect().catch(rethrow);
+    // A bundler loads several .sql files at once, so calls on the one client overlap; pg 8 queues a
+    // query sent while another runs, with a deprecation warning, and pg 9 will refuse it. So the
+    // calls take turns.
+    let turn: Promise<unknown> = Promise.resolve();
+    const serial = <T>(call: () => Promise<T>): Promise<T> => {
+      const next = turn.then(call, call);
+      turn = next.catch(() => {});
+      return next;
+    };
     return {
       driver: "pg",
       // node-postgres has no public describe, but it accepts any "submittable"
@@ -111,7 +132,7 @@ export async function openPostgresDescriber(projectDir: string, url: string): Pr
       // and noData are not routed to the query by pg, so they are read off the
       // connection while the query is active.
       describe(text) {
-        return new Promise<Described>((resolve, reject) => {
+        return serial(() => new Promise<Described>((resolve, reject) => {
           const out: Described = { params: [], columns: [] };
           let con: any;
           const cleanup = () => { con?.off("parameterDescription", onParam); con?.off("noData", onNoData); };
@@ -140,10 +161,10 @@ export async function openPostgresDescriber(projectDir: string, url: string): Pr
             handleReadyForQuery() { cleanup(); resolve(out); },
           };
           client.query(submittable);
-        });
+        }));
       },
-      query: async (text, params = []) => (await client.query(text, params).catch(rethrow)).rows,
-      values: async (text, params = []) => (await client.query({ text, values: params, rowMode: "array" }).catch(rethrow)).rows,
+      query: (text, params = []) => serial(async () => (await client.query(text, params).catch(rethrow)).rows),
+      values: (text, params = []) => serial(async () => (await client.query({ text, values: params, rowMode: "array" }).catch(rethrow)).rows),
       close: () => client.end(),
     };
   }

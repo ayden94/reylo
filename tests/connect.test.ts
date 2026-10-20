@@ -34,8 +34,9 @@ test("postgres.js: a refused connection fails every call as Unreachable", { skip
 
 test("postgres.js: calls queued behind a server that never answers fail together at the first timeout", { skip: installed(lab("basic"), "postgres") !== true && "lab/basic is not installed", timeout: 30_000 }, async () => {
   // A server that accepts the socket and never says anything: the connection times out, and
-  // postgres.js would connect again for each queued call, one timeout after another.
-  const silent = createServer(() => {});
+  // postgres.js would connect again for each queued call, one timeout after another. The client
+  // resets the socket when it gives up, which the server's side hears as ECONNRESET.
+  const silent = createServer((socket) => socket.on("error", () => {}));
   await new Promise<void>((resolve) => silent.listen(0, "127.0.0.1", resolve));
   try {
     const d = await openPostgresDescriber(lab("basic"), `postgres://127.0.0.1:${(silent.address() as AddressInfo).port}/x`);

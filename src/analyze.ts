@@ -176,6 +176,13 @@ export class Session {
     return this.#schema;
   }
 
+  /** Reads the schema's fingerprint again now, however recent the last read; whether it changed. */
+  async recheck(): Promise<boolean> {
+    const before = this.#schema?.value;
+    if (this.#schema) this.#schema = { ...this.#schema, at: -Infinity };
+    return (await this.schema()).value !== before;
+  }
+
   /** Where the database was looked for, and where that came from; never the credentials. */
   cannotConnect(why?: string): string {
     const { dialect, url, root, urlSource } = this.project;

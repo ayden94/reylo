@@ -24,14 +24,18 @@ export const FRESH_FOR = 60_000;
 
 const checked = new WeakMap<object, number>();
 
+// The clock is `performance.now()`, not `Date.now()`: an interval needs only a monotonic clock, and
+// Next.js's Cache Components refuse `Date.now()` while a page prerenders, which failed `next build`
+// on every page that ran a query (examples/nextjs, Next.js 16.4).
+
 /** Whether `query` is due for a check now. */
-export function due(query: object, now = Date.now()): boolean {
+export function due(query: object, now = performance.now()): boolean {
   const at = checked.get(query);
   return at === undefined || now - at >= FRESH_FOR;
 }
 
 /** Records a check of `query` that passed, or that could not run. */
-export function passed(query: object, now = Date.now()): void {
+export function passed(query: object, now = performance.now()): void {
   checked.set(query, now);
 }
 

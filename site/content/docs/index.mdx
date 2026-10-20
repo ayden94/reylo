@@ -200,7 +200,7 @@ A `.sql` file holds one `select`, `insert`, `update`, `delete` or `values`; `mer
 }
 ```
 
-`reylo generate` skips such files, and only the type check reports them: the plugins and the preload build whatever you import.
+`reylo generate` skips such files.
 
 <Details summary="Starting from an empty project" id="a-new-project">
 
@@ -345,9 +345,12 @@ Everywhere else, a plugin turns each `.sql` import into a module: Bun and nub lo
 <Accordions type="multiple">
 <Accordion title="Bun" id="setup-bun">
 
-Bun takes the preload in `bunfig.toml`, so `bun main.ts` needs no flag, and loads `.env` itself:
+Bun takes the preload in `bunfig.toml`, so `bun main.ts` needs no flag, and loads `.env` itself. `bun test` reads its own preload, under `[test]`:
 
 ```toml title="bunfig.toml"
+preload = ["reylo/register"]
+
+[test]
 preload = ["reylo/register"]
 ```
 
@@ -377,6 +380,8 @@ nub takes the preload in `nub.jsonc`, so `nub main.ts` needs no flag, and loads 
 }
 ```
 
+Node's test runner, `nub --test`, takes the same preload.
+
 </Accordion>
 <Accordion title="Vite" id="setup-vite">
 
@@ -389,7 +394,7 @@ export default defineConfig({
 });
 ```
 
-Import `.sql` files from server code: the module carries the statement's text, and Vite bundles it wherever it is imported. Vitest needs only this plugin.
+Import `.sql` files from server code: the module carries the statement's text, and Vite bundles it wherever it is imported, the browser included, so keep queries where your framework allows server code only, such as a `.server/` directory. Vitest needs only this plugin.
 
 </Accordion>
 <Accordion title="Next.js" id="setup-nextjs">
@@ -433,7 +438,7 @@ export default nextConfig;
 }
 ```
 
-A client component that imports a `.sql` file fails the build, so the statement stays on the server. On the edge runtime, use a driver that connects over HTTP or WebSockets.
+A client component that imports a `.sql` file fails the build, so the statement stays on the server. With Cache Components on, as `create-next-app` sets them up, a component that runs a query renders inside `<Suspense>`, at request time. On the edge runtime, use a driver that connects over HTTP or WebSockets.
 
 </Accordion>
 <Accordion title="esbuild" id="setup-esbuild">
@@ -446,8 +451,9 @@ await esbuild.build({
   entryPoints: ["main.ts"],
   bundle: true,
   platform: "node",
+  format: "esm",
   plugins: [reylo()],
-  outfile: "dist/main.js",
+  outfile: "dist/main.mjs",
 });
 ```
 
@@ -464,6 +470,8 @@ export default {
   },
 };
 ```
+
+`ts-loader` needs TypeScript's JavaScript API, which TypeScript 7 does not have, so compile TypeScript with `swc-loader` or `babel-loader`.
 
 </Accordion>
 <Accordion title="Rspack" id="setup-rspack">
@@ -494,7 +502,7 @@ export default {
 NODE_OPTIONS=--experimental-vm-modules npx jest
 ```
 
-In a CommonJS run, babel-jest must also compile Reylo itself, an ES module:
+In a CommonJS run, babel-jest must also compile Reylo itself, an ES module, wherever the package manager puts it:
 
 ```js title="jest.config.js"
 module.exports = {
@@ -502,14 +510,14 @@ module.exports = {
     "\\.sql$": "reylo/jest",
     "\\.[jt]s$": [
       "babel-jest",
-      { plugins: ["@babel/plugin-transform-modules-commonjs"] },
+      { presets: [["@babel/preset-env", { targets: { node: "current" } }]] },
     ],
   },
-  transformIgnorePatterns: ["/node_modules/(?!reylo/)"],
+  transformIgnorePatterns: ["/node_modules/(?!(\\.[^/]+/)?reylo[@/])"],
 };
 ```
 
-A CommonJS test reads the query as `require("./get_user.sql").default`.
+A CommonJS test reads the query as `require("./get_user.sql").default`. In an ES module run, Jest strips the types of tests written in TypeScript once `extensionsToTreatAsEsm` lists `".ts"` too; ts-jest does not run with TypeScript 7.
 
 </Accordion>
 </Accordions>
@@ -935,7 +943,7 @@ strict: true
 
 ### `cli`
 
-The `.sql` files `reylo generate` analyzes, the command that fills `.reylo/` ahead of a build without a database ([In CI](#in-ci)). The globs are relative to `.reylo.yaml`: `include` replaces the default, every `.sql` file, and `exclude` adds to what is always left out: `node_modules`, build output, directories whose names start with a dot, and what git ignores. The type check reads the files `tsconfig.json` includes instead.
+The `.sql` files `reylo generate` analyzes, the command that fills `.reylo/` ahead of a build without a database ([In CI](#in-ci)). The globs are relative to `.reylo.yaml`: `include` replaces the default, every `.sql` file, and `exclude` adds to what is always left out: `node_modules`, build output, directories whose names start with a dot (but for `.server`), and what git ignores. The type check reads the files `tsconfig.json` includes instead.
 
 ```yaml title=".reylo.yaml"
 cli:
@@ -983,7 +991,7 @@ import getUser from "./get_user.sql";
 const user = await getUser.run(db, { id: "1" });
 ```
 
-While a `.sql` file has an error, `tsc` holds back the TypeScript errors, so fix the SQL first. At run time, `run` rejects with the driver's own error, and with Reylo's when the rows do not fit the row count ([`run`](#run)).
+While a `.sql` file has an error, `tsc` holds back the TypeScript errors, so fix the SQL first. A build stops at the same error, and so does the preload. At run time, `run` rejects with the driver's own error, and with Reylo's when the rows do not fit the row count ([`run`](#run)).
 
 <DialectTabs follow>
 <Dialect value="MySQL">
@@ -1120,7 +1128,7 @@ Skipped 1 file that is not one query (a migration?): db/schema.sql
 ✗ 1 of 6 queries failed (0.1 s)
 ```
 
-`reylo generate` reads every `.sql` file under the given paths, the current directory by default. It skips `node_modules`, build output, dot directories and what git ignores; the [`cli`](#cli) keys of `.reylo.yaml` change the set. `--force` asks the database again for every statement. The exit code is 1 when a query fails.
+`reylo generate` reads every `.sql` file under the given paths, the current directory by default. It skips `node_modules`, build output, dot directories other than `.server`, and what git ignores; the [`cli`](#cli) keys of `.reylo.yaml` change the set. `--force` asks the database again for every statement. The exit code is 1 when a query fails or none is found.
 
 Reylo keys each entry by the server it came from (scheme, user, host, port and database), or by the SQLite file's absolute path. So the build sets the same URL as the place where `reylo generate` ran (`DATABASE_URL`, or [`direct_url`](#direct_url) when it is set), even though it cannot connect, and a SQLite project keeps its path.
 

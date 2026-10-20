@@ -14,7 +14,8 @@ const USAGE = `Usage: reylo generate [paths...] [--force]
 
 Analyzes every .sql file under the paths (by default the current directory) into .reylo/: the
 cache that the type check and the build steps read. A file that is not one query (a migration)
-is skipped. --force analyzes each file against the database even when .reylo/ holds it.
+is skipped, and a run that finds no query fails. --force analyzes each file against the database
+even when .reylo/ holds it.
 
 Which files are queries can be set in .reylo.yaml; the globs are relative to it:
 
@@ -23,13 +24,16 @@ Which files are queries can be set in .reylo.yaml; the globs are relative to it:
     exclude: ["src/legacy/**"]  # in addition to dependencies, build output and what git ignores`;
 
 // Never the project's own queries: dependencies and build output. A directory whose name starts
-// with a dot (.git, .reylo, .next) is left out too, because a glob's `*` does not match a dot.
+// with a dot (.git, .reylo, .next) is left out too, because a glob's `*` does not match a dot, but
+// for `.server`: React Router's (and Remix's) server-only modules, which its build keeps out of the
+// browser, and so the place for an app's queries there (examples/vite).
+const INCLUDE = ["**/*.sql", "**/.server/**/*.sql"];
 const EXCLUDE = ["**/node_modules/**", "**/{dist,build,out,target,coverage}/**"];
 
 const shown = (path: string) => relative(process.cwd(), path) || ".";
 const paint = (format: Parameters<typeof styleText>[0], text: string) => styleText(format, text);
 
-async function sqlFiles(dir: string, include = ["**/*.sql"], exclude: string[] = []): Promise<string[]> {
+async function sqlFiles(dir: string, include = INCLUDE, exclude: string[] = []): Promise<string[]> {
   const files = await glob(include, { cwd: dir, ignore: [...EXCLUDE, ...exclude], absolute: true });
   return files.filter((f) => f.endsWith(".sql"));
 }
@@ -175,7 +179,11 @@ async function generate(args: string[]): Promise<number> {
   const total = typed + failed.length;
   if (failed.length) console.log(`\n${paint("red", "✗")} ${failed.length} of ${total} ${total === 1 ? "query" : "queries"} failed (${seconds} s)`);
   else if (typed) console.log(`\n${paint("green", "✓")} ${typed} ${typed === 1 ? "query" : "queries"} typed (${seconds} s)`);
-  else if (!skipped.length) console.log(`No .sql files under ${(paths.length ? paths : ["."]).join(", ")}.`);
+  // Nothing to build from: a CI job that carries .reylo/ to a build would fail there instead.
+  else {
+    console.log(`${skipped.length ? "\n" : ""}No query under ${(paths.length ? paths : ["."]).join(", ")}: name the directory that holds them, or set cli.include in .reylo.yaml.`);
+    return 1;
+  }
   return failed.length ? 1 : 0;
 }
 

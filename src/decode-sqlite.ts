@@ -106,13 +106,15 @@ function plan(name: string, kind: Kind, exact: boolean): Plan {
  * 2^53 in an INTEGER column refused as rounded, a BLOB a Uint8Array, a JSON column parsed and a
  * truth value a boolean. In place, since every driver builds new rows per call. `exact`: the driver
  * read every INTEGER as a BigInt, so a number is a REAL, never a rounded integer. `d1`: an array is
- * D1's BLOB.
+ * D1's BLOB. A row is a plain object on every driver: node:sqlite builds rows with a null
+ * prototype, which `assert.deepStrictEqual` and `row.hasOwnProperty` tell apart.
  */
 export function normalize(rows: unknown[], columns: Columns | undefined, { exact = false, d1 = false } = {}): unknown[] {
   if (!Array.isArray(rows) || !rows.length) return Array.isArray(rows) ? rows : [];
   const plans = (columns ? [...columns] : Object.keys(rows[0] as object).map((name) => [name, "unknown"] as const)).map(([name, kind]) => plan(name, kind, exact));
   const n = plans.length;
   for (const row of rows as Record<string, unknown>[]) {
+    if (Object.getPrototypeOf(row) === null) Object.setPrototypeOf(row, Object.prototype);
     for (let i = 0; i < n; i++) {
       const p = plans[i]!;
       const v = row[p.name];
