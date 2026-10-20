@@ -200,3 +200,18 @@ test("runSync refuses a client whose prepared statement answers through a promis
   const { executeSync } = await import("../src/execute.ts");
   assert.throws(() => executeSync(db as never, { ...q, sql: "select 2 as n" }), /answered with a promise/);
 });
+
+test("mysql2: Reylo's typeCast only where it is needed, since mysql2 calls it for every value: a JSON or unknown column, unknown columns, or the app's typeCast, decimalNumbers or jsonStrings", async () => {
+  const sent: unknown[] = [];
+  const pool = (connectionConfig: Record<string, unknown> | undefined) => ({ pool: connectionConfig && { config: { connectionConfig } }, query: async () => [[], []], execute: async (options: { typeCast: unknown }) => (sent.push(typeof options.typeCast === "function" ? "cast" : options.typeCast), [[], []]) });
+  const q = (columns?: [string, string][]): QueryModule<"mysql"> => ({ dialect: "mysql", sql: "select 1", params: [], ...(columns ? { columns } : {}) });
+  await execute(pool({}) as never, q([["n", "int8"], ["amount", "decimal"], ["at", "timestamp"]]));
+  await execute(pool({}) as never, q([["doc", "json"]]));
+  await execute(pool({}) as never, q([["shape", "unknown"]]));
+  await execute(pool({}) as never, q());
+  await execute(pool({ decimalNumbers: true }) as never, q([["amount", "decimal"]]));
+  await execute(pool({ jsonStrings: true }) as never, q([["n", "int"]]));
+  await execute(pool({ typeCast: () => null }) as never, q([["n", "int"]]));
+  await execute(pool(undefined) as never, q([["n", "int"]]));
+  assert.deepEqual(sent, [true, "cast", "cast", "cast", "cast", "cast", "cast", "cast"]);
+});

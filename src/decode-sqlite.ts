@@ -8,10 +8,13 @@
 //
 // - better-sqlite3, node:sqlite and bun:sqlite: Reylo prepares its own statement on the app's
 //   database, once per database and text (a WeakMap keyed by the database), and sets that
-//   statement's own integer mode to BigInt, whatever the database's: every integer then arrives
-//   exact and is a number, or an error naming its column past 2^53, and no other statement of the
-//   app's changes. bun:sqlite's statement comes from `prepare`, never `query`, whose cache by text
-//   would carry Reylo's mode into the app's statement.
+//   statement's own integer mode, whatever the database's, and no other statement of the app's
+//   changes. node:sqlite's statement, and better-sqlite3's and bun:sqlite's where a column has no
+//   type the module knows, read every INTEGER as a BigInt: each is then a number, or an error naming
+//   its column past 2^53. Where every column is typed, better-sqlite3's and bun:sqlite's read numbers
+//   (a BigInt per integer cost +70% on 10,000 rows), and a number past 2^53 in a column that may hold
+//   an INTEGER can only be a rounded one, which is refused. bun:sqlite's statement comes from
+//   `prepare`, never `query`, whose cache by text would carry Reylo's mode into the app's statement.
 // - sqlite3 and the sqlite wrapper, libSQL, D1 and Bun.SQL's SQLite: the rows the driver gives,
 //   normalized. sqlite3 and sqlite are not cached: a statement left open makes the app's close()
 //   fail with SQLITE_BUSY. An INTEGER the driver already rounded (sqlite3, sqlite, D1, Bun.SQL
@@ -28,10 +31,11 @@ const statements = new WeakMap<object, Map<string, Kept>>();
 const KEPT = 500;
 
 /** Reylo's own statement for `text` on the app's database, with integers read as BigInts. */
-function statementFor(db: AnyClient, text: string): Kept {
+function statementFor(db: AnyClient, text: string, typed: boolean): Kept {
   let kept = statements.get(db);
   if (!kept) statements.set(db, (kept = new Map()));
-  const found = kept.get(text);
+  const key = `${typed ? "n" : "b"}${text}`;
+  const found = kept.get(key);
   if (found) return found;
   const st = db.prepare(text) as Statement;
   let exact = false;
@@ -41,12 +45,12 @@ function statementFor(db: AnyClient, text: string): Kept {
     if (typeof st.setReturnArrays === "function") st.setReturnArrays(false);
     exact = true;
   } else if (typeof st.safeIntegers === "function") {
-    st.safeIntegers(true);
-    exact = true;
+    st.safeIntegers(!typed);
+    exact = !typed;
   }
   if (kept.size >= KEPT) kept.delete(kept.keys().next().value!);
   const entry = { st, exact };
-  kept.set(text, entry);
+  kept.set(key, entry);
   return entry;
 }
 
@@ -56,7 +60,9 @@ function statementFor(db: AnyClient, text: string): Kept {
  * promise, which `runSync` refuses.
  */
 export function runSyncSqlite(db: AnyClient, text: string, values: unknown[], columns: Columns | undefined): unknown[] | Promise<unknown[]> {
-  const { st, exact } = statementFor(db, text);
+  // Every column typed: a number past 2^53 in one can be told as rounded (src/values.ts).
+  const typed = columns !== undefined && columns.length > 0 && !columns.some(([, kind]) => kind === "unknown");
+  const { st, exact } = statementFor(db, text, typed);
   // better-sqlite3 refuses all() on a statement that returns no rows.
   if (st.reader === false) {
     st.run(...values);
@@ -73,8 +79,27 @@ export function runSyncSqlite(db: AnyClient, text: string, values: unknown[], co
   return normalize(rows, columns, { exact });
 }
 
-/** The kinds that need a value converted whatever the driver; an INTEGER's and a BLOB's are by the value's type. */
-const CONVERTED = /^(json|bool)$|\|/;
+type Plan = {
+  name: string;
+  /** An INTEGER the driver read as a BigInt. */
+  big: (v: bigint) => unknown;
+  /** A number, where it may need converting: a truth value, or an INTEGER a driver may have rounded. */
+  num: ((v: number) => unknown) | undefined;
+  /** A string, where it may need converting: JSON, a truth value, libSQL's integer under intMode "string". */
+  str: ((v: string) => unknown) | undefined;
+};
+
+/** What each column's values need, worked out once per call rather than per value. */
+function plan(name: string, kind: Kind, exact: boolean): Plan {
+  if (kind === "bool") return { name, big: (v) => v !== BigInt(0), num: (v) => v !== 0, str: (v) => coerce(kind, v, name) };
+  if (kind === "json") return { name, big: (v) => exactInteger(v, name), num: undefined, str: (v) => JSON.parse(v) };
+  if (kind === "text") return { name, big: String, num: undefined, str: undefined };
+  if (kind === "int") return { name, big: (v) => exactInteger(v, name), num: exact ? undefined : (v) => exactInteger(v, name), str: (v) => coerce(kind, v, name) };
+  // A NUMERIC's either: read as numbers, one past 2^53 may be a rounded INTEGER, which is refused.
+  if (!exact && kind.split("|").includes("int")) return { name, big: (v) => exactInteger(v, name), num: (v) => (Number.isInteger(v) ? exactInteger(v, name) : v), str: undefined };
+  // A REAL, a BLOB, a column with no type: an integer is exact or refused, a number is as it is.
+  return { name, big: (v) => exactInteger(v, name), num: undefined, str: undefined };
+}
 
 /**
  * The rows with each value in Reylo's form: a BigInt a number (an error past 2^53), a number past
@@ -85,29 +110,27 @@ const CONVERTED = /^(json|bool)$|\|/;
  */
 export function normalize(rows: unknown[], columns: Columns | undefined, { exact = false, d1 = false } = {}): unknown[] {
   if (!Array.isArray(rows) || !rows.length) return Array.isArray(rows) ? rows : [];
-  const plan: (readonly [string, Kind])[] = columns ? [...columns] : Object.keys(rows[0] as object).map((name) => [name, "unknown"] as const);
-  const n = plan.length;
+  const plans = (columns ? [...columns] : Object.keys(rows[0] as object).map((name) => [name, "unknown"] as const)).map(([name, kind]) => plan(name, kind, exact));
+  const n = plans.length;
   for (const row of rows as Record<string, unknown>[]) {
     for (let i = 0; i < n; i++) {
-      const [name, kind] = plan[i]!;
-      const v = row[name];
+      const p = plans[i]!;
+      const v = row[p.name];
       if (v === null || v === undefined) continue;
       switch (typeof v) {
-        case "string":
-          // JSON, a truth value, and libSQL's integers under intMode "string".
-          if (CONVERTED.test(kind) || kind === "int") row[name] = coerce(kind, v, name);
-          continue;
-        case "number":
-          if ((kind === "int" && !exact) || CONVERTED.test(kind)) row[name] = coerce(kind, v, name);
-          continue;
         case "bigint":
-          row[name] = kind === "unknown" || kind === "float" ? exactInteger(v, name) : coerce(kind, v, name);
-          continue;
+          row[p.name] = p.big(v);
+          break;
+        case "number":
+          if (p.num) row[p.name] = p.num(v);
+          break;
+        case "string":
+          if (p.str) row[p.name] = p.str(v);
+          break;
         case "object":
-          if (v instanceof Uint8Array) continue;
           // libSQL's ArrayBuffer, D1's array of numbers.
-          if (v instanceof ArrayBuffer || (d1 && Array.isArray(v))) row[name] = coerce("bytes", v, name);
-          continue;
+          if (!(v instanceof Uint8Array) && (v instanceof ArrayBuffer || (d1 && Array.isArray(v)))) row[p.name] = coerce("bytes", v, p.name);
+          break;
       }
     }
   }

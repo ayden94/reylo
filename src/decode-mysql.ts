@@ -68,9 +68,25 @@ function wallClock(s: string, decimals: number, type: number): string {
   return type === TIME ? text : text.replace(" ", "T");
 }
 
+/** The app's settings, where mysql2 shows them: a promise Pool's, Connection's or PoolConnection's. */
+type Mysql2Config = { typeCast?: unknown; decimalNumbers?: boolean; jsonStrings?: boolean };
+const configOf = (m: AnyClient): Mysql2Config | undefined => m.pool?.config?.connectionConfig ?? m.connection?.config;
+
+/**
+ * Whether the statement needs Reylo's typeCast, which mysql2 calls for every value of the binary
+ * protocol (about 70 ns each): for a JSON or GEOMETRY column, whenever the columns are not known,
+ * and where the app's settings, which a query cannot turn off, would decide a DECIMAL or a JSON value
+ * or replace mysql2's own reading (or cannot be read).
+ */
+function needsCast(m: AnyClient, columns: Columns | undefined): boolean {
+  if (!columns || columns.some(([, kind]) => kind === "unknown" || kind.split("|").some((k) => k === "json" || k.startsWith("json")))) return true;
+  const config = configOf(m);
+  return config === undefined || typeof config.typeCast === "function" || config.decimalNumbers === true || config.jsonStrings === true;
+}
+
 /** mysql2's execute(), resolving to [rows, fields]. */
-export async function mysql2(m: AnyClient, text: string, values: unknown[]): Promise<unknown[]> {
-  const [rows, fields] = await m.execute({ sql: text, ...MYSQL2_OPTIONS, typeCast: mysql2Cast }, values);
+export async function mysql2(m: AnyClient, text: string, values: unknown[], columns: Columns | undefined): Promise<unknown[]> {
+  const [rows, fields] = await m.execute({ sql: text, ...MYSQL2_OPTIONS, typeCast: needsCast(m, columns) ? mysql2Cast : true }, values);
   if (!Array.isArray(rows)) return [];
   const dates = ((fields ?? []) as Mysql2Column[]).filter((f) => f.columnType === DATETIME || f.columnType === TIMESTAMP || (f.columnType === TIME && f.decimals > 0));
   if (dates.length) {
