@@ -574,7 +574,7 @@ fn json_contradiction(ty: &Value, json: &Value, path: &str) -> Option<String> {
         Some("json") => {
             let schema = ty.get("schema")?;
             let at = if path.is_empty() { "the top" } else { path };
-            (!reylo_engine::schema_type::admits(schema, json)).then(|| format!("holds {json} at {at}, which the schema {schema} does not admit"))
+            (!reylo_engine_core::schema_type::admits(schema, json)).then(|| format!("holds {json} at {at}, which the schema {schema} does not admit"))
         }
         // A row value inside a document is an object of its fields.
         Some("object") | Some("composite") => {
@@ -583,7 +583,7 @@ fn json_contradiction(ty: &Value, json: &Value, path: &str) -> Option<String> {
                 let name = f["name"].as_str()?;
                 let v = obj.get(name).unwrap_or(&Value::Null);
                 // A null where the field's own schema admits one is the column's value.
-                if v.is_null() && !(f["type"]["kind"] == "json" && f["type"].get("schema").is_some_and(|s| reylo_engine::schema_type::admits(s, v))) {
+                if v.is_null() && !(f["type"]["kind"] == "json" && f["type"].get("schema").is_some_and(|s| reylo_engine_core::schema_type::admits(s, v))) {
                     if !f["nullable"].as_bool().unwrap_or(true) {
                         return Some(format!("has a null at {path}.{name}, typed non-null"));
                     }
@@ -597,7 +597,7 @@ fn json_contradiction(ty: &Value, json: &Value, path: &str) -> Option<String> {
         }
         Some("list") => {
             for (i, item) in json.as_array()?.iter().enumerate() {
-                if item.is_null() && !(ty["of"]["kind"] == "json" && ty["of"].get("schema").is_some_and(|s| reylo_engine::schema_type::admits(s, item))) {
+                if item.is_null() && !(ty["of"]["kind"] == "json" && ty["of"].get("schema").is_some_and(|s| reylo_engine_core::schema_type::admits(s, item))) {
                     if !ty["nullable_items"].as_bool().unwrap_or(true) {
                         return Some(format!("has a null item at {path}[{i}], typed non-null"));
                     }

@@ -171,7 +171,7 @@ async fn analyze(conn: &mut Conn, sql: &str) -> Result<Value, String> {
     let mut answers = Map::new();
     for _ in 0..16 {
         let request = json!({ "op": "analyze", "sql": sql, "dialect": "mysql", "answers": Value::Object(answers.clone()) });
-        let response: Value = serde_json::from_str(&reylo_engine::call(&request.to_string())).map_err(|e| e.to_string())?;
+        let response: Value = serde_json::from_str(&crate::engine(&request.to_string())).map_err(|e| e.to_string())?;
         match response["status"].as_str() {
             Some("analysis") => return Ok(response["analysis"].clone()),
             Some("need") => {
@@ -1196,7 +1196,7 @@ fn json_contradiction(ty: &Value, json: &Value, nullable: bool, path: &str) -> O
     // A JSON column a CHECK holds to a JSON Schema: the value is one the engine's schema admits,
     // a JSON null included, unless the place may hold SQL's NULL, which a document writes alike.
     if let (Some("json"), Some(schema)) = (ty["kind"].as_str(), ty.get("schema")) {
-        return (!(json.is_null() && nullable) && !reylo_engine::schema_type::admits(schema, json)).then(|| format!("holds {json} at {at}, which the schema {schema} does not admit"));
+        return (!(json.is_null() && nullable) && !reylo_engine_core::schema_type::admits(schema, json)).then(|| format!("holds {json} at {at}, which the schema {schema} does not admit"));
     }
     if json.is_null() {
         return (!nullable && matches!(ty["kind"].as_str(), Some("object" | "list" | "scalar"))).then(|| format!("has a null at {at}, typed non-null"));

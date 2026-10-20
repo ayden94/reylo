@@ -363,12 +363,24 @@ async fn run_postgres(case: &Path, admin: &Client, admin_config: &Config, keep: 
     Ok((lines, unchecked))
 }
 
+/// One request to the engine of the database it names, as that database's artifact answers it: the
+/// oracle checks every database, so it links each one's crate and dispatches as no artifact does.
+pub(crate) fn engine(request: &str) -> String {
+    use reylo_engine_core::api::{call, dialect_of};
+    use reylo_engine_core::dialect::Dialect;
+    match dialect_of(request) {
+        Some(Dialect::Sqlite) => call::<reylo_engine_sqlite::Sqlite>(request),
+        Some(Dialect::Mysql) => call::<reylo_engine_mysql::Mysql>(request),
+        _ => call::<reylo_engine_postgres::Postgres>(request),
+    }
+}
+
 /// The engine's replay with every need answered on `client`.
 /// One request to the engine. Its answer nests as deeply as the statement's JSON shapes do,
 /// past serde_json's default limit of 128 levels for a statement the engine still parses, so it is
 /// read without that limit.
 fn engine_call(request: &Value) -> Result<Value, String> {
-    let text = reylo_engine::call(&request.to_string());
+    let text = engine(&request.to_string());
     let mut reader = serde_json::Deserializer::from_str(&text);
     reader.disable_recursion_limit();
     reader.into_iter::<Value>().next().unwrap_or_else(|| Ok(Value::Null)).map_err(|e| e.to_string())

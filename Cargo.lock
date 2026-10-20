@@ -2500,7 +2500,7 @@ dependencies = [
 name = "pgreylo"
 version = "0.1.0"
 dependencies = [
- "reylo-engine",
+ "reylo-engine-postgres",
  "serde_json",
 ]
 
@@ -3023,18 +3023,87 @@ dependencies = [
 ]
 
 [[package]]
-name = "reylo-engine"
+name = "reylo-engine-all-wasm"
 version = "0.0.0"
 dependencies = [
- "cc",
- "indexmap",
+ "reylo-engine-core",
+ "reylo-engine-mysql",
+ "reylo-engine-postgres",
+ "reylo-engine-sqlite",
+ "serde_json",
+]
+
+[[package]]
+name = "reylo-engine-build"
+version = "0.0.0"
+
+[[package]]
+name = "reylo-engine-core"
+version = "0.0.0"
+dependencies = [
  "libc",
- "pg_query",
- "prost 0.13.5",
+ "reylo-engine-build",
  "serde",
  "serde_json",
  "serde_yaml",
+]
+
+[[package]]
+name = "reylo-engine-mysql"
+version = "0.0.0"
+dependencies = [
+ "reylo-engine-build",
+ "reylo-engine-core",
+ "serde",
+ "serde_json",
  "sqlparser",
+]
+
+[[package]]
+name = "reylo-engine-mysql-wasm"
+version = "0.0.0"
+dependencies = [
+ "reylo-engine-core",
+ "reylo-engine-mysql",
+]
+
+[[package]]
+name = "reylo-engine-postgres"
+version = "0.0.0"
+dependencies = [
+ "pg_query",
+ "prost 0.13.5",
+ "reylo-engine-build",
+ "reylo-engine-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "reylo-engine-postgres-wasm"
+version = "0.0.0"
+dependencies = [
+ "reylo-engine-core",
+ "reylo-engine-postgres",
+]
+
+[[package]]
+name = "reylo-engine-sqlite"
+version = "0.0.0"
+dependencies = [
+ "cc",
+ "reylo-engine-build",
+ "reylo-engine-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "reylo-engine-sqlite-wasm"
+version = "0.0.0"
+dependencies = [
+ "reylo-engine-core",
+ "reylo-engine-sqlite",
 ]
 
 [[package]]
@@ -3069,7 +3138,9 @@ dependencies = [
  "pg_query",
  "rand 0.9.5",
  "reqwest",
- "reylo-engine",
+ "reylo-engine-core",
+ "reylo-engine-postgres",
+ "reylo-engine-sqlite",
  "rusqlite",
  "rustls",
  "serde",
@@ -3098,7 +3169,10 @@ name = "reylo-oracle"
 version = "0.0.0"
 dependencies = [
  "mysql_async",
- "reylo-engine",
+ "reylo-engine-core",
+ "reylo-engine-mysql",
+ "reylo-engine-postgres",
+ "reylo-engine-sqlite",
  "rusqlite",
  "serde_json",
  "tokio",
