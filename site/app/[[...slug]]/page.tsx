@@ -2,6 +2,7 @@ import { source } from '@/lib/source';
 import { githubUrl, siteUrl } from '@/lib/layout.shared';
 import { Brand } from '@/components/brand';
 import { getMDXComponents } from '@/components/mdx';
+import { CopyAgentPrompt } from 'docs-kit/components';
 import { DocsShell } from 'docs-kit/shell';
 import { notFound } from 'next/navigation';
 
@@ -23,7 +24,8 @@ export default async function Page({ params }: Props) {
   // the brand at its top and the GitHub link, the "Leave a star!" note and the theme switch at its
   // foot. The subheader under the title is the page's first element (`.dk-subheader`), since it
   // sets `.sql` as code; the frontmatter's description, in plain text, is the page's metadata
-  // (app/layout.tsx).
+  // (app/layout.tsx). "Copy agent prompt" at the right end of the title's row copies the agent
+  // card at the top of Setup (docs-kit's CopyAgentPrompt finds it in the page).
   return (
     <DocsShell
       tree={source.getPageTree()}
@@ -32,6 +34,7 @@ export default async function Page({ params }: Props) {
       fold={FOLD}
       brand={<Brand />}
       github={githubUrl}
+      titleAside={<CopyAgentPrompt />}
       before={<script type="application/ld+json" dangerouslySetInnerHTML={{ __html: structuredData(page.data.description ?? '') }} />}
     >
       <MDX components={getMDXComponents()} />
