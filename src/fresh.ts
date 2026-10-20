@@ -8,7 +8,9 @@
 //
 // A query is checked on its first run in a process, and again when its last check is a minute old,
 // so a long-running server notices a migration that lands while it runs. A catalog query that
-// fails (a role that may not read the catalog) checks nothing, and the query runs.
+// fails (a role that may not read the catalog) checks nothing, and the query runs; so does one
+// whose answer is not shaped as its rows are, which no database gives: a client that answers every
+// query with rows of its own, as a stub or a mock does, is no catalog to check against.
 
 /** What a module carries: the catalog query, which takes no parameter, and the facts as text. */
 export type Fresh = {
@@ -37,15 +39,23 @@ const yes = (v: string) => v === "true" || v === "1";
 const describe = (r: readonly string[]) => `${r[2]}${yes(r[3]!) ? " not null" : ""}${yes(r[4]!) ? " with a default" : ""}`;
 const table = (name: string) => name.replace(/^"|"$/g, "").replace(/"\."/g, ".");
 
+/** The catalog query's columns, as engine/src/fresh.rs names them. */
+const COLUMNS = ["fresh_table", "fresh_column", "fresh_type", "fresh_not_null", "fresh_default"] as const;
+
 /**
  * The differences between the facts the build saw and the rows the catalog query returns now, one
- * line each; none when the schema still holds what the query relied on.
+ * line each; none when the schema still holds what the query relied on, and `undefined` when the
+ * rows are not the catalog query's: each is an object with its five columns, or an array of five
+ * values where a driver hands rows back as arrays.
  */
-export function differences(fresh: Fresh, rows: readonly unknown[]): string[] {
+export function differences(fresh: Fresh, rows: readonly unknown[]): string[] | undefined {
   const now = new Map<string, string[]>();
   for (const row of rows) {
-    const values = (Array.isArray(row) ? row : Object.values(row as object)).map((v) => (v === null || v === undefined ? "" : typeof v === "boolean" ? String(v) : String(v)));
-    if (values.length >= 5) now.set(`${values[0]}\u0000${values[1]}`, values);
+    if (row === null || typeof row !== "object") return undefined;
+    const raw: unknown[] | undefined = Array.isArray(row) ? (row.length === 5 ? row : undefined) : Object.keys(row).length === 5 && COLUMNS.every((k) => k in row) ? COLUMNS.map((k) => (row as Record<string, unknown>)[k]) : undefined;
+    if (raw === undefined) return undefined;
+    const values = raw.map((v) => (v === null || v === undefined ? "" : String(v)));
+    now.set(`${values[0]}\u0000${values[1]}`, values);
   }
   const out: string[] = [];
   const seen = new Set<string>();

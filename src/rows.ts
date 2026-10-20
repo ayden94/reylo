@@ -23,12 +23,15 @@ export type Structured = { readonly name: string; readonly lists: readonly Struc
  */
 export const zoned = /(?:\d:\d\d(?::\d\d(?:\.\d+)?)?(?:\s*(?:z|[+-]\d\d?(?::?\d\d){0,2})|\s+[a-z][\w/+-]*)|^-?infinity|^epoch|^now)(?:\s+bc)?$/i;
 
+// BigInt calls, not literals: a project that type-checks these sources for a target below ES2020
+// refuses a literal (TS2737), as lab/nextjs's ES2017 does.
+const TWO_63 = BigInt(2) ** BigInt(63);
 const INTEGERS: Record<string, readonly [bigint, bigint]> = {
-  int2: [-32768n, 32767n],
-  int4: [-2147483648n, 2147483647n],
-  int8: [-(2n ** 63n), 2n ** 63n - 1n],
+  int2: [BigInt(-32768), BigInt(32767)],
+  int4: [BigInt(-2147483648), BigInt(2147483647)],
+  int8: [-TWO_63, TWO_63 - BigInt(1)],
   // SQLite's INTEGER is a 64-bit integer.
-  integer: [-(2n ** 63n), 2n ** 63n - 1n],
+  integer: [-TWO_63, TWO_63 - BigInt(1)],
 };
 
 /**
@@ -228,10 +231,10 @@ function integer(range: readonly [bigint, bigint], digits: boolean, written: str
 
 /** MySQL's integer types as a `::` cast names them, each with its range; `unsigned` doubles it from 0. */
 const MYSQL_INTEGERS: Record<string, readonly [bigint, bigint]> = {
-  tinyint: [-128n, 127n],
+  tinyint: [BigInt(-128), BigInt(127)],
   smallint: INTEGERS.int2!,
   int2: INTEGERS.int2!,
-  mediumint: [-8388608n, 8388607n],
+  mediumint: [BigInt(-8388608), BigInt(8388607)],
   int: INTEGERS.int4!,
   integer: INTEGERS.int4!,
   int4: INTEGERS.int4!,
@@ -255,7 +258,7 @@ export function checkCast(name: string, written: string, type: EngineType, v: un
   const base = written.replace(/\s*\(.*$/, "");
   const signed = dialect === "sqlite" ? (/int/i.test(base) ? INTEGERS.integer : undefined) : MYSQL_INTEGERS[base.replace(/\s*unsigned$/, "") || "bigint"];
   if (signed) {
-    const range: readonly [bigint, bigint] = dialect === "mysql" && base.endsWith("unsigned") ? [0n, signed[1] * 2n + 1n] : signed;
+    const range: readonly [bigint, bigint] = dialect === "mysql" && base.endsWith("unsigned") ? [BigInt(0), signed[1] * BigInt(2) + BigInt(1)] : signed;
     integer(range, dialect === "mysql" && range[1] >= INTEGERS.int8![1], written, v, fail);
     return;
   }

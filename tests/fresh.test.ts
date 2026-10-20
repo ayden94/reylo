@@ -45,7 +45,7 @@ const closeAll = async () => {
   for (const session of Session.opened()) await session.close();
 };
 
-test("a difference is a change: a column gone, retyped, made nullable or given a default, and a column an insert must now fill", () => {
+test("a difference is a change: a column gone, retyped, made nullable or given a default, and a column an insert must now fill; rows of another shape check nothing", () => {
   const fresh: Fresh = {
     query: "…",
     rows: [
@@ -55,9 +55,12 @@ test("a difference is a change: a column gone, retyped, made nullable or given a
     inserts: ["users"],
   };
   assert.deepEqual(differences(fresh, [["users", "id", "integer", "true", "true"], ["users", "email", "text", "true", "false"], ["users", "bio", "text", "false", "false"]]), []);
-  assert.deepEqual(differences(fresh, [{ t: "users", c: "id", ty: "integer", n: "true", d: "true" }]), ["users.email was text not null and no longer exists"]);
+  assert.deepEqual(differences(fresh, [{ fresh_table: "users", fresh_column: "id", fresh_type: "integer", fresh_not_null: true, fresh_default: true }]), ["users.email was text not null and no longer exists"]);
   assert.deepEqual(differences(fresh, [["users", "id", "bigint", "true", "true"], ["users", "email", "text", "false", "false"]]), ["users.id was integer not null with a default and is now bigint not null with a default", "users.email was text not null and is now text"]);
   assert.deepEqual(differences(fresh, [...fresh.rows, ["users", "tenant", "integer", "true", "false"]]), ["users.tenant is now integer not null, which the insert does not write"]);
+  // A client that answers every query with a row of its own, as lab/nextjs's edge stub does, is no catalog.
+  assert.equal(differences(fresh, [{ id: 1, name: "stub", email: null, role: "member", big: "7" }]), undefined);
+  assert.equal(differences(fresh, [["users", "id", "integer"]]), undefined);
 });
 
 test("SQLite: a query whose columns changed fails, naming them; one whose table gained a column it does not name runs", async () => {

@@ -174,7 +174,7 @@ function executeSyncSqlite(c: AnyClient, query: QueryModule, params: ParamsInput
     try {
       rows = c.prepare(query.fresh.query).all();
     } catch {}
-    const lines = rows ? differences(query.fresh, rows) : [];
+    const lines = (rows && differences(query.fresh, rows)) ?? [];
     if (lines.length) throw staleError(query.source, lines);
     passed(query);
   }
@@ -210,7 +210,7 @@ async function executeAsync(c: AnyClient | null | undefined, query: QueryModule,
     try {
       rows = await executeAsync(c, { dialect: query.dialect, sql: fresh.query, params: [], text: fresh.query, order: [] }, {});
     } catch {}
-    const lines = rows ? differences(fresh, rows) : [];
+    const lines = (rows && differences(fresh, rows)) ?? [];
     if (lines.length) throw staleError(query.source, lines);
     passed(query);
   }
