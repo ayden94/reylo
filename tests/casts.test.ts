@@ -100,8 +100,9 @@ test("MySQL: a cast is MySQL's own, LIMIT takes the bare placeholder, and a valu
     await db.query("insert into events (amount, at) values (1.50, '2026-10-01 10:00:00'), (2.50, '2026-10-02 10:00:00'), (3.50, '2026-10-03 10:00:00')");
     const big = await built(root, url.href, "big", "select id from events where amount > :min::numeric(10,2) order by id limit :n::int offset :skip::int");
     assert.equal(big.text, "select id from events where amount > CAST(? AS DECIMAL(10,2)) order by id limit ? offset ?");
-    assert.deepEqual(plain(await big.query.run(db, { min: "2.00", n: 5, skip: 0 })), [{ id: 2 }, { id: 3 }]);
-    assert.deepEqual(plain(await big.query.run(db, { min: 1, n: 1, skip: 1 })), [{ id: 2 }]);
+    // A BIGINT is its exact text (src/values.ts).
+    assert.deepEqual(plain(await big.query.run(db, { min: "2.00", n: 5, skip: 0 })), [{ id: "2" }, { id: "3" }]);
+    assert.deepEqual(plain(await big.query.run(db, { min: 1, n: 1, skip: 1 })), [{ id: "2" }]);
     // MySQL's CAST reads 'abc' as 0 and rounds 1.239 to 1.24.
     const [[raw]] = await db.query("select cast('abc' as signed) as a, cast(1.239 as decimal(10,2)) as b");
     assert.deepEqual({ ...raw }, { a: 0, b: "1.24" });
@@ -111,12 +112,12 @@ test("MySQL: a cast is MySQL's own, LIMIT takes the bare placeholder, and a valu
     await assert.rejects(big.query.run(db, { min: 1, n: 2 ** 31, skip: 0 }), /Parameter "n" is int, from -2147483648 to 2147483647/);
     const before = await built(root, url.href, "before", "select id from events where at < :t::datetime order by id");
     assert.equal(before.text, "select id from events where at < CAST(? AS DATETIME(6)) order by id");
-    assert.deepEqual(plain(await before.query.run(db, { t: "2026-10-02 00:00:00" })), [{ id: 1 }]);
+    assert.deepEqual(plain(await before.query.run(db, { t: "2026-10-02 00:00:00" })), [{ id: "1" }]);
     await assert.rejects(before.query.run(db, { t: "2026-02-30 00:00:00" }), /Parameter "t" is datetime, as text like "2026-10-12 19:06:48\.282"/);
     await assert.rejects(before.query.run(db, { t: new Date() }), /takes its text .*not a Date/);
     const doc = await built(root, url.href, "doc", "select json_extract(:doc::json, '$.a') as a, :id::bigint unsigned as id");
     assert.equal(doc.text, "select json_extract(CAST(? AS JSON), '$.a') as a, CAST(? AS UNSIGNED) as id");
-    assert.deepEqual({ ...(await doc.query.run(db, { doc: { a: [1, 2] }, id: 7 })) }, { a: [1, 2], id: 7 });
+    assert.deepEqual({ ...(await doc.query.run(db, { doc: { a: [1, 2] }, id: 7 })) }, { a: [1, 2], id: "7" });
     await assert.rejects(doc.query.run(db, { doc: {}, id: -1 }), /Parameter "id" is bigint unsigned, from 0 to 18446744073709551615; got -1/);
     await assert.rejects(built(root, url.href, "flag", "select :b::bool as b"), /MySQL has no boolean type/);
     await assert.rejects(built(root, url.href, "zone", "select :t::timestamptz as t"), /drops the zone/);
