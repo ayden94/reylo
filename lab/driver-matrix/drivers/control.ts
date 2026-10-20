@@ -5,7 +5,7 @@
 //                  client that binds an array as its elements joined by commas, as Bun.sql does,
 //                  running statements without their inputs, so reylo converts no array; an
 //                  unsafe() client that binds every array as its array literal, a JSON
-//                  parameter's too, as reylo did on Bun.sql at cf2bc64; and a
+//                  parameter's too, as reylo did on Bun.sql at 0d82fea; and a
 //                  transaction whose "rollback" commits and whose failure is swallowed
 //   --case sqlite  a node:sqlite database declared asynchronous, so runSync must refuse it and does not;
 //                  and a transaction(fn) whose statements answer through a promise, so runSync must throw

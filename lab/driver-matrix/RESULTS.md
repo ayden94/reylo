@@ -1,6 +1,6 @@
 # Driver matrix results
 
-Generated 2026-10-20T20:36:02.320Z by `./run.sh` against the working tree at b58d710 (uncommitted changes in src/: no; src/execute.ts fbcb89b5aa16, src/index.ts 8ccb75f1150d). The report and the diagnoses are in [README.md](README.md).
+Generated 2026-10-20T20:36:02.320Z by `./run.sh` against the working tree at a797012 (uncommitted changes in src/: no; src/execute.ts fbcb89b5aa16, src/index.ts 8ccb75f1150d). The report and the diagnoses are in [README.md](README.md).
 
 3681 rows: 3628 pass, 2 fail, 48 unsupported (reylo refuses them with its own TypeError, as its contract says), 0 skip, 3 not run. Failing controls: 30 of 97 control rows fail, as designed.
 
