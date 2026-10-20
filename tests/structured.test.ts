@@ -287,7 +287,8 @@ test("MySQL: a rows insert reads each column with ERROR ON ERROR, keeps a 64-bit
     assert.deepEqual((await analysis(root, url.href, "insert into events :e::rows(id bigint not null, ts datetime(6) not null)")).diagnostics, []);
     // A typed JSON parameter: MySQL receives `cast(? as json)`.
     const typed = await built(root, url.href, "typed_events", `select j.id from json_table(:ids::json('{"type": "array", "items": {"type": "integer", "minimum": 1}}'), '$[*]' columns (id bigint path '$' error on error)) as j order by j.id`);
-    assert.deepEqual(plain(await typed.run(db, { ids: [3, 1] })), [{ id: 1 }, { id: 3 }]);
+    // A BIGINT is its exact text (src/values.ts).
+    assert.deepEqual(plain(await typed.run(db, { ids: [3, 1] })), [{ id: "1" }, { id: "3" }]);
     await assert.rejects(typed.run(db, { ids: [0] }), /Parameter "ids" at \/0 must be at least 1/);
     const [rows] = await db.query("select cast(id as char) as id, status, amount, meta from events order by id");
     assert.deepEqual(plain(rows), [
