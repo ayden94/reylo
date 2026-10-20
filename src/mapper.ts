@@ -5,13 +5,12 @@ import { createHash } from "node:crypto";
 import { dirname } from "node:path";
 import { serve } from "./rpc.ts";
 import { engine, type Analysis } from "./engine.ts";
-import { declaredType, ident, renderParamType, renderType, type Repr } from "./render.ts";
+import { declaredType, ident, renderParamType, renderType } from "./render.ts";
 import { resolveProject, type Dialect } from "./project.ts";
 import { Session } from "./analyze.ts";
 
 type Project = {
   dialect: Dialect;
-  repr: Repr;
   strict: boolean;
   session: Promise<Session>;
 };
@@ -40,8 +39,8 @@ serve({
     // Every setting lives in the project file, which PorgREST and Reylo Framework read too.
     const optionDiagnostics = Object.keys(p.options ?? {}).map((key) => ({ path: [key], messageText: `reylo reads its settings from .reylo.yaml, not from the content mapper's options; move "${key}" there.`, code: 104 }));
     const resolved = resolveProject(await engine(), projectDir);
-    projects.set(p.projectHandle, { dialect: resolved.dialect, repr: resolved.repr, strict: resolved.strict, session: Session.open(projectDir) });
-    const configIdentity = createHash("sha1").update(JSON.stringify([resolved.file ?? null, resolved.dialect, resolved.repr, resolved.strict, resolved.url ?? null, resolved.error ?? null, p.options ?? null])).digest("hex");
+    projects.set(p.projectHandle, { dialect: resolved.dialect, strict: resolved.strict, session: Session.open(projectDir) });
+    const configIdentity = createHash("sha1").update(JSON.stringify([resolved.file ?? null, resolved.dialect, resolved.strict, resolved.url ?? null, resolved.error ?? null, p.options ?? null])).digest("hex");
     return { configIdentity, watchedFiles: resolved.watched, optionDiagnostics };
   },
   async transform(params) {
@@ -59,9 +58,6 @@ serve({
       extension: ".ts" as const,
       diagnostics,
       text: [
-        // TypeScript's own lib declares the Temporal types; the reference brings them in when
-        // the project's `lib` stops short of `esnext`.
-        ...(project.repr.dates === "temporal" ? [`/// <reference lib="esnext.temporal" />`] : []),
         `import type { Query } from "reylo";`,
         `export type Params = ${paramsType};`,
         // The same parameters as an array, in the order of `params`, for `run(client, [1, "ada"])`.
@@ -119,10 +115,10 @@ serve({
     // the engine's diagnostic (code 3), placed above.
     const order = names;
     if (analysis.diagnostics.some((d) => d.code === 6) || (dialect === "postgres" && analysis.kind === "")) return emit("unknown", "unknown", inferred, order);
-    const columns = analysis.columns.map((c) => `${ident(c.name)}: ${renderType(c.type, false, dialect, project.repr)}${c.nullable ? " | null" : ""}`);
+    const columns = analysis.columns.map((c) => `${ident(c.name)}: ${renderType(c.type, false, dialect)}${c.nullable ? " | null" : ""}`);
     // A parameter is typed from its context (a column it is compared with or written to, a CAST);
     // one no context types is `unknown`.
-    const typed = analysis.params.map((q) => [q.name, paramType(q, declaredType(q.type, q.schema) ?? renderParamType(q.type, dialect, project.repr))] as const);
+    const typed = analysis.params.map((q) => [q.name, paramType(q, declaredType(q.type, q.schema) ?? renderParamType(q.type, dialect))] as const);
     // A typed JSON parameter whose schema has a `default` may be left out (docs/typed-json-params.md).
     const optional = new Set(analysis.params.filter((q) => q.schema !== null && typeof q.schema === "object" && "default" in q.schema).map((q) => q.name));
     const paramTypes = typed.map(([name, type]) => `${ident(name)}${optional.has(name) ? "?" : ""}: ${type}`);

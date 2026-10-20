@@ -34,7 +34,10 @@ test("postgres: pg-promise gets a { text, values } object, so it binds instead o
   const db = { manyOrNone: async () => [], query: async (...args: unknown[]): Promise<any> => (calls.push({ method: "query", args }), [row]) };
   const q: QueryModule<"postgres"> = { dialect: "postgres", sql: "select '$2' as literal, :id::int as id", params: ["id"] };
   assert.deepEqual(await execute(db, q, { id: 1 }), [row]);
-  assert.deepEqual(calls[0]!.args, [{ text: "select '$2' as literal, $1::int as id", values: [1] }]);
+  // With Reylo's decoder table, which answers every oid itself.
+  const { types, ...bound } = calls[0]!.args[0] as { text: string; values: unknown[]; types: { getTypeParser(oid: number): (text: string) => unknown } };
+  assert.deepEqual(bound, { text: "select '$2' as literal, $1::int as id", values: [1] });
+  assert.equal(types.getTypeParser(20)("9007199254740993"), "9007199254740993");
 });
 
 test("postgres: unsafe(text, values) → rows, as on postgres.js and Bun.sql and their transactions", async () => {
@@ -101,7 +104,7 @@ test("mysql and sqlite: every driver gets a JSON parameter as its JSON text, and
   const values = { a: [1, 2], b: "abc", name: "ada", z: null };
   const expected = ["[1,2]", '"abc"', "ada", "[1,2]", null];
   const seen: unknown[][] = [];
-  await execute({ execute: async (_: string, v?: unknown[]) => (seen.push(v!), [[], []] as [unknown, unknown]) }, mq, values);
+  await execute({ query: async () => [[], []] as [unknown, unknown], execute: async (_: unknown, v?: unknown[]) => (seen.push(v!), [[], []] as [unknown, unknown]) }, mq, values);
   await execute({ query: async (_: string, v: unknown) => (seen.push(v as unknown[]), []), batch: async () => [] }, mq, values);
   await execute({ unsafe: async (_: string, v?: unknown[]) => (seen.push(v!), []), commitDistributed: async () => {} }, mq, values);
   const lq: QueryModule<"sqlite"> = { ...mq, dialect: "sqlite", sql: "select json(:a) as a, json(:b) as b, :name as name, json(:a) as again, json(:z) as z" };
@@ -160,7 +163,7 @@ test("a Date for a timestamp or date parameter, and a string without its zone fo
   assert.equal(seen.length, 1);
   // MySQL's DATETIME and TIMESTAMP are the engine's timestamp, and a placeholder compared with both is either.
   const my: QueryModule<"mysql"> = { dialect: "mysql", sql: "select :at", params: ["at"], inputs: { at: time("date|timestamp") } };
-  await assert.rejects(Promise.resolve().then(() => execute({ execute: async () => [[], []] as [unknown, unknown] }, my, { at: new Date() })), /^TypeError: Parameter "at" is a timestamp without a time zone/);
+  await assert.rejects(Promise.resolve().then(() => execute({ query: async () => [[], []] as [unknown, unknown], execute: async () => [[], []] as [unknown, unknown] }, my, { at: new Date() })), /^TypeError: Parameter "at" is a timestamp without a time zone/);
 });
 
 test("postgres: postgres.js, which binds a date or time string through new Date(), gets one declared unknown; Bun.sql gets the string", async () => {
@@ -199,7 +202,9 @@ test("postgres: Neon's neon() before 1.0 is called with (text, values)", async (
   const calls: Call[] = [];
   const sql = (...args: unknown[]) => (calls.push({ method: "call", args }), Promise.resolve([row]));
   assert.deepEqual(await execute(sql, pg, { id: 1, name: "ada" }), [row]);
-  assert.deepEqual(calls[0]!.args, ["select $1::int as id, $2 as name, $1 as again", [1, "ada"]]);
+  assert.deepEqual(calls[0]!.args.slice(0, 2), ["select $1::int as id, $2 as name, $1 as again", [1, "ada"]]);
+  // Its options take a decoder table, 0.9 too, and the fields with fullResults.
+  assert.deepEqual(Object.keys(calls[0]!.args[2] as object), ["fullResults", "arrayMode", "types"]);
 });
 
 test("a parameter left out binds NULL, which postgres.js, mysql2, node:sqlite and libSQL would reject", async () => {
@@ -213,9 +218,12 @@ test("a parameter left out binds NULL, which postgres.js, mysql2, node:sqlite an
 test("mysql: execute() → [rows, fields] on mysql2, a repeated name repeated in the values; a write's OK packet gives no rows", async () => {
   const calls: Call[] = [];
   const answers: unknown[] = [[[row], [{ name: "id" }]], [{ affectedRows: 1, insertId: 7 }, undefined]];
-  const pool = { execute: async (...args: unknown[]) => (calls.push({ method: "execute", args }), answers.shift() as [unknown, unknown]) };
+  const pool = { query: async () => [[], []] as [unknown, unknown], execute: async (...args: unknown[]) => (calls.push({ method: "execute", args }), answers.shift() as [unknown, unknown]) };
   assert.deepEqual(await execute(pool, my, { id: 1, name: "ada" }), [row]);
-  assert.deepEqual(calls[0]!.args, ["select ? as id, ? as name, ? as again", [1, "ada", 1]]);
+  // The statement with Reylo's per-query options and typeCast (src/decode-mysql.ts), never decimalNumbers.
+  const [options, values] = calls[0]!.args as [Record<string, unknown>, unknown[]];
+  assert.deepEqual(values, [1, "ada", 1]);
+  assert.deepEqual({ ...options, typeCast: typeof options.typeCast }, { sql: "select ? as id, ? as name, ? as again", supportBigNumbers: true, bigNumberStrings: true, dateStrings: true, rowsAsArray: false, nestTables: false, typeCast: "function" });
   assert.deepEqual(await execute(pool, my, { id: 1, name: "ada" }), []);
 });
 
@@ -242,7 +250,7 @@ test("mysql: mariadb's callback API answers through the callback, and its errors
   const conn = {
     batch: () => ({}),
     // The callback query() returns a command object, not a promise.
-    query: (sql: string, values: unknown[], done: (e: Error | null, rows?: unknown) => void) => (setImmediate(() => (sql.startsWith("insert") ? done(failure) : done(null, [{ values }]))), { on() {} }),
+    query: (options: { sql: string }, values: unknown[], done: (e: Error | null, rows?: unknown) => void) => (setImmediate(() => (options.sql.startsWith("insert") ? done(failure) : done(null, [{ values }]))), { on() {} }),
   };
   assert.deepEqual(await execute(conn as never, my, { id: 1, name: "ada" }), [{ values: [1, "ada", 1] }]);
   await assert.rejects(() => execute(conn as never, { dialect: "mysql", sql: "insert into t values (:a)", params: ["a"] }, { a: 1 }) as Promise<unknown>, (e) => e === failure);
@@ -291,7 +299,7 @@ test("every other driver gets a binary value as it is, pg-promise included, sinc
   await execute(pgp, pgq, { b: plain });
   await execute({ query: async (_: string, values?: unknown[]) => (seen.push(values![0]), { rows: [] }) }, pgq, { b: plain });
   await execute({ unsafe: async (_: string, values?: unknown[]) => (seen.push(values![0]), []) }, pgq, { b: plain });
-  await execute({ execute: async (_: string, values?: unknown[]) => (seen.push(values![0]), [[], []] as [unknown, unknown]) }, { ...bin, sql: "select hex(:b)", params: ["b"] }, { b: plain });
+  await execute({ query: async () => [[], []] as [unknown, unknown], execute: async (_: unknown, values?: unknown[]) => (seen.push(values![0]), [[], []] as [unknown, unknown]) }, { ...bin, sql: "select hex(:b)", params: ["b"] }, { b: plain });
   await execute({ prepare: () => ({ all: (...values: unknown[]) => (seen.push(values[0]), []) }) }, liteq, { b: plain });
   assert.equal(seen.length, 5);
   for (const v of seen) assert.equal(v, plain);
@@ -299,23 +307,26 @@ test("every other driver gets a binary value as it is, pg-promise included, sinc
 
 test("mysql: PlanetScale 2.0, which binds no parameters, runs a statement without any and refuses one with some", async () => {
   const calls: unknown[][] = [];
+  // 2.0's execute(query, options) refuses anything past them, or a second argument that is not its options.
   const conn = {
     execute: async (...args: unknown[]) => {
       calls.push(args);
-      if (args.length > 1) throw new Error("Query parameters are not supported: pass a complete SQL string and options to execute(query, options)");
+      if (args.length > 2 || (args[1] != null && (typeof args[1] !== "object" || Array.isArray(args[1])))) throw new Error("Query parameters are not supported: pass a complete SQL string and options to execute(query, options)");
       return { rows: [row], statement: String(args[0]), headers: [] };
     },
   };
   assert.deepEqual(await execute(conn, { dialect: "mysql", sql: "select 1", params: [] }), [row]);
   await assert.rejects(() => execute(conn, my, { id: 1, name: "ada" }) as Promise<unknown>, (e: TypeError) => e instanceof TypeError && /2\.0 binds no parameters/.test(e.message) && /not supported/.test((e.cause as Error).message));
-  assert.deepEqual(calls[0], ["select 1"]);
+  // 1.x's form first, then 2.0's, with Reylo's cast either way.
+  assert.deepEqual(calls[0]!.slice(0, 2), ["select 1", null]);
+  assert.deepEqual([calls[1]![0], Object.keys(calls[1]![1] as object)], ["select 1", ["as", "cast"]]);
 });
 
 test("mysql: a mysql2 callback pool or connection runs through its promise() wrapper", async () => {
   const callback = {
     // The callback execute() returns a Query object, not a promise.
     execute: () => ({ on() {} }),
-    promise: () => ({ execute: async () => [[row], []] as [unknown, unknown] }),
+    promise: () => ({ query: async () => [[], []] as [unknown, unknown], execute: async () => [[row], []] as [unknown, unknown] }),
   };
   assert.deepEqual(await execute(callback, my, { id: 1, name: "ada" }), [row]);
 });
@@ -408,7 +419,7 @@ test("an unsupported client rejects, naming what it has and what reylo takes", a
 test("parameters may be an array: element i binds params[i], for a named and a positional statement on every dialect", async () => {
   const seen: [string, unknown[]][] = [];
   const pgClient = { query: async (text: string, values: unknown[]) => (seen.push([text, values]), { rows: [] }) };
-  const mysqlPool = { execute: async (text: string, values: unknown[]) => (seen.push([text, values]), [[], []] as [unknown, unknown]) };
+  const mysqlPool = { query: async () => [[], []] as [unknown, unknown], execute: async (options: { sql: string }, values: unknown[]) => (seen.push([options.sql, values]), [[], []] as [unknown, unknown]) };
   const d1 = { batch: async () => [], prepare: (text: string) => ({ first: async () => null, bind: (...values: unknown[]) => (seen.push([text, values]), { all: async () => ({ results: [] }) }) }) };
   const positional: Record<string, QueryModule> = {
     postgres: { dialect: "postgres", sql: "select $2::text as name, $1::int as id", params: ["1", "2"] },

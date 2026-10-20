@@ -7,6 +7,7 @@
 import { dirname, relative } from "node:path";
 import { Session } from "./analyze.ts";
 import { querySchemas } from "./schema.ts";
+import { columnKind } from "./values.ts";
 
 export type SqlModule = {
   code: string;
@@ -42,6 +43,9 @@ export async function sqlModule(path: string, sql: string): Promise<SqlModule> {
   if (descriptor) throw new Error(`${path}: ${descriptor.message}`);
   // Each parameter's type, for the drivers that bind an array or a JSON value wrong (src/execute.ts).
   const inputs = Object.fromEntries(analysis.params.map((p) => [p.name, { type: p.type, ...(p.schema === undefined ? {} : { schema: p.schema }), ...(p.cast === undefined ? {} : { cast: p.cast }) }]));
+  // Each output column's name and kind, from the table the declared types come from: what the run
+  // time gives each value (src/values.ts).
+  const columns = analysis.columns.map((c) => [c.name, columnKind(c.type, session.project.dialect)]);
   // A structured parameter's lists, at JavaScript's offsets into the statement (the engine's are
   // UTF-8 bytes).
   const text = analysis.rewritten.sql;
@@ -50,7 +54,7 @@ export async function sqlModule(path: string, sql: string): Promise<SqlModule> {
     `import { defineQuery } from "reylo";`,
     `export const sql = ${JSON.stringify(sql)};`,
     `export const params = ${JSON.stringify(params)};`,
-    `export default defineQuery({ dialect: ${JSON.stringify(session.project.dialect)}, sql, params, cardinality: ${JSON.stringify(analysis.cardinality)}, text: ${JSON.stringify(text)}, order: ${JSON.stringify(analysis.rewritten.order)}, inputs: ${JSON.stringify(inputs)}${structured.length ? `, structured: ${JSON.stringify(structured)}` : ""}${analysis.fresh ? `, fresh: ${JSON.stringify(analysis.fresh)}, source: ${JSON.stringify(relative(session.project.root, path))}` : ""}, jsonSchema: ${JSON.stringify(querySchemas(analysis, session.project.dialect, session.project.repr))} });`,
+    `export default defineQuery({ dialect: ${JSON.stringify(session.project.dialect)}, sql, params, cardinality: ${JSON.stringify(analysis.cardinality)}, text: ${JSON.stringify(text)}, order: ${JSON.stringify(analysis.rewritten.order)}, inputs: ${JSON.stringify(inputs)}, columns: ${JSON.stringify(columns)}${structured.length ? `, structured: ${JSON.stringify(structured)}` : ""}${analysis.fresh ? `, fresh: ${JSON.stringify(analysis.fresh)}, source: ${JSON.stringify(relative(session.project.root, path))}` : ""}, jsonSchema: ${JSON.stringify(querySchemas(analysis, session.project.dialect))} });`,
     ``,
   ].join("\n");
   return { code, entry: outcome.entry };

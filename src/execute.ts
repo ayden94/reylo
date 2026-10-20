@@ -5,7 +5,10 @@
 // transaction, savepoint, reserved or checked-out connection has the same shape
 // as the client it came from, so it is accepted wherever that client is.
 
-import { queryPostgres } from "./decode.ts";
+import { bunRows, neonCallable, postgresJs, queryPostgres } from "./decode.ts";
+import { mariadb, mysql2, planetscale } from "./decode-mysql.ts";
+import { normalize, runSyncSqlite } from "./decode-sqlite.ts";
+import type { Columns } from "./values.ts";
 import type { EngineType } from "./engine-type.ts";
 import { lexPlaceholders } from "./lex.ts";
 import type { JsonSchema } from "./engine-type.ts";
@@ -115,6 +118,8 @@ export type QueryModule<D extends Dialect = Dialect> = {
   readonly order?: readonly string[] | undefined;
   /** What the analysis found of each parameter, by name (every build step puts it in the module). */
   readonly inputs?: Inputs | undefined;
+  /** Each output column's name and kind (src/values.ts), in order: what the run time gives each value (every build step puts it in the module). */
+  readonly columns?: Columns | undefined;
   /** Each structured parameter in insert position, with the lists of `text` the run time writes again for the keys a call carries. */
   readonly structured?: readonly Structured[] | undefined;
   /** The catalog facts the statement relied on, checked before it runs (src/fresh.ts). */
@@ -179,13 +184,7 @@ function executeSyncSqlite(c: AnyClient, query: QueryModule, params: ParamsInput
     passed(query);
   }
   const { text, values } = statement(query, params);
-  const prepared = c.prepare(text);
-  // better-sqlite3 refuses all() on a statement that returns no rows.
-  if (prepared.reader === false) {
-    prepared.run(...values);
-    return [];
-  }
-  return prepared.all(...values);
+  return runSyncSqlite(c, text, values, query.columns);
 }
 
 // A SQLite client with prepare() whose statements answer at once. D1 (batch()), sqlite3 and
@@ -236,67 +235,52 @@ async function executeAsync(c: AnyClient | null | undefined, query: QueryModule,
       // returns the value is bound as JSON and serialized to exactly its JSON text.
       const json = () => bound.map((v, i) => (isJsonParam(v, i) ? JSON.stringify(v) : v));
       // query() before unsafe(): Neon's neon() has both, and its unsafe() builds a fragment
-      // for a template instead of running anything. Where the driver takes a decoder per
-      // query, reylo passes its own (decode.ts).
-      if (typeof c.query === "function") return await queryPostgres(c, text, json());
+      // for a template instead of running anything. Reylo decodes every value itself (decode.ts).
+      if (typeof c.query === "function") return await queryPostgres(c, text, json(), query.columns);
       if (typeof c.unsafe === "function") {
         // postgres.js reads a string for a date or time parameter through `new Date(x)` and binds
         // its toISOString(), so a timestamp's wall-clock time moved by the app's offset, and
         // `infinity` or a zone name failed with "Invalid time value". Declared `unknown` (705), it
         // is sent as the text, which the server reads as the parameter's type, as it would an
         // undeclared one. Bun.sql (commitDistributed()) sends the text and has no typed().
-        const asText = typeof c.typed === "function" && typeof c.commitDistributed !== "function";
-        return await c.unsafe(text, bound.map((v, i) => (isJsonParam(v, i) ? { toJSON: () => v } : asText && typeof v === "string" && isTime(type(i)) ? c.typed(v, 705) : v)));
+        const bun = typeof c.commitDistributed === "function";
+        const asText = typeof c.typed === "function" && !bun;
+        const mapped = bound.map((v, i) => (isJsonParam(v, i) ? { toJSON: () => v } : asText && typeof v === "string" && isTime(type(i)) ? c.typed(v, 705) : v));
+        return bun ? bunRows(await c.unsafe(text, mapped), query.columns) : await postgresJs(c, text, mapped, query.columns);
       }
-      if (typeof c === "function") {
-        const result = await c(text, json().map(asByteaHex));
-        return Array.isArray(result) ? result : result.rows;
-      }
+      if (typeof c === "function") return await neonCallable(c, text, json().map(asByteaHex), query.columns);
       break;
     }
     case "mysql": {
-      if (typeof c.unsafe === "function") return await c.unsafe(text, values);
+      if (typeof c.unsafe === "function") return bunRows(await c.unsafe(text, values), query.columns);
       // mariadb, checked before execute() because it has one too (returning rows, not a pair).
       // Its callback API (mariadb/callback) answers through the callback and returns a command
       // object; its promise API returns a promise and ignores the callback.
-      if (typeof c.batch === "function" && typeof c.query === "function") {
-        const bound = values.map(asBuffer);
-        const result = await new Promise((resolve, reject) => {
-          const returned = c.query(text, bound, (error: Error | null, rows: unknown) => (error ? reject(error) : resolve(rows)));
-          if (typeof returned?.then === "function") returned.then(resolve, reject);
-        });
-        return Array.isArray(result) ? result : [];
-      }
+      if (typeof c.batch === "function" && typeof c.query === "function") return await mariadb(c, text, values.map(asBuffer), query.columns);
       // mysql2's callback API: the promise() wrapper runs on the same connection.
       const m = typeof c.promise === "function" ? c.promise() : c;
       if (typeof m.execute === "function") {
-        // mysql2 resolves to [rows, fields], PlanetScale to { rows }; a write's rows are an OK packet.
-        // A statement without parameters gets no values, which PlanetScale 2.0 would refuse.
-        let result;
-        try {
-          result = await (values.length ? m.execute(text, values) : m.execute(text));
-        } catch (error) {
-          if (!/^Query parameters are not supported/.test((error as Error)?.message)) throw error;
-          throw new TypeError(`@planetscale/database 2.0 binds no parameters, so reylo cannot pass this statement's values to it; use its 1.x line, or mysql2 on PlanetScale's MySQL endpoint.`, { cause: error });
-        }
-        const rows = Array.isArray(result) ? result[0] : result.rows;
-        return Array.isArray(rows) ? rows : [];
+        // mysql2 has query() beside execute(); PlanetScale's Connection, Client and transaction do not.
+        return typeof m.query === "function" ? await mysql2(m, text, values) : await planetscale(m, text, values);
       }
       break;
     }
     case "sqlite": {
-      if (typeof c.unsafe === "function") return await c.unsafe(text, values);
-      if (typeof c.execute === "function") return (await c.execute({ sql: text, args: values })).rows;
-      if (typeof c.getDatabaseInstance === "function") return await c.all(text, values);
+      // The driver's rows, each value given its kind (decode-sqlite.ts).
+      const columns = query.columns;
+      if (typeof c.unsafe === "function") return normalize(await c.unsafe(text, values), columns);
+      if (typeof c.execute === "function") return normalize((await c.execute({ sql: text, args: values })).rows, columns);
+      if (typeof c.getDatabaseInstance === "function") return normalize(await c.all(text, values), columns);
       if (typeof c.all === "function" && typeof c.exec === "function") {
-        return await new Promise<unknown[]>((resolve, reject) =>
-          c.all(text, values, (error: Error | null, rows: unknown[]) => (error ? reject(error) : resolve(rows))),
+        return normalize(
+          await new Promise<unknown[]>((resolve, reject) => c.all(text, values, (error: Error | null, rows: unknown[]) => (error ? reject(error) : resolve(rows)))),
+          columns,
         );
       }
       if (typeof c.prepare === "function") {
         const prepared = c.prepare(text);
-        if (typeof prepared.first === "function") return (await prepared.bind(...values).all()).results;
-        return await prepared.all(...values);
+        if (typeof prepared.first === "function") return normalize((await prepared.bind(...values).all()).results, columns, { d1: true });
+        return normalize(await prepared.all(...values), columns);
       }
       break;
     }

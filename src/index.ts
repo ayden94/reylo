@@ -4,6 +4,7 @@ import { execute, executeSync, type ClientFor, type Dialect, type Inputs, type S
 import type { StandardJSONSchemaV1, StandardTypedV1 } from "./standard.ts";
 import type { Structured } from "./rows.ts";
 import type { Fresh } from "./fresh.ts";
+import type { Columns } from "./values.ts";
 
 export type { ClientFor, Dialect, Inputs, MysqlClient, PostgresClient, SqliteClient, SyncClientFor } from "./execute.ts";
 
@@ -72,6 +73,8 @@ export type QueryDefinition = {
   order?: readonly string[];
   /** Each parameter's type, by name, as the engine found it: every build step puts it in the module, and a driver that binds some values wrong gets them converted by it. */
   inputs?: Inputs;
+  /** Each output column's name and kind (src/values.ts), in order: every build step puts them in the module, and the run time gives each value its kind by them. */
+  columns?: Columns;
   /** Each structured parameter in insert position, with the lists of `text` the run time writes again for the keys a call carries. */
   structured?: readonly Structured[];
   /** The catalog facts the statement relied on, which the run time checks before it runs (src/fresh.ts). */
@@ -89,13 +92,14 @@ export function defineQuery<Params, Row, C extends Cardinality, D extends Dialec
   const missingSchema = () => {
     throw new Error(`No JSON Schema is available for this query: a module a build step writes carries it, and a query defined by hand has none.`);
   };
-  const query: Query<Params, Row, C, D, Values> & { text?: string | undefined; order?: readonly string[] | undefined; inputs?: Inputs | undefined; structured?: readonly Structured[] | undefined; fresh?: Fresh | undefined; source?: string | undefined } = {
+  const query: Query<Params, Row, C, D, Values> & { text?: string | undefined; order?: readonly string[] | undefined; inputs?: Inputs | undefined; columns?: Columns | undefined; structured?: readonly Structured[] | undefined; fresh?: Fresh | undefined; source?: string | undefined } = {
     dialect: def.dialect,
     sql: def.sql,
     params: def.params,
     text: def.text,
     order: def.order,
     inputs: def.inputs,
+    columns: def.columns,
     structured: def.structured,
     fresh: def.fresh,
     source: def.source,

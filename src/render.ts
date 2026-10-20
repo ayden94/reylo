@@ -1,92 +1,38 @@
-// The engine's type model as TypeScript text. On the wire the project's driver decodes a value
-// its own way, and `run` returns what it decoded: reylo declares that type. Drivers disagree on
-// five kinds of value: timestamps (a Date or a string), 64-bit integers (a string, a number or a
-// BigInt), decimals (a string or a number), JSON (parsed or its text) and binary values (a
-// Uint8Array, a Buffer, an ArrayBuffer or an array of numbers). The `Repr` names what the
-// project's driver returns for each (src/project.ts takes it from the driver in package.json and
-// the project file's `types`), and the rendered type follows it. Inside a JSON value the database
-// has already serialized it, so the same type reads differently there and the setting does not
-// apply.
+// The engine's type model as TypeScript text. Reylo gives every value it returns its type itself,
+// on every driver (src/values.ts, the maintainer, 2026-10-20): one representation per SQL type, so
+// a column's type is its kind's, from the same table the run time decodes with. Inside a JSON value
+// the database has already serialized it, so the same type reads as JSON writes it there.
 import type { EngineType } from "./engine.ts";
+import { kindType as typeOfKind, scalarKind, type Dialect } from "./values.ts";
 
-/** What the project's driver returns for the values drivers disagree on. */
-export type Repr = {
-  dates: "string" | "Date" | "temporal";
-  /** `number | bigint` is PGlite's: a number, or a BigInt above 2^53. */
-  bigint: "string" | "number" | "bigint" | "number | bigint";
-  decimal: "string" | "number";
-  json: "parsed" | "string";
-  binary: "Uint8Array" | "Buffer" | "ArrayBuffer" | "number[]";
-};
-
-/** Each dialect's defaults when the project names no driver reylo knows: what postgres.js, mysql2 and node:sqlite return. */
-export const defaultReprs: Record<"postgres" | "mysql" | "sqlite", Repr> = {
-  postgres: { dates: "Date", bigint: "string", decimal: "string", json: "parsed", binary: "Uint8Array" },
-  mysql: { dates: "Date", bigint: "number", decimal: "string", json: "parsed", binary: "Uint8Array" },
-  // SQLite has no date, decimal or JSON type; an INTEGER is a number.
-  sqlite: { dates: "string", bigint: "number", decimal: "string", json: "parsed", binary: "Uint8Array" },
-};
-export const defaultRepr: Repr = defaultReprs.postgres;
-
-const wire: Record<string, string> = {
+// What a database writes inside a JSON document (`json_build_object`, `json_agg`, a composite
+// inside one): a number for the integers and decimals, the text of a date, hexadecimal for bytes.
+const json: Record<string, string> = {
   bool: "boolean",
   int2: "number", int4: "number", oid: "number", float4: "number", float8: "number",
-  numeric: "string",
+  int8: "number", numeric: "number",
   text: "string", varchar: "string", bpchar: "string", name: "string", char: "string", citext: "string",
   uuid: "string", time: "string", timetz: "string", interval: "string",
-  bytea: "Uint8Array",
-  void: "void",
-  // Types no supported driver parses: the value arrives as the text Postgres prints.
+  date: "string", timestamp: "string", timestamptz: "string",
+  bytea: "string",
   money: "string", inet: "string", cidr: "string", macaddr: "string", macaddr8: "string", xml: "string",
   bit: "string", varbit: "string", tsvector: "string", tsquery: "string", regclass: "string", regtype: "string",
   int4range: "string", int8range: "string", numrange: "string", tsrange: "string", tstzrange: "string", daterange: "string",
   int4multirange: "string", int8multirange: "string", nummultirange: "string", tsmultirange: "string", tstzmultirange: "string", datemultirange: "string",
   hstore: "string", ltree: "string", lquery: "string", ltxtquery: "string",
-  // A row value (`row(...)`, a composite-typed column, a whole-row reference): no driver parses
-  // one, so it arrives as its text form, and so does an array of them.
   record: "string",
 };
-const json: Record<string, string> = {
-  ...wire,
-  int8: "number", numeric: "number",
-  date: "string", timestamp: "string", timestamptz: "string",
-  bytea: "string",
-};
-const temporal: Record<string, string> = { timestamptz: "Temporal.Instant", timestamp: "Temporal.PlainDateTime", date: "Temporal.PlainDate" };
-
-// SQLite: the engine names a column by its affinity; the drivers decode REAL as a number, TEXT as
-// a string and BLOB as a Uint8Array. An INTEGER is a 64-bit integer, which the `bigint` setting
-// describes as for the other dialects: a number by default, a BigInt under better-sqlite3's and
-// bun:sqlite's safeIntegers or node:sqlite's readBigInts, a string or a BigInt under libsql's
-// intMode. A NUMERIC column holds whichever the row stored. SQLite has no date type, so `dates`
-// changes no SQLite type.
-const sqlite: Record<string, string> = { real: "number", text: "string", blob: "Uint8Array" };
-
-function sqliteScalar(name: string, repr: Repr): string {
-  if (name === "integer") return repr.bigint;
-  if (name === "numeric") return [...new Set([...repr.bigint.split(" | "), "number", "string"])].join(" | ");
-  if (name === "blob") return repr.binary;
-  return sqlite[name] ?? "unknown";
-}
+const sqliteJson: Record<string, string> = { integer: "number", real: "number", numeric: "number | string", text: "string", bool: "boolean" };
 
 export const ident = (name: string) => (/^[A-Za-z_$][\w$]*$/.test(name) ? name : JSON.stringify(name));
 
-/** The wire type of a scalar under the chosen representation. */
-export function scalarType(name: string, repr: Repr): string {
-  if (name in temporal) return repr.dates === "temporal" ? temporal[name]! : repr.dates === "Date" ? "Date" : "string";
-  if (name === "int8") return repr.bigint;
-  if (name === "numeric") return repr.decimal;
-  if (name === "bytea") return repr.binary;
-  return wire[name] ?? "unknown";
-}
-
-export function renderType(t: EngineType, inJson = false, dialect: "postgres" | "sqlite" | "mysql" = "postgres", repr: Repr = defaultRepr): string {
+export function renderType(t: EngineType, inJson = false, dialect: Dialect = "postgres"): string {
   switch (t.kind) {
     case "scalar": {
-      if (dialect === "sqlite") return sqliteScalar(t.name, repr);
       // `a|b` is either: a MySQL column whose type the execution decides (`:n + 1` is a BIGINT
       // or a DOUBLE by what is bound), or a truth value a document holds as `true` or as 1.
-      const parts = t.name.split("|").map((name) => (inJson ? json[name] ?? "unknown" : scalarType(name, repr)));
+      if (!inJson) return typeOfKind(scalarKind(t.name, dialect));
+      const parts = t.name.split("|").map((name) => (dialect === "sqlite" ? sqliteJson[name] : json[name]) ?? "unknown");
       return parts.includes("unknown") ? "unknown" : [...new Set(parts.flatMap((part) => part.split(" | ")))].join(" | ");
     }
     case "enum": return t.labels.length ? t.labels.map((l) => JSON.stringify(l)).join(" | ") : "string";
@@ -94,23 +40,21 @@ export function renderType(t: EngineType, inJson = false, dialect: "postgres" | 
       if (((t.of.kind === "scalar" && t.of.name === "record") || t.of.kind === "composite") && !inJson) return "string";
       // An element is nullable only where the statement builds the array from a value that may
       // be NULL (`array_agg` over a LEFT JOIN); any other array is `T[]`, as decided on 2026-10-03.
-      const inner = renderType(t.of, inJson, dialect, repr) + (t.nullable_items ? " | null" : "");
+      const inner = renderType(t.of, inJson, dialect) + (t.nullable_items ? " | null" : "");
       return /[|&]/.test(inner) ? `(${inner})[]` : `${inner}[]`;
     }
-    // A JSON value whose shape the statement builds; a driver set up to return JSON as text
-    // (mysql2's jsonStrings, a pg parser for json) hands back the text.
-    case "object": return !inJson && repr.json === "string" ? "string" : renderFields(t.fields, dialect, repr);
+    // A JSON value whose shape the statement builds.
+    case "object": return renderFields(t.fields, dialect);
     // A composite whose columns the catalog gave: on the wire it is a row value like `record`,
     // which no driver parses; inside a JSON document the database writes it as an object.
-    case "composite": return inJson ? renderFields(t.fields, dialect, repr) : "string";
+    case "composite": return inJson ? renderFields(t.fields, dialect) : "string";
     case "list": {
-      if (!inJson && repr.json === "string") return "string";
-      const inner = renderType(t.of, true, dialect, repr) + (t.nullable_items ? " | null" : "");
+      const inner = renderType(t.of, true, dialect) + (t.nullable_items ? " | null" : "");
       return /[|&]/.test(inner) ? `(${inner})[]` : `${inner}[]`;
     }
-    case "json": return !inJson && repr.json === "string" ? "string" : t.schema === undefined ? "unknown" : schemaType(t.schema);
+    case "json": return t.schema === undefined ? "unknown" : schemaType(t.schema);
     // Only a parameter is one; no column is.
-    case "rows": return renderParamType(t, dialect, repr);
+    case "rows": return renderParamType(t, dialect);
     case "unknown": return "unknown";
   }
 }
@@ -207,8 +151,8 @@ function grouped(ts: string): string {
 }
 
 /** An object type of JSON-encoded fields, each nullable as the engine says. */
-function renderFields(fields: { name: string; type: EngineType; nullable: boolean }[], dialect: "postgres" | "sqlite" | "mysql", repr: Repr): string {
-  return fields.length ? `{ ${fields.map((f) => `${ident(f.name)}: ${renderType(f.type, true, dialect, repr)}${f.nullable ? " | null" : ""}`).join("; ")} }` : "Record<never, never>";
+function renderFields(fields: { name: string; type: EngineType; nullable: boolean }[], dialect: Dialect): string {
+  return fields.length ? `{ ${fields.map((f) => `${ident(f.name)}: ${renderType(f.type, true, dialect)}${f.nullable ? " | null" : ""}`).join("; ")} }` : "Record<never, never>";
 }
 
 /**
@@ -221,39 +165,38 @@ export function declaredType(t: EngineType, declared: unknown): string | undefin
 }
 
 /**
- * The type a parameter accepts. The `dates` and `bigint` settings describe what the driver
- * returns, not what it takes: every Postgres and MySQL driver binds a number, a BigInt or a digit
- * string for a 64-bit integer, so `limit :n` takes a number. A `timestamptz` is an instant, which
- * every Postgres driver binds a `Date` as; a string for it must name its zone (`src/execute.ts`).
- * A `timestamp` or a `date` (MySQL's DATETIME and TIMESTAMP are the engine's `timestamp`) is a
- * wall-clock reading with no zone, and the drivers write a `Date`'s in different zones, the app's
- * (pg, mysql2), the server's (postgres.js) or UTC (PGlite, Bun.sql), so it takes the text alone
- * (the maintainer, 2026-10-12).
+ * The type a parameter accepts, which is what every driver binds rather than what Reylo returns:
+ * every Postgres and MySQL driver binds a number, a BigInt or a digit string for a 64-bit integer,
+ * so `limit :n` takes a number. A `timestamptz` is an instant, which every Postgres driver binds a
+ * `Date` as; a string for it must name its zone (`src/execute.ts`). A `timestamp` or a `date`
+ * (MySQL's DATETIME and TIMESTAMP are the engine's `timestamp`) is a wall-clock reading with no
+ * zone, and the drivers write a `Date`'s in different zones, the app's (pg, mysql2), the server's
+ * (postgres.js) or UTC (PGlite, Bun.sql), so it takes the text alone (the maintainer, 2026-10-12).
  */
-export function renderParamType(t: EngineType, dialect: "postgres" | "sqlite" | "mysql" = "postgres", repr: Repr = defaultRepr): string {
+export function renderParamType(t: EngineType, dialect: Dialect = "postgres"): string {
   if (t.kind === "scalar" && dialect !== "sqlite") {
     if (t.name === "int8") return "number | bigint | string";
     if (t.name === "timestamptz") return "Date | string";
-    if (t.name.split("|").every((name) => name in temporal)) return "string";
+    if (t.name.split("|").every((name) => name === "timestamp" || name === "timestamptz" || name === "date")) return "string";
   }
-  // A SQLite driver binds a number or a BigInt for an INTEGER, whatever it returns.
-  if (t.kind === "scalar" && dialect === "sqlite" && t.name === "integer") return repr.bigint === "number" ? "number" : `number | ${repr.bigint}`;
+  // A SQLite driver binds a number for an INTEGER.
+  if (t.kind === "scalar" && dialect === "sqlite" && t.name === "integer") return "number";
   // Every driver binds a Uint8Array (a Buffer is one) for a binary value, mariadb and Neon's
   // neon() before 0.10 once `execute` has converted it, a digit string for a decimal, and any
-  // JSON value for a JSON parameter, whatever it returns for them.
+  // JSON value for a JSON parameter.
   if (t.kind === "scalar" && (t.name === "bytea" || t.name === "blob")) return "Uint8Array";
-  if (t.kind === "scalar" && t.name === "numeric" && dialect !== "sqlite") return repr.decimal === "number" ? "number | string" : "string";
+  if (t.kind === "scalar" && t.name === "numeric" && dialect !== "sqlite") return "string";
   if (t.kind === "json") return t.schema === undefined ? "unknown" : schemaType(t.schema);
   // A structured parameter: each key as a parameter of its type takes it, `?` where the caller
   // may leave it out, `| null` where it may be null.
   if (t.kind === "rows") {
-    const fields = t.fields.map((f) => `${ident(f.name)}${f.optional ? "?" : ""}: ${declaredType(f.type, f.schema) ?? renderParamType(f.type, dialect, repr)}${f.nullable ? " | null" : ""}`);
+    const fields = t.fields.map((f) => `${ident(f.name)}${f.optional ? "?" : ""}: ${declaredType(f.type, f.schema) ?? renderParamType(f.type, dialect)}${f.nullable ? " | null" : ""}`);
     const row = fields.length ? `{ ${fields.join("; ")} }` : "Record<never, never>";
     return t.one ? row : `readonly ${row}[]`;
   }
   if (t.kind === "array") {
-    const inner = renderParamType(t.of, dialect, repr);
+    const inner = renderParamType(t.of, dialect);
     return /[|&]/.test(inner) ? `(${inner})[]` : `${inner}[]`;
   }
-  return renderType(t, false, dialect, repr);
+  return renderType(t, false, dialect);
 }

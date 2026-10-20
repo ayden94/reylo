@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { EngineType } from "../src/engine.ts";
-import { defaultRepr, renderParamType } from "../src/render.ts";
+import { renderParamType } from "../src/render.ts";
 import { prepareRows, variant, type RowsType } from "../src/rows.ts";
 
 // What the engine gives for `:events::rows(id int8 not null, ts timestamptz not null, status? text
@@ -22,10 +22,10 @@ const events: RowsType = {
 
 test("the caller's type is the column list's: each key as its parameter type takes it, ? where it may be left out, | null where it may be null", () => {
   assert.equal(
-    renderParamType(events, "postgres", defaultRepr),
+    renderParamType(events, "postgres"),
     "readonly { id: number | bigint | string; ts: Date | string; status?: string; amount?: string | null; tags?: string[] | null; meta?: { source: string } | null }[]",
   );
-  assert.equal(renderParamType({ ...events, one: true, fields: events.fields.slice(0, 1) }, "postgres", defaultRepr), "{ id: number | bigint | string }");
+  assert.equal(renderParamType({ ...events, one: true, fields: events.fields.slice(0, 1) }, "postgres"), "{ id: number | bigint | string }");
 });
 
 test("a value is checked against its column list, and written as the JSON the statement reads", () => {
