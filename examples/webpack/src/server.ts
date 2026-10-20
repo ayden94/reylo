@@ -40,8 +40,9 @@ const server = createServer(async (req, res) => {
   }
 });
 
+// A 64-bit integer is a BigInt, which JSON.stringify refuses: it is written as its text.
 function send(res: ServerResponse, status: number, body: unknown) {
-  res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(body));
+  res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(body, (_, v) => (typeof v === "bigint" ? String(v) : v)));
 }
 
 const port = Number(process.env.PORT ?? 3000);

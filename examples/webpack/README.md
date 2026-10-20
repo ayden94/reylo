@@ -51,6 +51,6 @@ Misspell a column in `queries/get_user.sql` and run `nub run typecheck` again: t
 ## Notes
 
 - ts-loader does not work with TypeScript 7: the `typescript` package of the Go port has no JavaScript API, and ts-loader fails with `TypeError: Cannot read properties of undefined (reading 'fileExists')`. swc-loader only strips the types, and `tsc` checks them.
-- `last_insert_id()` is a `BIGINT UNSIGNED`, which Reylo gives as a string to keep it exact, so the `POST` answers `{"id":"3"}`.
+- `last_insert_id()` is a `BIGINT UNSIGNED`, which Reylo gives as a `bigint`. `JSON.stringify` refuses a BigInt, so `send` writes one as its text, and the `POST` answers `{"id":"3"}`.
 - A build where the database is out of reach reads `.reylo/`; run `reylo generate` where it can be reached first ([In CI](https://reylo.dev/#in-ci)).
 - `typescript` is pinned to `7.1.0-beta`: a range such as `^7.1.0-beta` also takes the nightlies, `7.1.0-dev.*`, which semver orders above the beta.
