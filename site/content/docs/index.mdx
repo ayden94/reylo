@@ -132,6 +132,8 @@ create table events (
 Set up Reylo in this project. Reylo lets TypeScript import .sql
 files, with types inferred from the live database. Its docs are one
 page, https://reylo.dev: follow the section linked at each step.
+Each setup also has a complete, working example project to copy:
+https://github.com/colinhacks/reylo/tree/main/examples
 
 1. Check the requirements and install Reylo, the engine of the
    project's database (@reylosql/postgres, @reylosql/mysql or
@@ -148,6 +150,8 @@ page, https://reylo.dev: follow the section linked at each step.
 5. Set up the editor the project uses: https://reylo.dev/#editors
 6. Write a first query and run it with the project's own driver:
    https://reylo.dev/#usage and https://reylo.dev/#supported-drivers
+   For more queries, from a list to nested rows, follow the
+   examples: https://reylo.dev/#examples
 7. Run the typecheck script. The query's types come from the
    database; an error in a .sql file shows at its line and column.
 ```
