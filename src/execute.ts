@@ -89,11 +89,16 @@ export type SqlitePromiseClient = {
   getDatabaseInstance(): unknown;
 };
 
-export type ClientFor<D extends Dialect> = D extends "postgres"
-  ? PgQueryClient | NeonHttpClient | UnsafeClient | CallableClient
-  : D extends "mysql"
-    ? MysqlExecuteClient | Mysql2CallbackClient | MariadbClient | MariadbCallbackClient | BunSqlClient
-    : SyncSqliteClient | D1Client | LibsqlClient | Sqlite3Client | SqlitePromiseClient | BunSqlClient;
+/** Every Postgres client `run` takes, or a transaction, savepoint or connection taken from one. */
+export type PostgresClient = PgQueryClient | NeonHttpClient | UnsafeClient | CallableClient;
+/** Every MySQL client `run` takes, or a transaction or connection taken from one. */
+export type MysqlClient = MysqlExecuteClient | Mysql2CallbackClient | MariadbClient | MariadbCallbackClient | BunSqlClient;
+/** Every SQLite client `run` takes, or a transaction taken from one. */
+export type SqliteClient = SyncSqliteClient | D1Client | LibsqlClient | Sqlite3Client | SqlitePromiseClient | BunSqlClient;
+
+// Each dialect's clients are one named union, so a hover over `run` reads
+// `run(client: PostgresClient, …)` rather than listing every client's shape.
+export type ClientFor<D extends Dialect> = D extends "postgres" ? PostgresClient : D extends "mysql" ? MysqlClient : SqliteClient;
 
 /** The clients `runSync` takes: the synchronous SQLite drivers, and none for Postgres or MySQL. */
 export type SyncClientFor<D extends Dialect> = D extends "sqlite" ? SyncSqliteClient : never;

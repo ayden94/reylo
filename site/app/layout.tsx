@@ -1,18 +1,19 @@
 import './global.css';
 import { RootProvider } from 'fumadocs-ui/provider/next';
-import { Caveat, Inter, JetBrains_Mono } from 'next/font/google';
+import { Caveat, Geist, Geist_Mono } from 'next/font/google';
 import type { ReactNode } from 'react';
 
-// Inter for text, as on zod.dev; JetBrains Mono for code.
-const sans = Inter({
+// Geist for text and Geist Mono for code: the review of 2026-10-20 ("too wide", "the legibility
+// isn't very good anymore") replaced Inter and JetBrains Mono, after a comparison of six
+// directions on the live page. Both are variable fonts, so they take no weight list.
+const sans = Geist({
   subsets: ['latin'],
   display: 'swap',
   variable: '--font-text',
 });
 
-const mono = JetBrains_Mono({
+const mono = Geist_Mono({
   subsets: ['latin'],
-  weight: ['400', '500'],
   display: 'swap',
   variable: '--font-code',
 });

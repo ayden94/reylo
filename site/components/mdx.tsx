@@ -5,6 +5,7 @@ import * as Twoslash from 'fumadocs-twoslash/ui';
 import { Heading } from './heading';
 import { Dialect, DialectTabs } from './dialect-tabs';
 import { CodeTabs } from './code-tabs';
+import { AgentPrompt } from './agent-prompt';
 import { Details } from './details';
 import { HowItWorksDiagram } from './how-it-works-diagram';
 import type { MDXComponents } from 'mdx/types';
@@ -21,6 +22,8 @@ export function getMDXComponents(components?: MDXComponents) {
     Accordions,
     // A secondary detail, opened on demand and drawn quietly (components/details.tsx).
     Details,
+    // The setup instructions for a coding agent at the top of Setup (components/agent-prompt.tsx).
+    AgentPrompt,
     // The figure under How it works (components/how-it-works-diagram.tsx).
     HowItWorksDiagram,
     Tab,

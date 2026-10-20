@@ -2,7 +2,7 @@ import { source } from '@/lib/source';
 import { TocFooter, TocHeader, TopRow } from '@/components/chrome';
 import { getMDXComponents } from '@/components/mdx';
 import { DocsLayout } from 'fumadocs-ui/layouts/docs';
-import { DocsBody, DocsDescription, DocsPage, DocsTitle } from 'fumadocs-ui/layouts/docs/page';
+import { DocsBody, DocsPage, DocsTitle } from 'fumadocs-ui/layouts/docs/page';
 import type { TOCItemType } from 'fumadocs-core/toc';
 import type { Metadata } from 'next';
 import type { CSSProperties } from 'react';
@@ -17,11 +17,13 @@ const LEFT_TOC = {
   gridTemplate: `"toc toc header sidebar sidebar"
 "toc toc toc-popover sidebar sidebar"
 "toc toc main sidebar sidebar" 1fr / minmax(min-content, 1fr) var(--fd-toc-width) minmax(0, calc(var(--fd-layout-width) - var(--fd-sidebar-width) - var(--fd-toc-width))) var(--fd-sidebar-col) minmax(min-content, 1fr)`,
-  '--fd-layout-width': '78rem',
+  // The table of contents (268px, 16.75rem) plus the page: a 49.5rem column and Fumadocs' 2rem of
+  // padding on each side (`#nd-page` in app/global.css). Prose stops at 36rem inside it.
+  '--fd-layout-width': '70.25rem',
 } as CSSProperties;
 
-/** The h2s whose h3s stay out of the table of contents: the examples, and the keys of `.reylo.yaml`. */
-const FOLDED = new Set(['#configuration', '#examples']);
+/** The h2s whose h3s stay out of the table of contents: the parameters, the keys of `.reylo.yaml` and the examples. */
+const FOLDED = new Set(['#parameters', '#configuration', '#examples']);
 
 /**
  * The table of contents without the h3s of the sections in FOLDED: the maintainer wants the whole
@@ -57,11 +59,10 @@ export default async function Page({ params }: Props) {
         breadcrumb={{ enabled: false }}
         footer={{ enabled: false }}
       >
-        {/* The frontmatter's description is the subheader under the title, "Import SQL files into
-            TypeScript.", which the maintainer asked for on 2026-10-20, and the page's metadata
-            (below). */}
+        {/* The subheader under the title is the page's first element (`.reylo-subheader`), since it
+            sets `.sql` as code; the frontmatter's description, in plain text, is the page's
+            metadata (below). */}
         <DocsTitle>{page.data.title}</DocsTitle>
-        <DocsDescription>{page.data.description}</DocsDescription>
         <DocsBody>
           <MDX components={getMDXComponents()} />
         </DocsBody>

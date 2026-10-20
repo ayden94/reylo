@@ -5,7 +5,7 @@ import type { StandardJSONSchemaV1, StandardTypedV1 } from "./standard.ts";
 import type { Structured } from "./rows.ts";
 import type { Fresh } from "./fresh.ts";
 
-export type { ClientFor, Dialect, Inputs, SyncClientFor } from "./execute.ts";
+export type { ClientFor, Dialect, Inputs, MysqlClient, PostgresClient, SqliteClient, SyncClientFor } from "./execute.ts";
 
 /** How many rows a statement returns: `none` is a data-modifying statement without RETURNING. */
 export type Cardinality = "many" | "one" | "maybeOne" | "none";

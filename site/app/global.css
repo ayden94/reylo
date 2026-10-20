@@ -8,33 +8,33 @@
   --font-mono: var(--font-code), ui-monospace, 'SF Mono', Menlo, monospace;
 }
 
-/* ── Reylo: steel grays and one yellow ────────────────────────────────────────
-   The layout and type follow zod.dev (Inter, ruled h1 and h2, borderless inline
-   code tinted with the accent, mono tab labels). The colours are Reylo's own: a
-   blue-tinted steel scale for every surface and rule, and a yellow that marks
-   links, the active table-of-contents entry and inline code. In light mode the
-   yellow darkens to ochre wherever it carries text, so it keeps its contrast on
-   a pale background. ─────────────────────────────────────────────────────── */
+/* ── Reylo: neutral greys and one yellow ──────────────────────────────────────
+   The layout follows zod.dev (ruled h1 and h2, borderless inline code tinted
+   with the accent, mono tab labels); the type is Geist and Geist Mono. Every
+   surface and rule is a colourless grey, near-black by night and white by day,
+   so the yellow is the page's only colour: it marks links, the active
+   table-of-contents entry and inline code. In light mode the yellow darkens to
+   ochre wherever it carries text, so it keeps its contrast on white. ───── */
 
 :root {
   --reylo-yellow: hsl(46, 97%, 52%);
 
-  --color-fd-background: hsl(210, 20%, 99%);
-  --color-fd-foreground: hsl(215, 25%, 20%);
-  --color-fd-headings: hsl(215, 30%, 11%);
-  --color-fd-muted: hsl(214, 20%, 95%);
-  --color-fd-muted-foreground: hsl(215, 13%, 45%);
+  --color-fd-background: hsl(0, 0%, 100%);
+  --color-fd-foreground: hsl(0, 0%, 16%);
+  --color-fd-headings: hsl(0, 0%, 5%);
+  --color-fd-muted: hsl(0, 0%, 96%);
+  --color-fd-muted-foreground: hsl(0, 0%, 40%);
   --color-fd-popover: hsl(0, 0%, 100%);
-  --color-fd-popover-foreground: hsl(215, 25%, 20%);
-  --color-fd-card: hsl(210, 22%, 97.5%);
-  --color-fd-card-foreground: hsl(215, 25%, 20%);
-  --color-fd-border: hsl(214, 18%, 88%);
+  --color-fd-popover-foreground: hsl(0, 0%, 16%);
+  --color-fd-card: hsl(0, 0%, 98%);
+  --color-fd-card-foreground: hsl(0, 0%, 16%);
+  --color-fd-border: hsl(0, 0%, 89%);
   --color-fd-primary: hsl(40, 92%, 31%);
   --color-fd-primary-foreground: hsl(0, 0%, 100%);
-  --color-fd-secondary: hsl(214, 22%, 96%);
-  --color-fd-secondary-foreground: hsl(215, 25%, 20%);
-  --color-fd-accent: hsl(214, 20%, 93%);
-  --color-fd-accent-foreground: hsl(215, 30%, 11%);
+  --color-fd-secondary: hsl(0, 0%, 97%);
+  --color-fd-secondary-foreground: hsl(0, 0%, 16%);
+  --color-fd-accent: hsl(0, 0%, 94%);
+  --color-fd-accent-foreground: hsl(0, 0%, 5%);
   --color-fd-ring: hsl(46, 97%, 52%);
 
   --color-fd-info: hsl(212, 45%, 42%);
@@ -46,32 +46,28 @@
 .dark {
   --reylo-yellow: hsl(48, 96%, 58%);
 
-  --color-fd-background: hsl(215, 22%, 9%);
-  --color-fd-foreground: hsl(212, 16%, 80%);
-  --color-fd-headings: hsl(210, 25%, 95%);
-  --color-fd-muted: hsl(215, 18%, 14%);
-  --color-fd-muted-foreground: hsl(213, 11%, 60%);
-  --color-fd-popover: hsl(215, 21%, 11%);
-  --color-fd-popover-foreground: hsl(212, 16%, 80%);
-  --color-fd-card: hsl(215, 20%, 11.5%);
-  --color-fd-card-foreground: hsl(212, 16%, 82%);
-  --color-fd-border: hsl(215, 15%, 20%);
+  --color-fd-background: hsl(0, 0%, 5.5%);
+  --color-fd-foreground: hsl(0, 0%, 86%);
+  --color-fd-headings: hsl(0, 0%, 98%);
+  --color-fd-muted: hsl(0, 0%, 10%);
+  --color-fd-muted-foreground: hsl(0, 0%, 63%);
+  --color-fd-popover: hsl(0, 0%, 8%);
+  --color-fd-popover-foreground: hsl(0, 0%, 86%);
+  --color-fd-card: hsl(0, 0%, 8.5%);
+  --color-fd-card-foreground: hsl(0, 0%, 86%);
+  --color-fd-border: hsl(0, 0%, 17%);
   --color-fd-primary: hsl(48, 96%, 58%);
-  --color-fd-primary-foreground: hsl(215, 22%, 9%);
-  --color-fd-secondary: hsl(215, 20%, 12%);
-  --color-fd-secondary-foreground: hsl(210, 25%, 95%);
-  --color-fd-accent: hsl(215, 16%, 17%);
-  --color-fd-accent-foreground: hsl(210, 25%, 95%);
+  --color-fd-primary-foreground: hsl(0, 0%, 5.5%);
+  --color-fd-secondary: hsl(0, 0%, 9%);
+  --color-fd-secondary-foreground: hsl(0, 0%, 98%);
+  --color-fd-accent: hsl(0, 0%, 14%);
+  --color-fd-accent-foreground: hsl(0, 0%, 98%);
   --color-fd-ring: hsl(48, 96%, 58%);
 
   --color-fd-info: hsl(212, 60%, 70%);
   --color-fd-warning: hsl(46, 90%, 60%);
   --color-fd-success: hsl(150, 40%, 60%);
   --color-fd-error: hsl(2, 70%, 68%);
-}
-
-button {
-  cursor: pointer;
 }
 
 /* ── Prose, after zod.dev ────────────────────────────────────────────────── */
@@ -94,10 +90,23 @@ button {
   @apply pb-3;
 }
 
-/* The subheader under the title ("Import SQL files into TypeScript.") sits close above the first
-   paragraph; Fumadocs' `mb-8` left it 75px away, detached from the text it introduces. */
-#nd-page h1 + p {
-  margin-bottom: 0;
+/* The subheader under the title, the page's first element ("Import `.sql` files into your
+   TypeScript code with full type inference"): Fumadocs' description size and colour, close above
+   the first paragraph. */
+#nd-page .prose .reylo-subheader {
+  font-size: 1.125rem;
+  line-height: 1.6;
+  color: var(--color-fd-muted-foreground);
+  margin-bottom: 1.25rem;
+}
+
+/* The feature list under the opening example: square bullets, each item opening with an emoji. */
+#nd-page .prose .reylo-features ul {
+  list-style-type: square;
+}
+
+#nd-page .prose .reylo-features li::marker {
+  color: var(--color-fd-muted-foreground);
 }
 
 /* The page opens with its first paragraph right under the title. The body is a flex item, so its
@@ -129,12 +138,11 @@ html .prose {
     @apply mt-10;
   }
 
-  /* A heading that is a code token, such as a file name, is set in mono without the wash. */
+  /* A heading that names a member of the imported query (`run`, `with`, `sql`) or a key of
+     `.reylo.yaml` sets it as inline code, wash and all, as the maintainer asked on 2026-10-20. */
   h2 code,
   h3 code {
-    background: none !important;
-    padding: 0 !important;
-    font-size: 0.92em;
+    font-size: 0.86em;
     font-weight: 600;
   }
 
@@ -167,26 +175,26 @@ html .prose {
     background-color: var(--color-fd-accent);
   }
 
+  /* The icon's centre sits on the centre of the heading's lowercase letters (its x-height), not on
+     the centre of its box or of its capitals: a heading is mostly lowercase, and an icon centred on
+     the capitals read as sitting high (the maintainer, 2026-10-20). The offset is in the heading's
+     em, and one value holds for both sizes: measured, it puts the icon within 0.05px of the
+     x-height's centre in an h2 (28px, its rule's padding below the text included) and an h3
+     (19.2px), and within a pixel of the centre of an inline-code heading's chip. */
   .reylo-anchor {
     position: absolute;
     left: -1.75rem;
-    top: 50%;
+    top: calc(50% + 0.0675em);
     translate: 0 -50%;
     display: inline-flex;
     padding: 0.25rem;
     border-radius: 0.25rem;
     color: color-mix(in oklab, var(--color-fd-muted-foreground) 55%, transparent);
-    cursor: pointer;
     transition: color 120ms;
   }
 
   .reylo-anchor:hover {
     color: var(--color-fd-muted-foreground);
-  }
-
-  h2 > .reylo-anchor {
-    /* The rule's padding sits below the text; center on the text line, not the box. */
-    top: calc(50% - 0.0625rem);
   }
 
   /* Below md the page's margin is narrower than the icon, which would be cut off at the window's
@@ -304,14 +312,13 @@ html .prose {
 
 /* ── Twoslash hovers ─────────────────────────────────────────────────────────
    A `ts twoslash` block shows the editor's hover for each name. The token whose
-   popup is open takes the links' yellow rule; the popup is one steel card with
+   popup is open takes the links' yellow rule; the popup is one plain card with
    the type as its text, not a code card (border, copy button) inside a card. */
 
-/* A pointer over every name that has a popup, and a quick fade: Fumadocs' 300ms one trails the
-   popup. Every such name keeps its dotted rule, not only while the pointer is over the block, so a
-   reader sees which names can be hovered (Motherload's docs do the same). */
+/* A quick fade: Fumadocs' 300ms one trails the popup. Every name that has a popup keeps its dotted
+   rule, not only while the pointer is over the block, so a reader sees which names can be hovered
+   (Motherload's docs do the same). Its cursor is the code's text cursor (Cursors, at the end). */
 .twoslash .twoslash-hover {
-  cursor: pointer;
   transition: border-color 80ms;
   border-bottom-color: color-mix(in oklab, currentColor 40%, transparent);
 }
@@ -380,6 +387,13 @@ html .prose {
   overflow-wrap: anywhere;
 }
 
+/* A pinned `^?` popup keeps clear of the lines around it: the maintainer found the next line
+   "cramped" 4px under its card. The card sits 8px under the name it points at (Fumadocs' gap, which
+   its arrow spans) and 14px above the next line. */
+.twoslash .twoslash-query-line {
+  padding-bottom: 0.875rem;
+}
+
 .fd-twoslash-popover .twoslash-popup-docs {
   border-top: 1px solid var(--color-fd-border);
   padding-top: 8px;
@@ -426,7 +440,14 @@ figure.shiki code > .twoslash-query-line + .line:last-child:not(:has(span:not(:e
   text-indent: calc(-1 * (var(--indent, 0ch) + 2ch));
 }
 
-/* JetBrains Mono draws `->>`, `=>` and `!=` as single glyphs; code shows the characters typed. */
+/* An empty line keeps a line's height: Shiki writes it as an empty element, which the wrapping
+   above draws 0px tall, so the blank lines between the agent instructions' steps vanished. The
+   zero-width space is not text, so a copy of the block is unchanged. */
+#nd-page figure.shiki pre .line:empty::after {
+  content: '\200b';
+}
+
+/* A code font may draw `->>`, `=>` and `!=` as single glyphs; code shows the characters typed. */
 pre,
 code {
   font-variant-ligatures: none;
@@ -605,7 +626,6 @@ code {
   display: inline-flex;
   align-items: center;
   gap: 0.5em;
-  cursor: pointer;
   list-style: none;
   color: var(--color-fd-muted-foreground);
   transition: color 80ms;
@@ -646,10 +666,13 @@ code {
   margin-top: -0.25rem;
 }
 
+/* Its text is a size below the page's (15px against 16px), so an opened detail reads as an aside;
+   its summary stays the size of the text around it. */
 #nd-page .reylo-details-body {
   margin-top: 0.5rem;
   padding-left: 1rem;
   border-left: 1px solid var(--color-fd-border);
+  font-size: 0.9375rem;
 }
 
 #nd-page .reylo-details-body > :first-child {
@@ -658,4 +681,207 @@ code {
 
 #nd-page .reylo-details-body > :last-child {
   margin-bottom: 0;
+}
+
+/* ── The agent instructions at the top of Setup (components/agent-prompt.tsx) ──
+   A card that stands out from the page, with the accent's border and one prominent Copy button;
+   the instructions under it are folded to their first lines until opened. */
+
+#nd-page .reylo-agent {
+  margin-block: 1.5rem 2rem;
+  border: 1px solid color-mix(in oklab, var(--reylo-yellow) 55%, var(--color-fd-border));
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--reylo-yellow) 5%, var(--color-fd-card));
+  overflow: hidden;
+}
+
+#nd-page .reylo-agent-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+}
+
+#nd-page .reylo-agent-title {
+  margin: 0;
+  font-weight: 600;
+  color: var(--color-fd-headings);
+}
+
+#nd-page .reylo-agent-note {
+  margin: 0.125rem 0 0;
+  font-size: 0.9375rem;
+  color: var(--color-fd-muted-foreground);
+}
+
+#nd-page .reylo-agent-copy {
+  flex: none;
+  padding: 0.5rem 0.875rem;
+  border-radius: 8px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  background: var(--reylo-yellow);
+  color: hsl(215, 30%, 11%);
+}
+
+#nd-page .reylo-agent-copy:hover {
+  filter: brightness(1.06);
+}
+
+#nd-page .reylo-agent-body {
+  position: relative;
+  padding-inline: 1.25rem;
+  max-height: 9rem;
+  overflow: hidden;
+  mask-image: linear-gradient(to bottom, #000 55%, transparent);
+}
+
+#nd-page .reylo-agent-body[data-open] {
+  max-height: none;
+  mask-image: none;
+}
+
+#nd-page .reylo-agent-body figure {
+  margin: 0;
+}
+
+#nd-page .reylo-agent-toggle {
+  display: block;
+  width: 100%;
+  padding: 0.625rem 1.25rem 0.875rem;
+  text-align: left;
+  font-size: 0.875rem;
+  color: var(--color-fd-muted-foreground);
+}
+
+#nd-page .reylo-agent-toggle:hover {
+  color: var(--color-fd-headings);
+}
+
+/* ── Cursors ─────────────────────────────────────────────────────────────────
+   Everything that responds to a click shows a pointer, and a code block shows one steady text
+   cursor from edge to edge, the names with a Twoslash popup included (the maintainer, 2026-10-20,
+   reversing an earlier pointer on those names). Every cursor rule of the page is in this block, so
+   that no rule elsewhere contradicts it. Its selectors are all in `:where()`, of no specificity, so
+   that the order of the rules below decides and nothing else: a later rule overrides an earlier
+   one, and being unlayered, every one of them overrides Tailwind's and Fumadocs' layers. */
+
+/* A pointer on everything that responds to a click: every link (in the text, the table of contents
+   and the header), every button (the copy buttons, the heading's link and copy-as-Markdown buttons,
+   the accordion triggers and their link buttons, the theme switch, the table of contents' popover
+   toggle), every tab trigger, and the summary of every <Details>. Tailwind's preflight leaves a
+   button the arrow. */
+:where(a[href], button, summary, label[for], select, [role='button'], [role='tab'], [role='switch'], [role='link'], [role='menuitem'], [role='option']):where(:not(:disabled, [aria-disabled='true'])) {
+  cursor: pointer;
+}
+
+/* An icon, a span or inline code inside one of those shows the same pointer, whatever a rule for it
+   says, so that a button never shows two cursors. */
+:where(a[href], button, summary, label[for], [role='button'], [role='tab'], [role='switch'], [role='link']) :where(*) {
+  cursor: inherit;
+}
+
+/* A code block is one text cursor over all of it, so that moving across a line never switches
+   cursors: `auto` is an I-beam over a glyph but an arrow between tokens and past a line's end, and
+   a Twoslash name was a pointer. The popups, the one a hover opens and the `^?` cards pinned under
+   a line, are selectable text too. */
+:where(figure.shiki, pre, .fd-twoslash-popover, [role='presentation']:has(> .fd-twoslash-popover)),
+:where(figure.shiki, pre, .fd-twoslash-popover, [role='presentation']:has(> .fd-twoslash-popover)) :where(*) {
+  cursor: text;
+}
+
+/* Except what inside a code block or a popup responds to a click: the copy button floating over the
+   block, a tab, and a link in a popup's documentation. */
+:where(figure.shiki, pre, .fd-twoslash-popover) :where(a[href], button:not(.twoslash-hover), [role='tab']),
+:where(figure.shiki, pre, .fd-twoslash-popover) :where(a[href], button:not(.twoslash-hover), [role='tab']) :where(*) {
+  cursor: pointer;
+}
+
+/* ── The reading measure ─────────────────────────────────────────────────────
+   Prose stops at 36rem, about 71 characters a line (81 at most) in Geist at
+   16.5px; the 836px column of 2026-10-20 ran to 103 (111 at most). Code
+   blocks, tab groups and tables keep the whole column, 49.5rem, which holds
+   97 characters of Geist Mono at 13px and 91 or more inside a collapsible or
+   an accordion, so no line of 90 wraps at 1280px and wider. The page is the
+   column plus Fumadocs' 2rem of padding on each side; `--fd-layout-width` in
+   app/[[...slug]]/page.tsx is that plus the 268px table of contents. Headings
+   keep the whole column, so the rule under an h2 and the copy buttons line up
+   with the code's right edge. */
+#nd-page {
+  max-width: 53.5rem;
+}
+
+#nd-page > p,
+#nd-page .prose :is(p, ul, ol, blockquote, summary):not(:where(td, th, figure, li, .reylo-details-body ul, .reylo-details-body ol) *) {
+  max-width: 36rem;
+}
+
+#nd-page .prose {
+  font-size: 1.03125rem;
+  line-height: 1.7;
+}
+
+#nd-page .prose :is(ul, ol) > li {
+  margin-block: 0.4em;
+}
+
+/* The title outranks an h2 (it was the same 28px), an h2 an h3. */
+#nd-page h1 {
+  font-size: 2.5rem;
+  line-height: 1.15;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+}
+
+html #nd-page .prose h2 {
+  font-size: 1.625rem;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+}
+
+html #nd-page .prose > h3 {
+  font-size: 1.1875rem;
+  letter-spacing: -0.01em;
+}
+
+/* Code at 13px with room between lines (it was 13px at 1.43), in the blocks and the type popups. */
+#nd-page figure.shiki pre,
+#nd-page figure.shiki pre code,
+.fd-twoslash-popover pre,
+.fd-twoslash-popover code {
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+/* Shiki's github themes paint comments #6A737D, 3.5:1 on the dark card, and light-mode keywords
+   #D73A49, 4.2:1 on the light one, both under WCAG AA; GitHub's own later greys and red pass. */
+.dark .shiki span[style*='--shiki-dark:#6A737D' i] {
+  color: #8b949e !important;
+}
+
+html:not(.dark) .shiki span[style*='--shiki-light:#6A737D' i] {
+  color: #57606a !important;
+}
+
+html:not(.dark) .shiki span[style*='--shiki-light:#D73A49' i] {
+  color: #cf222e !important;
+}
+
+/* Inline code keeps its yellow wash, a little fainter; in a table cell it is plain mono in the
+   headings' colour, so a column of types reads as a list rather than a column of chips. */
+html #nd-page .prose :where(code):not(:where(pre code, [class~='not-prose'], [class~='not-prose'] *)) {
+  background-color: color-mix(in oklab, var(--reylo-yellow) 13%, transparent);
+  font-size: 0.85em;
+}
+
+html #nd-page .prose :is(td, th) {
+  font-size: 0.9375em;
+}
+
+html #nd-page .prose :is(td, th) code {
+  background: none !important;
+  padding: 0 !important;
+  font-size: 0.92em;
+  color: var(--color-fd-headings);
 }
