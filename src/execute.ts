@@ -8,6 +8,8 @@
 import { queryPostgres } from "./decode.ts";
 import type { EngineType } from "./engine-type.ts";
 import { lexPlaceholders } from "./lex.ts";
+import type { JsonSchema } from "./engine-type.ts";
+import { validate, withDefaults } from "./json-schema.ts";
 import { prepareRows, variant, zoned, type Structured } from "./rows.ts";
 
 export type Dialect = "postgres" | "mysql" | "sqlite";
@@ -117,7 +119,7 @@ export type QueryModule<D extends Dialect = Dialect> = {
  * JSON on pg); a query without it, defined by hand or built before 2026-10-12, binds every value
  * as it is. Typed JSON parameters (docs/typed-json-params.md) will carry their schema beside it.
  */
-export type Inputs = Readonly<Record<string, { readonly type: EngineType }>>;
+export type Inputs = Readonly<Record<string, { readonly type: EngineType; readonly schema?: JsonSchema }>>;
 
 type AnyClient = Record<string, any> & ((...args: any[]) => any);
 
@@ -293,6 +295,21 @@ function statement(query: QueryModule, input: ParamsInput) {
         : rewriteRepeating(query, params);
   bound.names.forEach((name, i) => {
     const type = query.inputs?.[name]?.type;
+    // A typed JSON parameter (`:p::jsonb('…')`): a value left out takes the schema's default, a
+    // key under `properties` too, and the value is checked against the schema before the
+    // statement runs (docs/typed-json-params.md). Null is SQL NULL, whose type the statement says.
+    const schema = query.inputs?.[name]?.schema;
+    if (schema !== undefined) {
+      let v = params[name];
+      if (v === undefined && schema !== null && typeof schema === "object" && "default" in schema) v = structuredClone(schema.default);
+      if (v !== undefined && v !== null) {
+        v = withDefaults(schema, v);
+        const failure = validate(schema, v);
+        if (failure) throw new TypeError(`Parameter "${name}"${failure.path ? ` at ${failure.path}` : ""} ${failure.message}.`);
+      }
+      bound.values[i] = v === undefined ? null : v;
+      return;
+    }
     // A structured parameter is checked against its column list and written as the JSON the
     // statement reads; in an insert, its lists name only the keys the call carries.
     if (type?.kind === "rows") {

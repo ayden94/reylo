@@ -6,6 +6,7 @@
 // truncate or read in a zone nobody chose is refused (the maintainer, 2026-10-15: "Never, except
 // defaults").
 import type { EngineType } from "./engine-type.ts";
+import { validate, withDefaults } from "./json-schema.ts";
 
 type Dialect = "postgres" | "mysql" | "sqlite";
 export type RowsType = Extract<EngineType, { kind: "rows" }>;
@@ -83,7 +84,14 @@ export function prepareRows(name: string, type: RowsType, value: unknown, dialec
         written[f.name] = null;
         continue;
       }
-      written[f.name] = check(f.type, f.written, v, dialect, (message) => fail(`${where}"${f.name}" ${message}`));
+      const checked = check(f.type, f.written, v, dialect, (message) => fail(`${where}"${f.name}" ${message}`));
+      // A JSON member's schema fills its defaults and checks the value (docs/typed-json-params.md).
+      if (f.schema !== undefined) {
+        const filled = withDefaults(f.schema, checked);
+        const failure = validate(f.schema, filled);
+        if (failure) fail(`${where}"${f.name}"${failure.path ? ` at ${failure.path}` : ""} ${failure.message}.`);
+        written[f.name] = filled;
+      } else written[f.name] = checked;
     }
     // One statement inserts every row of a call, so its column list is the same for each: a key
     // one row leaves out and another gives cannot have its default in one and its value in the

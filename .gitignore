@@ -17,6 +17,9 @@ target/
 # Lab emit output
 lab/**/dist/
 
+# The JSON Schema Test Suite, fetched by lab/json-schema-suite/run.ts
+lab/json-schema-suite/.suite/
+
 # Mapper cache written into lab projects
 lab/**/.reylo/
 

@@ -98,6 +98,9 @@ pub struct RowField {
     pub nullable: bool,
     /// Whether the caller may leave the key out: a `?` member, or one that may be null.
     pub optional: bool,
+    /// A `json('…')` member's JSON Schema as written, which the run time checks a value against.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

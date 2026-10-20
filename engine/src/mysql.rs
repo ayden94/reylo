@@ -400,7 +400,7 @@ pub fn analyze(sql: &str, lexed: &Lexed, text: Option<MysqlText>, host: &Host) -
                 Some(p) => param_type(p.r#type, p.charset),
                 None => (Type::Unknown, ""),
             };
-            Param { name: name.clone(), ty, type_name: type_name.to_string(), nullable: nullable.contains(name) }
+            Param { name: name.clone(), ty, type_name: type_name.to_string(), nullable: nullable.contains(name), schema: None }
         })
         .collect();
     let kind = match &read {

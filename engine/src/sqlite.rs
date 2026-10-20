@@ -1015,7 +1015,7 @@ impl Analyzer<'_> {
                 let fact = typed.get(numbered.as_str()).map(|f| (*f).clone()).unwrap_or_else(Fact::unknown);
                 let type_name = scalar_name(&fact.ty).unwrap_or("").to_string();
                 let nullable = fills.get(&numbered).copied().unwrap_or(false) || self.nullable_params.contains(&numbered);
-                Param { name: name.clone(), ty: fact.ty, type_name, nullable }
+                Param { name: name.clone(), ty: fact.ty, type_name, nullable, schema: None }
             })
             .collect()
     }

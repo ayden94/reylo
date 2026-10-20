@@ -11,7 +11,7 @@ import type { Repr } from "./render.ts";
 type Dialect = "postgres" | "mysql" | "sqlite";
 type Schema = { [key: string]: unknown };
 type Analysis = {
-  params: readonly { name: string; type: EngineType; nullable: boolean }[];
+  params: readonly { name: string; type: EngineType; nullable: boolean; schema?: JsonSchema }[];
   columns: readonly { name: string; type: EngineType; nullable: boolean }[];
   cardinality: "one" | "maybeOne" | "many" | "none";
 };
@@ -85,7 +85,8 @@ export function typeSchema(t: EngineType, dialect: Dialect, repr: Repr, input = 
     case "json": return t.schema ?? {};
     // What the caller passes: each key as a parameter of its type takes it.
     case "rows": {
-      const row = object(t.fields, (i) => (t.fields[i]!.nullable ? nullable : (s: Schema | JsonSchema) => s)(typeSchema(t.fields[i]!.type, dialect, repr, true)), (i) => t.fields[i]!.optional, true);
+      // A JSON member's schema as written, with its defaults and formats.
+      const row = object(t.fields, (i) => (t.fields[i]!.nullable ? nullable : (s: Schema | JsonSchema) => s)(t.fields[i]!.schema ?? typeSchema(t.fields[i]!.type, dialect, repr, true)), (i) => t.fields[i]!.optional, true);
       return t.one ? row : { type: "array", items: row };
     }
     case "unknown": return {};
@@ -94,11 +95,15 @@ export function typeSchema(t: EngineType, dialect: Dialect, repr: Repr, input = 
 
 /** The query's input and output schemas: the parameters as an object, and the result as `run` returns it once JSON. */
 export function querySchemas(analysis: Analysis, dialect: Dialect, repr: Repr): { input: Schema; output: Schema } {
+  // A typed JSON parameter's schema as written, with its defaults; one with a `default` at its root may be left out.
   const input = object(analysis.params, (i) => {
     const p = analysis.params[i]!;
-    const s = typeSchema(p.type, dialect, repr, true);
+    const s = p.schema ?? typeSchema(p.type, dialect, repr, true);
     return p.nullable ? nullable(s) : s;
-  }, () => false, true);
+  }, (i) => {
+    const s = analysis.params[i]!.schema;
+    return s !== null && typeof s === "object" && s !== undefined && "default" in s;
+  }, true);
   const row = object(analysis.columns, (i) => {
     const c = analysis.columns[i]!;
     const s = typeSchema(c.type, dialect, repr);

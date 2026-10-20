@@ -144,6 +144,10 @@ pub struct Param {
     /// coalesces it, or it is the whole value written to a nullable column.
     #[serde(default)]
     pub nullable: bool,
+    /// A typed JSON parameter's JSON Schema as its cast writes it (`:p::jsonb('…')`), which the
+    /// run time checks a value against; its type is the schema as the engine reads it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -84,6 +84,18 @@ pub struct Found {
     pub insert: bool,
     /// That table's name as written, in insert position.
     pub table: Option<(usize, usize)>,
+    /// A typed JSON parameter (`:p::jsonb('…')`) instead of a column list.
+    pub json: Option<JsonCast>,
+}
+
+/// A typed JSON parameter, `:p::jsonb('…')` or `:p::json('…')` (docs/typed-json-params.md): its
+/// JSON Schema, and where the schema's string is written.
+#[derive(Debug, Clone, PartialEq)]
+pub struct JsonCast {
+    /// `jsonb` rather than `json`.
+    pub jsonb: bool,
+    pub schema: Value,
+    pub schema_span: (usize, usize),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -124,6 +136,25 @@ fn cast_at(sql: &str, end: usize) -> Option<(bool, usize, usize)> {
     (b.get(paren) == Some(&b'(')).then_some((one, paren, word_end))
 }
 
+/// After a placeholder ending at `end`: `::jsonb(` or `::json(`, as `(jsonb, the offset of the
+/// parenthesis, the end of the keyword)`. Without the parenthesis it is an ordinary cast.
+fn json_cast_at(sql: &str, end: usize) -> Option<(bool, usize, usize)> {
+    let b = sql.as_bytes();
+    let mut i = skip_space(b, end);
+    if !(b.get(i) == Some(&b':') && b.get(i + 1) == Some(&b':')) {
+        return None;
+    }
+    i = skip_space(b, i + 2);
+    let word_end = i + b[i..].iter().take_while(|c| c.is_ascii_alphanumeric() || **c == b'_').count();
+    let jsonb = match sql[i..word_end].to_ascii_lowercase().as_str() {
+        "jsonb" => true,
+        "json" => false,
+        _ => return None,
+    };
+    let paren = skip_space(b, word_end);
+    (b.get(paren) == Some(&b'(')).then_some((jsonb, paren, word_end))
+}
+
 fn skip_space(b: &[u8], mut i: usize) -> usize {
     while b.get(i).is_some_and(|c| c.is_ascii_whitespace()) {
         i += 1;
@@ -140,6 +171,24 @@ pub fn find(sql: &str, dialect: Dialect) -> Result<Vec<Found>, DescriptorError> 
         // A placeholder the lexer found inside an earlier column list (`status?` reads as a `?`
         // on MySQL and SQLite) is part of it.
         if found.last().is_some_and(|f| p.start < f.region.1) {
+            continue;
+        }
+        if let Some((jsonb, paren, word_end)) = json_cast_at(sql, p.end) {
+            let (content, close) = descriptor_text(sql, paren)?;
+            let span = (skip_space(sql.as_bytes(), paren + 1), close);
+            if sql.as_bytes().get(span.0) != Some(&b'\'') {
+                return error(format!("`{}(…)` takes one string, the JSON Schema of the values, as in `{}::{}('{{\"type\": \"object\"}}')`.", if jsonb { "jsonb" } else { "json" }, &sql[p.start..p.end], if jsonb { "jsonb" } else { "json" }), paren, close + 1);
+            }
+            let text: String = content.iter().map(|&(c, _, _)| c).collect();
+            let schema = match serde_json::from_str::<Value>(&text) {
+                Ok(schema) => schema,
+                Err(e) => return error(format!("The schema in the cast of {} is not JSON: {e}.", &sql[p.start..p.end]), span.0, span.1),
+            };
+            if let Some(message) = profile(&schema, "") {
+                return error(message, span.0, span.1);
+            }
+            found.push(Found { name: p.name.clone(), placeholder: (p.start, p.end), one: false, members: Vec::new(), region: (p.start, close + 1), head: (p.start, p.end), alias: None, insert: false, table: None, json: Some(JsonCast { jsonb, schema, schema_span: span }) });
+            let _ = word_end;
             continue;
         }
         let Some((one, paren, word_end)) = cast_at(sql, p.end) else { continue };
@@ -167,7 +216,7 @@ pub fn find(sql: &str, dialect: Dialect) -> Result<Vec<Found>, DescriptorError> 
                 );
             }
         }
-        found.push(Found { name: p.name.clone(), placeholder: (p.start, p.end), one, members, region, head: (p.start, word_end), alias, insert, table });
+        found.push(Found { name: p.name.clone(), placeholder: (p.start, p.end), one, members, region, head: (p.start, word_end), alias, insert, table, json: None });
     }
     Ok(found)
 }
@@ -388,7 +437,13 @@ fn members(text: &Text, whole: (usize, usize)) -> Result<Vec<Member>, Descriptor
         let (ty, schema) = if (head == "json" || head == "jsonb") && rest.len() > 1 {
             match (&rest.get(1).map(|t| &t.tok), rest.get(2).map(|t| &t.tok), rest.get(3).map(|t| &t.tok), rest.len()) {
                 (Some(Tok::Punct('(')), Some(Tok::Str(text)), Some(Tok::Punct(')')), 4) => match serde_json::from_str::<Value>(text) {
-                    Ok(schema) if schema.is_object() || schema.is_boolean() => (head.clone(), Some(schema)),
+                    Ok(schema) if schema.get("default").is_some() => {
+                        return error(format!("A key the row leaves out takes its column's default, by omission: `{name}`'s schema cannot give it one. Write `{name}?` with `not null` for a column that has a default."), rest[2].start, rest[2].end)
+                    }
+                    Ok(schema) if schema.is_object() || schema.is_boolean() => match profile(&schema, "") {
+                        Some(message) => return error(message, rest[2].start, rest[2].end),
+                        None => (head.clone(), Some(schema)),
+                    },
                     Ok(_) => return error("A JSON member's schema is a JSON Schema: an object, as in `json('{\"type\": \"object\"}')`.", rest[2].start, rest[2].end),
                     Err(e) => return error(format!("The schema in `{name}`'s `{head}(…)` is not JSON: {e}."), rest[2].start, rest[2].end),
                 },
@@ -611,6 +666,17 @@ fn not_null_filter(ms: &[Member], table: &str, dialect: Dialect) -> String {
 
 /// What the expansion writes for `found`, standing where the author put it.
 pub fn lower(found: &Found, dialect: Dialect, placeholder: &str) -> Lowered {
+    // A typed JSON parameter is the dialect's JSON parameter, its schema left out: Postgres
+    // receives `$1::jsonb`, MySQL `cast(? as json)` and SQLite `?` (docs/typed-json-params.md).
+    if let Some(cast) = &found.json {
+        let (before, after) = match dialect {
+            Dialect::Postgres => ("", if cast.jsonb { "::jsonb" } else { "::json" }),
+            Dialect::Mysql => ("cast(", " as json)"),
+            Dialect::Sqlite => ("", ""),
+        };
+        let text = format!("{before}{placeholder}{after}");
+        return Lowered { placeholder: (before.len(), before.len() + placeholder.len()), text, members: Vec::new(), lists: Vec::new() };
+    }
     let ms = &found.members;
     let alias = alias_of(found, dialect);
     let mut w = Writer::new(ms.len());
@@ -863,6 +929,9 @@ pub fn analyze(sql: &str, dialect: Dialect, host: &Host, inner: &dyn Fn(&str) ->
         .found
         .iter()
         .map(|f| {
+            if f.json.is_some() {
+                return (Lowered { text: String::new(), placeholder: (0, 0), members: Vec::new(), lists: Vec::new() }, Some(crate::postgres::bare_of("", dialect, Vec::new())));
+            }
             let (text, lowered) = probe(f, dialect, &sql[f.placeholder.0..f.placeholder.1]);
             (lowered, inner(&text))
         })
@@ -888,6 +957,14 @@ pub fn analyze(sql: &str, dialect: Dialect, host: &Host, inner: &dyn Fn(&str) ->
     }
 
     for ((f, (lowered, probe)), table) in expanded.found.iter().zip(&probed).zip(&columns) {
+        if let Some(cast) = &f.json {
+            if let Some(p) = analysis.params.iter_mut().find(|p| p.name == f.name) {
+                p.ty = Type::Json { schema: Some(crate::schema_type::type_schema(&input_view(&cast.schema), &crate::schema_type::REYLO)) };
+                p.type_name = if cast.jsonb { "jsonb" } else { "json" }.to_string();
+                p.schema = Some(cast.schema.clone());
+            }
+            continue;
+        }
         // A type the database does not know, or another refusal of the probe, at the member.
         for d in &probe.diagnostics {
             let local = d.start.saturating_sub(PROBE.len());
@@ -908,12 +985,13 @@ pub fn analyze(sql: &str, dialect: Dialect, host: &Host, inner: &dyn Fn(&str) ->
             .map(|(k, m)| RowField {
                 name: m.name.clone(),
                 ty: match &m.schema {
-                    Some(schema) => Type::Json { schema: Some(crate::schema_type::type_schema(schema, &crate::schema_type::REYLO)) },
+                    Some(schema) => Type::Json { schema: Some(crate::schema_type::type_schema(&input_view(schema), &crate::schema_type::REYLO)) },
                     None => probe.columns.get(k).map(|c| c.ty.clone()).unwrap_or(Type::Unknown),
                 },
                 written: m.ty.clone(),
                 nullable: !m.not_null,
                 optional: m.omittable(),
+                schema: m.schema.clone(),
             })
             .collect();
         // The column list against the table: only once the database took every type.
@@ -957,6 +1035,135 @@ pub fn analyze(sql: &str, dialect: Dialect, host: &Host, inner: &dyn Fn(&str) ->
         })
         .collect();
     Some(analysis)
+}
+
+/// Where a schema's keyword holds subschemas: one, a list, or a map of them.
+enum Sub {
+    One,
+    List,
+    Map,
+}
+
+const SUBSCHEMAS: &[(&str, Sub)] = &[
+    ("properties", Sub::Map),
+    ("patternProperties", Sub::Map),
+    ("additionalProperties", Sub::One),
+    ("unevaluatedProperties", Sub::One),
+    ("propertyNames", Sub::One),
+    ("dependentSchemas", Sub::Map),
+    ("items", Sub::One),
+    ("prefixItems", Sub::List),
+    ("contains", Sub::One),
+    ("allOf", Sub::List),
+    ("anyOf", Sub::List),
+    ("oneOf", Sub::List),
+    ("not", Sub::One),
+    ("if", Sub::One),
+    ("then", Sub::One),
+    ("else", Sub::One),
+];
+
+const JSON_TYPES: &[&str] = &["string", "number", "integer", "boolean", "null", "object", "array"];
+
+/// What the profile of docs/typed-json-params.md refuses in a schema, as a message naming where:
+/// a reference, which breaks the schema's locality; a type that depends on which keyword matched
+/// or where validation entered, which no TypeScript type says; another draft's `$schema`;
+/// `nullable`, which is not 2020-12; and the traps that make a schema refuse every value.
+pub fn profile(schema: &Value, at: &str) -> Option<String> {
+    let place = |key: &str| if at.is_empty() { format!("`{key}`") } else { format!("`{key}` at {at}") };
+    let s = match schema {
+        Value::Bool(_) => return None,
+        Value::Object(s) => s,
+        other => return Some(format!("A schema is an object, as in {{\"type\": \"string\"}}, or true or false; {} is {other}.", if at.is_empty() { "the schema".to_string() } else { at.to_string() })),
+    };
+    for key in ["$ref", "$defs", "definitions"] {
+        if s.contains_key(key) {
+            return Some(format!("{}: a reference breaks the schema's locality, so write the schema where it is used.", place(key)));
+        }
+    }
+    for key in ["$dynamicRef", "$dynamicAnchor", "$recursiveRef", "$recursiveAnchor"] {
+        if s.contains_key(key) {
+            return Some(format!("{}: the same schema would mean a different type depending on where validation entered.", place(key)));
+        }
+    }
+    if s.contains_key("unevaluatedItems") {
+        return Some(format!("{}: an item's type would depend on which keyword checked it, which no TypeScript type says.", place("unevaluatedItems")));
+    }
+    if matches!(s.get("unevaluatedProperties"), Some(v) if !v.is_boolean()) {
+        return Some(format!("{} with a schema types a key by which member matched, which no TypeScript type says; `false` closes the object.", place("unevaluatedProperties")));
+    }
+    if s.contains_key("$vocabulary") {
+        return Some(format!("{} means nothing for a parameter.", place("$vocabulary")));
+    }
+    if s.contains_key("nullable") {
+        return Some(format!("{} is not JSON Schema 2020-12: write \"type\": [T, \"null\"].", place("nullable")));
+    }
+    if at.is_empty() {
+        if let Some(uri) = s.get("$schema") {
+            if uri.as_str().map(crate::schema_type::Draft::named) != Some(Some(crate::schema_type::Draft::Twenty)) {
+                return Some("`$schema` names another draft, whose keywords mean other things; the schema is JSON Schema 2020-12.".into());
+            }
+        }
+    }
+    let types: Vec<&str> = match s.get("type") {
+        Some(Value::String(t)) => vec![t.as_str()],
+        Some(Value::Array(ts)) => ts.iter().filter_map(Value::as_str).collect(),
+        _ => Vec::new(),
+    };
+    if let Some(t) = types.iter().find(|t| !JSON_TYPES.contains(t)) {
+        return Some(format!("{}: \"{t}\" is not one of JSON Schema's types (string, number, integer, boolean, null, object, array); a database type goes in the statement's column list or a row descriptor.", place("type")));
+    }
+    if s.get("additionalProperties") == Some(&Value::Bool(false)) && ["oneOf", "anyOf", "allOf"].iter().any(|k| s.contains_key(*k)) {
+        return Some(format!("{} beside `oneOf`, `anyOf` or `allOf` sees only this object's own `properties`, so it refuses every member's keys: write `unevaluatedProperties: false`.", place("additionalProperties: false")));
+    }
+    if let Some(Value::Array(members)) = s.get("allOf") {
+        if let Some(k) = members.iter().position(|m| m.get("additionalProperties") == Some(&Value::Bool(false))) {
+            return Some(format!("Member {} of {} is closed, so it refuses every other member's keys: close the whole with `unevaluatedProperties: false`.", k + 1, place("allOf")));
+        }
+    }
+    if let (Some(Value::Array(required)), Some(Value::Object(properties))) = (s.get("required"), s.get("properties")) {
+        if let Some(key) = required.iter().filter_map(Value::as_str).find(|k| !properties.contains_key(*k)) {
+            return Some(format!("{} lists \"{key}\", which `properties` does not name.", place("required")));
+        }
+    }
+    for (key, kind) in SUBSCHEMAS {
+        let Some(v) = s.get(*key) else { continue };
+        let found = match kind {
+            Sub::One => profile(v, &format!("{at}/{key}")),
+            Sub::List => v.as_array().and_then(|l| l.iter().enumerate().find_map(|(i, x)| profile(x, &format!("{at}/{key}/{i}")))),
+            Sub::Map => v.as_object().and_then(|m| m.iter().find_map(|(k, x)| profile(x, &format!("{at}/{key}/{k}")))),
+        };
+        if found.is_some() {
+            return found;
+        }
+    }
+    None
+}
+
+/// The schema as the caller sees it: a key whose schema has a `default` may be left out, since the
+/// run time fills it before the checks (the maintainer, 2026-10-20), so it leaves `required`. The
+/// walk follows where the run time fills defaults, as ajv's `useDefaults` does: not inside
+/// `anyOf`, `oneOf`, `not`, `if`, `contains` or `propertyNames`.
+pub fn input_view(schema: &Value) -> Value {
+    let Value::Object(s) = schema else { return schema.clone() };
+    let mut out = s.clone();
+    if let (Some(Value::Object(properties)), Some(Value::Array(required))) = (s.get("properties"), s.get("required")) {
+        let kept: Vec<Value> = required.iter().filter(|k| k.as_str().is_none_or(|k| properties.get(k).and_then(|p| p.get("default")).is_none())).cloned().collect();
+        out.insert("required".into(), Value::Array(kept));
+    }
+    for (key, kind) in SUBSCHEMAS {
+        if matches!(*key, "anyOf" | "oneOf" | "not" | "if" | "contains" | "propertyNames") {
+            continue;
+        }
+        let Some(v) = s.get(*key) else { continue };
+        let walked = match kind {
+            Sub::One => input_view(v),
+            Sub::List => Value::Array(v.as_array().map(|l| l.iter().map(input_view).collect()).unwrap_or_default()),
+            Sub::Map => Value::Object(v.as_object().map(|m| m.iter().map(|(k, x)| (k.clone(), input_view(x))).collect()).unwrap_or_default()),
+        };
+        out.insert((*key).to_string(), walked);
+    }
+    Value::Object(out)
 }
 
 /// The diagnostic code of a column list that disagrees with the table its insert writes.
@@ -1310,6 +1517,43 @@ mod tests {
         let sql = "select * from :p::rows(n integer) as x";
         let e = expand(sql, find(sql, Dialect::Sqlite).unwrap(), Dialect::Sqlite);
         assert_eq!(e.sql, "select * from (SELECT CAST(\"reylo.e\".value ->> '$.\"n\"' AS integer) AS \"n\" FROM json_each(:p) AS \"reylo.e\") AS x");
+    }
+
+    #[test]
+    fn a_typed_json_cast_is_the_dialects_json_parameter() {
+        let sql = "insert into t select * from json_each(:p::json('{\"type\": \"array\"}'))";
+        let f = one(sql, Dialect::Sqlite);
+        assert_eq!(f.json.as_ref().map(|c| c.schema.clone()), Some(serde_json::json!({"type": "array"})));
+        assert_eq!(expand(sql, vec![f], Dialect::Sqlite).sql, "insert into t select * from json_each(:p)");
+        let sql = "select * from jsonb_to_recordset(:p::jsonb('{\"type\": \"array\"}')) as x(a int)";
+        assert_eq!(expand(sql, find(sql, Dialect::Postgres).unwrap(), Dialect::Postgres).sql, "select * from jsonb_to_recordset(:p::jsonb) as x(a int)");
+        let sql = "select * from json_table(:p::json('{}'), '$[*]' columns (a int path '$.a')) as x";
+        assert_eq!(expand(sql, find(sql, Dialect::Mysql).unwrap(), Dialect::Mysql).sql, "select * from json_table(cast(:p as json), '$[*]' columns (a int path '$.a')) as x");
+        // A cast without a schema is an ordinary cast.
+        assert!(find("select :p::jsonb", Dialect::Postgres).unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_profile_refuses_what_no_typescript_type_says() {
+        let refused = |schema: serde_json::Value| profile(&schema, "").unwrap_or_default();
+        assert!(refused(serde_json::json!({"$defs": {}, "$ref": "#/$defs/a"})).contains("breaks the schema's locality"));
+        assert!(refused(serde_json::json!({"type": "array", "items": {"$dynamicRef": "#a"}})).contains("at /items"));
+        assert!(refused(serde_json::json!({"type": "array", "unevaluatedItems": false})).contains("which keyword checked it"));
+        assert!(refused(serde_json::json!({"unevaluatedProperties": {"type": "string"}})).contains("by which member matched"));
+        assert!(refused(serde_json::json!({"type": "string", "nullable": true})).contains("[T, \"null\"]"));
+        assert!(refused(serde_json::json!({"type": "text"})).contains("not one of JSON Schema's types"));
+        assert!(refused(serde_json::json!({"$schema": "http://json-schema.org/draft-07/schema#"})).contains("another draft"));
+        assert!(refused(serde_json::json!({"oneOf": [{}], "additionalProperties": false})).contains("unevaluatedProperties: false"));
+        assert!(refused(serde_json::json!({"type": "object", "properties": {"a": {}}, "required": ["b"]})).contains("lists \"b\""));
+        assert_eq!(profile(&serde_json::json!({"type": "object", "properties": {"a": {"type": ["string", "null"]}}, "unevaluatedProperties": false, "prefixItems": [true]}), ""), None);
+        // A key with a default may be left out by the caller; one inside a union member may not.
+        assert_eq!(
+            input_view(&serde_json::json!({"type": "object", "properties": {"a": {"default": 1}, "b": {}}, "required": ["a", "b"], "anyOf": [{"properties": {"c": {"default": 2}}, "required": ["c"]}]})),
+            serde_json::json!({"type": "object", "properties": {"a": {"default": 1}, "b": {}}, "required": ["b"], "anyOf": [{"properties": {"c": {"default": 2}}, "required": ["c"]}]})
+        );
+        assert!(err("insert into t :p::rows(meta jsonb('{\"default\": {}}'))", Dialect::Postgres).contains("by omission"));
+        assert!(err("insert into t :p::rows(meta jsonb('{\"$ref\": \"#\"}'))", Dialect::Postgres).contains("locality"));
+        assert!(err("select :p::jsonb('{\"$ref\": \"#\"}')", Dialect::Postgres).contains("locality"));
     }
 
     #[test]

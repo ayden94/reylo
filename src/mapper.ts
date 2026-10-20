@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { dirname } from "node:path";
 import { serve } from "./rpc.ts";
 import { engine, type Analysis } from "./engine.ts";
-import { ident, renderParamType, renderType, type Repr } from "./render.ts";
+import { declaredType, ident, renderParamType, renderType, type Repr } from "./render.ts";
 import { resolveProject, type Dialect } from "./project.ts";
 import { Session } from "./analyze.ts";
 
@@ -122,14 +122,16 @@ serve({
     const columns = analysis.columns.map((c) => `${ident(c.name)}: ${renderType(c.type, false, dialect, project.repr)}${c.nullable ? " | null" : ""}`);
     // A parameter is typed from its context (a column it is compared with or written to, a CAST);
     // one no context types is `unknown`.
-    const typed = analysis.params.map((q) => [q.name, paramType(q, renderParamType(q.type, dialect, project.repr))] as const);
-    const paramTypes = typed.map(([name, type]) => `${ident(name)}: ${type}`);
+    const typed = analysis.params.map((q) => [q.name, paramType(q, declaredType(q.type, q.schema) ?? renderParamType(q.type, dialect, project.repr))] as const);
+    // A typed JSON parameter whose schema has a `default` may be left out (docs/typed-json-params.md).
+    const optional = new Set(analysis.params.filter((q) => q.schema !== null && typeof q.schema === "object" && "default" in q.schema).map((q) => q.name));
+    const paramTypes = typed.map(([name, type]) => `${ident(name)}${optional.has(name) ? "?" : ""}: ${type}`);
     // The array form names each element after its parameter (`$1` for a positional one), when
     // every name can be a label.
     const types = new Map(typed);
     const labels = order.map((n) => (/^\d+$/.test(n) ? `$${n}` : n));
     const labeled = labels.every((l) => /^[A-Za-z_$][\w$]*$/.test(l));
-    const valuesType = `[${order.map((n, i) => `${labeled ? `${labels[i]}: ` : ""}${types.get(n) ?? "unknown"}`).join(", ")}]`;
+    const valuesType = `[${order.map((n, i) => `${labeled ? `${labels[i]}: ` : ""}${types.get(n) ?? "unknown"}${optional.has(n) ? " | undefined" : ""}`).join(", ")}]`;
     return emit(paramTypes.length ? `{ ${paramTypes.join("; ")} }` : "Record<never, never>", columns.length ? `{ ${columns.join("; ")} }` : "never", inferred, order, valuesType);
   },
   async closeProject(params) {

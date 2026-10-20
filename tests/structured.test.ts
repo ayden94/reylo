@@ -221,6 +221,12 @@ test("Postgres: a rows insert keeps the array's order and exact 64-bit ids, a ke
     assert.deepEqual((await analysis(root, url.href, read)).columns.map((c) => [c.name, c.nullable]), [["id", false], ["amount", true]]);
     const r = await built(root, url.href, "read_events", read);
     assert.deepEqual(plain(await r.run(sql, { events: [{ id: 2 }, { id: 1, amount: 3 }] })), [{ id: "1", amount: "3" }, { id: "2", amount: null }]);
+    // A typed JSON parameter: Postgres receives `$1::jsonb`, and the run time fills its defaults and checks it.
+    const typed = await built(root, url.href, "typed_users", `insert into users (email, name)
+select x.email, x.name from jsonb_to_recordset(:users::jsonb('{"type": "array", "items": {"type": "object", "properties": {"email": {"type": "string", "format": "email"}, "name": {"type": "string", "default": "anon"}}, "required": ["email", "name"]}}')) as x(email text, name text)
+returning email, name`);
+    assert.deepEqual(plain(await typed.run(sql, { users: [{ email: "b@x" }, { email: "c@x", name: "Cy" }] })), [{ email: "b@x", name: "anon" }, { email: "c@x", name: "Cy" }]);
+    await assert.rejects(typed.run(sql, { users: [{ email: "nope" }] }), /Parameter "users" at \/0\/email must be a email/);
     // A type the database does not know is an error at the member's type.
     const bad = "insert into events :events::rows(id int8 not null, ts timestamptz not null, amount numerc)";
     const d = (await analysis(root, url.href, bad)).diagnostics;
@@ -274,6 +280,10 @@ test("MySQL: a rows insert reads each column with ERROR ON ERROR, keeps a 64-bit
     const found = (await analysis(root, url.href, mismatch)).diagnostics.filter((x) => x.code === 21);
     assert.deepEqual(found.map((x) => [x.message, mismatch.slice(x.start, x.start + x.length)]), [["events.ts is datetime(6), and the column list says datetime: a column list writes each column's own type, so that the checks the run time makes are the column's.", "datetime"]]);
     assert.deepEqual((await analysis(root, url.href, "insert into events :e::rows(id bigint not null, ts datetime(6) not null)")).diagnostics, []);
+    // A typed JSON parameter: MySQL receives `cast(? as json)`.
+    const typed = await built(root, url.href, "typed_events", `select j.id from json_table(:ids::json('{"type": "array", "items": {"type": "integer", "minimum": 1}}'), '$[*]' columns (id bigint path '$' error on error)) as j order by j.id`);
+    assert.deepEqual(plain(await typed.run(db, { ids: [3, 1] })), [{ id: 1 }, { id: 3 }]);
+    await assert.rejects(typed.run(db, { ids: [0] }), /Parameter "ids" at \/0 must be at least 1/);
     const [rows] = await db.query("select cast(id as char) as id, status, amount, meta from events order by id");
     assert.deepEqual(plain(rows), [
       { id: "1", status: "new", amount: null, meta: null },
@@ -319,6 +329,65 @@ test("an imported query carries its input's and its output's JSON Schema, a stru
     // Standard Schema's converter gives the same.
     assert.deepEqual(q["~standard"].jsonSchema.input({ target: "draft-2020-12" }), q.inputSchema);
   } finally {
+    await closeAll();
+  }
+});
+
+test("SQLite: a typed JSON parameter is typed by its schema, takes its defaults, and is checked before the statement runs", async () => {
+  const root = project();
+  const db = new DatabaseSync(join(root, "app.db"));
+  db.exec("create table todos (id integer primary key, title text not null, done integer not null default 0)");
+  const url = "file:./app.db";
+  const insert = `insert into todos (title, done)
+select value ->> '$.title', value ->> '$.done' from json_each(:todos::json('{
+  "type": "array",
+  "maxItems": 2,
+  "items": {
+    "type": "object",
+    "properties": { "title": { "type": "string", "minLength": 1 }, "done": { "type": "boolean", "default": false } },
+    "required": ["title", "done"],
+    "additionalProperties": false
+  }
+}')) returning id, title, done`;
+  try {
+    const a = await analysis(root, url, insert);
+    const p = a.params[0]!;
+    assert.deepEqual([p.name, p.type_name, p.type.kind], ["todos", "json", "json"]);
+    // `done` has a default, so the caller may leave it out; the run time fills it.
+    assert.deepEqual(p.type.kind === "json" && p.type.schema && (p.type.schema as { items: { required: string[] } }).items.required, ["title"]);
+    const q = await built(root, url, "insert_todos", insert);
+    assert.deepEqual(plain(await q.run(db, { todos: [{ title: "a" }, { title: "b", done: true }] })), [{ id: 1, title: "a", done: 0 }, { id: 2, title: "b", done: 1 }]);
+    await assert.rejects(q.run(db, { todos: [{ title: "" }] }), /Parameter "todos" at \/0\/title must be at least 1 characters long/);
+    await assert.rejects(q.run(db, { todos: [{ title: "a", extra: 1 }] }), /at \/0\/extra is a key the schema does not allow/);
+    await assert.rejects(q.run(db, { todos: [{ title: "a" }, { title: "b" }, { title: "c" }] }), /must have at most 2 items/);
+    // A parameter whose schema has a default at its root may be left out.
+    const limited = await built(root, url, "limited", `select id from todos order by id limit :n::json('{ "type": "integer", "minimum": 1, "maximum": 200, "default": 1 }')`);
+    assert.deepEqual(plain(await limited.run(db, {})), [{ id: 1 }]);
+    assert.deepEqual(plain(await limited.run(db, { n: 2 })), [{ id: 1 }, { id: 2 }]);
+    await assert.rejects(limited.run(db, { n: 0 }), /Parameter "n" must be at least 1/);
+    assert.deepEqual(limited.inputSchema.required, []);
+    // What the profile refuses is the type check's error at the schema, and fails the build.
+    const bad = `select * from json_each(:p::json('{ "$ref": "#/$defs/x" }'))`;
+    const d = (await analysis(root, url, bad)).diagnostics.find((x) => x.code === 20);
+    assert.ok(d);
+    assert.match(d.message, /breaks the schema's locality/);
+    assert.equal(bad.slice(d.start, d.start + d.length), `'{ "$ref": "#/$defs/x" }'`);
+  } finally {
+    db.close();
+    await closeAll();
+  }
+});
+
+test("SQLite: a JSON member of a column list is checked against its schema, its nested defaults filled", async () => {
+  const root = project();
+  const db = new DatabaseSync(join(root, "app.db"));
+  db.exec("create table events (id integer primary key, meta text)");
+  try {
+    const q = await built(root, "file:./app.db", "insert_events", `insert into events :events::rows(id integer not null, meta json('{"type": "object", "properties": {"source": {"type": "string", "default": "web"}, "n": {"type": "integer", "minimum": 0}}, "required": ["source"]}')) returning id, meta`);
+    assert.deepEqual(plain(await q.run(db, { events: [{ id: 1, meta: {} }, { id: 2, meta: { source: "app", n: 3 } }] })), [{ id: 1, meta: `{"source":"web"}` }, { id: 2, meta: `{"source":"app","n":3}` }]);
+    await assert.rejects(q.run(db, { events: [{ id: 3, meta: { n: -1 } }] }), /row 1: "meta" at \/n must be at least 0/);
+  } finally {
+    db.close();
     await closeAll();
   }
 });

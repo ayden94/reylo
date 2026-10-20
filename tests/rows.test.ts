@@ -16,14 +16,14 @@ const events: RowsType = {
     { name: "status", type: scalar("text"), written: "text", nullable: false, optional: true },
     { name: "amount", type: scalar("numeric"), written: "numeric(12,2)", nullable: true, optional: true },
     { name: "tags", type: { kind: "array", of: scalar("text") }, written: "text[]", nullable: true, optional: true },
-    { name: "meta", type: { kind: "json", schema: { type: "object", properties: { source: { type: "string" } }, required: ["source"], additionalProperties: true } }, written: "jsonb", nullable: true, optional: true },
+    { name: "meta", type: { kind: "json", schema: { type: "object", properties: { source: { type: "string" } }, required: ["source"], additionalProperties: true } }, written: "jsonb", nullable: true, optional: true, schema: { type: "object", properties: { source: { type: "string" } }, required: ["source"] } },
   ],
 };
 
 test("the caller's type is the column list's: each key as its parameter type takes it, ? where it may be left out, | null where it may be null", () => {
   assert.equal(
     renderParamType(events, "postgres", defaultRepr),
-    "readonly { id: number | bigint | string; ts: Date | string; status?: string; amount?: string | null; tags?: string[] | null; meta?: { source: string; [key: string]: unknown } | null }[]",
+    "readonly { id: number | bigint | string; ts: Date | string; status?: string; amount?: string | null; tags?: string[] | null; meta?: { source: string } | null }[]",
   );
   assert.equal(renderParamType({ ...events, one: true, fields: events.fields.slice(0, 1) }, "postgres", defaultRepr), "{ id: number | bigint | string }");
 });
