@@ -17,9 +17,10 @@ const LEFT_TOC = {
   gridTemplate: `"toc toc header sidebar sidebar"
 "toc toc toc-popover sidebar sidebar"
 "toc toc main sidebar sidebar" 1fr / minmax(min-content, 1fr) var(--fd-toc-width) minmax(0, calc(var(--fd-layout-width) - var(--fd-sidebar-width) - var(--fd-toc-width))) var(--fd-sidebar-col) minmax(min-content, 1fr)`,
-  // The table of contents (268px, 16.75rem) plus the page: one 46rem column and Fumadocs' 2rem of
-  // padding on each side (`#nd-page` in app/global.css).
-  '--fd-layout-width': '66.75rem',
+  // The table of contents (268px, 16.75rem) plus the page: one 40rem column (prose a median 81
+  // characters a line, p90 88; code about 77) and Fumadocs' 2rem of padding on each side
+  // (`#nd-page` in app/global.css).
+  '--fd-layout-width': '60.75rem',
 } as CSSProperties;
 
 /** The h2s whose h3s stay out of the table of contents: the parameters, the keys of `.reylo.yaml` and the examples. */

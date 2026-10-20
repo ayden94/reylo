@@ -27,8 +27,6 @@ const legs = [
   { request: 'prepare, not run', code: false, answer: 'catalog' },
 ];
 
-const statement = 'select id, name, email from users where id = :id';
-const result = '{ id: number; name: string; email: string | null } | null';
 const rowCount = 'at most one row: id is the primary key';
 
 type TextProps = { x: number; y: number; children: ReactNode; size?: number; fill?: string; weight?: number; anchor?: 'start' | 'middle' | 'end'; code?: boolean };
@@ -98,70 +96,15 @@ function Figure({ w, h, children }: { w: number; h: number; children: ReactNode 
   );
 }
 
-/**
- * The figure at the text column's width (836px at a 1440px window): the three nodes in a row, the
- * file and the request going right along each leg and the answer coming back under it, and below
- * them the statement with the types TypeScript gets for it.
- */
-function Wide() {
-  const w = 836;
-  const boxWidth = 196;
-  const boxHeight = 84;
-  const xs = [0.5, (w - boxWidth) / 2, w - boxWidth - 0.5];
-  const card = { y: 112, h: 146, pad: 20, types: 116 };
-  return (
-    <Figure w={w} h={card.y + card.h + 1}>
-      {nodes.map((node, i) => (
-        <g key={node.title}>
-          <Box x={xs[i]} y={0.5} w={boxWidth} h={boxHeight} accent={node.accent} />
-          <NodeTitle x={xs[i] + boxWidth / 2} y={37} node={node} />
-          <Text x={xs[i] + boxWidth / 2} y={58} anchor="middle" size={12.5}>{node.note}</Text>
-        </g>
-      ))}
-      {legs.map((leg, i) => {
-        const from = xs[i] + boxWidth + 12;
-        const to = xs[i + 1] - 12;
-        const middle = (from + to) / 2;
-        return (
-          <g key={leg.request}>
-            <Text x={middle} y={25} anchor="middle" code={leg.code}>{leg.request}</Text>
-            <Arrow x1={from} y1={34} x2={to} y2={34} />
-            <Arrow x1={to} y1={51} x2={from} y2={51} />
-            <Text x={middle} y={69} anchor="middle">{leg.answer}</Text>
-          </g>
-        );
-      })}
-      <g transform={`translate(0.5 ${card.y})`}>
-        <Box x={0} y={0} w={w - 1} h={card.h} />
-        <Text x={card.pad} y={22} code>get_user.sql</Text>
-        <Rule x={0} y={34} w={w - 1} />
-        <Text x={card.pad} y={62} size={13} fill={color.text} code>{statement}</Text>
-        <Rule x={0} y={80} w={w - 1} dashed />
-        <Text x={card.pad} y={106}>parameters</Text>
-        <Text x={card.types} y={106} size={13} fill={color.headings} code>{'{ id: number }'}</Text>
-        <Text x={card.pad} y={128}>result</Text>
-        <Text x={card.types} y={128} size={13} fill={color.headings} code>{result}</Text>
-        <Text x={w - 1 - card.pad} y={128} anchor="end">{rowCount}</Text>
-      </g>
-    </Figure>
-  );
-}
-
-/**
- * The same figure for a phone's column (328px on a 360px screen), where the wide one would shrink
- * its text to about 5px: the nodes stacked, each leg's request on the left of its arrows and the
- * answer on the right, and the statement and the result type wrapped.
- */
-function Narrow() {
-  const w = 328;
+/** The three nodes stacked in a column `w` wide, each leg's request on the left of its arrows and
+ * the answer on the right. 336px tall. */
+function Stack({ w }: { w: number }) {
   const boxHeight = 64;
   const gap = 72;
   const ys = [0.5, 0.5 + boxHeight + gap, 0.5 + 2 * (boxHeight + gap)];
   const middle = w / 2;
-  const card = { y: ys[2] + boxHeight + 24, h: 272, pad: 16 };
-  const code = { size: 12.5, fill: color.headings, code: true };
   return (
-    <Figure w={w} h={card.y + card.h + 1}>
+    <g>
       {nodes.map((node, i) => (
         <g key={node.title}>
           <Box x={0.5} y={ys[i]} w={w - 1} h={boxHeight} accent={node.accent} />
@@ -182,38 +125,81 @@ function Narrow() {
           </g>
         );
       })}
-      <g transform={`translate(0.5 ${card.y})`}>
-        <Box x={0} y={0} w={w - 1} h={card.h} />
-        <Text x={card.pad} y={22} code>get_user.sql</Text>
-        <Rule x={0} y={34} w={w - 1} />
-        <Text x={card.pad} y={60} {...code} fill={color.text}>select id, name, email</Text>
-        <Text x={card.pad} y={80} {...code} fill={color.text}>from users where id = :id</Text>
-        <Rule x={0} y={98} w={w - 1} dashed />
-        <Text x={card.pad} y={122}>parameters</Text>
-        <Text x={card.pad} y={142} {...code}>{'{ id: number }'}</Text>
-        <Text x={card.pad} y={170}>result</Text>
-        <Text x={card.pad} y={190} {...code}>{'{ id: number;'}</Text>
-        <Text x={card.pad} y={208} {...code}>{'  name: string;'}</Text>
-        <Text x={card.pad} y={226} {...code}>{'  email: string | null } | null'}</Text>
-        <Text x={card.pad} y={252}>{rowCount}</Text>
-      </g>
+    </g>
+  );
+}
+
+const stackHeight = 3 * 64 + 2 * 72;
+const cardHeight = 272;
+
+/** The statement and the types TypeScript gets for it, wrapped to a card 328px wide. */
+function Card({ x, y }: { x: number; y: number }) {
+  const w = 328;
+  const pad = 16;
+  const code = { size: 12.5, fill: color.headings, code: true };
+  return (
+    <g transform={`translate(${x + 0.5} ${y})`}>
+      <Box x={0} y={0} w={w - 1} h={cardHeight} />
+      <Text x={pad} y={22} code>get_user.sql</Text>
+      <Rule x={0} y={34} w={w - 1} />
+      <Text x={pad} y={60} {...code} fill={color.text}>select id, name, email</Text>
+      <Text x={pad} y={80} {...code} fill={color.text}>from users where id = :id</Text>
+      <Rule x={0} y={98} w={w - 1} dashed />
+      <Text x={pad} y={122}>parameters</Text>
+      <Text x={pad} y={142} {...code}>{'{ id: number }'}</Text>
+      <Text x={pad} y={170}>result</Text>
+      <Text x={pad} y={190} {...code}>{'{ id: number;'}</Text>
+      <Text x={pad} y={208} {...code}>{'  name: string;'}</Text>
+      <Text x={pad} y={226} {...code}>{'  email: string | null } | null'}</Text>
+      <Text x={pad} y={252}>{rowCount}</Text>
+    </g>
+  );
+}
+
+/**
+ * The figure at the text column's width (640px, the 40rem column, at a 1440px window), drawn at
+ * that size so its text is the size it was drawn at: the nodes stacked on the left and the
+ * statement with its types beside them, on the right, so the figure meets both edges of the column.
+ */
+function Wide() {
+  const w = 640;
+  return (
+    <Figure w={w} h={stackHeight + 1}>
+      <Stack w={w - 328 - 16} />
+      <Card x={w - 328} y={(stackHeight - cardHeight) / 2} />
+    </Figure>
+  );
+}
+
+/**
+ * The same figure for a phone's column (328px on a 360px screen): the stack, and the statement
+ * and its types under it.
+ */
+function Narrow() {
+  const w = 328;
+  const cardY = stackHeight + 24;
+  return (
+    <Figure w={w} h={cardY + cardHeight + 1}>
+      <Stack w={w} />
+      <Card x={0} y={cardY} />
     </Figure>
   );
 }
 
 /**
  * The diagram under How it works: a `.sql` import through TypeScript, Reylo and the database, and
- * the type that comes back. A container query picks the form: the wide one from a 700px column,
- * where its smallest text is still 10px, and the stacked one below that, kept to 400px so that it
- * does not grow larger than the page's text on a tablet.
+ * the type that comes back. A container query picks the form: the wide one from a 560px column
+ * (drawn for the page's 640px, where its text is the size it was drawn at, and no smaller than
+ * 10.5px at 560px), and the stacked one below that, kept to 400px so that it does not grow larger
+ * than the page's text on a small tablet.
  */
 export function HowItWorksDiagram() {
   return (
     <figure className="@container my-8">
-      <div className="hidden @min-[700px]:block">
+      <div className="hidden @min-[560px]:block">
         <Wide />
       </div>
-      <div className="max-w-[400px] @min-[700px]:hidden">
+      <div className="max-w-[400px] @min-[560px]:hidden">
         <Narrow />
       </div>
     </figure>

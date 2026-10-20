@@ -29,15 +29,16 @@ group by u.id
 <Details summary="View the schema" id="schema">
 
 ```sql title="schema.sql" tab="Postgres" tab-group="dialect"
-create type user_role as enum ('admin', 'member');  -- role: "admin" | "member"
+create type user_role as enum ('admin', 'member');
 
 create table users (
-  id serial primary key,                            -- at most one row per id
-  name text not null,                               -- name: string
-  email text unique,                                -- email: string | null
-  role user_role not null default 'member',
-  tags text[] not null default '{}',                -- tags: string[]
-  created_at timestamptz not null default now()     -- created_at: Date
+  id serial primary key,                     -- at most one row per id
+  name text not null,                        -- name: string
+  email text unique,                         -- email: string | null
+  role user_role not null default 'member',  -- role: "admin" | "member"
+  tags text[] not null default '{}',         -- tags: string[]
+  created_at timestamptz                     -- created_at: Date
+    not null default now()
 );
 
 create table posts (
@@ -57,12 +58,14 @@ create table events (
 
 ```sql title="schema.sql" tab="MySQL" tab-group="dialect"
 create table users (
-  id int auto_increment primary key,                         -- at most one row per id
-  name text not null,                                        -- name: string
-  email varchar(255) unique,                                 -- email: string | null
-  role enum('admin', 'member') not null default 'member',    -- role: string
-  tags json not null default (json_array()),                 -- tags: unknown
-  created_at datetime not null default current_timestamp     -- created_at: string
+  id int auto_increment primary key,          -- at most one row per id
+  name text not null,                         -- name: string
+  email varchar(255) unique,                  -- email: string | null
+  role enum('admin', 'member')                -- role: string
+    not null default 'member',
+  tags json not null default (json_array()),  -- tags: unknown
+  created_at datetime                         -- created_at: string
+    not null default current_timestamp
 );
 
 create table posts (
@@ -83,12 +86,14 @@ create table events (
 
 ```sql title="schema.sql" tab="SQLite" tab-group="dialect"
 create table users (
-  id integer primary key,                                    -- at most one row per id
-  name text not null,                                        -- name: string
-  email text unique,                                         -- email: string | null
-  role text not null default 'member' check (role in ('admin', 'member')),
-  tags text not null default '[]',                           -- tags: string, JSON text
-  created_at text not null default current_timestamp         -- created_at: string
+  id integer primary key,               -- at most one row per id
+  name text not null,                   -- name: string
+  email text unique,                    -- email: string | null
+  role text not null default 'member'   -- role: string
+    check (role in ('admin', 'member')),
+  tags text not null default '[]',      -- tags: string, JSON text
+  created_at text                       -- created_at: string
+    not null default current_timestamp
 ) strict;
 
 create table posts (
@@ -124,25 +129,27 @@ create table events (
 <AgentPrompt>
 
 ```text
-Set up Reylo in this project. Reylo lets TypeScript import .sql files, with
-types inferred from the live database. Its docs are one page, https://reylo.dev:
-follow the section linked at each step.
+Set up Reylo in this project. Reylo lets TypeScript import .sql
+files, with types inferred from the live database. Its docs are one
+page, https://reylo.dev: follow the section linked at each step.
 
-1. Check the requirements and install Reylo, the engine of the project's
-   database (@reylosql/postgres, @reylosql/mysql or @reylosql/sqlite) and
-   TypeScript 7.1 beta or later: https://reylo.dev/#install
-2. Add Reylo to tsconfig.json as a content mapper, and add a typecheck script
-   that runs tsc --noEmit --runExternalCode: https://reylo.dev/#typescript
+1. Check the requirements and install Reylo, the engine of the
+   project's database (@reylosql/postgres, @reylosql/mysql or
+   @reylosql/sqlite) and TypeScript 7.1 beta or later:
+   https://reylo.dev/#install
+2. Add Reylo to tsconfig.json as a content mapper, and add a
+   typecheck script that runs tsc --noEmit --runExternalCode:
+   https://reylo.dev/#typescript
 3. Point Reylo at the development database with DATABASE_URL:
    https://reylo.dev/#url
-4. Make .sql imports load wherever the project runs code, with Node's --import
-   (https://reylo.dev/#node) or the plugin for its runtime, bundler or
-   framework (https://reylo.dev/#plugins).
+4. Make .sql imports load wherever the project runs code, with
+   Node's --import (https://reylo.dev/#node) or the plugin for its
+   runtime, bundler or framework (https://reylo.dev/#plugins).
 5. Set up the editor the project uses: https://reylo.dev/#editors
 6. Write a first query and run it with the project's own driver:
    https://reylo.dev/#usage and https://reylo.dev/#supported-drivers
-7. Run the typecheck script. The query's types come from the database, and an
-   error in a .sql file shows at its line and column.
+7. Run the typecheck script. The query's types come from the
+   database; an error in a .sql file shows at its line and column.
 ```
 
 </AgentPrompt>
@@ -405,7 +412,8 @@ Reylo runs in both of Next.js's bundlers, Turbopack and webpack, on the server.
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  typescript: { ignoreBuildErrors: true }, // the build script runs the type check first
+  // the build script runs the type check first
+  typescript: { ignoreBuildErrors: true },
   turbopack: {
     rules: {
       "*.sql": {
@@ -417,7 +425,10 @@ const nextConfig: NextConfig = {
   },
   webpack(config, { isServer }) {
     if (isServer) {
-      config.module.rules.push({ test: /\.sql$/, use: "reylo/webpack-loader" });
+      config.module.rules.push({
+        test: /\.sql$/,
+        use: "reylo/webpack-loader",
+      });
     }
     return config;
   },
@@ -433,7 +444,7 @@ export default nextConfig;
   "scripts": {
     "dev": "next dev",
     "typecheck": "next typegen && tsc --noEmit --runExternalCode",
-    "build": "next typegen && tsc --noEmit --runExternalCode && next build"
+    "build": "npm run typecheck && next build"
   }
 }
 ```
@@ -510,7 +521,11 @@ module.exports = {
     "\\.sql$": "reylo/jest",
     "\\.[jt]s$": [
       "babel-jest",
-      { presets: [["@babel/preset-env", { targets: { node: "current" } }]] },
+      {
+        presets: [
+          ["@babel/preset-env", { targets: { node: "current" } }],
+        ],
+      },
     ],
   },
   transformIgnorePatterns: ["/node_modules/(?!(\\.[^/]+/)?reylo[@/])"],
@@ -599,7 +614,8 @@ returning id
 ```ts twoslash title="main.ts"
 import createUser from "./create_user.sql";
 
-const created = await createUser.run(db, { name: "Ada", email: "ada@example.com" });
+const ada = { name: "Ada", email: "ada@example.com" };
+const created = await createUser.run(db, ada);
 //    ^?
 ```
 
@@ -660,7 +676,7 @@ import getUser, { type Params, type Row } from "./get_user.sql";
 
 `run(client, params)` runs the statement and resolves to its result, shaped by how many rows Reylo proves the statement can return:
 
-| The statement | `cardinality` | `run` resolves to |
+| The statement | `cardinality` | Resolves to |
 | --- | --- | --- |
 | A match on a primary or unique key, or `limit 1` | `maybeOne` | `Row \| null` |
 | An aggregate without `group by`, a one-row `insert … returning` | `one` | `Row` |
@@ -747,7 +763,8 @@ The JSON Schema (2020-12) of the parameters, as a plain object, for anything tha
 import getUser from "./get_user.sql";
 
 getUser.inputSchema;
-// { type: "object", properties: { id: { type: "integer", … } }, required: ["id"], … }
+// { type: "object", properties: { id: { type: "integer", … } },
+//   required: ["id"], … }
 ```
 
 ### `outputSchema`
@@ -758,7 +775,8 @@ The JSON Schema of the result, as `JSON.stringify` writes it:
 import getUser from "./get_user.sql";
 
 getUser.outputSchema;
-// { anyOf: [{ type: "object", properties: { id, name, email }, … }, { type: "null" }] }
+// { anyOf: [{ type: "object", properties: { id, name, email }, … },
+//   { type: "null" }] }
 ```
 
 A query is also a [Standard JSON Schema](https://standardschema.dev), so a library that reads one gets both schemas from `getUser["~standard"].jsonSchema`.
@@ -843,7 +861,10 @@ A JSON parameter carries a JSON Schema in its cast. The schema types it in TypeS
 
 ```sql title="add_users.sql" tab="Postgres" tab-group="dialect"
 with input as (
-  select :names::jsonb('{ "type": "array", "items": { "type": "string" } }') as names
+  select :names::jsonb('{
+    "type": "array",
+    "items": { "type": "string" }
+  }') as names
 )
 insert into users (name)
 select jsonb_array_elements_text(input.names) from input
@@ -852,15 +873,23 @@ select jsonb_array_elements_text(input.names) from input
 ```sql title="add_users.sql" tab="MySQL" tab-group="dialect"
 insert into users (name)
 with input as (
-  select :names::json('{ "type": "array", "items": { "type": "string" } }') as names
+  select :names::json('{
+    "type": "array",
+    "items": { "type": "string" }
+  }') as names
 )
 select j.name
-from input, json_table(input.names, '$[*]' columns (name text path '$')) as j
+from input, json_table(input.names, '$[*]' columns (
+  name text path '$'
+)) as j
 ```
 
 ```sql title="add_users.sql" tab="SQLite" tab-group="dialect"
 with input as (
-  select :names::json('{ "type": "array", "items": { "type": "string" } }') as names
+  select :names::json('{
+    "type": "array",
+    "items": { "type": "string" }
+  }') as names
 )
 insert into users (name)
 select j.value from input, json_each(input.names) as j
@@ -1667,7 +1696,10 @@ const next = await nextPage.run(db, page.at(-1)!);
 import nextPage from "./next_page.sql";
 
 // the first page: a cursor after every row
-const page = await nextPage.run(db, { created_at: "3000-01-01 00:00:00", id: 0 });
+const page = await nextPage.run(db, {
+  created_at: "3000-01-01 00:00:00",
+  id: 0,
+});
 // a DATETIME is its text, which the parameter takes back
 const next = await nextPage.run(db, page.at(-1)!);
 //    ^?
@@ -1701,17 +1733,25 @@ select id, name from users where id = any(:ids)
 
 ```sql title="users_by_ids.sql" tab="MySQL" tab-group="dialect"
 with input as (
-  select :ids::json('{ "type": "array", "items": { "type": "integer" } }') as ids
+  select :ids::json('{
+    "type": "array",
+    "items": { "type": "integer" }
+  }') as ids
 )
 select id, name from users
 where id in (
-  select j.id from input, json_table(input.ids, '$[*]' columns (id int path '$')) as j
+  select j.id from input, json_table(input.ids, '$[*]' columns (
+    id int path '$'
+  )) as j
 )
 ```
 
 ```sql title="users_by_ids.sql" tab="SQLite" tab-group="dialect"
 with input as (
-  select :ids::json('{ "type": "array", "items": { "type": "integer" } }') as ids
+  select :ids::json('{
+    "type": "array",
+    "items": { "type": "integer" }
+  }') as ids
 )
 select id, name from users
 where id in (select j.value from input, json_each(input.ids) as j)
@@ -1752,7 +1792,10 @@ order by i.position
 ```sql title="users_in_order.sql" tab="MySQL" tab-group="dialect"
 -- a for ordinality column numbers the elements
 with input as (
-  select :ids::json('{ "type": "array", "items": { "type": "integer" } }') as ids
+  select :ids::json('{
+    "type": "array",
+    "items": { "type": "integer" }
+  }') as ids
 )
 select u.id, u.name
 from input, json_table(input.ids, '$[*]' columns (
@@ -1766,7 +1809,10 @@ order by i.position
 ```sql title="users_in_order.sql" tab="SQLite" tab-group="dialect"
 -- json_each numbers the elements as key
 with input as (
-  select :ids::json('{ "type": "array", "items": { "type": "integer" } }') as ids
+  select :ids::json('{
+    "type": "array",
+    "items": { "type": "integer" }
+  }') as ids
 )
 select u.id, u.name
 from input, json_each(input.ids) as i
@@ -1959,14 +2005,18 @@ cross join jsonb_to_recordset(u.posts) as p(title text)
 ```
 
 ```ts twoslash title="main.ts"
-import createUsersWithPosts, { type Params } from "./create_users_with_posts.sql";
-//                                  ^?
+import createUsersWithPosts from "./create_users_with_posts.sql";
+import type { Params } from "./create_users_with_posts.sql";
+//            ^?
 
-await createUsersWithPosts.run(db, {
-  users: [
-    { name: "Ada", email: "ada@example.com", posts: [{ title: "Notes" }] },
-  ],
-});
+const users = [
+  {
+    name: "Ada",
+    email: "ada@example.com",
+    posts: [{ title: "Notes" }],
+  },
+];
+await createUsersWithPosts.run(db, { users });
 ```
 
 </Dialect>
@@ -2036,7 +2086,11 @@ import insertPosts from "./insert_posts.sql";
 
 const db = mysql.createPool(process.env.DATABASE_URL!);
 const users = [
-  { name: "Ada", email: "ada@example.com", posts: [{ title: "Notes" }] },
+  {
+    name: "Ada",
+    email: "ada@example.com",
+    posts: [{ title: "Notes" }],
+  },
 ];
 
 const conn = await db.getConnection();
@@ -2116,7 +2170,11 @@ import insertPosts from "./insert_posts.sql";
 
 const db = new Database("app.db");
 const users = [
-  { name: "Ada", email: "ada@example.com", posts: [{ title: "Notes" }] },
+  {
+    name: "Ada",
+    email: "ada@example.com",
+    posts: [{ title: "Notes" }],
+  },
 ];
 
 db.transaction(() => {

@@ -802,15 +802,16 @@ code {
 }
 
 /* ── The reading measure ─────────────────────────────────────────────────────
-   One column for everything, 46rem: prose, headings, code blocks, tab groups and tables share
-   both edges. Prose runs about 77 characters a line (92 at most) in Geist at 16.5px, and a code
-   block holds 90 characters of Geist Mono at 13px. The column of 2026-10-20 morning ran to 103;
-   a version that afternoon stopped prose at 36rem and let code and headings run to 49.5rem, and the
-   maintainer rejected the ragged edges ("It looks like trash"). The page is the column plus
-   Fumadocs' 2rem of padding on each side; `--fd-layout-width` in app/[[...slug]]/page.tsx is that
-   plus the 268px table of contents. */
+   One column for everything, 40rem: prose, headings, code blocks, tab groups and tables share
+   both edges. Prose runs a median 81 characters a line (88 at the 90th percentile) in Geist at
+   16.5px, and a code block holds about 77 characters of Geist Mono at 13px. The column of
+   2026-10-20 morning ran to 103; a version that afternoon stopped prose at 36rem and let code and
+   headings run to 49.5rem, and the maintainer rejected the ragged edges ("It looks like trash");
+   the one column of 46rem that followed ran a median 94, which he still found too wide and hard
+   to read. The page is the column plus Fumadocs' 2rem of padding on each side;
+   `--fd-layout-width` in app/[[...slug]]/page.tsx is that plus the 268px table of contents. */
 #nd-page {
-  max-width: 50rem;
+  max-width: 44rem;
 }
 
 #nd-page .prose {
