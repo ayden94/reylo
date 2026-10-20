@@ -202,14 +202,14 @@ function scalar(name: string, written: string, v: unknown, dialect: Dialect, fai
       if (typeof v === "string") return v;
       return fail(`is ${written}, a wall-clock reading with no zone, which takes its text ("2026-10-12 19:06:48.282", "2026-10-12"), not a Date: drivers write a Date's time in different zones.${v instanceof Date ? " A timestamptz takes a Date." : ` Got ${describe(v)}.`}`);
     case "bytea":
-      if (v instanceof Uint8Array && dialect === "postgres") {
-        let hex = "\\x";
-        for (const byte of v) hex += (byte < 16 ? "0" : "") + byte.toString(16);
-        return hex;
-      }
-      return fail(`is ${written}, binary data${dialect === "postgres" ? `, a Uint8Array; got ${describe(v)}.` : `, which a column list does not take on ${dialect === "mysql" ? "MySQL" : "SQLite"} yet.`}`);
-    case "blob":
-      return fail(`is ${written}, binary data, which a column list does not take on ${dialect === "mysql" ? "MySQL" : "SQLite"} yet.`);
+    case "blob": {
+      // Binary data travels as hexadecimal text: Postgres's own `\x` form, and bare digits that
+      // MySQL's and SQLite's readers decode with unhex().
+      if (!(v instanceof Uint8Array)) return fail(`is ${written}, binary data, a Uint8Array; got ${describe(v)}.`);
+      let hex = dialect === "postgres" ? "\\x" : "";
+      for (const byte of v) hex += (byte < 16 ? "0" : "") + byte.toString(16);
+      return hex;
+    }
     default:
       // A type the run time has no rule for (time, interval, inet, …) takes the text the database
       // reads, and a number or a truth value as JSON writes them.

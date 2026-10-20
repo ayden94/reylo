@@ -646,6 +646,20 @@ impl Writer {
     }
 }
 
+/// Whether a member holds binary data, which the JSON carries as hexadecimal text and the reader
+/// decodes with `unhex()`, as a binary value travels in a text form the statement decodes
+/// (docs/typed-json-params.md). Postgres's reader takes `bytea` from its own `\x` text as it is.
+fn binary(m: &Member, dialect: Dialect) -> bool {
+    match dialect {
+        Dialect::Postgres => false,
+        Dialect::Sqlite => m.schema.is_none() && affinity(&m.ty) == "BLOB",
+        Dialect::Mysql => {
+            let t = m.ty.to_ascii_lowercase();
+            ["binary", "varbinary", "tinyblob", "blob", "mediumblob", "longblob"].iter().any(|b| t == *b || t.starts_with(&format!("{b}(")))
+        }
+    }
+}
+
 /// The JSON column type of a JSON member in each dialect's reader.
 fn json_type(member: &Member, dialect: Dialect) -> String {
     match dialect {
@@ -755,6 +769,8 @@ pub fn lower(found: &Found, dialect: Dialect, placeholder: &str) -> Lowered {
             let read = |m: &Member| {
                 if m.schema.is_some() {
                     format!("nullif(\"reylo.e\".value -> {}, 'null')", path(&m.name))
+                } else if binary(m, dialect) {
+                    format!("unhex(\"reylo.e\".value ->> {})", path(&m.name))
                 } else {
                     format!("\"reylo.e\".value ->> {}", path(&m.name))
                 }
@@ -777,7 +793,7 @@ pub fn lower(found: &Found, dialect: Dialect, placeholder: &str) -> Lowered {
                     if k > 0 {
                         w.push(", ");
                     }
-                    let value = if m.schema.is_some() { read(m) } else { format!("CAST({} AS {})", read(m), m.ty) };
+                    let value = if m.schema.is_some() || binary(m, dialect) { read(m) } else { format!("CAST({} AS {})", read(m), m.ty) };
                     w.member(k, &format!("{value} AS {}", q(&m.name)));
                 }
                 w.push(" FROM ");
@@ -789,7 +805,8 @@ pub fn lower(found: &Found, dialect: Dialect, placeholder: &str) -> Lowered {
             }
         }
         Dialect::Mysql => {
-            let table = |w: &mut Writer, ordinal: bool| {
+            // A binary member is read as its hexadecimal text and decoded with UNHEX().
+            let table = |w: &mut Writer, ordinal: bool, alias: &str| {
                 w.push("JSON_TABLE(");
                 w.placeholder(placeholder);
                 w.push(if found.one { ", '$' COLUMNS (" } else { ", '$[*]' COLUMNS (" });
@@ -800,23 +817,35 @@ pub fn lower(found: &Found, dialect: Dialect, placeholder: &str) -> Lowered {
                     if k > 0 {
                         w.push(", ");
                     }
-                    let ty = if m.schema.is_some() { json_type(m, dialect) } else { m.ty.clone() };
+                    let ty = if m.schema.is_some() { json_type(m, dialect) } else if binary(m, dialect) { "longtext".to_string() } else { m.ty.clone() };
                     w.member(k, &format!("{} {ty} PATH {} ERROR ON ERROR", q(&m.name), path(&m.name)));
                 }
                 w.push(&format!(")) AS {alias}"));
             };
+            let value = |m: &Member, alias: &str| if binary(m, dialect) { format!("UNHEX({alias}.{})", q(&m.name)) } else { format!("{alias}.{}", q(&m.name)) };
             if found.insert {
                 w.push("(");
                 w.list(ms.iter().map(|m| q(&m.name)).collect(), &mut lists);
                 w.push(") SELECT ");
-                w.list(ms.iter().map(|m| format!("{alias}.{}", q(&m.name))).collect(), &mut lists);
+                w.list(ms.iter().map(|m| value(m, &alias)).collect(), &mut lists);
                 w.push(" FROM ");
-                table(&mut w, !found.one);
+                table(&mut w, !found.one, &alias);
                 if !found.one {
                     w.push(&format!(" ORDER BY {alias}.`reylo.n`"));
                 }
+            } else if ms.iter().any(|m| binary(m, dialect)) {
+                w.push("(SELECT ");
+                for (k, m) in ms.iter().enumerate() {
+                    if k > 0 {
+                        w.push(", ");
+                    }
+                    w.member(k, &format!("{} AS {}", value(m, "`reylo.j`"), q(&m.name)));
+                }
+                w.push(" FROM ");
+                table(&mut w, false, "`reylo.j`");
+                w.push(&format!(") AS {alias}"));
             } else {
-                table(&mut w, false);
+                table(&mut w, false, &alias);
             }
         }
     }
@@ -986,6 +1015,9 @@ pub fn analyze(sql: &str, dialect: Dialect, host: &Host, inner: &dyn Fn(&str) ->
                 name: m.name.clone(),
                 ty: match &m.schema {
                     Some(schema) => Type::Json { schema: Some(crate::schema_type::type_schema(&input_view(schema), &crate::schema_type::REYLO)) },
+                    // Binary data, whatever the reader's unhex() is typed: SQLite's analysis types
+                    // no such call, and MySQL's binary types are the engine's `bytea`.
+                    None if binary(m, dialect) => Type::Scalar { name: if dialect == Dialect::Sqlite { "blob" } else { "bytea" }.to_string() },
                     None => probe.columns.get(k).map(|c| c.ty.clone()).unwrap_or(Type::Unknown),
                 },
                 written: m.ty.clone(),

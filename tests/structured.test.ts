@@ -227,6 +227,11 @@ select x.email, x.name from jsonb_to_recordset(:users::jsonb('{"type": "array", 
 returning email, name`);
     assert.deepEqual(plain(await typed.run(sql, { users: [{ email: "b@x" }, { email: "c@x", name: "Cy" }] })), [{ email: "b@x", name: "anon" }, { email: "c@x", name: "Cy" }]);
     await assert.rejects(typed.run(sql, { users: [{ email: "nope" }] }), /Parameter "users" at \/0\/email must be a email/);
+    // Binary data: Postgres's reader takes bytea from its own \\x text.
+    await sql.unsafe("create table files (id int8 primary key, data bytea not null)");
+    const files = await built(root, url.href, "insert_files", "insert into files :files::rows(id int8 not null, data bytea not null) returning data");
+    const [file] = await files.run(sql, { files: [{ id: 1, data: new Uint8Array([0, 1, 255]) }] });
+    assert.deepEqual([...file.data], [0, 1, 255]);
     // A type the database does not know is an error at the member's type.
     const bad = "insert into events :events::rows(id int8 not null, ts timestamptz not null, amount numerc)";
     const d = (await analysis(root, url.href, bad)).diagnostics;
@@ -389,5 +394,53 @@ test("SQLite: a JSON member of a column list is checked against its schema, its 
   } finally {
     db.close();
     await closeAll();
+  }
+});
+
+test("binary data in a column list travels as hexadecimal text, which each reader decodes", async () => {
+  const bytes = new Uint8Array([0, 1, 127, 128, 255]);
+  const same = (got: unknown) => assert.deepEqual([...new Uint8Array(got as ArrayLike<number>)], [...bytes]);
+  // SQLite decodes it with unhex().
+  const root = project();
+  const db = new DatabaseSync(join(root, "app.db"));
+  db.exec("create table files (id integer primary key, data blob not null)");
+  try {
+    const insert = await built(root, "file:./app.db", "insert_files", "insert into files :files::rows(id integer not null, data blob not null) returning id, data");
+    const [row] = await insert.run(db, { files: [{ id: 1, data: bytes }] });
+    same(row.data);
+    const read = await built(root, "file:./app.db", "read_files", "select f.data from :files::rows(data blob not null) as f");
+    same((await read.run(db, { files: [{ data: bytes }] }))[0].data);
+    await assert.rejects(insert.run(db, { files: [{ id: 2, data: "00ff" }] }), /"data" is blob, binary data, a Uint8Array; got "00ff"/);
+  } finally {
+    db.close();
+    await closeAll();
+  }
+  // MySQL decodes it with UNHEX().
+  if (mysqlLive) return;
+  const require = createRequire(join(DRIVERS, "mysql2", "package.json"));
+  const mysql = require("mysql2/promise");
+  const server = new URL(MYSQL!);
+  const connect = (database?: string) => mysql.createConnection({ host: server.hostname, port: Number(server.port), user: decodeURIComponent(server.username) || "root", password: decodeURIComponent(server.password), database });
+  const admin = await connect();
+  const name = `reylo_binary_${process.pid}`;
+  await admin.query(`drop database if exists ${name}`);
+  await admin.query(`create database ${name}`);
+  const url = new URL(MYSQL!);
+  url.pathname = `/${name}`;
+  const my = await connect(name);
+  const mroot = project("mysql2");
+  try {
+    await my.query("create table files (id bigint primary key, data varbinary(16) not null)");
+    const insert = await built(mroot, url.href, "insert_files", "insert into files :files::rows(id bigint not null, data varbinary(16) not null)");
+    await insert.run(my, { files: [{ id: 1, data: bytes }] });
+    const [rows] = await my.query("select data from files");
+    same((rows as { data: Uint8Array }[])[0]!.data);
+    const read = await built(mroot, url.href, "read_files", "select f.data from :files::rows(data varbinary(16) not null) as f");
+    same((await read.run(my, { files: [{ data: bytes }] }))[0].data);
+  } finally {
+    await closeAll();
+    await my.end();
+    await admin.query(`drop database if exists ${name}`);
+    await admin.end();
   }
 });
