@@ -472,7 +472,10 @@ impl<'a> Engine<'a> {
                     unresolved.extend(resolved.unresolved.iter().map(|p| format!("{}: {p}", col.name)));
                     (resolved.ty, !resolved.non_null)
                 }
-                _ => (with_document(with_values(with_items(registry.render(col.type_oid), col.nullable_items), col.values.as_deref()), col.document.as_ref()), col.nullable),
+                _ => {
+                    let ty = if col.whole_row { registry.render_row(col.type_oid) } else { registry.render(col.type_oid) };
+                    (with_document(with_values(with_items(ty, col.nullable_items), col.values.as_deref()), col.document.as_ref()), col.nullable)
+                }
             };
             columns.push(Column { name: col.name.clone(), ty, nullable, type_name: col.type_name.clone() });
         }
@@ -688,6 +691,7 @@ impl<'a> Engine<'a> {
         // Nullability from provenance, then from the SQL.
         let settled = self.settle(sql, &raw, parsed, trust);
         let (Some(()), Some(mut described), Some(checks)) = (types, settled, checks) else { return None };
+        self.stored_sublinks(sql, &mut described);
         for (col, raw) in described.columns.iter_mut().zip(&raw.columns) {
             if trust.builtin("=") {
                 col.values = checks.values.get(&(raw.table, raw.attnum)).cloned();
@@ -779,6 +783,31 @@ impl<'a> Engine<'a> {
             out.sources.insert(key, texts);
         }
         Some(out)
+    }
+
+    /// Mark the result columns a scalar or `ARRAY` subquery fills with stored rows of a table
+    /// ([`sublink_rows`]), where the subquery's one target can only be that table's whole row: it
+    /// names no column of any table the statement reads, and every FROM item of the statement is
+    /// a table whose columns the engine read. The column's type confirms it: the table's row type,
+    /// or an array of it.
+    fn stored_sublinks(&self, sql: &str, described: &mut DescribedStatement) {
+        let Some(rows) = sublink_rows(sql) else { return };
+        if rows.targets.len() != described.columns.len() || rows.targets.iter().all(Option::is_none) {
+            return;
+        }
+        let columns = self.columns_by_name.borrow();
+        let relations = self.relations.borrow();
+        let registry = self.registry.borrow();
+        let unambiguous = |name: &str| !SYSTEM_COLUMNS.contains(&name) && rows.tables.iter().all(|t| columns.get(t).is_some_and(|c| c.values().all(|(column, _)| column != name)));
+        for (col, target) in described.columns.iter_mut().zip(&rows.targets) {
+            let Some((relation, name, array)) = target else { continue };
+            let oid = relations.iter().find(|(_, (n, _))| n == relation).map(|(o, _)| *o);
+            let row_type = if *array { registry.get(col.type_oid).and_then(|t| t.elem) } else { Some(col.type_oid) };
+            let of = row_type.and_then(|o| registry.get(o)).and_then(|t| t.relid);
+            if oid.is_some() && of == oid && unambiguous(name) {
+                col.whole_row = true;
+            }
+        }
     }
 
     /// A described statement's columns with their nullability from provenance: the catalog's
@@ -892,8 +921,13 @@ impl<'a> Engine<'a> {
                     Some(Some(columns)) if col.attnum > 0 && !degraded => columns.get(col.attnum as usize - 1).and_then(|c| c.document.clone()),
                     _ => None,
                 };
-                // A whole-row reference (attribute 0) of the relation whose row type the column is.
-                let whole_row = col.table != 0 && col.attnum == 0 && !degraded && registry.get(col.oid).and_then(|t| t.relid) == Some(col.table);
+                // A whole-row reference (attribute 0) of the relation whose row type the column is,
+                // or a view's column that is one in the view's own statement.
+                let from_view = match view_columns.get(&col.table) {
+                    Some(Some(columns)) if col.attnum > 0 && !degraded => columns.get(col.attnum as usize - 1).is_some_and(|c| c.whole_row),
+                    _ => false,
+                };
+                let whole_row = from_view || (col.table != 0 && col.attnum == 0 && !degraded && registry.get(col.oid).and_then(|t| t.relid) == Some(col.table));
                 DescribedColumn { name: col.name.clone(), type_oid: col.oid, type_name: registry.name(col.oid), nullable, nullable_items: None, values: None, document, whole_row }
             })
             .collect();
@@ -1088,6 +1122,7 @@ impl<'a> Engine<'a> {
         let checks = self.checks(&raw, parsed.as_ref(), &[], true);
         let settled = self.settle(sql, &raw, parsed.as_ref(), trust);
         let (Some(()), Some(mut described), Some(checks)) = (types, settled, checks) else { return None };
+        self.stored_sublinks(sql, &mut described);
         for (col, raw) in described.columns.iter_mut().zip(&raw.columns) {
             if let Some(document) = checks.documents.get(&(raw.table, raw.attnum)) {
                 col.document = Some(document.clone());
@@ -1308,6 +1343,77 @@ fn missing_rows(sql: &str, origins: &[bool], columns: &dyn Fn(&str) -> Option<Ve
         return vec![true; count];
     }
     out.iter().zip(origins).map(|(missing, origin)| *missing && *origin).collect()
+}
+
+/// The system columns every table has, which a bare name reads before any row.
+const SYSTEM_COLUMNS: &[&str] = &["tableoid", "xmin", "cmin", "xmax", "cmax", "ctid"];
+
+/// What [`sublink_rows`] finds in a SELECT.
+struct SublinkRows {
+    /// Per target of the SELECT: for a scalar or `ARRAY` subquery whose one target is the whole
+    /// row of a table of its own FROM, that table, the name the row goes by there, and whether
+    /// the subquery is an `ARRAY`.
+    targets: Vec<Option<(String, String, bool)>>,
+    /// Every table a FROM anywhere in the statement names.
+    tables: Vec<String>,
+}
+
+/// The targets of a SELECT that are a scalar or `ARRAY` subquery returning the whole rows of one
+/// of its own FROM's tables (`(select c from child c …)`, `array(select c from child c …)`), and
+/// every table a FROM of the statement names. `None` where a name could mean something the
+/// statement's text does not show: a FROM item that is no plain table (a function, a derived
+/// table, `JSON_TABLE`), a table named with its schema, or one named like a WITH query. A bare
+/// name reads a column of any FROM in scope before it reads a row, which
+/// [`Engine::stored_sublinks`] rules out with the tables' columns.
+fn sublink_rows(sql: &str) -> Option<SublinkRows> {
+    use pg_query::protobuf::node::Node as N;
+    use pg_query::protobuf::{Node, SetOperation, SubLinkType};
+    use pg_query::NodeRef;
+    let parsed = crate::stack::parse(sql).ok()?;
+    let (mut tables, mut ctes) = (Vec::new(), Vec::new());
+    for (node, _, _, _) in parsed.protobuf.nodes() {
+        match node {
+            NodeRef::RangeVar(r) if r.schemaname.is_empty() => tables.push(r.relname.clone()),
+            NodeRef::CommonTableExpr(c) => ctes.push(c.ctename.clone()),
+            NodeRef::RangeVar(_) | NodeRef::RangeSubselect(_) | NodeRef::RangeFunction(_) | NodeRef::RangeTableFunc(_) | NodeRef::RangeTableSample(_) | NodeRef::JsonTable(_) => return None,
+            _ => {}
+        }
+    }
+    if tables.iter().any(|t| ctes.contains(t)) {
+        return None;
+    }
+    /// The table of a FROM item that goes by `name`: the alias where it has one, else its name.
+    fn named(item: &Node, name: &str) -> Option<String> {
+        match item.node.as_ref()? {
+            N::RangeVar(r) => (r.alias.as_ref().map_or(r.relname.as_str(), |a| a.aliasname.as_str()) == name).then(|| r.relname.clone()),
+            N::JoinExpr(j) if j.alias.is_none() => j.larg.as_deref().and_then(|l| named(l, name)).or_else(|| j.rarg.as_deref().and_then(|r| named(r, name))),
+            _ => None,
+        }
+    }
+    let row = |target: &Node| -> Option<(String, String, bool)> {
+        let N::ResTarget(t) = target.node.as_ref()? else { return None };
+        let N::SubLink(s) = t.val.as_deref()?.node.as_ref()? else { return None };
+        let array = s.sub_link_type == SubLinkType::ArraySublink as i32;
+        if !array && s.sub_link_type != SubLinkType::ExprSublink as i32 {
+            return None;
+        }
+        let N::SelectStmt(inner) = s.subselect.as_deref()?.node.as_ref()? else { return None };
+        if inner.op != SetOperation::SetopNone as i32 {
+            return None;
+        }
+        let [only] = inner.target_list.as_slice() else { return None };
+        let N::ResTarget(only) = only.node.as_ref()? else { return None };
+        let N::ColumnRef(c) = only.val.as_deref()?.node.as_ref()? else { return None };
+        let [field] = c.fields.as_slice() else { return None };
+        let N::String(name) = field.node.as_ref()? else { return None };
+        let relation = inner.from_clause.iter().find_map(|item| named(item, &name.sval))?;
+        Some((relation, name.sval.clone(), array))
+    };
+    let N::SelectStmt(select) = parsed.protobuf.stmts.first()?.stmt.as_deref()?.node.as_ref()? else { return None };
+    if select.op != SetOperation::SetopNone as i32 {
+        return None;
+    }
+    Some(SublinkRows { targets: select.target_list.iter().map(row).collect(), tables })
 }
 
 /// What a column's CHECKs say of its values ([`Engine::checks`]), by relation and attribute.
@@ -1683,6 +1789,28 @@ mod tests {
         // The fix reads the value from a WITH.
         let a = replay("with input as (select concat('%', :q::text, '%') as pattern) select 1 as one from input where input.pattern like input.pattern");
         assert!(a.diagnostics.iter().all(|d| d.code != 3), "{:?}", a.diagnostics);
+    }
+
+    #[test]
+    fn a_subquery_whose_one_target_is_a_tables_whole_row_returns_its_stored_rows() {
+        let targets = |sql: &str| sublink_rows(sql).map(|r| r.targets);
+        let row = |table: &str, name: &str, array: bool| Some((table.to_string(), name.to_string(), array));
+        assert_eq!(
+            targets("SELECT p.id, array(SELECT c FROM child c WHERE c.pid = p.id), (SELECT c FROM child c LIMIT 1), (SELECT child FROM child) FROM parent p"),
+            Some(vec![None, row("child", "c", true), row("child", "c", false), row("child", "child", false)])
+        );
+        // A join of tables, and the alias hides the table's own name.
+        assert_eq!(targets("SELECT (SELECT c FROM parent p JOIN child c ON c.pid = p.id LIMIT 1)"), Some(vec![row("child", "c", false)]));
+        assert_eq!(targets("SELECT (SELECT child FROM child c LIMIT 1)"), Some(vec![None]));
+        // What is no whole row of a table of the subquery's own FROM.
+        assert_eq!(targets("SELECT (SELECT row(1, 'a')::child FROM child LIMIT 1), (SELECT c.* FROM child c LIMIT 1), (SELECT x.c FROM child x LIMIT 1)"), Some(vec![None, None, None]));
+        assert_eq!(targets("SELECT (SELECT c FROM child c UNION ALL SELECT c FROM child c LIMIT 1)"), Some(vec![None]));
+        // Where a name could mean what the text does not show, nothing is read.
+        assert_eq!(targets("SELECT (SELECT c FROM child c, generate_series(1, 2) g LIMIT 1)"), None);
+        assert_eq!(targets("SELECT (SELECT c FROM child c LIMIT 1) FROM (SELECT 1) s"), None);
+        assert_eq!(targets("SELECT (SELECT c FROM public.child c LIMIT 1)"), None);
+        assert_eq!(targets("WITH child AS (SELECT 1 AS x) SELECT (SELECT c FROM child c LIMIT 1)"), None);
+        assert_eq!(targets("SELECT 1 UNION SELECT 2"), None);
     }
 
     #[test]

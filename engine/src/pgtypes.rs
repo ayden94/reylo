@@ -347,41 +347,30 @@ impl TypeRegistry {
     /// The JSON columns of the relation whose row type `oid` is, by relation and attribute: the
     /// ones whose CHECKs a stored row of it was held to.
     pub fn row_json_columns(&self, oid: u32) -> Vec<(u32, i32)> {
+        // An array of stored rows holds rows of its element's relation.
+        let oid = self.get(oid).filter(|t| t.kind == TypeKind::Array).and_then(|t| t.elem).unwrap_or(oid);
         let Some(t) = self.get(oid).filter(|t| t.kind == TypeKind::Composite) else { return Vec::new() };
         let Some(relid) = t.relid else { return Vec::new() };
         t.fields.iter().filter(|f| f.attnum > 0 && matches!(self.resolve_domain(f.type_oid), oid::JSON | oid::JSONB)).map(|f| (relid, f.attnum)).collect()
     }
 
-    /// The type model of a stored row of the relation whose row type `oid` is: a JSON column a
-    /// CHECK holds to a JSON Schema is the values it admits ([`TypeRegistry::documents`]). A row
-    /// value of the same type built by a statement was held to no CHECK, and renders as
+    /// The type model of a stored row of the relation whose row type `oid` is (`d` of `from docs
+    /// d`): the table's constraints held it, so a column is non-null where its `NOT NULL` is valid,
+    /// and a JSON column a CHECK holds to a JSON Schema is the values it admits
+    /// ([`TypeRegistry::documents`]). A row value of the same type that a statement builds
+    /// (`row(…)::docs`), or that another table's column holds, met none of them, and renders as
     /// [`TypeRegistry::render`] does.
     pub fn render_row(&self, oid: u32) -> crate::types::Type {
-        use crate::types::Type;
-        let relid = self.get(oid).and_then(|t| t.relid);
-        match (self.render(oid), relid) {
-            (Type::Composite { name, fields }, Some(relid)) => {
-                let attnums: Vec<i32> = self.get(oid).map(|t| t.fields.iter().map(|f| f.attnum).collect()).unwrap_or_default();
-                let fields = fields
-                    .into_iter()
-                    .zip(attnums.into_iter().chain(std::iter::repeat(0)))
-                    .map(|(f, attnum)| match (f.ty, self.documents.get(&(relid, attnum))) {
-                        (Type::Json { schema: None }, Some(schema)) => crate::types::Field { ty: Type::Json { schema: Some(schema.clone()) }, ..f },
-                        (ty, _) => crate::types::Field { ty, ..f },
-                    })
-                    .collect();
-                Type::Composite { name, fields }
-            }
-            (ty, _) => ty,
-        }
+        self.render_at(oid, 0, true)
     }
 
-    /// The type model for one oid.
+    /// The type model for one oid. A composite's fields are each nullable: a row value of a table's
+    /// type need not be one of its stored rows ([`TypeRegistry::render_row`]).
     pub fn render(&self, oid: u32) -> crate::types::Type {
-        self.render_at(oid, 0)
+        self.render_at(oid, 0, false)
     }
 
-    fn render_at(&self, oid: u32, depth: usize) -> crate::types::Type {
+    fn render_at(&self, oid: u32, depth: usize, stored: bool) -> crate::types::Type {
         use crate::types::{Field, Type};
         if depth > MAX_DEPTH {
             return Type::Unknown;
@@ -390,11 +379,24 @@ impl TypeRegistry {
         for _ in 0..8 {
             let Some(t) = self.get(cur) else { return Type::Unknown };
             match (t.kind, t.elem, t.base) {
-                (TypeKind::Array, Some(e), _) => return Type::Array { of: Box::new(self.render_at(e, depth + 1)), nullable_items: None },
+                // The elements of an array of stored rows are stored rows.
+                (TypeKind::Array, Some(e), _) => return Type::Array { of: Box::new(self.render_at(e, depth + 1, stored)), nullable_items: None },
                 (TypeKind::Domain, _, Some(b)) => cur = b,
                 (TypeKind::Enum, _, _) => return Type::Enum { name: t.name.clone(), labels: t.labels.clone() },
                 (TypeKind::Composite, _, _) if !t.fields.is_empty() => {
-                    let fields = t.fields.iter().map(|f| Field { name: f.name.clone(), ty: self.render_at(f.type_oid, depth + 1), nullable: !f.not_null }).collect();
+                    let fields = t
+                        .fields
+                        .iter()
+                        .map(|f| {
+                            let ty = self.render_at(f.type_oid, depth + 1, false);
+                            let document = t.relid.filter(|_| stored).and_then(|r| self.documents.get(&(r, f.attnum)));
+                            let ty = match (ty, document) {
+                                (Type::Json { schema: None }, Some(schema)) => Type::Json { schema: Some(schema.clone()) },
+                                (ty, _) => ty,
+                            };
+                            Field { name: f.name.clone(), ty, nullable: !(stored && f.not_null) }
+                        })
+                        .collect();
                     return Type::Composite { name: t.name.clone(), fields };
                 }
                 // A row value whose columns were not read: no driver parses one, so it reaches
@@ -441,7 +443,11 @@ mod tests {
                     Field { name: "tags".into(), ty: Type::Array { of: Box::new(Type::Scalar { name: "text".into() }), nullable_items: None }, nullable: true },
                 ],
             };
-            assert_eq!(registry.render(90001), users);
+            // A stored row of the table holds its NOT NULL; a row value of its type need not.
+            assert_eq!(registry.render_row(90001), users);
+            let Type::Composite { name, fields } = users else { unreachable!() };
+            let built = Type::Composite { name, fields: fields.into_iter().map(|f| Field { nullable: true, ..f }).collect() };
+            assert_eq!(registry.render(90001), built);
         }
     }
 

@@ -642,7 +642,8 @@ impl ResolveCtx<'_> {
                                 unresolved.push(display_path(&join(path, &col.name)));
                                 Type::Unknown
                             } else {
-                                crate::postgres::with_document(self.registry.render(col.type_oid), col.document.as_ref())
+                                let ty = if col.whole_row { self.registry.render_row(col.type_oid) } else { self.registry.render(col.type_oid) };
+                                crate::postgres::with_document(ty, col.document.as_ref())
                             };
                             Field { name: col.name.clone(), ty, nullable: col.nullable }
                         })

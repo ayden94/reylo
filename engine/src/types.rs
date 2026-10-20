@@ -23,9 +23,12 @@ pub struct DescribedColumn {
     /// ([`crate::schema_type`]): its values are those, as [`Type::Json`]'s `schema` says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub document: Option<serde_json::Value>,
-    /// Whether the column is a whole row the statement reads from a table (`d` of `from docs
-    /// d`): a stored row, which the table's CHECKs held, unlike a row value the statement builds
-    /// (`row(…)::docs`), which only shares the type.
+    /// Whether the row value the column holds, or each one of an array of them, is a stored row
+    /// of the table whose row type it is: a whole row the statement reads (`d` of `from docs d`,
+    /// through a view, a derived table or a WITH query too), or one a scalar or `ARRAY` subquery
+    /// returns (`array(select c from child c …)`). Such a row met the table's `NOT NULL` and
+    /// CHECKs; a row value the statement builds (`row(…)::docs`), a function returns or another
+    /// table's column holds only shares the type.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub whole_row: bool,
 }
