@@ -1,6 +1,6 @@
 // The runtime query object behind `import query from "./file.sql"`.
 // Types come from the content mapper; values come from the runtime loader.
-import { execute, executeSync, type ClientFor, type Dialect, type Inputs, type SyncClientFor } from "./execute.ts";
+import { compile, execute, executeSync, type ClientFor, type Dialect, type Inputs, type QueryModule, type SyncClientFor } from "./execute.ts";
 import type { StandardJSONSchemaV1, StandardTypedV1 } from "./standard.ts";
 import type { Structured } from "./rows.ts";
 import type { Fresh } from "./fresh.ts";
@@ -34,8 +34,16 @@ export type ReyloTypes<Params, Row, C extends Cardinality, Values extends readon
 export interface Query<Params, Row, C extends Cardinality, D extends Dialect, Values extends readonly unknown[] = readonly unknown[]>
   extends StandardTypedV1<Params, Materialize<Row, C>>, StandardJSONSchemaV1<Params, Materialize<Row, C>> {
   readonly dialect: D;
-  /** The statement as written, with reylo's placeholders left in place. */
+  // The base text: a structured parameter (`::rows`, `::row`, src/rows.ts) in an insert has its
+  // column lists written again for the keys each call carries. Said here and not in the doc
+  // comment, whose text the docs site shows in its hovers, which leave structured parameters out.
+  /**
+   * The statement as Reylo sends it to the database, as the module's `sql` export: `:id` is `$1`
+   * on Postgres and `?` on MySQL and SQLite, and each cast is the dialect's own.
+   */
   readonly sql: string;
+  /** The `.sql` file's contents, exactly as written, as the module's `raw` export. */
+  readonly raw: string;
   /** Parameter names in binding order. */
   readonly params: readonly string[];
   readonly cardinality: C;
@@ -66,9 +74,14 @@ export type ParamsArg<Params, Values extends readonly unknown[] = readonly unkno
 
 export type QueryDefinition = {
   dialect: Dialect;
+  /** The statement as written, Reylo's placeholders in place: the query's `raw`. */
   sql: string;
   params: readonly string[];
-  /** The statement as the engine rewrote it for the database, and its binding order: every build step puts them in the module. */
+  /**
+   * The statement as the engine compiled it for the database, the query's `sql`, and its binding
+   * order: every build step puts them in the module. A query defined by hand without them is
+   * compiled from `sql` by the run time's own lexer.
+   */
   text?: string;
   order?: readonly string[];
   /** Each parameter's type, by name, as the engine found it: every build step puts it in the module, and a driver that binds some values wrong gets them converted by it. */
@@ -92,7 +105,8 @@ export function defineQuery<Params, Row, C extends Cardinality, D extends Dialec
   const missingSchema = () => {
     throw new Error(`No JSON Schema is available for this query: a module a build step writes carries it, and a query defined by hand has none.`);
   };
-  const query: Query<Params, Row, C, D, Values> & { text?: string | undefined; order?: readonly string[] | undefined; inputs?: Inputs | undefined; columns?: Columns | undefined; structured?: readonly Structured[] | undefined; fresh?: Fresh | undefined; source?: string | undefined } = {
+  // What the run time reads, kept off the query object, whose `sql` is the compiled statement.
+  const module: QueryModule<D> = {
     dialect: def.dialect,
     sql: def.sql,
     params: def.params,
@@ -103,6 +117,17 @@ export function defineQuery<Params, Row, C extends Cardinality, D extends Dialec
     structured: def.structured,
     fresh: def.fresh,
     source: def.source,
+  };
+  let compiled: string | undefined;
+  const query: Query<Params, Row, C, D, Values> = {
+    dialect: def.dialect,
+    // A query defined by hand is compiled when its `sql` is first read, so a placeholder its
+    // `params` misses fails there and in `run`, not where it is defined.
+    get sql() {
+      return (compiled ??= compile(module).text);
+    },
+    raw: def.sql,
+    params: def.params,
     cardinality,
     get inputSchema() {
       return def.jsonSchema?.input ?? missingSchema();
@@ -120,14 +145,14 @@ export function defineQuery<Params, Row, C extends Cardinality, D extends Dialec
     },
     "~reylo": undefined as unknown as ReyloTypes<Params, Row, C, Values>,
     run: ((client: ClientFor<D>, params?: Params) => run(client, params ?? ({} as Params))) as Query<Params, Row, C, D, Values>["run"],
-    runSync: ((client: SyncClientFor<D>, params?: Params) => materialize(executeSync(client, query, (params ?? {}) as Record<string, unknown>) as Row[])) as Query<Params, Row, C, D, Values>["runSync"],
+    runSync: ((client: SyncClientFor<D>, params?: Params) => materialize(executeSync(client, module, (params ?? {}) as Record<string, unknown>) as Row[])) as Query<Params, Row, C, D, Values>["runSync"],
     with: ((client: ClientFor<D>) => (params?: Params) => run(client, params ?? ({} as Params))) as Query<Params, Row, C, D, Values>["with"],
   };
   // A synchronous client answers before run returns, but its rows and its error still come
   // back through the promise, so run means the same on every client.
   function run(client: ClientFor<D>, params: Params): Promise<Materialize<Row, C>> {
     try {
-      const rows = execute(client, query, params as Record<string, unknown>);
+      const rows = execute(client, module, params as Record<string, unknown>);
       return Array.isArray(rows) ? Promise.resolve(materialize(rows as Row[])) : rows.then((rows) => materialize(rows as Row[]));
     } catch (error) {
       return Promise.reject(error);

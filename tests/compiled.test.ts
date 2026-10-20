@@ -1,0 +1,231 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { DatabaseSync } from "node:sqlite";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { Session } from "../src/analyze.ts";
+import { sqlModule } from "../src/loader.ts";
+import { defineQuery } from "../src/index.ts";
+
+// A query's `sql` is the statement as Reylo sends it to the database, the engine's compiled text,
+// and `raw` the file as written (the maintainer, 2026-10-20: "`.sql` should give the user back the
+// compiled query", "`.raw` can contain the actual contents"). Both are the module's exports too,
+// and the content mapper declares both as string literals. Postgres and MySQL run on throwaway
+// servers (REYLO_TEST_PG, REYLO_TEST_MYSQL), each test in a database of its own.
+const PG = process.env.REYLO_TEST_PG;
+const MYSQL = process.env.REYLO_TEST_MYSQL;
+const DRIVERS = fileURLToPath(new URL("../lab/drivers/node_modules", import.meta.url));
+const INDEX = pathToFileURL(fileURLToPath(new URL("../src/index.ts", import.meta.url))).href;
+const MAPPER = fileURLToPath(new URL("../src/mapper.ts", import.meta.url));
+const pgLive = !PG ? "REYLO_TEST_PG names no server" : !existsSync(join(DRIVERS, "postgres")) ? "lab/drivers is not installed" : false;
+const mysqlLive = !MYSQL ? "REYLO_TEST_MYSQL names no server" : !existsSync(join(DRIVERS, "mysql2")) ? "lab/drivers is not installed" : false;
+
+function project(url: string, driver?: string): string {
+  const root = mkdtempSync(join(tmpdir(), "reylo-compiled-"));
+  writeFileSync(join(root, "package.json"), "{}");
+  writeFileSync(join(root, ".env"), `DATABASE_URL=${url}\n`);
+  if (driver) {
+    mkdirSync(join(root, "node_modules"));
+    symlinkSync(join(DRIVERS, driver), join(root, "node_modules", driver));
+  }
+  return root;
+}
+
+/** The module a build step writes for `raw`, imported: its default export and its `sql` and `raw` exports. */
+async function built(root: string, name: string, raw: string) {
+  const file = join(root, `${name}.sql`);
+  writeFileSync(file, raw);
+  const { code } = await sqlModule(file, raw);
+  const out = join(root, `${name}.mjs`);
+  writeFileSync(out, code.replace(`from "reylo"`, `from ${JSON.stringify(INDEX)}`));
+  return (await import(pathToFileURL(out).href)) as { default: { sql: string; raw: string; run(client: unknown, params?: unknown): Promise<unknown> }; sql: string; raw: string };
+}
+
+/** The declaration the content mapper writes for each file, through its own JSON-RPC process, as the type check runs it. */
+async function declarations(root: string, files: Record<string, string>): Promise<Record<string, string>> {
+  const child = spawn(process.execPath, [MAPPER], { cwd: root, stdio: ["pipe", "pipe", "inherit"] });
+  const pending = new Map<number, (result: unknown) => void>();
+  let buffer = Buffer.alloc(0);
+  child.stdout.on("data", (chunk: Buffer) => {
+    buffer = Buffer.concat([buffer, chunk]);
+    for (;;) {
+      const end = buffer.indexOf("\r\n\r\n");
+      if (end === -1) return;
+      const length = Number(/Content-Length:\s*(\d+)/i.exec(buffer.subarray(0, end).toString("ascii"))![1]);
+      if (buffer.length < end + 4 + length) return;
+      const message = JSON.parse(buffer.subarray(end + 4, end + 4 + length).toString("utf8"));
+      buffer = buffer.subarray(end + 4 + length);
+      pending.get(message.id)?.(message.error ? Promise.reject(new Error(message.error.message)) : message.result);
+    }
+  });
+  let id = 0;
+  const call = (method: string, params: unknown) =>
+    new Promise<any>((resolve) => {
+      pending.set(++id, resolve);
+      const body = Buffer.from(JSON.stringify({ jsonrpc: "2.0", id, method, params }), "utf8");
+      child.stdin.write(`Content-Length: ${body.length}\r\n\r\n`);
+      child.stdin.write(body);
+    });
+  try {
+    await call("initialize", { protocolVersion: 1 });
+    await call("openProject", { projectHandle: "p", configFileName: join(root, "tsconfig.json"), options: {} });
+    const out: Record<string, string> = {};
+    for (const [name, content] of Object.entries(files)) {
+      const result = await call("transform", { fileName: join(root, name), content, projectHandle: "p" });
+      assert.deepEqual(result.diagnostics, [], `${name}: ${JSON.stringify(result.diagnostics)}`);
+      out[name] = result.text;
+    }
+    await call("closeProject", { projectHandle: "p" });
+    return out;
+  } finally {
+    child.stdin.end();
+    await new Promise((resolve) => child.once("exit", resolve));
+  }
+}
+
+/** The declaration's lines that carry the two texts. */
+function texts(declaration: string): string[] {
+  return declaration.split("\n").filter((line) => /^export declare const (sql|raw):/.test(line) || line.startsWith("declare const query:")).map((line) => line.replace(/^declare const query: Query<.*> & /, "declare const query: Query<…> & "));
+}
+
+const closeAll = async () => {
+  for (const session of Session.opened()) await session.close();
+};
+
+const GET_USER = "select id, name, email from users where id = :id\n";
+
+test("a query defined by hand: `raw` is its statement as written and `sql` the one the run time compiles from it", () => {
+  const raw = "select :id as id, :name as name, :id as again";
+  const pg = defineQuery({ dialect: "postgres", sql: raw, params: ["id", "name"] });
+  assert.equal(pg.raw, raw);
+  assert.equal(pg.sql, "select $1 as id, $2 as name, $1 as again");
+  for (const dialect of ["mysql", "sqlite"] as const) {
+    const q = defineQuery({ dialect, sql: raw, params: ["id", "name"] });
+    assert.equal(q.raw, raw);
+    assert.equal(q.sql, "select ? as id, ? as name, ? as again");
+  }
+  // The compiled text a build step writes wins over the run time's own lexer.
+  assert.equal(defineQuery({ dialect: "postgres", sql: "select :id", params: ["id"], text: "select $1::int", order: ["id"] }).sql, "select $1::int");
+  // A placeholder its params miss fails where `sql` is read, as `run` does.
+  const missing = defineQuery({ dialect: "postgres", sql: "select :id, :other", params: ["id"] });
+  assert.equal(missing.raw, "select :id, :other");
+  assert.throws(() => missing.sql, /The statement's placeholder :other is parameter "other", which the query's params \(\["id"\]\) do not list/);
+});
+
+test("SQLite: `sql` is the compiled statement and `raw` the file, at run time and in the mapper's declaration", async () => {
+  const root = project("file:./app.db");
+  const db = new DatabaseSync(join(root, "app.db"));
+  db.exec("create table users (id integer primary key, name text not null, email text)");
+  db.exec("insert into users (name, email) values ('Ada', 'ada@example.com')");
+  const doc = `select json_extract(:doc::json, '$.a') as a, :tags::json('{ "type": "array", "items": { "type": "string" } }') as tags\n`;
+  try {
+    const getUser = await built(root, "get_user", GET_USER);
+    assert.equal(getUser.default.sql, "select id, name, email from users where id = ?\n");
+    assert.equal(getUser.default.raw, GET_USER);
+    assert.equal(getUser.sql, getUser.default.sql);
+    assert.equal(getUser.raw, GET_USER);
+    assert.deepEqual({ ...((await getUser.default.run(db, { id: 1 })) as object) }, { id: 1, name: "Ada", email: "ada@example.com" });
+    const json = await built(root, "doc", doc);
+    assert.equal(json.default.sql, "select json_extract(json(?), '$.a') as a, ? as tags\n");
+    assert.equal(json.default.raw, doc);
+    assert.deepEqual({ ...((await json.default.run(db, { doc: { a: 5 }, tags: ["x"] })) as object) }, { a: 5, tags: '["x"]' });
+    await closeAll();
+    const declared = await declarations(root, { "get_user.sql": GET_USER, "doc.sql": doc });
+    assert.deepEqual(texts(declared["get_user.sql"]!), [
+      `export declare const sql: "select id, name, email from users where id = ?\\n";`,
+      `export declare const raw: "select id, name, email from users where id = :id\\n";`,
+      `declare const query: Query<…> & { readonly sql: typeof sql; readonly raw: typeof raw };`,
+    ]);
+    assert.deepEqual(texts(declared["doc.sql"]!).slice(0, 2), [`export declare const sql: ${JSON.stringify(json.default.sql)};`, `export declare const raw: ${JSON.stringify(doc)};`]);
+  } finally {
+    db.close();
+    await closeAll();
+  }
+});
+
+test("Postgres: `sql` numbers the parameters and keeps a typed JSON parameter's cast as `$1::jsonb`", { skip: pgLive }, async () => {
+  const require = createRequire(join(DRIVERS, "postgres", "package.json"));
+  const postgres = require("postgres");
+  const admin = postgres(PG, { max: 1, onnotice: () => {} });
+  const name = `reylo_compiled_${process.pid}`;
+  await admin.unsafe(`drop database if exists ${name}`);
+  await admin.unsafe(`create database ${name}`);
+  const url = new URL(PG!);
+  url.pathname = `/${name}`;
+  const sql = postgres(url.href, { max: 1, onnotice: () => {} });
+  const root = project(url.href, "postgres");
+  const names = `select :names::jsonb('{ "type": "array", "items": { "type": "string" } }') as names\n`;
+  try {
+    await sql.unsafe(`create table users (id int generated always as identity primary key, name text not null, email text); insert into users (name, email) values ('Ada', 'ada@example.com')`).simple();
+    const getUser = await built(root, "get_user", GET_USER);
+    assert.equal(getUser.default.sql, "select id, name, email from users where id = $1\n");
+    assert.equal(getUser.sql, getUser.default.sql);
+    assert.equal(getUser.default.raw, GET_USER);
+    assert.equal(getUser.raw, GET_USER);
+    assert.deepEqual({ ...((await getUser.default.run(sql, { id: 1 })) as object) }, { id: 1, name: "Ada", email: "ada@example.com" });
+    const json = await built(root, "names", names);
+    assert.equal(json.default.sql, "select $1::jsonb as names\n");
+    assert.equal(json.default.raw, names);
+    assert.deepEqual({ ...((await json.default.run(sql, { names: ["a", "b"] })) as object) }, { names: ["a", "b"] });
+    await closeAll();
+    const declared = await declarations(root, { "get_user.sql": GET_USER, "names.sql": names });
+    assert.deepEqual(texts(declared["get_user.sql"]!), [
+      `export declare const sql: "select id, name, email from users where id = $1\\n";`,
+      `export declare const raw: "select id, name, email from users where id = :id\\n";`,
+      `declare const query: Query<…> & { readonly sql: typeof sql; readonly raw: typeof raw };`,
+    ]);
+    assert.deepEqual(texts(declared["names.sql"]!).slice(0, 2), [`export declare const sql: "select $1::jsonb as names\\n";`, `export declare const raw: ${JSON.stringify(names)};`]);
+  } finally {
+    await closeAll();
+    await sql.end();
+    await admin.unsafe(`drop database if exists ${name}`);
+    await admin.end();
+  }
+});
+
+test("MySQL: `sql` has `?` placeholders and writes a typed JSON parameter's cast as `cast(? as json)`", { skip: mysqlLive }, async () => {
+  const require = createRequire(join(DRIVERS, "mysql2", "package.json"));
+  const mysql = require("mysql2/promise");
+  const server = new URL(MYSQL!);
+  const connect = (database?: string) => mysql.createConnection({ host: server.hostname, port: Number(server.port), user: decodeURIComponent(server.username) || "root", password: decodeURIComponent(server.password), database });
+  const admin = await connect();
+  const name = `reylo_compiled_${process.pid}`;
+  await admin.query(`drop database if exists ${name}`);
+  await admin.query(`create database ${name}`);
+  const url = new URL(MYSQL!);
+  url.pathname = `/${name}`;
+  const db = await connect(name);
+  const root = project(url.href, "mysql2");
+  const names = `select :names::json('{ "type": "array", "items": { "type": "string" } }') as names\n`;
+  try {
+    await db.query("create table users (id int auto_increment primary key, name varchar(100) not null, email varchar(100))");
+    await db.query("insert into users (name, email) values ('Ada', 'ada@example.com')");
+    const getUser = await built(root, "get_user", GET_USER);
+    assert.equal(getUser.default.sql, "select id, name, email from users where id = ?\n");
+    assert.equal(getUser.sql, getUser.default.sql);
+    assert.equal(getUser.default.raw, GET_USER);
+    assert.equal(getUser.raw, GET_USER);
+    assert.deepEqual({ ...((await getUser.default.run(db, { id: 1 })) as object) }, { id: 1, name: "Ada", email: "ada@example.com" });
+    const json = await built(root, "names", names);
+    assert.equal(json.default.sql, "select cast(? as json) as names\n");
+    assert.equal(json.default.raw, names);
+    assert.deepEqual({ ...((await json.default.run(db, { names: ["a", "b"] })) as object) }, { names: ["a", "b"] });
+    await closeAll();
+    const declared = await declarations(root, { "get_user.sql": GET_USER, "names.sql": names });
+    assert.deepEqual(texts(declared["get_user.sql"]!), [
+      `export declare const sql: "select id, name, email from users where id = ?\\n";`,
+      `export declare const raw: "select id, name, email from users where id = :id\\n";`,
+      `declare const query: Query<…> & { readonly sql: typeof sql; readonly raw: typeof raw };`,
+    ]);
+    assert.deepEqual(texts(declared["names.sql"]!).slice(0, 2), [`export declare const sql: "select cast(? as json) as names\\n";`, `export declare const raw: ${JSON.stringify(names)};`]);
+  } finally {
+    await closeAll();
+    await db.end();
+    await admin.query(`drop database if exists ${name}`);
+    await admin.end();
+  }
+});

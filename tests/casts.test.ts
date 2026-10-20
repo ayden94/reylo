@@ -29,7 +29,7 @@ function project(driver?: string): string {
   return root;
 }
 
-/** The module a build step writes for `sql`, imported, and the statement it sends. */
+/** The module a build step writes for `sql`, imported, and the statement it sends (the query's `sql`). */
 async function built(root: string, url: string, name: string, sql: string) {
   const file = join(root, `${name}.sql`);
   writeFileSync(file, sql);
@@ -38,7 +38,7 @@ async function built(root: string, url: string, name: string, sql: string) {
   const out = join(root, `${name}.mjs`);
   writeFileSync(out, code.replace(`from "reylo"`, `from ${JSON.stringify(INDEX)}`));
   const module = await import(pathToFileURL(out).href);
-  return { query: module.default, text: JSON.parse(/, text: ("(?:[^"\\]|\\.)*")/.exec(code)?.[1] ?? '""') as string, code };
+  return { query: module.default, text: module.default.sql as string, code };
 }
 
 const plain = (rows: readonly object[]) => [...rows].map((r) => ({ ...r }));

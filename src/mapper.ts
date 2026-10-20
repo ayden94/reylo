@@ -54,7 +54,9 @@ serve({
       diagnostics.push(diag(`The content mapper has no project for this file; restart the TypeScript server.`, 0, 1, 9));
       return { extension: ".ts" as const, diagnostics, text: `import type { Query } from "reylo";\nexport type Params = unknown;\nexport type Values = unknown[];\nexport type Row = unknown;\ndeclare const query: Query<unknown, unknown, "many", "postgres">;\nexport default query;\n` };
     }
-    const emit = (paramsType: string, rowType: string, cardinality: string, names: string[], valuesType = "unknown[]") => ({
+    // `compiled` is the statement as Reylo sends it to the database (the engine's rewritten text),
+    // which an analysis that failed has not given: then `sql` is any string.
+    const emit = (compiled: string | undefined, paramsType: string, rowType: string, cardinality: string, names: string[], valuesType = "unknown[]") => ({
       extension: ".ts" as const,
       diagnostics,
       text: [
@@ -63,11 +65,14 @@ serve({
         // The same parameters as an array, in the order of `params`, for `run(client, [1, "ada"])`.
         `export type Values = ${valuesType};`,
         `export type Row = ${rowType};`,
-        `export declare const sql: ${JSON.stringify(sql)};`,
+        `export declare const sql: ${compiled === undefined ? "string" : JSON.stringify(compiled)};`,
+        `export declare const raw: ${JSON.stringify(sql)};`,
         `export declare const params: readonly [${names.map((n) => JSON.stringify(n)).join(", ")}];`,
         // The literal types go in the Query type directly rather than through the aliases, so a
-        // hover shows the row's shape (`{ id: number; ... } | null`) and not `Row | null`.
-        `declare const query: Query<${paramsType}, ${rowType}, ${JSON.stringify(cardinality)}, ${JSON.stringify(project.dialect)}, ${valuesType}>;`,
+        // hover shows the row's shape (`{ id: number; ... } | null`) and not `Row | null`. The two
+        // texts go in by `typeof`, so a hover over the query names them and one over its `sql`
+        // shows the statement.
+        `declare const query: Query<${paramsType}, ${rowType}, ${JSON.stringify(cardinality)}, ${JSON.stringify(project.dialect)}, ${valuesType}> & { readonly sql: typeof sql; readonly raw: typeof raw };`,
         `export default query;`,
         ``,
       ].join("\n"),
@@ -97,7 +102,7 @@ serve({
     const outcome = await session.analyze(sql);
     if (!outcome.ok) {
       diagnostics.push(diag(outcome.message, 0, 1, outcome.code));
-      return emit("unknown", "unknown", cardinality, names);
+      return emit(undefined, "unknown", "unknown", cardinality, names);
     }
     const { analysis } = outcome;
     const dialect = project.dialect;
@@ -114,7 +119,7 @@ serve({
     // which an array of values follows. Each parameter appears once in a statement; a second use is
     // the engine's diagnostic (code 3), placed above.
     const order = names;
-    if (analysis.diagnostics.some((d) => d.code === 6) || (dialect === "postgres" && analysis.kind === "")) return emit("unknown", "unknown", inferred, order);
+    if (analysis.diagnostics.some((d) => d.code === 6) || (dialect === "postgres" && analysis.kind === "")) return emit(analysis.rewritten.sql, "unknown", "unknown", inferred, order);
     const columns = analysis.columns.map((c) => `${ident(c.name)}: ${renderType(c.type, false, dialect)}${c.nullable ? " | null" : ""}`);
     // A parameter is typed from its context (a column it is compared with or written to, a CAST);
     // one no context types is `unknown`.
@@ -128,7 +133,7 @@ serve({
     const labels = order.map((n) => (/^\d+$/.test(n) ? `$${n}` : n));
     const labeled = labels.every((l) => /^[A-Za-z_$][\w$]*$/.test(l));
     const valuesType = `[${order.map((n, i) => `${labeled ? `${labels[i]}: ` : ""}${types.get(n) ?? "unknown"}${optional.has(n) ? " | undefined" : ""}`).join(", ")}]`;
-    return emit(paramTypes.length ? `{ ${paramTypes.join("; ")} }` : "Record<never, never>", columns.length ? `{ ${columns.join("; ")} }` : "never", inferred, order, valuesType);
+    return emit(analysis.rewritten.sql, paramTypes.length ? `{ ${paramTypes.join("; ")} }` : "Record<never, never>", columns.length ? `{ ${columns.join("; ")} }` : "never", inferred, order, valuesType);
   },
   async closeProject(params) {
     const handle = (params as { projectHandle: string }).projectHandle;

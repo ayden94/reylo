@@ -108,11 +108,11 @@ export type SyncClientFor<D extends Dialect> = D extends "sqlite" ? SyncSqliteCl
 
 export type QueryModule<D extends Dialect = Dialect> = {
   readonly dialect: D;
-  /** SQL with placeholders in the dialect's native positional form ($1 / ?). */
+  /** The statement as written, with Reylo's placeholders (`:id`) left in place: the query's `raw`. */
   readonly sql: string;
   /** Parameter names in placeholder order, so an object of params binds positionally. */
   readonly params: readonly string[];
-  /** The statement as the mapper's engine rewrote it for the database, when the mapper ran. */
+  /** The statement as the engine compiled it for the database, when a build step ran: the query's `sql`. A query without it is compiled by `compile` below. */
   readonly text?: string | undefined;
   /** The binding order for `text`: one name per placeholder of the rewritten statement. */
   readonly order?: readonly string[] | undefined;
@@ -301,13 +301,9 @@ function statement(query: QueryModule, input: ParamsInput) {
   } else if (input === null || typeof input !== "object") {
     throw new TypeError(`The parameters must be an object keyed by parameter name (or by number, { 1: ... }, for positional placeholders), or an array in the order of the query's params; got ${String(input)}.`);
   } else params = input as Record<string, unknown>;
-  // The mapper already rewrote the statement; only the values need ordering.
-  const bound =
-    query.text && query.order
-      ? { text: query.text, values: query.order.map((name) => value(params, name)), names: query.order }
-      : query.dialect === "postgres"
-        ? rewrite(query, params)
-        : rewriteRepeating(query, params);
+  // The build step already compiled the statement; only the values need ordering.
+  const compiled = compile(query);
+  const bound: { text: string; values: unknown[]; names: readonly string[] } = { text: compiled.text, values: compiled.order.map((name) => value(params, name)), names: compiled.order };
   bound.names.forEach((name, i) => {
     const type = query.inputs?.[name]?.type;
     // A typed JSON parameter (`:p::jsonb('…')`): a value left out takes the schema's default, a
@@ -435,37 +431,29 @@ function dateText(d: Date): string {
   return `${pad(year < 1 ? 1 - year : year, 4)}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}${offset < 0 ? "-" : "+"}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}${year < 1 ? " BC" : ""}`;
 }
 
-// Without the engine's rewritten statement (a query defined by hand) the runtime lexes the
-// placeholders itself (`lex.ts`); the engine's lexer is the authoritative one, and the two agree
-// on every statement the runtime fallback is meant for. Postgres numbers each distinct parameter
-// once.
-function rewrite(query: QueryModule, params: Record<string, unknown>) {
+/**
+ * The statement as Reylo sends it to the database, and the parameter each placeholder binds: the
+ * engine's compiled text where a build step wrote one into the module. Without it (a query
+ * defined by hand) the run time lexes the placeholders itself (`lex.ts`); the engine's lexer is
+ * the authoritative one, and the two agree on every statement the fallback is meant for.
+ * Postgres numbers each distinct parameter once; MySQL has only `?`, and better-sqlite3 reads
+ * SQLite's `?NNN` as a named parameter, so both get one `?` per placeholder and a repeated name is
+ * repeated in the binding order.
+ */
+export function compile(query: QueryModule): { text: string; order: readonly string[] } {
+  if (query.text && query.order) return { text: query.text, order: query.order };
   const { placeholders } = lexPlaceholders(query.sql, query.dialect);
+  const postgres = query.dialect === "postgres";
   let text = "";
   let last = 0;
+  const order: string[] = [];
   for (const p of placeholders) {
-    text += query.sql.slice(last, p.start) + `$${indexOf(query, p) + 1}`;
+    const index = indexOf(query, p);
+    text += query.sql.slice(last, p.start) + (postgres ? `$${index + 1}` : "?");
+    order.push(p.name);
     last = p.end;
   }
-  return { text: text + query.sql.slice(last), values: query.params.map((name) => value(params, name)), names: query.params };
-}
-
-// MySQL has only `?`, and better-sqlite3 reads SQLite's `?NNN` as a named parameter, so both
-// get one `?` per placeholder and a repeated name is repeated in the value list.
-function rewriteRepeating(query: QueryModule, params: Record<string, unknown>) {
-  const { placeholders } = lexPlaceholders(query.sql, query.dialect);
-  let text = "";
-  let last = 0;
-  const values: unknown[] = [];
-  const names: string[] = [];
-  for (const p of placeholders) {
-    indexOf(query, p);
-    text += query.sql.slice(last, p.start) + "?";
-    values.push(value(params, p.name));
-    names.push(p.name);
-    last = p.end;
-  }
-  return { text: text + query.sql.slice(last), values, names };
+  return { text: text + query.sql.slice(last), order: postgres ? query.params : order };
 }
 
 function indexOf(query: QueryModule, p: { name: string; start: number; end: number }) {

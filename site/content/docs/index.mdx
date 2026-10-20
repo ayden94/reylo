@@ -697,12 +697,24 @@ const user = await get({ id: 1 });
 
 ### `sql`
 
-The statement as written in the file, with its `:name` parameters:
+The statement as Reylo sends it to the database, typed as its string literal:
 
 ```ts twoslash title="main.ts"
 import getUser from "./get_user.sql";
 
-getUser.sql;  // "select id, name, email from users where id = :id\n"
+getUser.sql;
+//      ^?
+```
+
+### `raw`
+
+The file's contents, as written:
+
+```ts twoslash title="main.ts"
+import getUser from "./get_user.sql";
+
+getUser.raw;
+//      ^?
 ```
 
 ### `params`

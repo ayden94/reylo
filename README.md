@@ -298,13 +298,14 @@ On better-sqlite3, `node:sqlite` and `bun:sqlite`, `runSync` runs a statement sy
 
 ### The imported query
 
-Besides `run`, an imported query carries its statement and its schemas, and the module exports its types:
+Besides `run`, an imported query carries its statement, as Reylo sends it to the database (`sql`) and as written (`raw`), both typed as string literals, and its schemas, and the module exports its types:
 
 ```ts
 import getUser, { type Params, type Row } from "./get_user.sql";
 
 const get = getUser.with(db);  // bound to one client: await get({ id: 1 })
-getUser.sql;                   // "select id, name, email from users where id = :id\n"
+getUser.sql;                   // "select id, name, email from users where id = $1\n" (? on MySQL and SQLite)
+getUser.raw;                   // "select id, name, email from users where id = :id\n"
 getUser.params;                // ["id"]
 getUser.cardinality;           // "maybeOne"
 getUser.inputSchema;           // the parameters, as JSON Schema

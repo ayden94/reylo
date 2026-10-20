@@ -17,6 +17,7 @@ const sql = postgres(process.env["DATABASE_URL"] ?? "postgres://localhost:5432/p
 const kind = (v: unknown) => (typeof v === "object" && v !== null ? v.constructor.name : typeof v);
 const kinds = (row: Record<string, unknown> | null | undefined) => row && Object.fromEntries(Object.entries(row).map(([k, v]) => [k, Array.isArray(v) ? `${kind(v[0])}[]` : kind(v)]));
 const reylo = await query.run(sql, { id: 1 });
-const [app] = await sql.unsafe(query.sql.replace(":id", "$1"), [1]);
+// The app runs the same statement itself: `query.sql` is the text Reylo sends, with `$1`.
+const [app] = await sql.unsafe(query.sql, [1]);
 console.log(JSON.stringify({ reylo: kinds(reylo), app: kinds(app), values: reylo }));
 await sql.end();

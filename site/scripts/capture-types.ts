@@ -117,8 +117,10 @@ function compile(sql: string, dialect: Dialect): string {
 
 /**
  * The module src/mapper.ts's `transform` returns for the statement, copied from there (keep the two
- * in step): `written` is the file's text, `sql` what the engine reads. One change: a typed JSON
- * parameter takes the type computed from its schema (`json`), where the loader says `unknown`.
+ * in step): `written` is the file's text, declared as `raw`, and `sql` what the engine reads; the
+ * module's `sql` is the engine's compiled text, the statement as Reylo sends it to the database.
+ * One change: a typed JSON parameter takes the type computed from its schema (`json`), where the
+ * loader says `unknown`.
  */
 async function render(session: Session, written: string, sql: string, json: Map<string, string>): Promise<{ text: string; analysis: Analysis } | { error: string }> {
   const project = session.project;
@@ -127,15 +129,16 @@ async function render(session: Session, written: string, sql: string, json: Map<
     if (q.type.kind === 'unknown') return 'unknown';
     return q.nullable ? `${rendered} | null` : rendered;
   };
-  const emit = (paramsType: string, rowType: string, cardinality: string, names: string[], valuesType = 'unknown[]') =>
+  const emit = (compiled: string, paramsType: string, rowType: string, cardinality: string, names: string[], valuesType = 'unknown[]') =>
     [
       `import type { Query } from "reylo";`,
       `export type Params = ${paramsType};`,
       `export type Values = ${valuesType};`,
       `export type Row = ${rowType};`,
-      `export declare const sql: ${JSON.stringify(written)};`,
+      `export declare const sql: ${JSON.stringify(compiled)};`,
+      `export declare const raw: ${JSON.stringify(written)};`,
       `export declare const params: readonly [${names.map((n) => JSON.stringify(n)).join(', ')}];`,
-      `declare const query: Query<${paramsType}, ${rowType}, ${JSON.stringify(cardinality)}, ${JSON.stringify(project.dialect)}, ${valuesType}>;`,
+      `declare const query: Query<${paramsType}, ${rowType}, ${JSON.stringify(cardinality)}, ${JSON.stringify(project.dialect)}, ${valuesType}> & { readonly sql: typeof sql; readonly raw: typeof raw };`,
       `export default query;`,
       ``,
     ].join('\n');
@@ -164,7 +167,7 @@ async function render(session: Session, written: string, sql: string, json: Map<
   const labels = order.map((n) => (/^\d+$/.test(n) ? `$${n}` : n));
   const labeled = labels.every((l) => /^[A-Za-z_$][\w$]*$/.test(l));
   const valuesType = `[${order.map((n, i) => `${labeled ? `${labels[i]}: ` : ''}${types.get(n) ?? 'unknown'}`).join(', ')}]`;
-  return { text: emit(paramTypes.length ? `{ ${paramTypes.join('; ')} }` : 'Record<never, never>', columns.length ? `{ ${columns.join('; ')} }` : 'never', inferred, order, valuesType), analysis };
+  return { text: emit(analysis.rewritten.sql, paramTypes.length ? `{ ${paramTypes.join('; ')} }` : 'Record<never, never>', columns.length ? `{ ${columns.join('; ')} }` : 'never', inferred, order, valuesType), analysis };
 }
 
 // ---- The scratch databases ----
@@ -332,7 +335,7 @@ function indent(text: string) {
 
 /** The module's parameters, row and row count on one line. */
 function summary(module: string): string {
-  const m = /declare const query: Query<([\s\S]*)>;/.exec(module);
+  const m = /declare const query: Query<([\s\S]*)> & \{ readonly sql/.exec(module);
   return m ? m[1]!.replace(/, "(postgres|mysql|sqlite)", \[.*\]$/, '') : module;
 }
 
