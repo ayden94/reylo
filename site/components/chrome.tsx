@@ -1,5 +1,5 @@
 import { ThemeSwitch } from 'fumadocs-ui/layouts/shared/slots/theme-switch';
-import { Mark } from '@/components/mark';
+import { Wordmark } from '@/components/wordmark';
 import { githubUrl } from '@/lib/layout.shared';
 
 /*
@@ -10,13 +10,11 @@ import { githubUrl } from '@/lib/layout.shared';
  * title, in the grid's empty header row, and scrolls away with the page.
  */
 
-/** The mark and the name, a link to the top of the page. */
+/** The wordmark, a link to the top of the page. */
 function Brand() {
   return (
-    <a href="/" className="whitespace-nowrap text-lg font-semibold tracking-tight text-fd-headings">
-      {/* As tall as Inter's capitals and standing on the baseline, so the level ends of its arms sit on the R's top line and on the baseline (brand/README.md). */}
-      <Mark className="mr-[0.3em] inline-block h-[0.7275em] w-auto align-baseline" />
-      Reylo
+    <a href="/" className="inline-block text-fd-headings">
+      <Wordmark className="h-6 w-auto" />
     </a>
   );
 }
