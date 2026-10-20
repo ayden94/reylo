@@ -21,42 +21,56 @@ import { coerce, exactInteger, type Columns, type Kind } from "./values.ts";
 type AnyClient = Record<string, any>;
 type Statement = AnyClient;
 
-const statements = new WeakMap<object, Map<string, Statement>>();
+/** Reylo's statement, and whether it reads every INTEGER as a BigInt (a driver of the three). */
+type Kept = { st: Statement; exact: boolean };
+const statements = new WeakMap<object, Map<string, Kept>>();
 /** How many statements Reylo keeps per database: more distinct texts than that drop the oldest. */
 const KEPT = 500;
 
 /** Reylo's own statement for `text` on the app's database, with integers read as BigInts. */
-function statementFor(db: AnyClient, text: string): Statement {
+function statementFor(db: AnyClient, text: string): Kept {
   let kept = statements.get(db);
   if (!kept) statements.set(db, (kept = new Map()));
-  let st = kept.get(text);
-  if (st) return st;
-  st = db.prepare(text) as Statement;
+  const found = kept.get(text);
+  if (found) return found;
+  const st = db.prepare(text) as Statement;
+  let exact = false;
   // node:sqlite's StatementSync; better-sqlite3's and bun:sqlite's Statement.
   if (typeof st.setReadBigInts === "function") {
     st.setReadBigInts(true);
     if (typeof st.setReturnArrays === "function") st.setReturnArrays(false);
-  } else if (typeof st.safeIntegers === "function") st.safeIntegers(true);
+    exact = true;
+  } else if (typeof st.safeIntegers === "function") {
+    st.safeIntegers(true);
+    exact = true;
+  }
   if (kept.size >= KEPT) kept.delete(kept.keys().next().value!);
-  kept.set(text, st);
-  return st;
+  const entry = { st, exact };
+  kept.set(text, entry);
+  return entry;
 }
 
-/** Runs `text` on a synchronous SQLite database (better-sqlite3, node:sqlite, bun:sqlite) and returns its normalized rows. */
-export function runSyncSqlite(db: AnyClient, text: string, values: unknown[], columns: Columns | undefined): unknown[] {
-  const st = statementFor(db, text);
+/**
+ * Runs `text` on a synchronous SQLite database (better-sqlite3, node:sqlite, bun:sqlite) and returns
+ * its normalized rows; a statement that answers through a promise (no such database) gives the
+ * promise, which `runSync` refuses.
+ */
+export function runSyncSqlite(db: AnyClient, text: string, values: unknown[], columns: Columns | undefined): unknown[] | Promise<unknown[]> {
+  const { st, exact } = statementFor(db, text);
   // better-sqlite3 refuses all() on a statement that returns no rows.
   if (st.reader === false) {
     st.run(...values);
     return [];
   }
-  let rows = st.all(...values) as unknown[];
+  const all = st.all(...values) as unknown[] | Promise<unknown[]>;
+  if (!Array.isArray(all)) return Promise.resolve(all).then((rows) => normalize(rows, columns));
+  let rows = all;
   // A database opened with returnArrays, on a Node whose statements cannot turn it off.
   if (rows.length && Array.isArray(rows[0]) && typeof st.columns === "function") {
     const names = (st.columns() as { name: string }[]).map((c) => c.name);
     rows = (rows as unknown[][]).map((r) => Object.fromEntries(names.map((n, i) => [n, r[i]])));
   }
-  return normalize(rows, columns, { exact: true });
+  return normalize(rows, columns, { exact });
 }
 
 /** The kinds that need a value converted whatever the driver; an INTEGER's and a BLOB's are by the value's type. */

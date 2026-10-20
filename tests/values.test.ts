@@ -181,3 +181,22 @@ test("PlanetScale: Reylo's cast per query, the driver's own default with a DATET
     ["9007199254740993", "2026-03-08T09:31:00.000", "1.10", { é: 1 }, 7, 2.2, Uint8Array.of(1, 255), "é", null],
   );
 });
+
+test("mariadb's callback API, whose rows carry no meta, and mariadb 2, whose columns have no isSet(): the module's kinds join a SET and give a DATETIME its T", async () => {
+  const conn = {
+    batch: () => ({}),
+    query: (_: unknown, __: unknown, done: (e: Error | null, rows?: unknown, meta?: unknown) => void) => (setImmediate(() => done(null, [{ tags: ["x", "z"], at: "2026-03-08 09:31:00.000", id: 1 }], [{ name: () => "tags", type: "SET" }])), { on() {} }),
+  };
+  const q: QueryModule<"mysql"> = { dialect: "mysql", sql: "select 1", params: [], columns: [["tags", "text"], ["at", "timestamp"], ["id", "int"]] };
+  assert.deepEqual(await execute(conn as never, q), [{ tags: "x,z", at: "2026-03-08T09:31:00.000", id: 1 }]);
+  // A query defined by hand: the callback's own meta.
+  assert.deepEqual(await execute(conn as never, { ...q, columns: undefined }), [{ tags: "x,z", at: "2026-03-08 09:31:00.000", id: 1 }]);
+});
+
+test("runSync refuses a client whose prepared statement answers through a promise, which run awaits", async () => {
+  const db = { prepare: () => ({ all: async () => [{ n: 1 }] }) };
+  const q: QueryModule<"sqlite"> = { dialect: "sqlite", sql: "select 1 as n", params: [], columns: [["n", "int"]] };
+  assert.deepEqual(await execute(db as never, q), [{ n: 1 }]);
+  const { executeSync } = await import("../src/execute.ts");
+  assert.throws(() => executeSync(db as never, { ...q, sql: "select 2 as n" }), /answered with a promise/);
+});

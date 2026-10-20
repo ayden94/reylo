@@ -170,8 +170,9 @@ function safeJson(v: unknown): string {
   }
 }
 
-// Decoding is not under test: a BIGINT count, a TINYINT(1) boolean or a numeric string compares
-// equal to the plain value, so a row fails only when it carries the wrong data.
+// Every scenario but S10 tests the dispatch, not the decoding: a BIGINT count, a TINYINT(1) boolean
+// or a numeric string compares equal to the plain value, so a row fails only when it carries the
+// wrong data. S10 compares each value with its JavaScript type (typedEq).
 function normalize(v: unknown): unknown {
   if (typeof v === "bigint") return Number(v);
   if (typeof v === "boolean") return v ? 1 : 0;
@@ -288,8 +289,45 @@ export function queries(d: Dialect, typed = true) {
     repeated: q(repeatedSql, ["id"], "one"),
     repeatedMapper: q(repeatedSql, ["id"], "one", { text: repeatedText, order: d === "postgres" ? ["id"] : ["id", "id"] }),
     syntax: q(`selec 1`, [], "many"),
+    // The columns a build step writes for the statement (src/loader.ts, src/values.ts).
+    typed: q(`select ${Object.keys(TYPED[d]).join(", ")} from ${t("typed")} where id = 1`, [], "one", { columns: TYPED_COLUMNS[d] }),
+    typedBig: q(`select id, big from ${t("typed")} where id = 1`, [], "one", { columns: [["id", "int"], ["big", d === "sqlite" ? "int" : "int8"]] }),
     dup: q(`insert into ${t("uniq")} (k) values (:k)`, ["k"], "none"),
   };
+}
+
+// Reylo's one representation per SQL type (src/values.ts) of the `typed` fixture's row, on every driver.
+const TYPED: Record<Dialect, Record<string, unknown>> = {
+  postgres: {
+    id: 1, big: "9007199254740993", amount: "12345678901234567890.123456789", day: "2026-10-20", at: "2026-10-20T10:00:00.123", stamp: new Date("2026-10-20T08:00:00.123Z"),
+    doc: { a: [1, 2] }, docb: { b: true }, raw: Uint8Array.of(1, 2, 255), flag: true, f8: 2.5, tags: ["a", null, "NULL", "b,c"], ints: [1, 2, 3], moods: ["ok", "sad"], span: "1 day 02:00:00", uid: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+  },
+  mysql: {
+    id: 1, big: "-9007199254740993", ubig: "18446744073709551615", amount: "1.100000000000000001", day: "2026-10-20", at: "2026-10-20T10:00:00.123", doc: { a: [1, 2] },
+    bit1: Uint8Array.of(1), raw: Uint8Array.of(1, 2, 255), tags: "x,z", kind: "b", flag: 1, yr: 2026, f8: 2.5, tm: "10:00:00", s: "hi",
+  },
+  sqlite: { id: 1, n: 5, r: 1.5, s: "hi", b: Uint8Array.of(1, 2, 255), doc: { a: [1, 2] }, flag: true, x: 7 },
+};
+const TYPED_COLUMNS: Record<Dialect, [string, string][]> = {
+  postgres: [["id", "int"], ["big", "int8"], ["amount", "decimal"], ["day", "date"], ["at", "timestamp"], ["stamp", "timestamptz"], ["doc", "json"], ["docb", "json"], ["raw", "bytes"], ["flag", "bool"], ["f8", "float"], ["tags", "text[]"], ["ints", "int[]"], ["moods", "text[]"], ["span", "text"], ["uid", "text"]],
+  mysql: [["id", "int"], ["big", "int8"], ["ubig", "int8"], ["amount", "decimal"], ["day", "date"], ["at", "timestamp"], ["doc", "json"], ["bit1", "bytes"], ["raw", "bytes"], ["tags", "text"], ["kind", "text"], ["flag", "int"], ["yr", "int"], ["f8", "float"], ["tm", "text"], ["s", "text"]],
+  // A SQLite JSON column and truth value as the engine types them where it can tell, a column with no type unknown.
+  sqlite: [["id", "int"], ["n", "int"], ["r", "float"], ["s", "text"], ["b", "bytes"], ["doc", "json"], ["flag", "bool"], ["x", "unknown"]],
+};
+
+/** A value with its JavaScript type spelled out, so that 1 and "1", or a Buffer and a Uint8Array of the same bytes, compare as they are. */
+function typedValue(v: unknown): unknown {
+  if (v === null || v === undefined) return v ?? null;
+  if (v instanceof Date) return `Date(${Number.isNaN(v.getTime()) ? "Invalid" : v.toISOString()})`;
+  if (v instanceof Uint8Array) return `Uint8Array(${[...v]})`;
+  if (Array.isArray(v)) return v.map(typedValue);
+  if (typeof v === "object") return Object.fromEntries(Object.keys(v).sort().map((k) => [k, typedValue((v as Record<string, unknown>)[k])]));
+  return `${typeof v}(${String(v)})`;
+}
+function typedEq(actual: unknown, expected: unknown, what: string): void {
+  const a = JSON.stringify(typedValue(actual));
+  const b = JSON.stringify(typedValue(expected));
+  if (a !== b) throw new Mismatch(`${what}: expected ${b}, got ${oneLine(a, 600)}`);
 }
 
 const PEOPLE = [
@@ -757,6 +795,29 @@ export const SCENARIOS: Scenario[] = [
       })();
       if (got === "a promise") throw new Violation("runSync returned a promise inside transaction(fn); the row is not usable there");
       eq(got, { n: 5 }, "row read inside the transaction");
+    },
+  },
+  {
+    id: "S10 representation: every value is Reylo's one type for its SQL type, whatever the driver gives by itself",
+    on: "client",
+    params: false,
+    async run(ctx, client, q) {
+      const d = ctx.job.dialect;
+      typedEq(await call(ctx, q.typed, client), TYPED[d], "row");
+      if (d !== "sqlite") {
+        typedEq(await call(ctx, q.typedBig, client), { id: 1, big: TYPED[d].big }, "an int8 past 2^53");
+        return;
+      }
+      // An INTEGER past 2^53, which a number cannot hold: Reylo's error naming the column, or libSQL's own at its default intMode.
+      try {
+        const r = await call(ctx, q.typedBig, client);
+        throw new Mismatch(`expected the integer past 2^53 to be refused, got ${oneLine(safeJson(r))}`);
+      } catch (e) {
+        if (e instanceof Mismatch || e instanceof Violation) throw e;
+        if (e instanceof TypeError && /^Column "big" holds/.test(e.message)) return e.message.slice(0, 120);
+        if (e instanceof RangeError && /cannot be safely represented/.test(e.message)) return `libSQL's own: ${e.message}`;
+        throw new Mismatch(`not the refusal of an integer past 2^53: ${describe(e)}`);
+      }
     },
   },
   {

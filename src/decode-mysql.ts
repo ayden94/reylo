@@ -112,20 +112,28 @@ type MariadbColumn = { type?: string; columnType?: number; name?: string | (() =
 /** mariadb's query(), on its promise or its callback API, with Reylo's options. */
 export async function mariadb(c: AnyClient, text: string, values: unknown[], columns: Columns | undefined): Promise<unknown[]> {
   const options = { sql: text, ...MARIADB_OPTIONS, ...(columns?.some(([, kind]) => kind === "unknown") ? { typeCast: mariadbGeometry } : {}) };
+  // The promise API resolves to the rows with their `meta`; the callback API hands the meta over as a third argument.
+  let callbackMeta: MariadbColumn[] | undefined;
   const result = await new Promise((resolve, reject) => {
-    const returned = c.query(options, values, (error: Error | null, rows: unknown) => (error ? reject(error) : resolve(rows)));
+    const returned = c.query(options, values, (error: Error | null, rows: unknown, meta?: MariadbColumn[]) => (error ? reject(error) : ((callbackMeta = meta), resolve(rows))));
     if (typeof returned?.then === "function") returned.then(resolve, reject);
   });
   if (!Array.isArray(result)) return [];
-  // A DATETIME and a TIMESTAMP with `T`, and a SET's members joined as MySQL writes them.
-  const meta = ((result as { meta?: MariadbColumn[] }).meta ?? []).map((m) => ({ name: typeof m.name === "function" ? m.name() : m.name, type: m.type, set: typeof m.isSet === "function" && m.isSet() }));
-  const work = meta.filter((m) => m.name !== undefined && (m.set || m.type === "DATETIME" || m.type === "TIMESTAMP"));
+  // A DATETIME and a TIMESTAMP with `T`, and a SET's members joined as MySQL writes them: by the
+  // module's kinds, else by the columns' metadata (mariadb 2 has no isSet()).
+  const work: { name: string; date: boolean }[] = columns
+    ? columns.filter(([, kind]) => kind === "text" || kind.split("|").includes("timestamp")).map(([name, kind]) => ({ name, date: kind !== "text" }))
+    : (((result as { meta?: MariadbColumn[] }).meta ?? callbackMeta ?? []) as MariadbColumn[])
+        .map((m) => ({ name: typeof m.name === "function" ? m.name() : m.name, type: m.type, set: (typeof m.isSet === "function" && m.isSet()) || m.type === "SET" }))
+        .filter((m): m is { name: string; type: string | undefined; set: boolean } => m.name !== undefined && (m.set || m.type === "DATETIME" || m.type === "TIMESTAMP"))
+        .map((m) => ({ name: m.name, date: !m.set }));
   if (!work.length) return result;
   for (const row of result as Record<string, unknown>[]) {
-    for (const m of work) {
-      const v = row[m.name!];
+    for (const { name, date } of work) {
+      const v = row[name];
       if (v === null || v === undefined) continue;
-      row[m.name!] = m.set ? coerce("text", v, m.name!) : typeof v === "string" ? v.replace(" ", "T") : v;
+      if (Array.isArray(v)) row[name] = coerce("text", v, name);
+      else if (date && typeof v === "string") row[name] = v.replace(" ", "T");
     }
   }
   return result;
