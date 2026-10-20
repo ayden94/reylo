@@ -6,6 +6,7 @@
 // without the analysis would not do what its types say.
 import { dirname } from "node:path";
 import { Session } from "./analyze.ts";
+import { querySchemas } from "./schema.ts";
 
 export type SqlModule = {
   code: string;
@@ -35,14 +36,27 @@ export async function sqlModule(path: string, sql: string): Promise<SqlModule> {
       throw new Error(`${path}: ${(e as Error).message}`);
     }
   }
+  // A column list that does not read, or that disagrees with the table its insert writes, fails
+  // the build too.
+  const descriptor = analysis.diagnostics.find((d) => d.code === 20 || d.code === 21);
+  if (descriptor) throw new Error(`${path}: ${descriptor.message}`);
   // Each parameter's type, for the drivers that bind an array or a JSON value wrong (src/execute.ts).
   const inputs = Object.fromEntries(analysis.params.map((p) => [p.name, { type: p.type }]));
+  // A structured parameter's lists, at JavaScript's offsets into the statement (the engine's are
+  // UTF-8 bytes).
+  const text = analysis.rewritten.sql;
+  const structured = (analysis.structured ?? []).map((s) => ({ name: s.name, lists: s.lists.map((l) => ({ start: utf16(text, l.start), end: utf16(text, l.end), entries: l.entries })) }));
   const code = [
     `import { defineQuery } from "reylo";`,
     `export const sql = ${JSON.stringify(sql)};`,
     `export const params = ${JSON.stringify(params)};`,
-    `export default defineQuery({ dialect: ${JSON.stringify(session.project.dialect)}, sql, params, cardinality: ${JSON.stringify(analysis.cardinality)}, text: ${JSON.stringify(analysis.rewritten.sql)}, order: ${JSON.stringify(analysis.rewritten.order)}, inputs: ${JSON.stringify(inputs)} });`,
+    `export default defineQuery({ dialect: ${JSON.stringify(session.project.dialect)}, sql, params, cardinality: ${JSON.stringify(analysis.cardinality)}, text: ${JSON.stringify(text)}, order: ${JSON.stringify(analysis.rewritten.order)}, inputs: ${JSON.stringify(inputs)}${structured.length ? `, structured: ${JSON.stringify(structured)}` : ""}, jsonSchema: ${JSON.stringify(querySchemas(analysis, session.project.dialect, session.project.repr))} });`,
     ``,
   ].join("\n");
   return { code, entry: outcome.entry };
+}
+
+/** The JavaScript offset into `text` of a UTF-8 byte offset. */
+function utf16(text: string, bytes: number): number {
+  return Buffer.from(text, "utf8").subarray(0, bytes).toString("utf8").length;
 }

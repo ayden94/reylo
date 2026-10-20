@@ -127,6 +127,17 @@ pub fn analyze(sql: &str, dialect: Dialect, host: &Host) -> Lazy<Analysis> {
 }
 
 fn analyze_here(sql: &str, dialect: Dialect, host: &Host) -> Lazy<Analysis> {
+    crate::structured::analyze(sql, dialect, host, &|sql| analyze_plain(sql, dialect, host), &|diagnostics| bare_of(sql, dialect, diagnostics))
+}
+
+/// The bare analysis of `sql` with `diagnostics`, its parameters as far as the lexer reads them.
+pub(crate) fn bare_of(sql: &str, dialect: Dialect, diagnostics: Vec<Diagnostic>) -> Analysis {
+    let lexed = lex::lex(sql, dialect).unwrap_or(Lexed { params: vec![], placeholders: vec![], style: Style::None, opaque: vec![] });
+    bare(sql, &lexed, dialect, diagnostics)
+}
+
+/// The analysis of a statement without structured parameters.
+fn analyze_plain(sql: &str, dialect: Dialect, host: &Host) -> Lazy<Analysis> {
     let lexed = match lexed(sql, dialect) {
         Ok(l) => l,
         Err(bare) => return Some(bare),
@@ -301,6 +312,7 @@ pub(crate) fn bare(sql: &str, lexed: &Lexed, dialect: Dialect, diagnostics: Vec<
         style: lexed.style,
         diagnostics,
         unresolved: Vec::new(),
+        structured: Vec::new(),
     }
 }
 
@@ -493,6 +505,7 @@ impl<'a> Engine<'a> {
             style: lexed.style,
             diagnostics,
             unresolved,
+            structured: Vec::new(),
         })
     }
 

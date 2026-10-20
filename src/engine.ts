@@ -22,6 +22,8 @@ export type Analysis = {
   style: "none" | "named" | "positional" | "mixed";
   diagnostics: Diagnostic[];
   unresolved: string[];
+  /** Each structured parameter in insert position, with the lists of `rewritten.sql` (UTF-8 byte offsets) the run time writes again for a call that leaves keys out. */
+  structured?: { name: string; lists: { start: number; end: number; entries: string[] }[] }[];
 };
 
 export type Lexed = {

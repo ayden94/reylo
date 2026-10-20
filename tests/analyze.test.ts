@@ -97,7 +97,7 @@ test("the module a build step emits carries the analysis and reads nothing at ru
       `import { defineQuery } from "reylo";`,
       `export const sql = ${JSON.stringify(SELECT)};`,
       `export const params = ["id"];`,
-      `export default defineQuery({ dialect: "sqlite", sql, params, cardinality: "maybeOne", text: "select id, name from users where id = ?", order: ["id"], inputs: {"id":{"type":{"kind":"scalar","name":"integer"}}} });`,
+      `export default defineQuery({ dialect: "sqlite", sql, params, cardinality: "maybeOne", text: "select id, name from users where id = ?", order: ["id"], inputs: {"id":{"type":{"kind":"scalar","name":"integer"}}}, jsonSchema: {"input":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"id":{"type":"integer","format":"int64"}},"required":["id"],"additionalProperties":false},"output":{"$schema":"https://json-schema.org/draft/2020-12/schema","anyOf":[{"type":"object","properties":{"id":{"type":"integer","format":"int64"},"name":{"type":"string"}},"required":["id","name"]},{"type":"null"}]}} });`,
       ``,
     ].join("\n"));
     // A build (a process of its own) that has neither the database nor the entry fails instead of guessing.

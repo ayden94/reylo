@@ -88,6 +88,24 @@ impl Type {
             // null included.
             Type::Json { schema: Some(schema) } => schema.clone(),
             Type::Json { schema: None } | Type::Unknown => json!({}),
+            // What the caller passes: each key's value as it passes a parameter of that type.
+            Type::Rows { one, fields } => {
+                let mut properties = Map::new();
+                let mut required = Vec::new();
+                for f in fields {
+                    let schema = f.ty.json_schema(opts);
+                    properties.insert(f.name.clone(), if f.nullable { nullable(schema) } else { schema });
+                    if !f.optional {
+                        required.push(json!(f.name));
+                    }
+                }
+                let row = json!({"type": "object", "properties": properties, "required": required, "additionalProperties": false});
+                if *one {
+                    row
+                } else {
+                    json!({"type": "array", "items": row})
+                }
+            }
         }
     }
 }

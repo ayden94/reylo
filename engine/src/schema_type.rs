@@ -123,6 +123,11 @@ impl Validator {
     }
 }
 
+/// Reylo's own check of a schema a statement writes in a parameter's column list (`meta
+/// json('…')`): 2020-12, as the specification says, whatever `$schema` says, since the decision of
+/// 2026-10-12 takes JSON Schema 2020-12 in its entirety (`docs/typed-json-params.md`).
+pub const REYLO: Validator = Validator { fallback: &[Draft::Twenty], ..SPEC };
+
 /// MySQL's `JSON_SCHEMA_VALID` (8.0.17 and later): RapidJSON's draft 4 validator, whatever `$schema`
 /// says. It leaves a pointer with a `$` in it unresolved, and reads a root `openapi` or `swagger`
 /// key as OpenAPI (measured on 8.0.46, 8.4.11, 9.7.2 and 26.7.0: `docs/json-schema-checks/mysql/`).

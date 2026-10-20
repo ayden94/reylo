@@ -172,6 +172,10 @@ pub struct Analysis {
     pub diagnostics: Vec<Diagnostic>,
     /// Paths inside JSON columns the engine could not type, for a message.
     pub unresolved: Vec<String>,
+    /// Each structured parameter in insert position, with the lists of `rewritten` the run time
+    /// writes again for a call that leaves keys out ([`crate::structured`]).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub structured: Vec<crate::structured::Info>,
 }
 
 #[derive(Debug, Serialize)]
@@ -197,7 +201,10 @@ fn analyze(sql: &str, dialect: Dialect, answers: &HashMap<String, Answer>) -> Re
     // be done before the answer came, and the extension would never be used.
     let server = if dialect == Dialect::Postgres { extension::server(&host) } else { Some(Server::Absent) };
     let Some(server) = server else { return Response::Need { needs: host.needs() } };
-    if server == Server::Same {
+    // A structured parameter is expanded before the analysis, and the server's answer carries
+    // neither the expansion nor the lists the run time writes again, so such a statement is
+    // analyzed here, with the server answering its needs.
+    if server == Server::Same && !crate::structured::present(sql, dialect) {
         match extension::analyze(sql, &host) {
             Some(Some(analysis)) => return Response::Analysis { analysis },
             Some(None) => {}

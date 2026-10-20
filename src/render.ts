@@ -109,6 +109,8 @@ export function renderType(t: EngineType, inJson = false, dialect: "postgres" | 
       return /[|&]/.test(inner) ? `(${inner})[]` : `${inner}[]`;
     }
     case "json": return !inJson && repr.json === "string" ? "string" : t.schema === undefined ? "unknown" : schemaType(t.schema);
+    // Only a parameter is one; no column is.
+    case "rows": return renderParamType(t, dialect, repr);
     case "unknown": return "unknown";
   }
 }
@@ -225,6 +227,13 @@ export function renderParamType(t: EngineType, dialect: "postgres" | "sqlite" | 
   if (t.kind === "scalar" && (t.name === "bytea" || t.name === "blob")) return "Uint8Array";
   if (t.kind === "scalar" && t.name === "numeric" && dialect !== "sqlite") return repr.decimal === "number" ? "number | string" : "string";
   if (t.kind === "json") return t.schema === undefined ? "unknown" : schemaType(t.schema);
+  // A structured parameter: each key as a parameter of its type takes it, `?` where the caller
+  // may leave it out, `| null` where it may be null.
+  if (t.kind === "rows") {
+    const fields = t.fields.map((f) => `${ident(f.name)}${f.optional ? "?" : ""}: ${renderParamType(f.type, dialect, repr)}${f.nullable ? " | null" : ""}`);
+    const row = fields.length ? `{ ${fields.join("; ")} }` : "Record<never, never>";
+    return t.one ? row : `readonly ${row}[]`;
+  }
   if (t.kind === "array") {
     const inner = renderParamType(t.of, dialect, repr);
     return /[|&]/.test(inner) ? `(${inner})[]` : `${inner}[]`;

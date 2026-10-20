@@ -24,6 +24,7 @@ pub mod schema_type;
 pub mod sqlite;
 pub mod sqlite_tree;
 pub mod stack;
+pub mod structured;
 pub mod types;
 
 /// A fingerprint of the sources this engine was built from (`build.rs`). Two engines with the

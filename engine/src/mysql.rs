@@ -63,6 +63,11 @@ const KINDS: &[&str] = &["select", "with", "table", "values", "insert", "replace
 /// placeholder by default and one without escapes; `"email"` is a string or a column), the mode
 /// decides, asked of the session, and both the placeholders and the parser's tree are read by it.
 pub fn analyze_text(sql: &str, host: &Host) -> Lazy<Analysis> {
+    crate::structured::analyze(sql, Dialect::Mysql, host, &|sql| analyze_text_plain(sql, host), &|diagnostics| crate::postgres::bare_of(sql, Dialect::Mysql, diagnostics))
+}
+
+/// The analysis of a statement without structured parameters.
+fn analyze_text_plain(sql: &str, host: &Host) -> Lazy<Analysis> {
     let read = |text| lex::lex_mysql(sql, lex::Named::Dialect, text);
     let first = read(MysqlText::default());
     let alike = MysqlText::ALL.iter().all(|&text| read(text) == first);
@@ -433,6 +438,7 @@ pub fn analyze(sql: &str, lexed: &Lexed, text: Option<MysqlText>, host: &Host) -
         style: lexed.style,
         diagnostics,
         unresolved: Vec::new(),
+        structured: Vec::new(),
     })
 }
 

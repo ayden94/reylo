@@ -12,6 +12,8 @@ export type EngineType =
   | { kind: "list"; of: EngineType; nullable_items: boolean }
   /** Any JSON, or with `schema` the values a CHECK's JSON Schema admits, as the engine's canonical schema (engine/src/schema_type.rs). */
   | { kind: "json"; schema?: JsonSchema }
+  /** A structured parameter, `:events::rows(…)` or `:user::row(…)`: one object (`one`) or an array of them, each key typed by its column list. `optional`: the caller may leave the key out. `written`: the type as the column list writes it. */
+  | { kind: "rows"; one: boolean; fields: { name: string; type: EngineType; written: string; nullable: boolean; optional: boolean }[] }
   | { kind: "unknown" };
 
 /**

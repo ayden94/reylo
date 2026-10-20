@@ -76,8 +76,25 @@ pub enum Type {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         schema: Option<serde_json::Value>,
     },
+    /// A structured parameter, `:events::rows(…)` or `:user::row(…)`: one object (`one`) or an
+    /// array of objects, whose keys the parameter's column list names ([`crate::structured`]).
+    Rows { one: bool, fields: Vec<RowField> },
     /// Nothing the engine derived.
     Unknown,
+}
+
+/// One key of a structured parameter.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RowField {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub ty: Type,
+    /// The type as the column list writes it, whose modifiers (`varchar(32)`, `numeric(12,2)`)
+    /// say what the run time checks beside the type itself.
+    pub written: String,
+    pub nullable: bool,
+    /// Whether the caller may leave the key out: a `?` member, or one that may be null.
+    pub optional: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

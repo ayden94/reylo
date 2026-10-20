@@ -8,6 +8,7 @@
 import { queryPostgres } from "./decode.ts";
 import type { EngineType } from "./engine-type.ts";
 import { lexPlaceholders } from "./lex.ts";
+import { prepareRows, variant, zoned, type Structured } from "./rows.ts";
 
 export type Dialect = "postgres" | "mysql" | "sqlite";
 
@@ -106,6 +107,8 @@ export type QueryModule<D extends Dialect = Dialect> = {
   readonly order?: readonly string[] | undefined;
   /** What the analysis found of each parameter, by name (every build step puts it in the module). */
   readonly inputs?: Inputs | undefined;
+  /** Each structured parameter in insert position, with the lists of `text` the run time writes again for the keys a call carries. */
+  readonly structured?: readonly Structured[] | undefined;
 };
 
 /**
@@ -288,9 +291,22 @@ function statement(query: QueryModule, input: ParamsInput) {
       : query.dialect === "postgres"
         ? rewrite(query, params)
         : rewriteRepeating(query, params);
-  bound.names.forEach((name, i) => checkTime(query.inputs?.[name]?.type, name, bound.values[i]));
-  // Every MySQL and SQLite driver binds JSON text as text, which the database reads as JSON.
-  if (query.dialect !== "postgres") bound.values = bound.values.map((v, i) => (isJsonValue(query, bound.names[i]!, v) ? JSON.stringify(v) : v));
+  bound.names.forEach((name, i) => {
+    const type = query.inputs?.[name]?.type;
+    // A structured parameter is checked against its column list and written as the JSON the
+    // statement reads; in an insert, its lists name only the keys the call carries.
+    if (type?.kind === "rows") {
+      const structured = query.structured?.find((s) => s.name === name);
+      const prepared = prepareRows(name, type, bound.values[i], query.dialect, structured !== undefined);
+      bound.values[i] = prepared.value;
+      if (structured) bound.text = variant(bound.text, structured, type.fields, prepared.present);
+      return;
+    }
+    checkTime(type, name, bound.values[i]);
+  });
+  // Every MySQL and SQLite driver binds JSON text as text, which the database reads as JSON (a
+  // structured parameter's is written already).
+  if (query.dialect !== "postgres") bound.values = bound.values.map((v, i) => (isJsonValue(query, bound.names[i]!, v) && query.inputs?.[bound.names[i]!]?.type.kind !== "rows" ? JSON.stringify(v) : v));
   return bound;
 }
 
@@ -311,7 +327,7 @@ function asBuffer(v: unknown) {
   return v instanceof Uint8Array && NodeBuffer !== undefined && !NodeBuffer.isBuffer(v) ? NodeBuffer.from(v.buffer, v.byteOffset, v.byteLength) : v;
 }
 
-const isJson = (kind: EngineType["kind"] | undefined) => kind === "json" || kind === "object" || kind === "list";
+const isJson = (kind: EngineType["kind"] | undefined) => kind === "json" || kind === "object" || kind === "list" || kind === "rows";
 
 // A JSON parameter's value is a JavaScript value, which reaches the database as its JSON text
 // (JSON.stringify), so a string is a JSON string on every driver; null is SQL NULL. Each driver
@@ -329,7 +345,6 @@ function isJsonValue(query: QueryModule, name: string, v: unknown): boolean {
 // postgres.js in the server's, PGlite and Bun.sql in UTC, and Bun.sql's `date` failed in every
 // zone. A string for a `timestamptz` names its zone: without one the server reads it in the
 // session's TimeZone, which the driver or the server sets.
-const zoned = /(?:\d:\d\d(?::\d\d(?:\.\d+)?)?(?:\s*(?:z|[+-]\d\d?(?::?\d\d){0,2})|\s+[a-z][\w/+-]*)|^-?infinity|^epoch|^now)(?:\s+bc)?$/i;
 
 const isTime = (type: EngineType | undefined) => type?.kind === "scalar" && type.name.split("|").every((part) => part === "timestamp" || part === "timestamptz" || part === "date");
 

@@ -98,6 +98,7 @@ pub fn analyze(sql: &str, host: &Host) -> Lazy<Option<Analysis>> {
         style: lexed.style,
         diagnostics: remote.diagnostics,
         unresolved: remote.unresolved,
+        structured: Vec::new(),
     }))
 }
 
