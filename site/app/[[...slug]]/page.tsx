@@ -1,10 +1,10 @@
 import { source } from '@/lib/source';
 import { TocFooter, TocHeader, TopRow } from '@/components/chrome';
+import { githubUrl, siteUrl } from '@/lib/layout.shared';
 import { getMDXComponents } from '@/components/mdx';
 import { DocsLayout } from 'fumadocs-ui/layouts/docs';
 import { DocsBody, DocsPage, DocsTitle } from 'fumadocs-ui/layouts/docs/page';
 import type { TOCItemType } from 'fumadocs-core/toc';
-import type { Metadata } from 'next';
 import type { CSSProperties } from 'react';
 import { notFound } from 'next/navigation';
 
@@ -61,7 +61,8 @@ export default async function Page({ params }: Props) {
       >
         {/* The subheader under the title is the page's first element (`.reylo-subheader`), since it
             sets `.sql` as code; the frontmatter's description, in plain text, is the page's
-            metadata (below). */}
+            metadata (app/layout.tsx). */}
+        <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: structuredData(page.data.description ?? '') }} />
         <DocsTitle>{page.data.title}</DocsTitle>
         <DocsBody>
           <MDX components={getMDXComponents()} />
@@ -75,8 +76,31 @@ export function generateStaticParams() {
   return source.generateParams();
 }
 
-export async function generateMetadata({ params }: Props): Promise<Metadata> {
-  const page = source.getPage((await params).slug ?? []);
-  if (!page) notFound();
-  return { title: page.data.title, description: page.data.description };
+/**
+ * The site and the project as schema.org data: the WebSite gives search results the site's name,
+ * and the SoftwareSourceCode says what the page is about and where its code lives.
+ */
+function structuredData(description: string): string {
+  const author = { '@type': 'Person', name: 'Colin McDonnell', url: 'https://github.com/colinhacks' };
+  const data = {
+    '@context': 'https://schema.org',
+    '@graph': [
+      { '@type': 'WebSite', '@id': `${siteUrl}/#website`, url: `${siteUrl}/`, name: 'Reylo', description, inLanguage: 'en' },
+      {
+        '@type': 'SoftwareSourceCode',
+        '@id': `${siteUrl}/#software`,
+        name: 'Reylo',
+        description,
+        url: `${siteUrl}/`,
+        codeRepository: githubUrl,
+        programmingLanguage: ['TypeScript', 'SQL'],
+        runtimePlatform: 'Node.js',
+        license: 'https://opensource.org/licenses/MIT',
+        author,
+        isPartOf: { '@id': `${siteUrl}/#website` },
+      },
+    ],
+  };
+  // `<` is escaped so that no string in the data can close the script element.
+  return JSON.stringify(data).replace(/</g, '\\u003c');
 }

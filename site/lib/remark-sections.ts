@@ -64,6 +64,11 @@ export function toAgentMarkdown(source: string): string {
       .replace(/^<\/?(?:Tabs|Tab|DialectTabs|Dialect|Accordions|Accordion|Details)\b[^>]*>\n?/gm, '')
       // A paragraph written as HTML for its class, such as the lede, as a paragraph.
       .replace(/<p\b[^>]*>([\s\S]*?)<\/p>/g, '$1')
+      // Any other line that is only a tag, outside the code blocks: a wrapper such as the feature
+      // list's `<div>` or `<AgentPrompt>`, whose contents are Markdown already, or an anchor.
+      .split(/(^```[^\n]*\n[\s\S]*?^```$)/m)
+      .map((part, i) => (i % 2 ? part : part.replace(/^[ \t]*<\/?[A-Za-z][\w.-]*(?:\s[^<>]*)?\/?>[ \t]*\n?/gm, '')))
+      .join('')
       .replace(/\n{3,}/g, '\n\n')
       .trim() + '\n'
   );
