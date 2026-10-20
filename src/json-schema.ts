@@ -13,6 +13,16 @@ type Object_ = { readonly [key: string]: unknown };
 export type Failure = { path: string; message: string };
 
 /**
+ * A fresh copy of a JSON value, such as a schema's `default`, so that filling one in never shares
+ * it between calls. A JSON round trip rather than `structuredClone`, which the run time cannot name
+ * where a project's tsconfig loads no Node or DOM types (the labs set `"types": []`), and which
+ * gives the same copy for a JSON value.
+ */
+export function cloneJson<T>(value: T): T {
+  return value === undefined ? value : JSON.parse(JSON.stringify(value));
+}
+
+/**
  * The value with the schema's defaults filled in, as ajv's `useDefaults` fills them (the
  * maintainer, 2026-10-20: a JSON parameter's default is its schema's `default`): a key `properties`
  * names and the value lacks takes its `default`, and so does an item `prefixItems` names past the
@@ -28,7 +38,7 @@ export function withDefaults(schema: Schema, value: unknown): unknown {
     const o: Record<string, unknown> = { ...(value as Object_) };
     const properties = (s.properties ?? {}) as Record<string, Schema>;
     for (const [key, sub] of Object.entries(properties)) {
-      if (!Object.prototype.hasOwnProperty.call(o, key) && sub !== null && typeof sub === "object" && "default" in sub) o[key] = structuredClone((sub as Object_).default);
+      if (!Object.prototype.hasOwnProperty.call(o, key) && sub !== null && typeof sub === "object" && "default" in sub) o[key] = cloneJson((sub as Object_).default);
     }
     const patterns = Object.entries((s.patternProperties ?? {}) as Record<string, Schema>).map(([p, sub]) => [regex(p), sub] as const);
     for (const key of Object.keys(o)) {
@@ -53,7 +63,7 @@ export function withDefaults(schema: Schema, value: unknown): unknown {
     const a = [...value];
     const prefix = Array.isArray(s.prefixItems) ? (s.prefixItems as Schema[]) : [];
     prefix.forEach((sub, i) => {
-      if (i >= a.length && sub !== null && typeof sub === "object" && "default" in sub && a.length === i) a.push(structuredClone((sub as Object_).default));
+      if (i >= a.length && sub !== null && typeof sub === "object" && "default" in sub && a.length === i) a.push(cloneJson((sub as Object_).default));
     });
     for (let i = 0; i < a.length; i++) a[i] = withDefaults(i < prefix.length ? prefix[i]! : (s.items as Schema) ?? true, a[i]);
     out = a;

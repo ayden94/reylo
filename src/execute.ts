@@ -9,7 +9,7 @@ import { queryPostgres } from "./decode.ts";
 import type { EngineType } from "./engine-type.ts";
 import { lexPlaceholders } from "./lex.ts";
 import type { JsonSchema } from "./engine-type.ts";
-import { validate, withDefaults } from "./json-schema.ts";
+import { cloneJson, validate, withDefaults } from "./json-schema.ts";
 import { prepareRows, variant, zoned, type Structured } from "./rows.ts";
 import { differences, due, passed, staleError, type Fresh } from "./fresh.ts";
 
@@ -331,7 +331,7 @@ function statement(query: QueryModule, input: ParamsInput) {
     const schema = query.inputs?.[name]?.schema;
     if (schema !== undefined) {
       let v = params[name];
-      if (v === undefined && schema !== null && typeof schema === "object" && "default" in schema) v = structuredClone(schema.default);
+      if (v === undefined && schema !== null && typeof schema === "object" && "default" in schema) v = cloneJson(schema.default);
       if (v !== undefined && v !== null) {
         v = withDefaults(schema, v);
         const failure = validate(schema, v);
