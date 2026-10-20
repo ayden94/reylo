@@ -124,24 +124,25 @@ create table events (
 <AgentPrompt>
 
 ```text
-Set up Reylo in this project. Reylo lets TypeScript import .sql files, with types
-inferred from the live database. Its docs are one page, https://reylo.dev: follow the
-section linked at each step.
+Set up Reylo in this project. Reylo lets TypeScript import .sql files, with
+types inferred from the live database. Its docs are one page, https://reylo.dev:
+follow the section linked at each step.
 
-1. Check the requirements and install Reylo, the engine of the project's database
-   (@reylosql/postgres, @reylosql/mysql or @reylosql/sqlite) and TypeScript 7.1 beta
-   or later: https://reylo.dev/#install
-2. Add Reylo to tsconfig.json as a content mapper, and add a typecheck script that runs
-   tsc --noEmit --runExternalCode: https://reylo.dev/#typescript
-3. Point Reylo at the development database with DATABASE_URL: https://reylo.dev/#url
+1. Check the requirements and install Reylo, the engine of the project's
+   database (@reylosql/postgres, @reylosql/mysql or @reylosql/sqlite) and
+   TypeScript 7.1 beta or later: https://reylo.dev/#install
+2. Add Reylo to tsconfig.json as a content mapper, and add a typecheck script
+   that runs tsc --noEmit --runExternalCode: https://reylo.dev/#typescript
+3. Point Reylo at the development database with DATABASE_URL:
+   https://reylo.dev/#url
 4. Make .sql imports load wherever the project runs code, with Node's --import
-   (https://reylo.dev/#node) or the plugin for its runtime, bundler or framework
-   (https://reylo.dev/#plugins).
+   (https://reylo.dev/#node) or the plugin for its runtime, bundler or
+   framework (https://reylo.dev/#plugins).
 5. Set up the editor the project uses: https://reylo.dev/#editors
 6. Write a first query and run it with the project's own driver:
    https://reylo.dev/#usage and https://reylo.dev/#supported-drivers
-7. Run the typecheck script. The query's types come from the database, and an error in
-   a .sql file shows at its line and column.
+7. Run the typecheck script. The query's types come from the database, and an
+   error in a .sql file shows at its line and column.
 ```
 
 </AgentPrompt>

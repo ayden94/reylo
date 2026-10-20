@@ -802,22 +802,15 @@ code {
 }
 
 /* ── The reading measure ─────────────────────────────────────────────────────
-   Prose stops at 36rem, about 71 characters a line (81 at most) in Geist at
-   16.5px; the 836px column of 2026-10-20 ran to 103 (111 at most). Code
-   blocks, tab groups and tables keep the whole column, 49.5rem, which holds
-   97 characters of Geist Mono at 13px and 91 or more inside a collapsible or
-   an accordion, so no line of 90 wraps at 1280px and wider. The page is the
-   column plus Fumadocs' 2rem of padding on each side; `--fd-layout-width` in
-   app/[[...slug]]/page.tsx is that plus the 268px table of contents. Headings
-   keep the whole column, so the rule under an h2 and the copy buttons line up
-   with the code's right edge. */
+   One column for everything, 46rem: prose, headings, code blocks, tab groups and tables share
+   both edges. Prose runs about 77 characters a line (92 at most) in Geist at 16.5px, and a code
+   block holds 90 characters of Geist Mono at 13px. The column of 2026-10-20 morning ran to 103;
+   a version that afternoon stopped prose at 36rem and let code and headings run to 49.5rem, and the
+   maintainer rejected the ragged edges ("It looks like trash"). The page is the column plus
+   Fumadocs' 2rem of padding on each side; `--fd-layout-width` in app/[[...slug]]/page.tsx is that
+   plus the 268px table of contents. */
 #nd-page {
-  max-width: 53.5rem;
-}
-
-#nd-page > p,
-#nd-page .prose :is(p, ul, ol, blockquote, summary):not(:where(td, th, figure, li, .reylo-details-body ul, .reylo-details-body ol) *) {
-  max-width: 36rem;
+  max-width: 50rem;
 }
 
 #nd-page .prose {
