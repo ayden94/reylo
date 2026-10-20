@@ -14,7 +14,7 @@ export default function User({ loaderData: { user } }: Route.ComponentProps) {
   return (
     <main>
       <h1>{user.name}</h1>
-      <p>{user.email ?? "no email"}, {user.role}, joined {user.created_at.toISOString()}</p>
+      <p>{user.email ?? "no email"}, {user.role}, joined {user.created_at}</p>
     </main>
   );
 }

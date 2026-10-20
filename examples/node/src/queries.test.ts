@@ -12,7 +12,8 @@ test("get_user finds ada, and null for an id nobody has", async () => {
   const ada = await getUser.run(sql, { id: 1 });
   assert.equal(ada?.name, "ada");
   assert.equal(ada?.role, "admin");
-  assert.ok(ada?.created_at instanceof Date);
+  // An instant is its ISO 8601 text in UTC, which Temporal.Instant.from reads.
+  assert.match(ada?.created_at ?? "", /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$/);
   assert.equal(await getUser.run(sql, { id: 999 }), null);
 });
 
