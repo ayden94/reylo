@@ -234,8 +234,8 @@ test("mariadb: every option per query, metaAsArray off, a SET joined and a DATET
   const conn = { batch: async () => ({}), query: async (options: Record<string, any>) => ((sent = options), Object.assign([{ tags: ["x", "z"], at: "2026-03-08 09:31:00.000", id: 1 }], { meta })) };
   assert.deepEqual([...((await execute(conn as never, { dialect: "mysql", sql: "select 1", params: [] })) as unknown[])], [{ tags: "x,z", at: "2026-03-08T09:31:00.000", id: 1 }]);
   assert.equal(sent.metaAsArray, false);
-  // A BIGINT mariadb's own BigInt, a DECIMAL its text.
-  assert.deepEqual([sent.bigIntAsNumber, sent.supportBigNumbers, sent.bigNumberStrings, sent.decimalAsNumber], [false, false, false, false]);
+  // A BIGINT mariadb's own BigInt, a DECIMAL its text, on mariadb 3 and mariadb 2 (supportBigInt, bigNumberStrings).
+  assert.deepEqual([sent.bigIntAsNumber, sent.supportBigNumbers, sent.decimalAsNumber, sent.supportBigInt, sent.bigNumberStrings], [false, false, false, true, true]);
   assert.equal(sent.typeCast, undefined, "an app's typeCast is switched off");
   await execute(conn as never, { dialect: "mysql", sql: "select 1", params: [], columns: [["shape", "unknown"]] });
   assert.equal(typeof sent.typeCast, "function");

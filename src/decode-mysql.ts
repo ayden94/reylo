@@ -13,7 +13,7 @@
 //   fraction comes back from the result's fields. `decimalNumbers` is never passed per query:
 //   mysql2 keys its row-parser cache, shared by every pool in the process, by the per-query value
 //   and builds the parser from the app's, so one query would poison another pool's parser.
-// - mariadb takes every option per query, both ways: a BIGINT is its own BigInt, and
+// - mariadb takes every option per query, both ways: a BIGINT is its own BigInt (mariadb 2's too), and
 //   `metaAsArray: false` keeps the rows an array of rows. A SET comes back an array, which no
 //   option prevents: Reylo joins it.
 // - PlanetScale takes a `cast` per query, which replaces the app's: Reylo's is the driver's own
@@ -151,14 +151,18 @@ export async function mysql2(m: AnyClient, text: string, values: unknown[], colu
 
 /**
  * Every decoding option, each laid over the app's for this query (mariadb's parser.js:
- * Object.assign(Object.create(connOpts), opts)): with `bigIntAsNumber` and `supportBigNumbers` off a
- * BIGINT is mariadb's own BigInt, and with `decimalAsNumber` off too a DECIMAL its text.
+ * Object.assign(Object.create(connOpts), opts)). mariadb 3: with `bigIntAsNumber` and
+ * `supportBigNumbers` off a BIGINT is its own BigInt, and with `decimalAsNumber` off too a DECIMAL
+ * its text (`bigNumberStrings` matters only beside `supportBigNumbers`). mariadb 2, which has none
+ * of the first two: `supportBigInt` makes a BIGINT a BigInt and `bigNumberStrings` a DECIMAL its
+ * text, where it would be a lossy number.
  */
 const MARIADB_OPTIONS = {
   bigIntAsNumber: false,
   decimalAsNumber: false,
   supportBigNumbers: false,
-  bigNumberStrings: false,
+  bigNumberStrings: true,
+  supportBigInt: true,
   checkNumberRange: false,
   dateStrings: true,
   jsonStrings: false,
