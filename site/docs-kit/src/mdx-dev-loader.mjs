@@ -1,4 +1,4 @@
-// A Turbopack loader that runs on fumadocs-mdx's output in `next dev` only (next.config.mjs). It
+// A Turbopack loader that runs on fumadocs-mdx's output in `next dev` only (`withDocsKit`, next.mjs). It
 // changes nothing the page renders; it keeps the dev server's memory flat across edits.
 //
 // It gives the compiled page a source map that names the `.mdx` file and ignore-lists it. In
@@ -6,7 +6,7 @@
 // renders: for each distinct frame it evals a stand-in function whose source is padded with one
 // newline per line above the frame and ends with the frame's `//# sourceMappingURL`, and it keeps
 // every one in a cache that is never cleared (as Node keeps a per-line table of each). On
-// 2026-10-11 the page compiled to about 35,000 JSX calls on 178,000 lines, so its frames cost
+// 2026-10-11 Reylo's page compiled to about 35,000 JSX calls on 178,000 lines, so its frames cost
 // gigabytes, and every edit that moves the code makes a new set. Worse, after an edit server Fast
 // Refresh runs the page's new code under a `file://…?id=` URL that Next.js does not map to the
 // chunk's `.map` file, so Next.js inlines the page's whole source map (16.8 MB of base64) as that
@@ -24,7 +24,7 @@
 // runtime is imported once into local constants instead. And V8 stores a string with any character
 // above U+00FF at two bytes per character: the page's few such characters are written as `\uXXXX`
 // escapes, which mean the same characters in the string literals MDX writes. A copy went from 70 MB
-// to 21 MB (and to 9 MB once lib/recma-shared-popups.ts built each popup once).
+// to 21 MB (and to 9 MB once mdx/recma-shared-popups.ts built each popup once).
 
 const JSX_RUNTIME = /^import \{([^}]*)\} from "react\/jsx-runtime";$/m;
 

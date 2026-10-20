@@ -1,11 +1,9 @@
 // Gives each h2 and h3 its section as Markdown, for the heading's copy button
-// (components/heading.tsx): the text from the heading to the next heading of the same or a
-// higher level, taken from the page's source, with what only the page needs removed, so the
-// section pastes cleanly into an agent. Ported from Motherload's lib/remark-sections.ts, with
-// Reylo's components: code-tab groups, <DialectTabs>/<Dialect>, <Accordions>/<Accordion>,
-// <Details>, and the module a Twoslash block hides above its `// ---cut---` line. The source is read before
-// lib/remark-mapper.ts expands an example's TypeScript into a panel per dialect, so a copied
-// section shows that TypeScript once, as it is written.
+// (../components/heading.tsx): the text from the heading to the next heading of the same or a
+// higher level, taken from the page's source, with what only the page needs removed, so the section
+// pastes cleanly into an agent. It runs before a site's own remark plugins (the first of
+// `docsMdxOptions`' remark plugins), so a block a site expands later, such as one copy per variant,
+// is copied once, as it is written.
 
 type Node = {
   type: string;
@@ -15,6 +13,7 @@ type Node = {
   children?: Node[];
 };
 
+/** A fenced code block, whole, from its opening fence to its closing one. */
 const FENCE = /^```[^\n]*\n[\s\S]*?^```$/gm;
 
 /** A fence's meta attribute, such as `tab="Postgres"`. */
@@ -33,12 +32,12 @@ function cleanBlock(block: string): string {
   // everything below `---cut-after---`.
   body = body.replace(/^[\s\S]*?^\/\/ ---cut(?:-before)?---\n/m, '').replace(/^\/\/ ---cut-after---\n[\s\S]*$/m, '');
   body = body
-    // Twoslash's directives (`// @noErrors`), queries (`//    ^?`) and completions (`^|`).
+    // Twoslash's directives (`// @noErrors`, `// @hover: …`), queries (`//    ^?`) and completions (`^|`).
     .replace(/^[ \t]*\/\/ @\w+.*\n/gm, '')
     .replace(/^[ \t]*\/\/\s*\^[?|][ \t]*\n/gm, '')
     // Shiki's diff and highlight markers.
     .replace(/[ \t]*\/\/ \[!code [^\]]*\]/g, '');
-  // A tab named for a dialect is bold; a file name, as a tab or a title, is code.
+  // A tab that names a variant is bold; a file name, as a tab or a title, is code.
   const tab = attribute(meta, 'tab');
   const title = attribute(meta, 'title');
   const name = (text: string) => (/\.\w+$/.test(text) ? `\`${text}\`` : `**${text}**`);
@@ -47,28 +46,38 @@ function cleanBlock(block: string): string {
   return `${label}\`\`\`${lang}\n${body}\`\`\``;
 }
 
-export function toAgentMarkdown(source: string): string {
+/** The prose between code blocks, with the page's components as plain Markdown. */
+function cleanProse(text: string): string {
   return (
-    source
-      .replace(FENCE, cleanBlock)
-      // A terminal block's colours are escape codes, which an agent reads as noise.
-      .replace(/\x1b\[[0-9;]*m/g, '')
+    text
       // MDX comments.
       .replace(/\{\/\*[\s\S]*?\*\/\}\n?/g, '')
-      // The page's components as plain Markdown.
+      // A callout as a quote, its title in bold.
       .replace(/<Callout[^>]*?title="([^"]*)"[^>]*>\s*([\s\S]*?)\s*<\/Callout>/g, (_, title: string, body: string) => `> **${title}.** ${body.replace(/\n/g, '\n> ')}`)
       .replace(/<Callout[^>]*>\s*([\s\S]*?)\s*<\/Callout>/g, (_, body: string) => `> ${body.replace(/\n/g, '\n> ')}`)
-      .replace(/^<(?:Tab|Dialect) value="([^"]*)">$/gm, '**$1**')
-      .replace(/^<Accordion title="([^"]*)"[^>]*>$/gm, '**$1**')
-      .replace(/^<Details summary="([^"]*)"[^>]*>$/gm, '**$1**')
-      .replace(/^<\/?(?:Tabs|Tab|DialectTabs|Dialect|Accordions|Accordion|Details)\b[^>]*>\n?/gm, '')
-      // A paragraph written as HTML for its class, such as the lede, as a paragraph.
+      // A component's opening tag alone on its line that names a value, a title or a summary (a tab,
+      // a variant's panel, an accordion item, a `<Details>`) becomes that label in bold; any other
+      // line holding only a component's tag (a tab group, a figure, a card) goes.
+      .replace(/^[ \t]*<[A-Z]\w*\b[^>]*?\s(?:value|title|summary)="([^"]*)"[^>]*>[ \t]*$/gm, '**$1**')
+      .replace(/^[ \t]*<\/?[A-Z]\w*\b[^>]*>[ \t]*\n?/gm, '')
+      // HTML written for its class: a `<div>` line goes, a `<p>` is its text.
+      .replace(/^[ \t]*<\/?div\b[^>]*>[ \t]*\n?/gm, '')
       .replace(/<p\b[^>]*>([\s\S]*?)<\/p>/g, '$1')
-      // Any other line that is only a tag, outside the code blocks: a wrapper such as the feature
-      // list's `<div>` or `<AgentPrompt>`, whose contents are Markdown already, or an anchor.
-      .split(/(^```[^\n]*\n[\s\S]*?^```$)/m)
-      .map((part, i) => (i % 2 ? part : part.replace(/^[ \t]*<\/?[A-Za-z][\w.-]*(?:\s[^<>]*)?\/?>[ \t]*\n?/gm, '')))
-      .join('')
+  );
+}
+
+export function toAgentMarkdown(source: string): string {
+  let out = '';
+  let last = 0;
+  for (const match of source.matchAll(FENCE)) {
+    out += cleanProse(source.slice(last, match.index)) + cleanBlock(match[0]);
+    last = match.index + match[0].length;
+  }
+  out += cleanProse(source.slice(last));
+  return (
+    out
+      // A terminal block's colours are escape codes, which an agent reads as noise.
+      .replace(/\x1b\[[0-9;]*m/g, '')
       .replace(/\n{3,}/g, '\n\n')
       .trim() + '\n'
   );

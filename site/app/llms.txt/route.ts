@@ -1,10 +1,10 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { siteUrl } from '@/lib/layout.shared';
-import { toAgentMarkdown } from '@/lib/remark-sections';
+import { toAgentMarkdown } from 'docs-kit/remark-sections';
 
 // The whole page as Markdown, for a coding agent or a language model (https://llmstxt.org): the
-// page's source, read as each heading's copy button reads its section (lib/remark-sections.ts),
+// page's source, read as each heading's copy button reads its section (docs-kit's remark-sections),
 // under the title and the description, with each link to a section of the page made absolute.
 // Built once, with the page.
 export const dynamic = 'force-static';

@@ -1,11 +1,11 @@
-// Builds each distinct Twoslash popup once. A name hovered in several blocks, or in each dialect's
-// copy of a block (lib/remark-mapper.ts), shows the same popup, and MDX writes one
-// `_jsx(PopupContent, …)` call per occurrence (on 2026-10-11, 829 popups, 253 of them different;
-// the repeats were 1.2 MB of the page's 3.4 MB React payload, which the HTML carries too). This
-// plugin moves each popup written more than once into a constant of `_createMdxContent` and puts
-// the constant at each occurrence, so the page renders one element for it, and React's payload
-// carries it once and each repeat as a reference to it. What renders is the same: the
-// server-rendered HTML is identical, and a popup's content is drawn from that element when it opens.
+// Builds each distinct Twoslash popup once. A name hovered in several blocks, or in each copy of a
+// block a site writes per variant, shows the same popup, and MDX writes one `_jsx(PopupContent, …)`
+// call per occurrence (on Reylo's page of 2026-10-11, 829 popups, 253 of them different; the repeats
+// were 1.2 MB of the page's 3.4 MB React payload, which the HTML carries too). This plugin moves
+// each popup written more than once into a constant of `_createMdxContent` and puts the constant at
+// each occurrence, so the page renders one element for it, and React's payload carries it once and
+// each repeat as a reference to it. What renders is the same: the server-rendered HTML is
+// identical, and a popup's content is drawn from that element when it opens.
 
 type Node = { type: string; [key: string]: unknown };
 type Slot = { parent: Record<string | number, unknown>; key: string | number };

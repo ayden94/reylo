@@ -1,28 +1,39 @@
 import './global.css';
-import { RootProvider } from 'fumadocs-ui/provider/next';
+import { DocsRoot } from 'docs-kit/root';
 import { Caveat, Geist, Geist_Mono } from 'next/font/google';
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
+import { DIALECTS } from '@/lib/dialects';
 import { siteTitle, siteUrl } from '@/lib/layout.shared';
 import { source } from '@/lib/source';
 
 // Geist for text and Geist Mono for code: the review of 2026-10-20 ("too wide", "the legibility
 // isn't very good anymore") replaced Inter and JetBrains Mono, after a comparison of six
 // directions on the live page. Both are variable fonts, so they take no weight list.
+//
+// `display: 'optional'`, not 'swap': a font that arrived after the first paint rewrapped the
+// opening paragraph (a layout shift of 0.057 at 1440 wide and 0.146 at 390, measured 2026-10-20).
+// The files are preloaded, so they make the first paint on any ordinary connection; a first view
+// whose fonts take longer keeps the fallbacks, and the next view has them cached. Geist Mono's
+// fallback is the system's monospace, not the Arial next/font would adjust to it, which drew code
+// proportional until the font came; under Turbopack `adjustFontFallback: false` alone kept the
+// Arial face, so the fallback is listed.
 const sans = Geist({
   subsets: ['latin'],
-  display: 'swap',
+  display: 'optional',
   variable: '--font-text',
 });
 
 const mono = Geist_Mono({
   subsets: ['latin'],
-  display: 'swap',
+  display: 'optional',
+  adjustFontFallback: false,
+  fallback: ['ui-monospace', 'SF Mono', 'Menlo', 'monospace'],
   variable: '--font-code',
 });
 
 // A handwriting face, as on nub's and Motherload's docs, for the "Leave a star!" note under the
-// GitHub link only (components/chrome.tsx).
+// GitHub link only (docs-kit's chrome).
 const hand = Caveat({
   subsets: ['latin'],
   weight: ['600'],
@@ -85,33 +96,24 @@ const themeIcons = `try {
 // itself by its own media query.
 const staticIcons = '<link rel="icon" href="/favicon.ico" sizes="48x48"><link rel="icon" href="/icon.svg" type="image/svg+xml" sizes="any">';
 
-// Fumadocs' tabs take the dialect saved under `dialect` (components/dialect-tabs.tsx) over their
-// default, and a saved value that names no tab selects nothing, so every dialect group showed an
-// empty panel until a tab was clicked. An earlier version of the page saved `postgres`, `mysql` or
-// `sqlite` (`<Tabs items>` lowercases its values). This runs before the tabs read the choice: it
-// keeps a saved dialect that differs only in case, in today's spelling (DIALECTS there), and drops
-// any other value, so the tabs fall back to their default.
-const restoreDialect = `try {
-  for (const store of [sessionStorage, localStorage]) {
-    const saved = store.getItem('dialect');
-    if (saved === null) continue;
-    const dialect = ['Postgres', 'MySQL', 'SQLite'].find((d) => d.toLowerCase() === saved.toLowerCase());
-    if (dialect) store.setItem('dialect', dialect);
-    else store.removeItem('dialect');
-  }
-} catch {}`;
-
+// docs-kit's document: Fumadocs' provider, and the head scripts that show a saved tab choice from
+// the first paint and keep a pressed tab under the pointer. Every dialect choice on the page is one
+// tab group, `dialect` (components/dialect-tabs.tsx); a saved choice written in another case, such
+// as the `postgres` an earlier version of the page saved, is put in today's spelling before the tabs
+// read it, and any other value is dropped, since Fumadocs' tabs would otherwise select nothing.
 export default function Layout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en" suppressHydrationWarning className={`${sans.variable} ${mono.variable} ${hand.variable}`}>
-      <head>
-        <script dangerouslySetInnerHTML={{ __html: restoreDialect }} />
-        <script dangerouslySetInnerHTML={{ __html: themeIcons }} />
-        <noscript dangerouslySetInnerHTML={{ __html: staticIcons }} />
-      </head>
-      <body className="flex flex-col min-h-screen">
-        <RootProvider search={{ enabled: false }}>{children}</RootProvider>
-      </body>
-    </html>
+    <DocsRoot
+      className={`${sans.variable} ${mono.variable} ${hand.variable}`}
+      tabs={{ dialect: DIALECTS }}
+      head={
+        <>
+          <script dangerouslySetInnerHTML={{ __html: themeIcons }} />
+          <noscript dangerouslySetInnerHTML={{ __html: staticIcons }} />
+        </>
+      }
+    >
+      {children}
+    </DocsRoot>
   );
 }

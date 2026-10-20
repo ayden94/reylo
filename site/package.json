@@ -9,6 +9,7 @@
     "capture": "nub scripts/capture-types.ts"
   },
   "dependencies": {
+    "docs-kit": "link:./docs-kit",
     "fumadocs-core": "^16.15.1",
     "fumadocs-mdx": "^15.3.1",
     "fumadocs-twoslash": "3.3.1",
