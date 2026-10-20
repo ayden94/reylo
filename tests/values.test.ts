@@ -130,29 +130,31 @@ test("SQLite: the asynchronous drivers' rows normalized: libSQL's BigInt, string
   assert.deepEqual(await execute(ok, q), [{ n: 1, b: Uint8Array.of(1, 2), doc: {} }]);
 });
 
-test("mysql2: per-query options and Reylo's typeCast, never decimalNumbers; a DECIMAL and JSON as their text, a date's fraction and T, TIME's digits", async () => {
+test("mysql2: per-query options and Reylo's typeCast, never decimalNumbers; a DECIMAL and JSON as their text, a date's dropped fraction and its T, TIME's digits", async () => {
   let sent: Record<string, any> = {};
-  const field = (type: string, text: string | null, length?: number) => ({ type, length, string: () => text, buffer: () => (text === null ? null : Buffer.from(text)) });
+  const field = (type: string, text: string | null) => ({ type, string: () => text, buffer: () => (text === null ? null : Buffer.from(text)) });
   const pool = {
     query: async () => [[], []],
-    // mysql2 calls the typeCast once per value with the field and its own reading.
+    // mysql2 calls the typeCast once per value with the field and its own reading, and resolves to [rows, fields].
     execute: async (options: Record<string, any>) => {
       sent = options;
       const cast = options.typeCast as (f: unknown, next: () => unknown) => unknown;
       const row = {
         amount: cast(field("NEWDECIMAL", "1.100000000000000001"), () => 1.1),
         doc: cast(field("JSON", '{"big":9007199254740993}'), () => ({ big: "9007199254740993" })),
-        at: cast(field("DATETIME", null, 23), () => "2026-03-08 09:31:00"),
-        at0: cast(field("DATETIME", null, 19), () => "2026-03-08 09:31:00"),
-        t: cast(field("TIME", null, 13), () => "10:00:00.5"),
+        at: cast(field("DATETIME", null), () => "2026-03-08 09:31:00"),
+        at6: cast(field("DATETIME", null), () => "2026-03-08 09:31:00.123456"),
+        latest: cast(field("DATETIME", null), () => "2026-03-08 09:31:00"),
+        t: cast(field("TIME", null), () => "10:00:00.5"),
         geo: cast(field("GEOMETRY", "wkb"), () => ({ x: 1, y: 2 })),
         big: cast(field("LONGLONG", null), () => "9007199254740993"),
       };
-      return [[row], []];
+      const fields = [["at", 12, 3], ["at6", 12, 6], ["latest", 12, 0], ["t", 11, 2]].map(([name, columnType, decimals]) => ({ name, columnType, decimals }));
+      return [[row], fields];
     },
   };
   const [row] = (await execute(pool as never, { dialect: "mysql", sql: "select 1", params: [] })) as Record<string, unknown>[];
-  assert.deepEqual(row, { amount: "1.100000000000000001", doc: { big: 9007199254740992 }, at: "2026-03-08T09:31:00.000", at0: "2026-03-08T09:31:00", t: "10:00:00.50", geo: Buffer.from("wkb"), big: "9007199254740993" });
+  assert.deepEqual(row, { amount: "1.100000000000000001", doc: { big: 9007199254740992 }, at: "2026-03-08T09:31:00.000", at6: "2026-03-08T09:31:00.123456", latest: "2026-03-08T09:31:00", t: "10:00:00.50", geo: Buffer.from("wkb"), big: "9007199254740993" });
   assert.equal("decimalNumbers" in sent, false, "a per-query decimalNumbers poisons mysql2's parser cache for every pool");
   assert.equal("jsonStrings" in sent, false);
 });

@@ -150,6 +150,15 @@ export function timestamptz(x: string): Date {
 
 type BufferClass = { from(data: string, encoding: string): Uint8Array; isBuffer(v: unknown): boolean };
 const NodeBuffer = (globalThis as { Buffer?: BufferClass }).Buffer;
+// TextDecoder is a global in every runtime Reylo supports; it is typed here rather than through
+// the DOM lib or Node's, which a project that type-checks Reylo's sources need not have.
+const Utf8 = (globalThis as unknown as { TextDecoder: new (label?: string) => { decode(bytes: Uint8Array): string } }).TextDecoder;
+const utf8Decoder = new Utf8("utf-8");
+
+/** UTF-8 bytes as text: a Buffer's own toString where the bytes are one. */
+export function utf8(bytes: Uint8Array): string {
+  return NodeBuffer?.isBuffer(bytes) ? (bytes as Uint8Array & { toString(encoding: string): string }).toString("utf8") : utf8Decoder.decode(bytes);
+}
 const fromHex = (Uint8Array as unknown as { fromHex?: (hex: string) => Uint8Array }).fromHex;
 
 /** bytea's text: hex (`\x0102ff`, the server's default) or the escape format (`bytea_output = escape`). */

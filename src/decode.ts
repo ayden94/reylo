@@ -23,7 +23,7 @@
 // A type the database created (an enum, a domain's array, an extension's type) has the kind the
 // module gives its column; for a query defined by hand, one catalog query per client reads which of
 // those oids are arrays, cached in a WeakMap keyed by the app's object.
-import { coerce, DecodeError, textDecoder, type Columns, type Decoder, type Kind, type ScalarKind } from "./values.ts";
+import { coerce, textDecoder, utf8, type Columns, type Decoder, type Kind, type ScalarKind } from "./values.ts";
 
 type AnyClient = Record<string, any>;
 type Field = { name: string; oid: number };
@@ -309,10 +309,8 @@ async function pglite(db: AnyClient, text: string, values: unknown[], columns: C
 // ---------------------------------------------------------------------------------------------
 // postgres.js: `.raw()`, and the rows built by Reylo.
 
-const utf8 = new TextDecoder();
-type BufferLike = Uint8Array & { toString?(encoding: string): string };
-const NodeBuffer = (globalThis as { Buffer?: { isBuffer(v: unknown): boolean } }).Buffer;
-const textOf = (v: BufferLike): string => (NodeBuffer?.isBuffer(v) ? v.toString!("utf8") : utf8.decode(v));
+type BufferLike = Uint8Array;
+const textOf = utf8;
 
 export async function postgresJs(c: AnyClient, text: string, params: unknown[], columns: Columns | undefined): Promise<unknown[]> {
   const pending = c.unsafe(text, params);

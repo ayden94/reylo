@@ -363,7 +363,7 @@ type CastsRow = {
   short_name: string;
   score_int: number | null;
   big_num: string;
-  day: Date;
+  day: string;
   since: Date;
   k: number | null;
   nothing: number | null;

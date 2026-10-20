@@ -16,15 +16,9 @@
 // - PlanetScale takes a `cast` per query, which replaces the app's: Reylo's is the driver's own
 //   default, with a DATETIME's `T`.
 // - Bun.sql takes nothing per query: its values are converted (src/decode.ts, `bunRows`).
-import { coerce, type Columns } from "./values.ts";
+import { coerce, utf8, type Columns } from "./values.ts";
 
 type AnyClient = Record<string, any>;
-
-/** A DATETIME or TIMESTAMP's text with `T`; the binary protocol drops a zero fraction, which the column's display length gives back (23 for DATETIME(3)). */
-function wallClock(s: string, length: number | undefined): string {
-  const padded = length !== undefined && length > 19 && s.length === 19 ? `${s}.${"0".repeat(length - 20)}` : s;
-  return padded.replace(" ", "T");
-}
 
 // ---------------------------------------------------------------------------------------------
 // mysql2
@@ -32,12 +26,12 @@ function wallClock(s: string, length: number | undefined): string {
 /** Options mysql2 ORs with the app's (a BIGINT and a date as text) and the row's shape, which the query's own replace. */
 const MYSQL2_OPTIONS = { supportBigNumbers: true, bigNumberStrings: true, dateStrings: true, rowsAsArray: false, nestTables: false };
 
-type Mysql2Field = { type: string; length?: number; string(encoding?: string): string | null; buffer(): Uint8Array | null };
+type Mysql2Field = { type: string; string(encoding?: string): string | null; buffer(): Uint8Array | null };
 
 /**
- * Reylo's typeCast: a DECIMAL and a JSON value as their text (length-coded in the binary protocol
- * too, so `string()` reads them), JSON parsed here because mysql2's own parser turns an integer
- * past 2^53 inside a document into a string under `supportBigNumbers`; a date with its `T`; a
+ * Reylo's typeCast: a DECIMAL as its text and a JSON value parsed from its bytes (both are
+ * length-coded in the binary protocol too, so they read whole), JSON here because mysql2's own
+ * parser turns an integer past 2^53 inside a document into a string under `supportBigNumbers`; a
  * GEOMETRY as its bytes; every other type mysql2's own reading with the options above.
  */
 function mysql2Cast(f: Mysql2Field, next: () => unknown): unknown {
@@ -46,21 +40,8 @@ function mysql2Cast(f: Mysql2Field, next: () => unknown): unknown {
     case "DECIMAL":
       return f.string("ascii");
     case "JSON": {
-      const s = f.string("utf8");
-      return s === null ? null : JSON.parse(s);
-    }
-    case "DATETIME":
-    case "TIMESTAMP": {
-      const s = next();
-      return typeof s === "string" ? wallClock(s, f.length) : s;
-    }
-    case "TIME": {
-      // The binary protocol's TIME drops the fraction's trailing zeros: TIME(n)'s display length is 11 + n.
-      const s = next();
-      const digits = (f.length ?? 0) - 11;
-      if (typeof s !== "string" || digits <= 0) return s;
-      const dot = s.indexOf(".");
-      return dot < 0 ? `${s}.${"0".repeat(digits)}` : s.padEnd(dot + 1 + digits, "0");
+      const bytes = f.buffer();
+      return bytes === null ? null : JSON.parse(utf8(bytes));
     }
     case "GEOMETRY":
       return f.buffer();
@@ -69,10 +50,38 @@ function mysql2Cast(f: Mysql2Field, next: () => unknown): unknown {
   }
 }
 
+/** A column's protocol type and fraction digits, as mysql2's fields give them. */
+type Mysql2Column = { name: string; columnType: number; decimals: number };
+const DATETIME = 12, TIMESTAMP = 7, TIME = 11;
+
+/**
+ * A DATETIME or TIMESTAMP with `T`, and the fraction digits the binary protocol drops when they are
+ * all zero (mysql2 writes `09:31:00` for a DATETIME(3) of .000, and TIME's trailing zeros never),
+ * from the column's own count.
+ */
+function wallClock(s: string, decimals: number, type: number): string {
+  let text = s;
+  if (decimals > 0) {
+    const dot = text.indexOf(".");
+    text = dot < 0 ? `${text}.${"0".repeat(decimals)}` : text.padEnd(dot + 1 + decimals, "0");
+  }
+  return type === TIME ? text : text.replace(" ", "T");
+}
+
 /** mysql2's execute(), resolving to [rows, fields]. */
 export async function mysql2(m: AnyClient, text: string, values: unknown[]): Promise<unknown[]> {
-  const [rows] = await m.execute({ sql: text, ...MYSQL2_OPTIONS, typeCast: mysql2Cast }, values);
-  return Array.isArray(rows) ? rows : [];
+  const [rows, fields] = await m.execute({ sql: text, ...MYSQL2_OPTIONS, typeCast: mysql2Cast }, values);
+  if (!Array.isArray(rows)) return [];
+  const dates = ((fields ?? []) as Mysql2Column[]).filter((f) => f.columnType === DATETIME || f.columnType === TIMESTAMP || (f.columnType === TIME && f.decimals > 0));
+  if (dates.length) {
+    for (const row of rows as Record<string, unknown>[]) {
+      for (const f of dates) {
+        const v = row[f.name];
+        if (typeof v === "string") row[f.name] = wallClock(v, f.decimals > 6 ? 0 : f.decimals, f.columnType);
+      }
+    }
+  }
+  return rows;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -126,7 +135,6 @@ export async function mariadb(c: AnyClient, text: string, values: unknown[], col
 // PlanetScale 1.x
 
 type PlanetscaleField = { type: string; charset?: number };
-const decoder = new TextDecoder("utf-8");
 /** PlanetScale hands each value over as a string of bytes, one character each. */
 const bytesOf = (s: string) => {
   const out = new Uint8Array(s.length);
@@ -148,7 +156,7 @@ function planetscaleCast(field: PlanetscaleField, value: string | null): unknown
     case "TIMESTAMP":
       return value.replace(" ", "T");
     case "JSON":
-      return JSON.parse(decoder.decode(bytesOf(value)));
+      return JSON.parse(utf8(bytesOf(value)));
     case "INT8":
     case "INT16":
     case "INT24":
@@ -164,7 +172,7 @@ function planetscaleCast(field: PlanetscaleField, value: string | null): unknown
       return parseFloat(value);
   }
   if (field.charset === 63) return bytesOf(value);
-  return value ? decoder.decode(bytesOf(value)) : "";
+  return value ? utf8(bytesOf(value)) : "";
 }
 
 /** PlanetScale's execute(): 1.x binds parameters; 2.0 takes none, and its options come second. */

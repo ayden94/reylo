@@ -1,8 +1,9 @@
-// reylo's per-query decoding (src/decode.ts) against real drivers: pg's Client, Pool and a
-// PoolClient in a transaction, pg-promise, Neon's Pool and Client through a local stand-in for
-// its WebSocket proxy, and PGlite. Each driver runs the same statement through reylo's `run` and
-// directly (the control, which shows the driver's own shapes), then checks that a parser the
-// user registered still applies and that the user's own queries are unchanged.
+// Reylo decodes every value of its own Postgres queries itself (src/decode.ts, the maintainer,
+// 2026-10-20), against real drivers each set up by the app against it: pg's Client, Pool and a
+// PoolClient in a transaction, pg-promise, Neon's Pool and Client through a local stand-in for its
+// WebSocket proxy, PGlite, and postgres.js. Each runs the same statement through Reylo's `run` and
+// directly (the control, which shows the app's own decoding, its parsers and the driver's), and the
+// app's own queries must keep the app's decoding after Reylo's.
 // Needs a Postgres server (DECODE_SERVER, default postgres://localhost:5432; the database
 // porg_decode is created and dropped there): DECODE_SERVER=postgres://localhost:5432 nub decode.mjs
 import net from "node:net";
@@ -10,6 +11,7 @@ import { createRequire } from "node:module";
 import { isDeepStrictEqual, inspect } from "node:util";
 import pg from "pg";
 import pgPromise from "pg-promise";
+import postgres from "postgres";
 import { PGlite } from "@electric-sql/pglite";
 import { defineQuery } from "../../src/index.ts";
 
@@ -27,11 +29,14 @@ const sql = `select array['admin', 'member', null]::role[] as roles, array['a', 
   array[1, 2]::posint[] as posints, array[row(1, 'x'), row(2, 'y,z')]::pair[] as pairs,
   interval '1 year 2 mons 3 days 04:05:06.789' as span, array[interval '1 day', interval '2 hours'] as spans,
   array[1.5, 12345678901234567890.1]::numeric[] as amounts, 9007199254740993::int8 as big,
-  timestamptz '2024-01-15 10:30:00.123+00' as at, :id::int as id`;
+  timestamptz '2024-01-15 10:30:00.123+00' as at, timestamp '2024-01-15 10:30:00.123456' as wall, date '2024-01-15' as day, :id::int as id`;
+// A query defined by hand: the types the database created come from one catalog query per client.
 const q = defineQuery({ dialect: "postgres", sql, params: ["id"], cardinality: "one" });
+// The same with the columns a build step writes (src/loader.ts): no catalog query.
+const built = defineQuery({ dialect: "postgres", sql, params: ["id"], cardinality: "one", columns: [["roles", "text[]"], ["names", "text[]"], ["posints", "int[]"], ["pairs", "text"], ["span", "text"], ["spans", "text[]"], ["amounts", "decimal[]"], ["big", "int8"], ["at", "timestamptz"], ["wall", "timestamp"], ["day", "date"], ["id", "int"]] });
 const direct = sql.replace(":id", "$1");
 
-// What reylo declares for each column (an enum array is a union array, interval its text, ...).
+// What Reylo returns for each column (src/values.ts): one representation per type on every driver.
 const declared = {
   roles: ["admin", "member", null],
   names: ["a", "b"],
@@ -42,6 +47,8 @@ const declared = {
   amounts: ["1.5", "12345678901234567890.1"],
   big: "9007199254740993",
   at: new Date("2024-01-15T10:30:00.123Z"),
+  wall: "2024-01-15T10:30:00.123456",
+  day: "2024-01-15",
   id: 1,
 };
 
@@ -55,12 +62,10 @@ function same(label, actual, expected) {
   const diff = Object.keys(expected).filter((k) => !isDeepStrictEqual(actual?.[k], expected[k]));
   check(label, diff.length === 0, diff.length ? diff.map((k) => `${k}=${show(actual?.[k])} (expected ${show(expected[k])})`).join("; ") : "");
 }
-// The control: the driver alone gives its own shapes for the same statement.
-function control(label, row, { pglite = false } = {}) {
-  const pgShapes = pglite
-    ? typeof row.roles === "string" || (Array.isArray(row.posints) && row.posints[0] === "1") || Array.isArray(row.pairs)
-    : typeof row.roles === "string" && typeof row.names === "string" && typeof row.posints === "string" && typeof row.span === "object" && typeof row.amounts[0] === "number";
-  check(`${label} control (no reylo)`, pgShapes, `roles=${show(row.roles)} names=${show(row.names)} posints=${show(row.posints)} span=${show(row.span)} amounts=${show(row.amounts)}`);
+/** Both forms of the query: by hand and as built. */
+async function both(label, client) {
+  same(`${label} through run`, await q.run(client, { id: 1 }), declared);
+  same(`${label} through run, as built`, await built.run(client, [1]), declared);
 }
 
 const admin = new pg.Client(`${server}/postgres`);
@@ -73,74 +78,82 @@ try {
   await setup.query(schema);
   await setup.end();
 
-  // pg Client: decoded, the user's own next query unchanged, a client parser and a global parser kept.
+  // pg's global table, set up by the app: an int8 a BigInt, a numeric a float, a timestamptz tagged.
+  const defaults = { 20: pg.types.getTypeParser(20), 1700: pg.types.getTypeParser(1700), 1184: pg.types.getTypeParser(1184) };
+  pg.types.setTypeParser(20, BigInt);
+  pg.types.setTypeParser(1700, parseFloat);
+  pg.types.setTypeParser(1184, (x) => `global:${x}`);
+
+  // pg Client, with a client parser and an enum parser too.
   {
     const client = new pg.Client(URL);
     await client.connect();
-    control("pg Client", (await client.query(direct, [1])).rows[0]);
-    same("pg Client through run", await q.run(client, { id: 1 }), declared);
-    same("pg Client through run, parameters as an array", await q.run(client, [1]), declared);
-    control("pg Client, the user's own query after reylo's", (await client.query(direct, [1])).rows[0]);
-    client.setTypeParser(1184, (x) => `client:${x}`);
-    client.setTypeParser(1186, function userInterval(x) {
-      return `user:${x}`;
-    });
-    pg.types.setTypeParser(20, BigInt);
-    const row = await q.run(client, { id: 1 });
-    check("pg Client: a client timestamptz parser applies to reylo's query", row.at === "client:2024-01-15 02:30:00.123-08" || String(row.at).startsWith("client:"), show(row.at));
-    check("pg Client: a global int8 parser (BigInt) applies to reylo's query", row.big === 9007199254740993n, show(row.big));
-    check("pg Client: the user's interval parser wins over reylo's text, for interval and interval[]", row.span === "user:1 year 2 mons 3 days 04:05:06.789" && row.spans[0] === "user:1 day", `${show(row.span)} ${show(row.spans)}`);
-    pg.types.setTypeParser(20, pg.types.getTypeParser(25));
+    client.setTypeParser(1082, (x) => `client:${x}`);
+    const control = (await client.query(direct, [1])).rows[0];
+    check("pg Client control (no reylo): the app's parsers", control.big === 9007199254740993n && String(control.at).startsWith("global:") && control.day === "client:2024-01-15" && control.roles === "{admin,member,NULL}" && typeof control.span === "object", show(control));
+    await both("pg Client", client);
+    same("pg Client, the app's own query after reylo's", (await client.query(direct, [1])).rows[0], control);
     // A type created after reylo read the catalog: decoded after one lookup of its oid.
     await client.query("create type late as enum ('x', 'y')");
     const late = defineQuery({ dialect: "postgres", sql: "select array['x', 'y']::late[] as lates, 'x'::late as one", params: [], cardinality: "one" });
     same("pg Client: an enum created after the catalog was read", await late.run(client), { lates: ["x", "y"], one: "x" });
-    check("pg Client control: that enum array through the client alone", (await client.query("select array['x', 'y']::late[] as lates")).rows[0].lates === "{x,y}");
     await client.end();
+    const binary = new pg.Client({ connectionString: URL, binary: true });
+    await binary.connect();
+    const refused = await q.run(binary, { id: 1 }).then(() => null, (e) => e);
+    check("pg Client with binary: true is refused", /binary: true/.test(refused?.message), String(refused?.message));
+    await binary.end();
   }
 
-  // pg Pool without a listener (pool.query with types), with a connect listener (a checked-out client), and a PoolClient in a transaction.
+  // pg Pool with a pool table and a connect listener, and a PoolClient in a transaction.
   {
-    const pool = new pg.Pool({ connectionString: URL, max: 2 });
-    control("pg Pool", (await pool.query(direct, [1])).rows[0]);
-    same("pg Pool through run", await q.run(pool, { id: 1 }), declared);
-    control("pg Pool, the user's own query after reylo's", (await pool.query(direct, [1])).rows[0]);
-    const listened = new pg.Pool({ connectionString: URL, max: 2 });
-    listened.on("connect", (c) => c.setTypeParser(1184, (x) => `connect:${x}`));
-    const row = await q.run(listened, { id: 1 });
-    same("pg Pool with a connect listener through run", row, { ...declared, at: row.at });
-    check("pg Pool with a connect listener: the listener's parser applies to reylo's query", String(row.at).startsWith("connect:"), show(row.at));
-    check("pg Pool with a connect listener: the checked-out client went back", listened.idleCount === listened.totalCount, `idle ${listened.idleCount} of ${listened.totalCount}`);
-    // As pool.query does, a failing statement releases the client with its error, which ends it.
+    const pool = new pg.Pool({ connectionString: URL, max: 2, types: { getTypeParser: (oid, format) => (oid === 1114 ? (x) => `pool:${x}` : pg.types.getTypeParser(oid, format)) } });
+    pool.on("connect", (c) => c.setTypeParser(1082, (x) => `connect:${x}`));
+    const control = (await pool.query(direct, [1])).rows[0];
+    check("pg Pool control (no reylo): the pool's and the listener's parsers", control.wall === "pool:2024-01-15 10:30:00.123456" && control.day === "connect:2024-01-15", show(control));
+    await both("pg Pool", pool);
+    // As pool.query does, a failing statement releases the client with its error.
     const failing = defineQuery({ dialect: "postgres", sql: "select 1 / 0 as x", params: [], cardinality: "one" });
-    const error = await failing.run(listened).then(() => null, (e) => e);
-    check("pg Pool with a connect listener: the driver's error comes through, and the client is ended", error?.code === "22012" && listened.totalCount === 0, `${error?.message}; ${listened.totalCount} clients`);
+    const error = await failing.run(pool).then(() => null, (e) => e);
+    check("pg Pool: the driver's error comes through", error?.code === "22012", String(error?.message));
     const tx = await pool.connect();
     await tx.query("begin");
     await tx.query("create type in_tx as enum ('p', 'q')");
-    same("pg PoolClient inside a transaction through run", await q.run(tx, { id: 1 }), declared);
+    await both("pg PoolClient inside a transaction", tx);
     const inTx = defineQuery({ dialect: "postgres", sql: "select array['p']::in_tx[] as v", params: [], cardinality: "one" });
     same("pg PoolClient: an enum created inside the transaction", await inTx.run(tx), { v: ["p"] });
     await tx.query("rollback");
-    control("pg PoolClient, the user's own query after reylo's", (await tx.query(direct, [1])).rows[0]);
+    same("pg PoolClient, the app's own query after reylo's", (await tx.query(direct, [1])).rows[0], control);
     tx.release();
     await pool.end();
-    await listened.end();
   }
 
-  // pg-promise: the database, a task and a transaction.
+  // pg-promise: the database, a task and a transaction; its receive event is refused.
   {
     const pgp = pgPromise();
     const db = pgp(URL);
-    control("pg-promise", await db.one(direct, [1]).catch(() => db.one({ text: direct, values: [1] })));
-    same("pg-promise database through run", await q.run(db, { id: 1 }), declared);
-    pgp.pg.types.setTypeParser(1184, (x) => `pgp-global:${x}`);
-    const row = await db.tx((t) => q.run(t, { id: 1 }));
-    same("pg-promise transaction through run", row, { ...declared, at: row.at });
-    check("pg-promise: a global parser (pgp.pg.types) applies to reylo's query", String(row.at).startsWith("pgp-global:"), show(row.at));
-    pgp.pg.types.setTypeParser(1184, pg.types.getTypeParser(1082));
-    control("pg-promise, the user's own query after reylo's", await db.one({ text: direct, values: [1] }));
+    const control = await db.one({ text: direct, values: [1] });
+    await both("pg-promise database", db);
+    same("pg-promise task through run", await db.task((t) => q.run(t, { id: 1 })), declared);
+    same("pg-promise transaction through run", await db.tx((t) => built.run(t, { id: 1 })), declared);
+    same("pg-promise, the app's own query after reylo's", await db.one({ text: direct, values: [1] }), control);
     pgp.end();
+    const camel = pgPromise({ receive: ({ data }) => data.forEach((r) => ((r.Roles = r.roles), delete r.roles)) });
+    const cdb = camel(URL);
+    const refused = await q.run(cdb, { id: 1 }).then(() => null, (e) => e);
+    check("pg-promise with a receive event is refused", /receive event/.test(refused?.message), String(refused?.message));
+    camel.end();
+  }
+
+  // postgres.js with BigInt and camelCase: .raw() and Reylo's parsers, the module's names.
+  {
+    const sql = postgres(URL, { types: { bigint: postgres.BigInt }, transform: postgres.camel, onnotice: () => {} });
+    const [control] = await sql.unsafe(direct, [1]);
+    check("postgres.js control (no reylo): BigInt, and a NULL element read as the text NULL", control.big === 9007199254740993n && control.roles[2] === "NULL", show(control));
+    await both("postgres.js", sql);
+    same("postgres.js transaction through run", await sql.begin((tx) => built.run(tx, { id: 1 })), declared);
+    same("postgres.js, the app's own query after reylo's", (await sql.unsafe(direct, [1]))[0], control);
+    await sql.end();
   }
 
   // Neon's Pool and Client, through a local stand-in for Neon's WebSocket proxy (as the 2026-10-02 study ran it).
@@ -161,44 +174,34 @@ try {
     neon.neonConfig.pipelineConnect = false;
     neon.neonConfig.webSocketConstructor = globalThis.WebSocket;
     const neonUrl = `postgres://${serverUser || process.env.USER}@${serverHost}:${serverPort || 5432}/porg_decode`;
-    const pool = new neon.Pool({ connectionString: neonUrl });
-    control("Neon Pool", (await pool.query(direct, [1])).rows[0]);
-    same("Neon Pool through run", await q.run(pool, { id: 1 }), declared);
+    // Neon's global table is its own copy of pg-types.
     neon.types.setTypeParser(1184, (x) => `neon-global:${x}`);
-    const row = await q.run(pool, { id: 1 });
-    check("Neon Pool: Neon's global parser (its own pg-types copy) applies to reylo's query", String(row.at).startsWith("neon-global:"), show(row.at));
-    neon.types.setTypeParser(1184, pg.types.getTypeParser(1082));
-    control("Neon Pool, the user's own query after reylo's", (await pool.query(direct, [1])).rows[0]);
+    const pool = new neon.Pool({ connectionString: neonUrl });
+    const control = (await pool.query(direct, [1])).rows[0];
+    check("Neon Pool control (no reylo): Neon's global parser", String(control.at).startsWith("neon-global:"), show(control.at));
+    await both("Neon Pool", pool);
+    same("Neon Pool, the app's own query after reylo's", (await pool.query(direct, [1])).rows[0], control);
     const client = new neon.Client({ connectionString: neonUrl });
     await client.connect();
-    same("Neon Client through run", await q.run(client, { id: 1 }), declared);
+    await both("Neon Client", client);
     await client.end();
     await pool.end();
     wss.close();
   }
 
-  // PGlite: types created after the instance started stay text in its own decoding.
+  // PGlite with the app's parsers on the instance, a later run and a transaction.
   {
-    const lite = await PGlite.create();
+    const lite = await PGlite.create({ parsers: { 20: (x) => BigInt(x), 1184: (x) => `lite:${x}` } });
     await lite.exec(schema);
-    control("PGlite", (await lite.query(direct, [1])).rows[0], { pglite: true });
-    const row = await q.run(lite, { id: 1 });
-    // PGlite's int8 is a number within 2^53 and a BigInt above (reylo declares `number | bigint` for it).
-    same("PGlite through run", row, { ...declared, big: 9007199254740993n });
-    control("PGlite, the user's own query after reylo's", (await lite.query(direct, [1])).rows[0], { pglite: true });
-    // After refreshArrayTypes() PGlite parses the arrays itself, a domain's elements and a composite's as strings.
-    await lite.refreshArrayTypes();
-    const refreshed = (await lite.query(direct, [1])).rows[0];
-    check("PGlite refreshed control (no reylo)", isDeepStrictEqual(refreshed.posints, ["1", "2"]) && Array.isArray(refreshed.pairs), `posints=${show(refreshed.posints)} pairs=${show(refreshed.pairs)}`);
-    same("PGlite refreshed through run", await q.run(lite, { id: 1 }), { ...declared, big: 9007199254740993n });
+    const control = (await lite.query(direct, [1])).rows[0];
+    check("PGlite control (no reylo): the instance's parsers", control.big === 9007199254740993n && String(control.at).startsWith("lite:"), show(control));
+    await both("PGlite", lite);
+    same("PGlite, a later run", await q.run(lite, { id: 1 }), declared);
+    same("PGlite transaction through run", await lite.transaction((tx) => built.run(tx, { id: 1 })), declared);
+    same("PGlite, the app's own query after reylo's", (await lite.query(direct, [1])).rows[0], control);
     await lite.close();
-    const withParsers = await PGlite.create({ parsers: { 1184: (x) => `lite:${x}` } });
-    await withParsers.exec(schema);
-    const own = await q.run(withParsers, { id: 1 });
-    check("PGlite: an instance parser applies to reylo's query", String(own.at).startsWith("lite:"), show(own.at));
-    same("PGlite with instance parsers through run", own, { ...declared, big: 9007199254740993n, at: own.at });
-    await withParsers.close();
   }
+  for (const [oid, parser] of Object.entries(defaults)) pg.types.setTypeParser(Number(oid), parser);
 } finally {
   await admin.query("drop database if exists porg_decode with (force)");
   await admin.end();

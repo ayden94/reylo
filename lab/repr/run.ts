@@ -1,8 +1,9 @@
 import postgres from "postgres";
 import query from "./query.sql";
-// reylo declares what the driver returns and converts nothing, so the driver builds the values
-// `.reylo.yaml` names: Temporal for timestamptz, timestamp and date (and their arrays, which
-// postgres parses element by element), and a BigInt for int8.
+// The app sets up postgres.js to build Temporal values for timestamptz, timestamp and date (and
+// their arrays, which postgres parses element by element) and a BigInt for int8. Its own queries
+// get those; Reylo's gets its one representation, since it reads each value's text itself
+// (`.raw()`) and never the app's parsers.
 const temporal = (oid: number, from: (text: string) => unknown) => ({ to: oid, from: [oid], serialize: String, parse: from });
 const sql = postgres(process.env["DATABASE_URL"] ?? "postgres://localhost:5432/postgres", {
   types: {
@@ -11,12 +12,11 @@ const sql = postgres(process.env["DATABASE_URL"] ?? "postgres://localhost:5432/p
     plainDateTime: temporal(1114, (t) => Temporal.PlainDateTime.from(t.replace(" ", "T"))),
     plainDate: temporal(1082, (t) => Temporal.PlainDate.from(t)),
   },
+  onnotice: () => {},
 });
-const ada = await query.run(sql, { id: 1 });
 const kind = (v: unknown) => (typeof v === "object" && v !== null ? v.constructor.name : typeof v);
-// JSON.stringify has no rule for a BigInt; Temporal values serialize through their toJSON.
-console.log(JSON.stringify({
-  kinds: ada && Object.fromEntries(Object.entries(ada).map(([k, v]) => [k, Array.isArray(v) ? `${kind(v[0])}[]` : kind(v)])),
-  values: ada,
-}, (_, v) => (typeof v === "bigint" ? `${v}n` : v)));
+const kinds = (row: Record<string, unknown> | null | undefined) => row && Object.fromEntries(Object.entries(row).map(([k, v]) => [k, Array.isArray(v) ? `${kind(v[0])}[]` : kind(v)]));
+const reylo = await query.run(sql, { id: 1 });
+const [app] = await sql.unsafe(query.sql.replace(":id", "$1"), [1]);
+console.log(JSON.stringify({ reylo: kinds(reylo), app: kinds(app), values: reylo }));
 await sql.end();
