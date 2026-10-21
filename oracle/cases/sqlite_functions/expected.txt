@@ -1,4 +1,4 @@
-aggregates.sql: one () -> { n: integer, e: integer, names: text?, t: real, m: real?, first: text?, mean: real? }
+aggregates.sql: one () -> { n: integer, e: integer, names: text?, t: real?, m: real?, first: text?, mean: real? }
 dates.sql: one () -> { d: text, y: text, u: integer, jd: real, zero: text }
 json.sql: many () -> { a: unknown?, l: integer?, v: integer?, o: text, items: integer }
 math_missing.sql: many () -> {  } !! reylo6: no such function: acos on this database's SQLite

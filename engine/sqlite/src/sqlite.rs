@@ -823,7 +823,7 @@ impl Analyzer<'_> {
                 "like" | "glob" | "regexp" | "match" => self.extras.function(n.name.as_deref().unwrap_or(""), n.args.len()).is_none(),
                 "likely" | "unlikely" | "likelihood" => n.args.first().is_some_and(|a| self.truth(a, scope, declared)),
                 "coalesce" | "ifnull" => every(&mut n.args.iter()),
-                "iif" | "if" => every(&mut n.args.iter().skip(1)),
+                "iif" | "if" => every(&mut iif_values(n.args.len()).into_iter().filter_map(|i| n.args.get(i))),
                 _ => false,
             },
             // `list` alternates WHEN and THEN; an odd tail is the ELSE.
@@ -1000,7 +1000,7 @@ impl Analyzer<'_> {
                 "row_number" | "rank" | "dense_rank" | "ntile" => done("integer", Nulls::Never),
                 "percent_rank" | "cume_dist" => done("real", Nulls::Never),
                 "count" => done("integer", Nulls::Never),
-                "total" => done("real", Nulls::Never),
+                "total" => done("real", total_nulls(&first)),
                 "sum" => typed(if is_numeric(&first.ty) { first.ty.clone() } else { Type::Scalar { name: "real".into() } }, Nulls::Always),
                 "avg" => done("real", Nulls::Always),
                 "min" | "max" | "lag" | "lead" | "first_value" | "last_value" | "nth_value" => typed(first.ty.clone(), Nulls::Always),
@@ -1012,30 +1012,42 @@ impl Analyzer<'_> {
             // Under a plain GROUP BY every group has a row, so an aggregate that is NULL only
             // over no rows or only NULLs follows its argument. (A FILTER makes the call a window
             // call in SQLite's tree, and is read above.) `sum` stays nullable: a sum of `1e999`
-            // and `-1e999` is NaN, which SQLite stores as NULL.
+            // and `-1e999` is NaN, which SQLite stores as NULL, and so is a `total` of them.
             let grouped = self.level.borrow().grouped;
             return match name {
                 "count" => done("integer", Nulls::Never),
-                "total" => done("real", Nulls::Never),
+                "total" => done("real", total_nulls(&first)),
                 "sum" => typed(if is_numeric(&first.ty) { first.ty.clone() } else { Type::Scalar { name: "real".into() } }, Nulls::Always),
                 "avg" => done("real", Nulls::Always),
                 "min" | "max" => typed(first.ty.clone(), if grouped { Nulls::IfArgs } else { Nulls::Always }),
                 "group_concat" | "string_agg" => done("text", if grouped { Nulls::IfArgs } else { Nulls::Always }),
-                "json_group_array" | "jsonb_group_array" | "json_group_object" | "jsonb_group_object" => done("text", Nulls::Never),
+                "json_group_array" | "json_group_object" => done("text", Nulls::Never),
+                "jsonb_group_array" | "jsonb_group_object" => done("blob", Nulls::Never),
                 _ => Fact::unknown(),
             };
         }
+        // A number for SQLite's math functions: a value of INTEGER or REAL type. Any other gives
+        // NULL, text that reads as no number included (`sqrt('abc')`, `sign('')`).
+        let numbers = all_non_null && args.iter().all(|a| matches!(scalar_name(&a.ty), Some("integer" | "real")));
         match name {
             "coalesce" | "ifnull" => Fact { ty: shared(&args.iter().collect::<Vec<_>>()), non_null: args.iter().any(|a| a.non_null) },
             "nullif" => Fact { ty: first.ty.clone(), non_null: false },
+            // `iif(c1, v1, c2, v2, …, else)`: NULL where no condition holds and there is no ELSE,
+            // an even count of arguments.
             "iif" | "if" => {
-                let arms: Vec<&Fact> = args.iter().skip(1).collect();
-                Fact { ty: shared(&arms), non_null: arms.len() >= 2 && arms.iter().all(|a| a.non_null) }
+                let arms: Vec<&Fact> = iif_values(args.len()).into_iter().filter_map(|i| args.get(i)).collect();
+                Fact { ty: shared(&arms), non_null: args.len() >= 3 && args.len() % 2 == 1 && arms.iter().all(|a| a.non_null) }
             }
             "min" | "max" => Fact { ty: shared(&args.iter().collect::<Vec<_>>()), non_null: all_non_null },
+            // `abs` of the least integer is an error, not NULL; of text, 0.0.
             "abs" => typed(if is_numeric(&first.ty) { first.ty.clone() } else { Type::Scalar { name: "real".into() } }, Nulls::IfArgs),
-            "round" | "julianday" | "timediff_seconds" => done("real", Nulls::IfArgs),
-            "length" | "instr" | "unixepoch" | "json_array_length" | "json_valid" | "octet_length" | "sign" => done("integer", Nulls::IfArgs),
+            "round" => done("real", Nulls::IfArgs),
+            "length" | "instr" | "json_valid" | "octet_length" => done("integer", Nulls::IfArgs),
+            // A path that finds nothing is NULL: `json_array_length('{}', '$.a')`, `json_type('{}', '$.a')`.
+            "json_array_length" => done("integer", if args.len() == 1 { Nulls::IfArgs } else { Nulls::Always }),
+            "json_type" => done("text", if args.len() == 1 { Nulls::IfArgs } else { Nulls::Always }),
+            // `json_remove(j, '$')` is NULL, and so is a NULL path; with no path it is `json(j)`.
+            "json_remove" => done("text", if args.len() == 1 { Nulls::IfArgs } else { Nulls::Always }),
             // `unicode('')` is NULL: an empty string has no first character.
             "unicode" => done("integer", Nulls::Always),
             "like" | "glob" | "regexp" | "match" | "likely" | "unlikely" | "likelihood" => {
@@ -1045,17 +1057,48 @@ impl Analyzer<'_> {
             // NULL separator.
             "concat" => done("text", Nulls::Never),
             "concat_ws" => Fact::new("text", first.non_null),
-            "upper" | "lower" | "trim" | "ltrim" | "rtrim" | "substr" | "substring" | "replace" | "char" | "printf" | "format"
-            | "date" | "time" | "datetime" | "strftime" | "timediff" | "json" | "jsonb" | "json_array" | "json_object" | "json_insert" | "json_replace" | "json_set"
-            | "json_remove" | "json_patch" | "json_quote" | "json_pretty" | "json_type" => done("text", Nulls::IfArgs),
+            // A blob's slice is a blob, and the slice of an empty blob is NULL (`substr(x'', 1)`):
+            // non-null only over text. A parameter there is typed text ([`Analyzer::argument`]).
+            "substr" | "substring" => {
+                let blob = matches!(scalar_name(&first.ty), Some("blob"));
+                let any = matches!(first.ty, Type::Unknown) && n.args.first().is_some_and(|a| a.op != "variable");
+                let ty = if blob { first.ty.clone() } else if any { Type::Unknown } else { Type::Scalar { name: "text".into() } };
+                Fact { ty, non_null: all_non_null && !blob && !any }
+            }
+            // NULL where it writes nothing, as for an empty format or one that stops at a
+            // conversion SQLite does not know (`printf('%T')`).
+            "printf" | "format" => Fact::new("text", n.args.first().and_then(literal_text).is_some_and(printf_writes)),
+            "upper" | "lower" | "trim" | "ltrim" | "rtrim" | "replace" | "json" | "json_patch" | "json_pretty" => done("text", Nulls::IfArgs),
+            // A NULL argument is a JSON null or the code point 0; a NULL path changes nothing.
+            "char" | "json_array" | "json_object" | "json_quote" => done("text", Nulls::Never),
+            "json_insert" | "json_replace" | "json_set" => Fact::new("text", first.non_null),
+            "jsonb" => done("blob", Nulls::IfArgs),
+            // The date and time functions are NULL for a time value they cannot read and for a
+            // modifier that fails, so they are non-null only for the current time with modifiers
+            // that cannot fail on it (`date()`, `datetime('now', 'localtime')`).
+            "date" | "time" | "datetime" => Fact::new("text", current_time(&n.args)),
+            "julianday" => Fact::new("real", current_time(&n.args)),
+            // `unixepoch(…, 'subsec')` is a real.
+            "unixepoch" => {
+                let whole = n.args.iter().skip(1).all(|m| literal_text(m).is_some_and(|m| !matches!(m.to_ascii_lowercase().as_str(), "subsec" | "subsecond")));
+                Fact::new(if whole { "integer" } else { "real" }, current_time(&n.args))
+            }
+            // A conversion it does not know makes `strftime` NULL (`strftime('%Q')`).
+            "strftime" => Fact::new("text", n.args.first().and_then(literal_text).is_some_and(strftime_format) && current_time(n.args.get(1..).unwrap_or_default())),
+            "timediff" => Fact::new("text", n.args.len() == 2 && current_time(&n.args[..1]) && current_time(&n.args[1..])),
             // `soundex(NULL)` is '?000'.
             "hex" | "quote" | "typeof" | "soundex" => done("text", Nulls::Never),
             "sqlite_version" | "sqlite_source_id" | "current_date" | "current_time" | "current_timestamp" => done("text", Nulls::Never),
             "random" | "last_insert_rowid" | "changes" | "total_changes" => done("integer", Nulls::Never),
             "randomblob" | "zeroblob" => done("blob", Nulls::IfArgs),
             "json_extract" | "jsonb_extract" | "->" | "->>" => Fact::unknown(),
-            "acos" | "acosh" | "asin" | "asinh" | "atan" | "atan2" | "atanh" | "ceil" | "ceiling" | "cos" | "cosh" | "degrees" | "exp" | "floor" | "ln" | "log"
-            | "log10" | "log2" | "mod" | "pow" | "power" | "radians" | "sin" | "sinh" | "sqrt" | "tan" | "tanh" | "trunc" => done("real", Nulls::IfArgs),
+            // Defined on every number, infinities included: NULL only for an argument that is no
+            // number.
+            "atan" | "atan2" | "asinh" | "sinh" | "cosh" | "tanh" | "exp" | "degrees" | "radians" | "ceil" | "ceiling" | "floor" | "trunc" => Fact::new("real", numbers),
+            "sign" => Fact::new("integer", numbers),
+            // NULL outside their domain (`sqrt(-1)`, `ln(0)`, `acos(2)`, `mod(1, 0)`,
+            // `pow(-1, 0.5)`) and for an infinite argument (`sin(1e999)`).
+            "acos" | "acosh" | "asin" | "atanh" | "cos" | "sin" | "tan" | "ln" | "log" | "log10" | "log2" | "mod" | "pow" | "power" | "sqrt" => done("real", Nulls::Always),
             "pi" => done("real", Nulls::Never),
             _ => Fact::unknown(),
         }
@@ -1313,7 +1356,7 @@ impl Analyzer<'_> {
                 // type, or failing that the type the call stands in (`name = coalesce(:a, :b)`).
                 "function" => match (slot, self.argument(n, i_of(slot), scope)) {
                     (Slot::Arg(_), Ctx::Typed(None) | Ctx::None) if matches!(n.name.as_deref(), Some("coalesce" | "ifnull" | "nullif" | "min" | "max")) && !n.agg => outer_type(&ctx),
-                    (Slot::Arg(i), Ctx::Typed(None) | Ctx::None) if i > 0 && matches!(n.name.as_deref(), Some("iif" | "if")) => outer_type(&ctx),
+                    (Slot::Arg(i), Ctx::Typed(None) | Ctx::None) if matches!(n.name.as_deref(), Some("iif" | "if")) && iif_values(n.args.len()).contains(&i) => outer_type(&ctx),
                     (Slot::Arg(_), c) => c,
                     _ => Ctx::None,
                 },
@@ -1406,8 +1449,16 @@ impl Analyzer<'_> {
             "abs" | "round" | "acos" | "acosh" | "asin" | "asinh" | "atan" | "atan2" | "atanh" | "ceil" | "ceiling" | "cos" | "cosh" | "degrees" | "exp"
             | "floor" | "ln" | "log" | "log10" | "log2" | "mod" | "pow" | "power" | "radians" | "sin" | "sinh" | "sqrt" | "tan" | "tanh" | "trunc" => real(),
             "coalesce" | "ifnull" | "nullif" | "min" | "max" => others(),
+            // A condition is a truth value; a value shares the other values' type.
             "iif" | "if" => {
-                if i == 0 { Ctx::Bool } else { others() }
+                let values = iif_values(n.args.len());
+                if !values.contains(&i) {
+                    Ctx::Bool
+                } else {
+                    let facts: Vec<Fact> = values.iter().filter(|j| **j != i).filter_map(|j| n.args.get(*j)).map(|a| self.type_of(a, scope)).collect();
+                    let ty = shared(&facts.iter().collect::<Vec<_>>());
+                    Ctx::Typed(if matches!(ty, Type::Unknown) { None } else { Some(Fact { ty, non_null: true }) })
+                }
             }
             "sum" | "avg" | "total" => real(),
             _ => Ctx::None,
@@ -1752,6 +1803,192 @@ fn column_of(n: &Node) -> Option<&Node> {
     }
 }
 
+/// A string literal's text.
+fn literal_text(n: &Node) -> Option<&str> {
+    if n.op == "string" { n.value.as_deref() } else { None }
+}
+
+/// The arguments of `iif(c1, v1, c2, v2, …, else)` that are its values: each one after a
+/// condition, and the last of an odd count, the ELSE.
+fn iif_values(count: usize) -> Vec<usize> {
+    let mut out: Vec<usize> = (1..count).step_by(2).collect();
+    if count >= 3 && count % 2 == 1 {
+        out.push(count - 1);
+    }
+    out
+}
+
+/// When `total` is NULL: never over integers, but over reals a `1e999` and a `-1e999` add up to
+/// NaN, which SQLite gives as NULL.
+fn total_nulls(arg: &Fact) -> Nulls {
+    if matches!(scalar_name(&arg.ty), Some("integer")) { Nulls::Never } else { Nulls::Always }
+}
+
+/// Whether a date and time function always reads its time value and modifiers. SQLite gives NULL
+/// for a time value it cannot read (`date('not a date')`), one outside the julian days 0 to
+/// 5373484 it reads (`date(-1)`, `datetime(1e18, 'unixepoch')`), and a modifier that fails
+/// (`'weekday 7'`, `'unixepoch'` after a text value) or moves the time out of that range. So this
+/// holds only for no time value (the current time), the current time (`'now'` in any case, or
+/// `current_timestamp`, `current_date` or `current_time`) moved less than a thousand years, or a
+/// number literal (a julian day, or a unix time read by a first `'unixepoch'`) whose modifiers
+/// keep it in range; and only for literal modifiers that cannot fail on it.
+fn current_time(args: &[Node]) -> bool {
+    let Some((value, modifiers)) = args.split_first() else { return true };
+    let now = literal_text(value).is_some_and(|v| v.eq_ignore_ascii_case("now"))
+        || (value.op == "function" && value.args.is_empty() && matches!(value.name.as_deref(), Some("current_timestamp" | "current_date" | "current_time")));
+    let number = if matches!(value.op.as_str(), "integer" | "float") { value.value.as_deref().and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite()) } else { None };
+    let mut modifiers = modifiers.iter().map(literal_text).peekable();
+    let julian_day = match number {
+        Some(v) if modifiers.peek().is_some_and(|m| m.is_some_and(|m| m.eq_ignore_ascii_case("unixepoch"))) => {
+            modifiers.next();
+            v / 86_400.0 + 2_440_587.5
+        }
+        Some(v) => v,
+        None if now => 0.0,
+        None => return false,
+    };
+    // The days the modifiers may move the time by, each at most.
+    let mut days = 0.0;
+    for m in modifiers {
+        let Some(m) = m else { return false };
+        let m = m.to_ascii_lowercase();
+        days += match m.as_str() {
+            "subsec" | "subsecond" => 0.0,
+            "localtime" | "utc" | "ceiling" | "floor" => 1.0,
+            "start of day" | "start of month" | "start of year" => 366.0,
+            _ if m.len() == 9 && m.starts_with("weekday ") && matches!(m.as_bytes()[8], b'0'..=b'6') => 7.0,
+            _ => match shift_days(&m) {
+                Some(d) => d,
+                None => return false,
+            },
+        };
+    }
+    if now {
+        days < 365_000.0
+    } else {
+        // With a margin for the rounding of months and years.
+        let margin = if days > 0.0 { days + 400.0 } else { 0.0 };
+        julian_day - margin >= 0.0 && julian_day + margin < 5_373_484.0
+    }
+}
+
+/// How far a modifier `±N unit` (`'+7 days'`, `'-1.5 hours'`) moves a time, in days at most, as
+/// SQLite spells one: a number, spaces, and a unit, with or without its plural `s`.
+fn shift_days(m: &str) -> Option<f64> {
+    let (number, unit) = m.split_once(' ')?;
+    let unit = unit.trim_start_matches(' ');
+    let unit = unit.strip_suffix('s').unwrap_or(unit);
+    let days = match unit {
+        "second" => 1.0 / 86_400.0,
+        "minute" => 1.0 / 1_440.0,
+        "hour" => 1.0 / 24.0,
+        "day" => 1.0,
+        "month" => 31.0,
+        "year" => 366.0,
+        _ => return None,
+    };
+    let digits = number.strip_prefix(['+', '-']).unwrap_or(number);
+    let (whole, fraction) = digits.split_once('.').unwrap_or((digits, "0"));
+    let all_digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    if !all_digits(whole) || !all_digits(fraction) {
+        return None;
+    }
+    Some(digits.parse::<f64>().ok()? * days)
+}
+
+/// Whether `printf` with this format writes a character whatever its arguments are. SQLite gives
+/// NULL where it wrote none, as for an empty format, and stops at a conversion it does not know
+/// (`printf('%T')` is NULL, `printf('a%T')` is 'a'), so a character of the format itself or a `%%`
+/// must come before any such conversion. The directive is read as SQLite's `sqlite3_str_vappendf`
+/// reads it: flags, a width, a precision and a length, in that loop's order.
+fn printf_writes(format: &str) -> bool {
+    let b = format.as_bytes();
+    let at = |i: usize| b.get(i).copied().unwrap_or(0);
+    let mut i = 0;
+    loop {
+        match at(i) {
+            0 => return false,
+            b'%' => {}
+            _ => return true,
+        }
+        i += 1;
+        // A `%` that ends the format is written as it is.
+        if at(i) == 0 {
+            return true;
+        }
+        let mut c = at(i);
+        loop {
+            match c {
+                b'-' | b'+' | b' ' | b'#' | b'!' | b'0' | b',' => {}
+                b'l' => {
+                    i += 1;
+                    if at(i) == b'l' {
+                        i += 1;
+                    }
+                    c = at(i);
+                    break;
+                }
+                b'1'..=b'9' => {
+                    while at(i + 1).is_ascii_digit() {
+                        i += 1;
+                    }
+                    if !matches!(at(i + 1), b'.' | b'l') {
+                        i += 1;
+                        c = at(i);
+                        break;
+                    }
+                }
+                b'*' => {
+                    if !matches!(at(i + 1), b'.' | b'l') {
+                        i += 1;
+                        c = at(i);
+                        break;
+                    }
+                }
+                b'.' => {
+                    i += 1;
+                    if at(i) == b'*' {
+                        i += 1;
+                    } else {
+                        while at(i).is_ascii_digit() {
+                            i += 1;
+                        }
+                    }
+                    if at(i) != b'l' {
+                        c = at(i);
+                        break;
+                    }
+                    i -= 1;
+                }
+                _ => break,
+            }
+            i += 1;
+            c = at(i);
+            if c == 0 {
+                break;
+            }
+        }
+        match c {
+            b'%' => return true,
+            // `T` and `S` are SQLite's own, which a SQL call cannot use: it stops there.
+            b's' | b'E' | b'u' | b'G' | b'w' | b'x' | b'c' | b'z' | b'd' | b'e' | b'f' | b'g' | b'Q' | b'i' | b'X' | b'n' | b'o' | b'p' | b'q' | b'r' => i += 1,
+            _ => return false,
+        }
+    }
+}
+
+/// Whether every conversion of a `strftime` format is one SQLite knows; any other makes it NULL,
+/// as does a `%` that ends the format.
+fn strftime_format(format: &str) -> bool {
+    let mut bytes = format.bytes();
+    while let Some(b) = bytes.next() {
+        if b == b'%' && !bytes.next().is_some_and(|c| b"deFfGgHkIljJmMpPRsSTuwUVWY%".contains(&c)) {
+            return false;
+        }
+    }
+    true
+}
+
 /// SQLite's built-in scalar functions the engine's table reads, by name.
 const KNOWN_FUNCTIONS: &[&str] = &[
     "coalesce", "ifnull", "nullif", "iif", "if", "min", "max", "abs", "round", "length", "instr", "unicode", "json_array_length", "json_valid", "octet_length", "sign",
@@ -1953,6 +2190,98 @@ mod tests {
     fn param(a: &Analysis, name: &str) -> String {
         let p = a.params.iter().find(|p| p.name == name).unwrap_or_else(|| panic!("no param {name}"));
         scalar_name(&p.ty).unwrap_or("unknown").to_string()
+    }
+
+    #[test]
+    fn a_built_in_is_non_null_only_where_sqlite_never_answers_null_for_non_null_arguments() {
+        // Every argument below is non-null; each NULL noted is what SQLite 3.53 answers.
+        let ddl = vec![
+            "create table o (id integer primary key, placed_at text not null, x real not null, n integer not null, b blob not null, v any not null, doc text not null, fmt text not null) strict".to_string(),
+            "create table loose (id integer primary key, num numeric not null)".to_string(),
+        ];
+        let typed = |expr: &str| {
+            let a = analyze_ddl(&format!("select {expr} as v from o, loose"), &ddl, &Extras::default()).analysis;
+            assert!(a.diagnostics.is_empty(), "{expr}: {:?}", a.diagnostics);
+            col(&a, "v")
+        };
+        let nullable = |expr: &str| typed(expr).1;
+        // A time value SQLite cannot read, a number outside its range, a modifier that fails.
+        for expr in [
+            "date(placed_at)", "time(placed_at)", "datetime(placed_at)", "julianday(placed_at)", "unixepoch(placed_at)", "strftime('%Y', placed_at)",
+            "date(placed_at, '+1 day')", "timediff(placed_at, 'now')", "date(n)", "date(x, 'unixepoch')", "date('2024-01-01')", "date(:d)",
+            "date('now', 'weekday 7')", "date('now', 'unixepoch')", "date('now', 'julianday')", "date('now', '+8000 years')", "date('now', '+1 day ')",
+            "date('now', '+600 years', '+600 years')", "date('now', fmt)", "date('now ')", "strftime('%Q', 'now')", "strftime('%Y%')", "strftime(fmt)",
+            "date(5373485)", "datetime(1e18, 'unixepoch')", "date(0, '-1 day')", "date(1700000000, 'unixepoch', 'unixepoch')", "date(1, 'auto')", "date(-1)",
+        ] {
+            assert!(nullable(expr), "{expr}");
+        }
+        // The current time with modifiers that cannot fail on it.
+        for expr in [
+            "date()", "time()", "datetime()", "julianday()", "unixepoch()", "date('now')", "date('NOW')", "datetime('now', 'localtime')", "datetime('now', 'utc')",
+            "date('now', 'start of month', '+1 month', '-1 day')", "date('now', 'weekday 0')", "datetime('now', '-7 days', '+1.5 hours', '+30 MINUTES')",
+            "date('now', 'subsec')", "strftime('%Y-%m-%d %H:%M:%f %% %j', 'now')", "strftime('%s')", "strftime('')", "timediff('now', 'now')",
+            "strftime('%Y', current_timestamp)", "date(current_date, '+1 month')", "datetime(0, 'unixepoch')", "date(2460000.5)", "date(1700000000, 'unixepoch', 'start of day', '+1 day')",
+        ] {
+            assert!(!nullable(expr), "{expr}");
+        }
+        assert_eq!(typed("unixepoch()"), ("integer".into(), false));
+        assert_eq!(typed("unixepoch('now', 'subsec')"), ("real".into(), false));
+        assert_eq!(typed("unixepoch('now', fmt)"), ("real".into(), true));
+        // Outside a function's domain (`sqrt(-1)`, `ln(0)`, `acos(2)`, `mod(1, 0)`, `pow(-1, 0.5)`)
+        // or at an infinity (`sin(1e999)`).
+        for f in ["acos(x)", "acosh(x)", "asin(x)", "atanh(x)", "cos(x)", "sin(x)", "tan(x)", "ln(x)", "log(x)", "log(2, x)", "log10(x)", "log2(x)", "mod(n, x)", "pow(x, 0.5)", "power(x, n)", "sqrt(x)", "sqrt(4)"] {
+            assert_eq!(typed(f), ("real".into(), true), "{f}");
+        }
+        // Defined on every number; NULL for an argument that is no number (`sign('')`).
+        for f in ["atan(x)", "atan2(x, n)", "asinh(x)", "sinh(x)", "cosh(n)", "tanh(x)", "exp(x)", "degrees(x)", "radians(n)", "ceil(x)", "ceiling(x)", "floor(n)", "trunc(x)", "pi()"] {
+            assert_eq!(typed(f), ("real".into(), false), "{f}");
+        }
+        assert_eq!(typed("sign(x)"), ("integer".into(), false));
+        for f in ["sign(placed_at)", "sign(v)", "sign(num)", "ceil(placed_at)", "floor(b)", "exp(v)", "atan2(x, placed_at)", "sinh(num)"] {
+            assert!(nullable(f), "{f}");
+        }
+        // An empty format, or one that stops at a conversion SQLite does not know (`printf('%T')`).
+        for f in ["printf(fmt, n)", "printf('', n)", "printf('%T')", "printf('%s', placed_at)", "format('%d%d', n, n)", "printf('%T x')", "printf('%5-dx', n)", "printf('%ls', n)", "printf('%.*s', n, placed_at)", "printf('%-')"] {
+            assert!(nullable(f), "{f}");
+        }
+        for f in ["printf('x%s', null)", "format('-%d', n)", "printf('%%')", "printf('%')", "printf('%s-%d', placed_at, n)", "printf('%5.2f%%', x)", "printf('%-10s|', placed_at)", "printf('%lld:', n)", "printf('%*.*s.', n, n, placed_at)", "printf('a%T')"] {
+            assert!(!nullable(f), "{f}");
+        }
+        // The slice of an empty blob is NULL, and of any blob a blob.
+        assert_eq!(typed("substr(placed_at, 2)"), ("text".into(), false));
+        assert_eq!(typed("substr(n, 2, 1)"), ("text".into(), false));
+        assert_eq!(typed("substr(:s, 2)"), ("text".into(), false));
+        assert_eq!(typed("substr(b, 2)"), ("blob".into(), true));
+        assert_eq!(typed("substring(v, 1, 2)"), ("unknown".into(), true));
+        // A path that finds nothing, and `json_remove(j, '$')`.
+        for f in ["json_type(doc, '$.a')", "json_array_length(doc, '$.a')", "json_remove(doc, '$')", "json_remove(doc, '$.a')"] {
+            assert!(nullable(f), "{f}");
+        }
+        for f in ["json_type(doc)", "json_array_length(doc)", "json_remove(doc)", "json(doc)", "json_set(doc, '$.a', null)", "json_patch(doc, doc)", "json_valid(doc)"] {
+            assert!(!nullable(f), "{f}");
+        }
+        assert_eq!(typed("jsonb(doc)"), ("blob".into(), false));
+        assert_eq!(typed("(select jsonb_group_array(id) from o)"), ("blob".into(), false));
+        // `iif` with an even count of arguments has no ELSE: NULL where no condition holds.
+        assert_eq!(typed("iif(n > 0, placed_at)"), ("text".into(), true));
+        assert_eq!(typed("iif(n > 0, placed_at, n > 1, doc)"), ("text".into(), true));
+        assert_eq!(typed("iif(n > 0, placed_at, n > 1, doc, fmt)"), ("text".into(), false));
+        assert_eq!(typed("if(n > 0, x, n > 1, x, 1.5)"), ("real".into(), false));
+        // A condition takes a truth value, which SQLite reads as an integer; a value the other values' type.
+        assert_eq!(param(&analyze_ddl("select id from o where x = iif(n > 0, 1.5, :c, 2.5, :e)", &ddl, &Extras::default()).analysis, "c"), "integer");
+        assert_eq!(param(&analyze_ddl("select id from o where x = iif(n > 0, 1.5, :c, 2.5, :e)", &ddl, &Extras::default()).analysis, "e"), "real");
+        // `total` of a `1e999` and a `-1e999` is NaN, which SQLite gives as NULL; of integers never.
+        assert_eq!(typed("(select total(x) from o)"), ("real".into(), true));
+        assert_eq!(typed("(select total(n) from o)"), ("real".into(), false));
+        assert_eq!(typed("total(x) over ()"), ("real".into(), true));
+        // What never gives NULL for non-null arguments.
+        for f in [
+            "abs(x)", "round(x, 2)", "length(b)", "instr(placed_at, '')", "octet_length(b)", "upper(b)", "lower(placed_at)", "trim(placed_at, '')", "replace(placed_at, '', 'x')",
+            "char(n)", "hex(b)", "quote(v)", "typeof(v)", "concat(placed_at, null)", "like(placed_at, 'a%')", "glob('*', placed_at)", "json_array(n)", "json_object('a', n)", "json_quote(v)",
+        ] {
+            assert!(!nullable(f), "{f}");
+        }
+        assert!(nullable("unicode(placed_at)"));
     }
 
     #[test]
