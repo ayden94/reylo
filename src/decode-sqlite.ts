@@ -4,7 +4,7 @@
 // rounded past 2^53, an error, a BigInt, or libSQL's string) and a BLOB (a Buffer, a Uint8Array, an
 // ArrayBuffer or D1's array of numbers). And only the analysis knows that a TEXT holds JSON or that
 // an INTEGER is a truth value. So Reylo normalizes the driver's rows, by each column's kind where the
-// module carries it (docs/driver-decoding/spike/sqlite.md):
+// module carries it (wiki/driver-decoding/spike/sqlite.md):
 //
 // - better-sqlite3, node:sqlite and bun:sqlite: Reylo prepares its own statement on the app's
 //   database, once per database and text (a WeakMap keyed by the database), and sets that

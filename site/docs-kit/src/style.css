@@ -24,7 +24,7 @@
    the bar under an h3 and the selection. Inline code and the table of contents' code chips are a
    wash of the text's own grey (`--dk-code-tint`), and the washes are variables too, for a palette
    that wants them lighter or stronger. Everything else here is the maintainer's rules for the docs
-   sites, from the reviews of Reylo's site (Reylo's docs/docs-site.md): the layout follows zod.dev
+   sites, from the reviews of Reylo's site (Reylo's wiki/docs-site.md): the layout follows zod.dev
    (ruled h1 and h2, borderless inline code, mono tab labels), with a reading measure, quiet
    collapsibles, code that never scrolls sideways and one cursor per kind of thing. */
 

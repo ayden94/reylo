@@ -140,7 +140,7 @@ const timestamp: Decoder = (x) => x.replace(" ", "T");
 // timestamptz in DateStyle ISO: `2026-10-20 03:03:00.123456-07`, offsets with seconds before
 // standard time (`-07:52:58`), years past 9999, ` BC`. `new Date(text)`, which postgres.js and
 // PGlite use, returns Invalid Date for the last three and reads year 0001 as 2001
-// (docs/driver-decoding/spike/postgres.md); and a Date holds milliseconds, not the server's
+// (wiki/driver-decoding/spike/postgres.md); and a Date holds milliseconds, not the server's
 // microseconds. So Reylo moves the wall-clock time to UTC itself, in whole seconds on a day count,
 // and keeps the fraction as the server wrote it.
 const TSTZ = /^(\d{4,})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d)(\.\d{1,6})?([+-])(\d\d)(?::(\d\d))?(?::(\d\d))?( BC)?$/;
@@ -313,7 +313,7 @@ export function textDecoder(kind: Kind, delim = ","): Decoder {
 // The value of each kind from whatever a driver decoded it to: for the drivers that take no
 // decoder (Bun.sql; the SQLite drivers, whose JSON is text and whose truth values are integers),
 // and for the rare value a driver decoded before Reylo could name its type. Each converts the
-// forms a driver is measured to give (docs/driver-decoding/spike/) and leaves a value already in
+// forms a driver is measured to give (wiki/driver-decoding/spike/) and leaves a value already in
 // Reylo's form as it is.
 
 /** Why a value cannot be given its kind: Reylo's error, naming the column. */

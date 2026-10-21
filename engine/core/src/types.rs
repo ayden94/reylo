@@ -16,7 +16,7 @@ pub enum Type {
     Enum { name: String, labels: Vec<String> },
     /// A Postgres array of the element type. Any array may hold NULL elements, whatever a
     /// column's `NOT NULL`, yet an array is typed `T[]` all the same, as the maintainer decided on
-    /// 2026-10-03 (`docs/driver-decoding.md`). Only an array the statement builds says more
+    /// 2026-10-03 (`wiki/driver-decoding.md`). Only an array the statement builds says more
     /// (`reylo_engine_postgres::types::DescribedColumn::nullable_items`): `Some(true)` when an element may be NULL, as
     /// `array_agg(u.email)` over a LEFT JOIN gives `{NULL}` for a team with no users, which
     /// renders `(T | null)[]`; `Some(false)` when every element is proven non-null.

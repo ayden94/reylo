@@ -1,6 +1,6 @@
 //! Structured parameters: a named parameter cast to `rows(…)` or `row(…)`, whose column list
 //! names each key the caller passes, its database type, and whether it may be null or left out
-//! (docs/structured-params.md, decided with the maintainer on 2026-10-20). The caller passes one
+//! (wiki/structured-params.md, decided with the maintainer on 2026-10-20). The caller passes one
 //! JSON value, an array of objects for `rows` and one object for `row`, and the statement reads it
 //! as a table:
 //!
@@ -15,12 +15,12 @@
 //! What it writes depends on where the parameter stands (the maintainer, 2026-10-20: "Yes,
 //! depending on position"):
 //! - right after `INTO <table>`, the insert's column list and a query over the rows, in the
-//!   array's order (`docs/bulk-insert.md`, Order);
+//!   array's order (`wiki/bulk-insert.md`, Order);
 //! - anywhere else, a table, named by the alias written after it or else by the parameter.
 //!
 //! Each dialect reads the JSON with its own reader: `jsonb_to_record` on Postgres, `json_each` on
 //! SQLite, `JSON_TABLE` with `ERROR ON ERROR` on every column on MySQL (which otherwise turns a
-//! value it cannot read into NULL without a warning; `docs/structured-params/verify.md`).
+//! value it cannot read into NULL without a warning; `wiki/structured-params/verify.md`).
 //!
 //! The column list is written bare in the cast's parentheses (the maintainer, 2026-10-20: "Bare in
 //! the parentheses"). A member is `name[?] type [not null]`: `?` lets the caller leave a `not null` key out so that the column's default
@@ -108,7 +108,7 @@ pub struct PlainCast {
     pub around: Option<(String, String)>,
 }
 
-/// A typed JSON parameter, `:p::jsonb('…')` or `:p::json('…')` (docs/typed-json-params.md): its
+/// A typed JSON parameter, `:p::jsonb('…')` or `:p::json('…')` (wiki/typed-json-params.md): its
 /// JSON Schema, and where the schema's string is written.
 #[derive(Debug, Clone, PartialEq)]
 pub struct JsonCast {
@@ -813,7 +813,7 @@ impl Writer {
 
 /// Whether a member holds binary data, which the JSON carries as hexadecimal text and the reader
 /// decodes with `unhex()`, as a binary value travels in a text form the statement decodes
-/// (docs/typed-json-params.md). Postgres's reader takes `bytea` from its own `\x` text as it is.
+/// (wiki/typed-json-params.md). Postgres's reader takes `bytea` from its own `\x` text as it is.
 fn binary(m: &Member, dialect: Dialect) -> bool {
     match dialect {
         Dialect::Postgres => false,
@@ -846,7 +846,7 @@ fn not_null_filter(ms: &[Member], table: &str, dialect: Dialect) -> String {
 /// What the expansion writes for `found`, standing where the author put it.
 pub fn lower(found: &Found, dialect: Dialect, placeholder: &str) -> Lowered {
     // A typed JSON parameter is the dialect's JSON parameter, its schema left out: Postgres
-    // receives `$1::jsonb`, MySQL `cast(? as json)` and SQLite `?` (docs/typed-json-params.md).
+    // receives `$1::jsonb`, MySQL `cast(? as json)` and SQLite `?` (wiki/typed-json-params.md).
     if let Some(cast) = &found.plain {
         let (before, after) = cast.around.clone().unwrap_or_default();
         return Lowered { placeholder: (before.len(), before.len() + placeholder.len()), text: format!("{before}{placeholder}{after}"), members: Vec::new(), lists: Vec::new() };
@@ -934,7 +934,7 @@ pub fn lower(found: &Found, dialect: Dialect, placeholder: &str) -> Lowered {
                 }
             };
             // A JSON member keeps its JSON text; an explicit null is SQL NULL, not the text
-            // `null` (docs/structured-params/verify.md).
+            // `null` (wiki/structured-params/verify.md).
             let read = |m: &Member| {
                 if m.schema.is_some() {
                     format!("nullif(\"reylo.e\".value -> {}, 'null')", path(&m.name))
@@ -1281,7 +1281,7 @@ const SUBSCHEMAS: &[(&str, Sub)] = &[
 
 const JSON_TYPES: &[&str] = &["string", "number", "integer", "boolean", "null", "object", "array"];
 
-/// What the profile of docs/typed-json-params.md refuses in a schema, as a message naming where:
+/// What the profile of wiki/typed-json-params.md refuses in a schema, as a message naming where:
 /// a reference, which breaks the schema's locality; a type that depends on which keyword matched
 /// or where validation entered, which no TypeScript type says; another draft's `$schema`;
 /// `nullable`, which is not 2020-12; and the traps that make a schema refuse every value.

@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { Session } from "../src/analyze.ts";
 import { sqlModule } from "../src/loader.ts";
 
-// Structured parameters (docs/structured-params.md): a parameter cast to `rows(…)` or `row(…)` is
+// Structured parameters (wiki/structured-params.md): a parameter cast to `rows(…)` or `row(…)` is
 // typed by its column list and written for its position; the run time checks each value and
 // writes the insert's column lists for the keys a call carries, so a key left out takes its
 // column's default. Postgres and MySQL run on throwaway servers, never one anyone uses: each test

@@ -1,7 +1,7 @@
 // Reylo decodes every value of its own MySQL queries itself, on the app's own pool, connection or
 // transaction (the maintainer, 2026-10-20; the representation is src/values.ts). Each driver but
 // Bun.sql takes its decoding choices per query, laid over the app's without changing them
-// (docs/driver-decoding/spike/mysql.md):
+// (wiki/driver-decoding/spike/mysql.md):
 //
 // - mysql2 stays on `execute`, the binary protocol (its `query` writes the values into the text
 //   with backslash escapes, which matched every row of a table under NO_BACKSLASH_ESCAPES). Its

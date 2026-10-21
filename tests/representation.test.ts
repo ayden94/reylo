@@ -251,7 +251,7 @@ test("SQLite: one row on every driver, whatever its integer setting; an integer 
   node.close();
   for (const intMode of ["number", "bigint", "string"]) {
     const client = createClient({ url: `file:${file}`, intMode });
-    // Under intMode "string" an integer in a column with no type is its digits (docs/driver-decoding.md).
+    // Under intMode "string" an integer in a column with no type is its digits (wiki/driver-decoding.md).
     if (intMode !== "string") assert.deepEqual(plain(await q.run(client)), rows, `libSQL with intMode ${intMode}`);
     await assert.rejects(odd.run(client), refused);
     client.close();

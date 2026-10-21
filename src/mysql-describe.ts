@@ -2,7 +2,7 @@
 // result columns with type codes, NOT NULL flags, charsets, display lengths and
 // the table each is a column of, and the server's type guess per `?` parameter,
 // without executing anything. The engine reads
-// those as they are (docs/mysql-sources.md); this side only carries them, and
+// those as they are (wiki/mysql-sources.md); this side only carries them, and
 // runs the engine's catalog queries.
 import { createRequire } from "node:module";
 import { loadDriver } from "./describe.ts";

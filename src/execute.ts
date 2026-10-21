@@ -132,7 +132,7 @@ export type QueryModule<D extends Dialect = Dialect> = {
  * Each parameter by name: `type` is the engine's type for it. The run time reads it where a
  * driver binds a value of one type wrong (an array to a SQL array on postgres.js and Bun.sql, to
  * JSON on pg); a query without it, defined by hand or built before 2026-10-12, binds every value
- * as it is. A typed JSON parameter (docs/typed-json-params.md) carries its schema beside it, and
+ * as it is. A typed JSON parameter (wiki/typed-json-params.md) carries its schema beside it, and
  * a parameter cast with `::` on MySQL or SQLite the type as written (src/rows.ts, `checkCast`).
  */
 export type Inputs = Readonly<Record<string, { readonly type: EngineType; readonly schema?: JsonSchema; readonly cast?: string }>>;
@@ -142,7 +142,7 @@ type AnyClient = Record<string, any> & ((...args: any[]) => any);
 /**
  * The parameters: an object keyed by name, or by number for positional placeholders (`$1` and
  * `?` give `{ 1: ..., 2: ... }`, and `params` is `["1", "2"]`). An array is refused, since
- * 2026-10-20 (DESIGN.md §9).
+ * 2026-10-20 (wiki/design.md §9).
  */
 export type ParamsInput = Record<string, unknown>;
 
@@ -292,7 +292,7 @@ async function executeAsync(c: AnyClient | null | undefined, query: QueryModule,
 
 // The parameters are an object, refused before anything reaches the database otherwise: an
 // array, which `run` took in the order of `params` from 2026-10-03, was dropped on 2026-10-20
-// (DESIGN.md §9), so the call says which key each value binds.
+// (wiki/design.md §9), so the call says which key each value binds.
 function checkParams(query: QueryModule, input: unknown): asserts input is Record<string, unknown> {
   if (input !== null && typeof input === "object" && !Array.isArray(input)) return;
   const keys = query.params.map((name) => `${/^(?:[A-Za-z_$][\w$]*|\d+)$/.test(name) ? name : JSON.stringify(name)}: ...`);
@@ -311,7 +311,7 @@ function statement(query: QueryModule, params: ParamsInput) {
     const type = query.inputs?.[name]?.type;
     // A typed JSON parameter (`:p::jsonb('…')`): a value left out takes the schema's default, a
     // key under `properties` too, and the value is checked against the schema before the
-    // statement runs (docs/typed-json-params.md). Null is SQL NULL, whose type the statement says.
+    // statement runs (wiki/typed-json-params.md). Null is SQL NULL, whose type the statement says.
     const schema = query.inputs?.[name]?.schema;
     if (schema !== undefined) {
       let v = params[name];
@@ -367,7 +367,7 @@ const isJson = (kind: EngineType["kind"] | undefined) => kind === "json" || kind
 
 // A JSON parameter's value is a JavaScript value, which reaches the database as its JSON text
 // (JSON.stringify), so a string is a JSON string on every driver; null is SQL NULL. Each driver
-// left to itself did something else (docs/driver-decoding.md, 2026-10-12): pg wrote an array as
+// left to itself did something else (wiki/driver-decoding.md, 2026-10-12): pg wrote an array as
 // an array literal and a string as raw JSON text, mariadb expanded an array into a list, the
 // SQLite drivers refused an object, and mysql2 bound 5 as 5.0.
 function isJsonValue(query: QueryModule, name: string, v: unknown): boolean {

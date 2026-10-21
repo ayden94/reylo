@@ -1,7 +1,7 @@
 //! The MySQL analysis. The server's prepare metadata is the type source: every result column's
 //! type and NOT NULL flag (the server's own analysis, expressions included) and, since 8.0.22, a
 //! type per `?` from its context. The engine takes those as they are (see
-//! docs/mysql-sources.md). MySQL has no RETURNING and no server surface for the row count, so a
+//! wiki/mysql-sources.md). MySQL has no RETURNING and no server surface for the row count, so a
 //! data-modifying statement returns no rows, and a SELECT's row count is the unique-key proof
 //! over a `sqlparser` tree with the keys read from `information_schema.statistics`.
 //!
@@ -979,7 +979,7 @@ fn other_width(c: &crate::api::MysqlColumn) -> Option<&'static str> {
 /// Whether a column's prepare says it is one digit or one bit wide: a TINYINT(1), which MySQL's
 /// BOOLEAN is, or a BIT(1). MySQL 8 reports a TINYINT's display width only where it is 1 (every
 /// other TINYINT reports 4), and a BIT's width is its own (measured on 8.4.11 and 9.7.2,
-/// docs/driver-decoding.md).
+/// wiki/driver-decoding.md).
 fn flag_width(c: &crate::api::MysqlColumn) -> bool {
     matches!((c.r#type, c.length), (1 | 16, Some(1)))
 }
@@ -1734,7 +1734,7 @@ pub(crate) fn aggregate_where(e: &Expr, counts: &mut dyn FnMut(&ast::Function) -
 mod tests {
     #[test]
     fn a_json_schema_check_as_information_schema_prints_it() {
-        // `CHECK_CLAUSE` as MySQL 8.4.11 printed the CHECKs of docs/json-schema-checks/mysql/catalog.ts.
+        // `CHECK_CLAUSE` as MySQL 8.4.11 printed the CHECKs of wiki/json-schema-checks/mysql/catalog.ts.
         let schema = r#"{"type":"object","properties":{"a":{"type":"string"}},"required":["a"]}"#;
         let at = |clause: &str| check_documents(clause).into_iter().map(|(c, s)| (c, serde_json::from_str::<Value>(&s).unwrap())).collect::<Vec<_>>();
         let doc = vec![("doc".to_string(), serde_json::from_str::<Value>(schema).unwrap())];
@@ -1752,7 +1752,7 @@ mod tests {
     #[test]
     fn a_check_clause_reads_back_through_its_escapes_and_its_double_encoding() {
         // Quotes, backslashes, a JSON escape, non-ASCII and four-byte text, as 8.4.11 printed them.
-        let catalog = include_str!("../../../docs/json-schema-checks/mysql/out/catalog-mysql-8.4.txt");
+        let catalog = include_str!("../../../wiki/json-schema-checks/mysql/out/catalog-mysql-8.4.txt");
         let line = catalog.lines().find_map(|l| l.strip_prefix("c_esc_default ")).unwrap();
         let clause: String = serde_json::from_str(line).unwrap();
         let found = check_documents(&clause);
@@ -2119,7 +2119,7 @@ mod tests {
 
     #[test]
     fn a_truth_value_is_a_boolean_by_the_statement_and_a_flag_column_by_the_prepare() {
-        // Each column as the prepare on 8.4.11 and 9.7.2 reports it (docs/driver-decoding.md).
+        // Each column as the prepare on 8.4.11 and 9.7.2 reports it (wiki/driver-decoding.md).
         let column = |ty: u32, length: u32, table: &str, name: &str| json!({ "name": "c", "type": ty, "flags": 0, "length": length, "org_table": table, "org_name": name });
         let types = |sql: &str, columns: Vec<Value>| {
             let described = json!({ "columns": columns, "params": [] });

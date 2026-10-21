@@ -1765,7 +1765,7 @@ mod tests {
 
     #[test]
     fn a_check_holds_a_json_column_to_the_schema_it_prints() {
-        // As PostgreSQL 18 printed the CHECKs of docs/json-schema-checks/postgres/catalog.sql.
+        // As PostgreSQL 18 printed the CHECKs of wiki/json-schema-checks/postgres/catalog.sql.
         let schema = r#"{"type": "object", "properties": {"name": {"type": "string", "pattern": "^\\d+$", "description": "it's café é"}}, "required": ["name"]}"#;
         let printed = r#"'{"type": "object", "properties": {"name": {"type": "string", "pattern": "^\\d+$", "description": "it''s café é"}}, "required": ["name"]}'::json"#;
         let call = |f: &str| vec![(f.to_string(), vec![CheckArg::Schema(schema.into()), CheckArg::Column])];

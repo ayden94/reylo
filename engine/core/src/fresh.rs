@@ -1,5 +1,5 @@
 //! What a statement's analysis relied on, for a deployed query to check against the database it
-//! runs on: the schema freshness check (docs/structured-params.md §6, accepted on 2026-10-15; the
+//! runs on: the schema freshness check (wiki/structured-params.md §6, accepted on 2026-10-15; the
 //! maintainer, 2026-10-20: any change fails).
 //!
 //! For each table the statement reads or writes, the facts of each column it names (of every

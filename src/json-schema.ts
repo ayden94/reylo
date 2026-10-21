@@ -1,6 +1,6 @@
 // A JSON Schema 2020-12 validator for the run time, which has no dependencies: it checks a value
 // against the schema a statement writes in a `json('…')` member of a column list or, where it is
-// built, a JSON parameter's cast (docs/typed-json-params.md, the maintainer, 2026-10-12: JSON
+// built, a JSON parameter's cast (wiki/typed-json-params.md, the maintainer, 2026-10-12: JSON
 // Schema in its entirety; checks TypeScript cannot say are Reylo's to run). The engine refuses what
 // the profile leaves out before a module is written (references, `unevaluatedItems`, a schema in
 // `unevaluatedProperties`, the dynamic keywords), so none of those reach this file. A format is

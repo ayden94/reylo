@@ -1,4 +1,4 @@
-// Structured parameters at run time (docs/structured-params.md): the value of a `:events::rows(…)`
+// Structured parameters at run time (wiki/structured-params.md): the value of a `:events::rows(…)`
 // or `:user::row(…)` parameter is checked against its column list before the statement runs,
 // written as the JSON the statement reads, and an insert's column lists are written again
 // without the keys a call leaves out, so that each of those columns takes its default (the
@@ -38,7 +38,7 @@ const INTEGERS: Record<string, readonly [bigint, bigint]> = {
 /**
  * A 64-bit integer, which JSON carries as digits: a string on Postgres, which reads one exactly, and
  * a bare number elsewhere (MySQL's `CAST(… AS SIGNED)` wraps a string out of range;
- * docs/structured-params/verify.md). A Postgres or MySQL `int8` takes a number, a BigInt or a string
+ * wiki/structured-params/verify.md). A Postgres or MySQL `int8` takes a number, a BigInt or a string
  * of digits, as its parameter type says; SQLite's `integer` takes a number or a BigInt (src/render.ts).
  */
 const WIDE = new Set(["int8", "integer"]);
@@ -89,7 +89,7 @@ export function prepareRows(name: string, type: RowsType, value: unknown, dialec
         continue;
       }
       const checked = check(f.type, f.written, v, dialect, (message) => fail(`${where}"${f.name}" ${message}`));
-      // A JSON member's schema fills its defaults and checks the value (docs/typed-json-params.md).
+      // A JSON member's schema fills its defaults and checks the value (wiki/typed-json-params.md).
       if (f.schema !== undefined) {
         const filled = withDefaults(f.schema, checked);
         const failure = validate(f.schema, filled);

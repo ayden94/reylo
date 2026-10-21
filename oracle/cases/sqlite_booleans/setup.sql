@@ -1,4 +1,4 @@
--- Truth values (docs/driver-decoding.md, 2026-10-20). SQLite has no boolean type: a comparison, a
+-- Truth values (wiki/driver-decoding.md, 2026-10-20). SQLite has no boolean type: a comparison, a
 -- test or a logical operator computes 0, 1 or NULL, which is typed bool and which the oracle holds
 -- to them; a column declared BOOLEAN or BOOL (as Prisma's schemas declare one) is typed bool too,
 -- and holds whatever was stored in it (the seeds put text and other integers there), which the run

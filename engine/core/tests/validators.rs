@@ -1,5 +1,5 @@
 //! Every value a database's JSON Schema validator accepted, in the measurements of
-//! `docs/json-schema-checks/`, fits the type the engine reads off the same schema for that
+//! `wiki/json-schema-checks/`, fits the type the engine reads off the same schema for that
 //! validator: the soundness of `schema_type`, checked against what the validators did rather
 //! than what the drafts say.
 
@@ -8,7 +8,7 @@ use serde_json::{Map, Value};
 use std::path::PathBuf;
 
 fn checks(path: &str) -> Value {
-    let file = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/json-schema-checks").join(path);
+    let file = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../wiki/json-schema-checks").join(path);
     serde_json::from_str(&std::fs::read_to_string(&file).unwrap_or_else(|e| panic!("{}: {e}", file.display()))).unwrap()
 }
 

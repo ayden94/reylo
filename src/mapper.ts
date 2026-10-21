@@ -122,7 +122,7 @@ serve({
     // A parameter is typed from its context (a column it is compared with or written to, a CAST);
     // one no context types is `unknown`.
     const typed = analysis.params.map((q) => [q.name, paramType(q, declaredType(q.type, q.schema) ?? renderParamType(q.type, dialect))] as const);
-    // A typed JSON parameter whose schema has a `default` may be left out (docs/typed-json-params.md).
+    // A typed JSON parameter whose schema has a `default` may be left out (wiki/typed-json-params.md).
     const optional = new Set(analysis.params.filter((q) => q.schema !== null && typeof q.schema === "object" && "default" in q.schema).map((q) => q.name));
     const paramTypes = typed.map(([name, type]) => `${ident(name)}${optional.has(name) ? "?" : ""}: ${type}`);
     return emit(analysis.rewritten.sql, paramTypes.length ? `{ ${paramTypes.join("; ")} }` : "Record<never, never>", columns.length ? `{ ${columns.join("; ")} }` : "never", inferred, order);
