@@ -524,29 +524,32 @@ test("MySQL: an insert's rows take the row alias written after the column list, 
 });
 
 // MariaDB runs on a throwaway server named by REYLO_TEST_MARIADB; without one the test passes
-// having checked nothing, as the binary test does for MySQL.
+// having checked nothing, as the binary test does for MySQL. The type check refuses it: its prepare
+// types every parameter NULL and a JSON column LONGTEXT (wiki/dialects.md).
 const MARIADB = process.env.REYLO_TEST_MARIADB;
 
-test("MariaDB: a JSON member reads and writes a JSON null as SQL NULL, goes into a JSON column, and a JSON cast is JSON_COMPACT()", async () => {
+test("MariaDB: the type check and every build step refuse the server, naming it and its version, and say to point the URL at MySQL", async () => {
   if (!MARIADB || mysqlLive === "lab/drivers is not installed") return;
   const my = await mysqlDatabase(MARIADB, "reylo_mariadb");
   const root = project("mysql2");
   try {
-    // MariaDB's JSON is LONGTEXT with a json_valid CHECK.
     await my.db.query("create table docs (id bigint primary key, meta json)");
-    const insert = await built(root, my.url, "insert_docs", `insert into docs :docs::rows(id bigint not null, meta json('{"type": "object"}'))`);
-    await insert.run(my.db, { docs: [{ id: 1, meta: null }, { id: 2, meta: { a: 1 } }] });
-    assert.deepEqual(await my.rows("select id, meta is null as n from docs order by id"), [{ id: 1, n: 1 }, { id: 2, n: 0 }]);
-    const read = await built(root, my.url, "read_docs", `select r.id from :p::rows(id bigint not null, meta json('{"type": "object"}')) r where r.meta is null`);
-    assert.deepEqual(plain(await read.run(my.db, { p: [{ id: 1, meta: null }, { id: 2, meta: { a: 1 } }] })), [{ id: 1n }]);
-    const doc = await built(root, my.url, "doc", `select json_value(:d::json, '$.a') as a, json_length(:t::json('{"type": "array"}')) as n`);
-    assert.equal(doc.sql, "select json_value(JSON_COMPACT(?), '$.a') as a, json_length(JSON_COMPACT(?)) as n");
-    assert.deepEqual({ ...(await doc.run(my.db, { d: { a: "v" }, t: [1, 2] })) }, { a: "v", n: 2n });
-    // NTILE's argument is the bare placeholder; a frame's bound takes no parameter on MariaDB.
-    const tile = await built(root, my.url, "tile", "select id, ntile(:k::int) over (order by id) as b from docs order by id");
-    assert.equal(tile.sql, "select id, ntile(?) over (order by id) as b from docs order by id");
-    assert.deepEqual(plain(await tile.run(my.db, { k: 2 })), [{ id: 1n, b: 1n }, { id: 2n, b: 2n }]);
-    await assert.rejects(built(root, my.url, "frame", "select sum(id) over (order by id rows between :k::int preceding and current row) as s from docs"), /MariaDB takes only a literal as a window frame's bound/);
+    const [[{ v }]] = await my.db.query("select version() as v");
+    const version = /^\d+(\.\d+)*/.exec(v)![0];
+    const refused = new RegExp(`Cannot type-check against the database at [^ ]+ \\([^)]*\\): it is MariaDB ${version.replaceAll(".", "\\.")}, and Reylo type-checks MySQL statements against MySQL\\. Point the type check's URL at a MySQL server, 8\\.4 or later, with the same schema\\.$`);
+    for (const [name, sql] of [
+      ["plain", "select id from docs where id = ?"],
+      ["insert_docs", `insert into docs :docs::rows(id bigint not null, meta json('{"type": "object"}'))`],
+    ]) await assert.rejects(built(root, my.url, name!, sql!), refused);
+    const session = await Session.open(root, { DATABASE_URL: my.url });
+    try {
+      const outcome = await session.analyze("select id from docs");
+      assert.ok(!outcome.ok);
+      assert.equal(outcome.code, 5);
+      assert.match(outcome.message, refused);
+    } finally {
+      await session.close();
+    }
   } finally {
     await closeAll();
     await my.drop();

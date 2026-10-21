@@ -158,7 +158,7 @@ export function resolveProject(engine: Engine | MissingEngine, projectDir: strin
     if (hit) urlSource = hit.source;
   }
   const dialect = url ? dialectOf(url) : "postgres";
-  if (url && !dialect) error ??= `Cannot tell the database from the URL (${urlSource}): reylo reads postgres://, postgresql://, mysql://, mariadb://, file: and sqlite: URLs.`;
+  if (url && !dialect) error ??= `Cannot tell the database from the URL (${urlSource}): reylo reads postgres://, postgresql://, mysql://, file: and sqlite: URLs.`;
   const watched = [...(file ? [file] : [join(root, PROJECT_FILE)]), ...envFiles];
   return { file, root, dialect: dialect ?? "postgres", strictParams: config.strict_params ?? false, cli: config.cli ?? {}, url, urlSource, watched, error };
 }

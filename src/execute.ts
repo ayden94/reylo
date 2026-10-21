@@ -523,7 +523,7 @@ function indexOf(query: QueryModule, p: { name: string; start: number; end: numb
 
 const accepted: Record<Dialect, string> = {
   postgres: "query(text, values) as on pg, PGlite, Neon and pg-promise; unsafe(text, values) as on postgres.js and Bun.sql; or Neon's neon() function",
-  mysql: "execute(text, values) as on mysql2 and PlanetScale; query() and batch() as on mariadb; unsafe(text, values) as on Bun.sql; or a mysql2 callback pool or connection",
+  mysql: "execute(text, values) as on mysql2 and PlanetScale; unsafe(text, values) as on Bun.sql; or a mysql2 callback pool or connection",
   sqlite: "prepare(sql) as on better-sqlite3, node:sqlite, bun:sqlite, Turso's @tursodatabase/database and Cloudflare D1; execute({ sql, args }) as on @libsql/client; all(sql, params) as on sqlite3 and sqlite; or unsafe(text, values) as on Bun.sql",
 };
 

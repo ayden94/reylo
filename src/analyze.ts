@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { anyEngine, engine, reason, AnswerCache, MissingEngine, Unreachable, type Analysis, type Engine, type EngineIo } from "./engine.ts";
 import { packageDir, resolveProject, type ResolvedProject } from "./project.ts";
 import { openPostgresDescriber } from "./describe.ts";
-import { openMysqlDescriber } from "./mysql-describe.ts";
+import { NotMysql, openMysqlDescriber } from "./mysql-describe.ts";
 import { openSqliteDescriber, sqlitePath } from "./sqlite-describe.ts";
 
 /** What `.reylo/` holds for one statement. */
@@ -137,6 +137,11 @@ export class Session {
         this.#schema = { value: null, at: Date.now(), error: reason(e) };
         return { ok: false, message: this.cannotConnect(reason(e)), code: 5 };
       }
+      if (e instanceof NotMysql) {
+        this.#io = undefined;
+        this.#schema = { value: null, at: Date.now(), error: this.notMysql(e), fatal: true };
+        return { ok: false, message: this.#schema.error!, code: 5 };
+      }
       return { ok: false, message: (e as Error).message, code: 5 };
     }
     writeEntry(this.root, file, { version: ENTRY_VERSION, dialect: this.project.dialect, schema: schema.value, analysis });
@@ -145,7 +150,8 @@ export class Session {
 
   /**
    * The fingerprint of the database's schema; null when the database cannot be reached, and
-   * `fatal` when no connection can be made at all (no driver installed). A server that refuses the
+   * `fatal` when no connection can be made at all (no driver installed) or the server is one the type
+   * check refuses (MariaDB, `NotMysql`). A server that refuses the
    * fingerprint query gets a value no entry matches, so every statement is analyzed live.
    */
   async schema(): Promise<{ value: string | null; error?: string; fatal?: boolean }> {
@@ -156,7 +162,7 @@ export class Session {
       io = await this.#connection();
     } catch (e) {
       this.#io = undefined;
-      this.#schema = e instanceof Unreachable ? { value: null, at: now, error: reason(e) } : { value: null, at: now, error: (e as Error).message, fatal: true };
+      this.#schema = e instanceof Unreachable ? { value: null, at: now, error: reason(e) } : { value: null, at: now, error: e instanceof NotMysql ? this.notMysql(e) : (e as Error).message, fatal: true };
       return this.#schema;
     }
     try {
@@ -188,6 +194,11 @@ export class Session {
     const { dialect, url, root, urlSource } = this.project;
     if (dialect === "sqlite") return `Cannot open the database ${sqlitePath(url ?? "", root)} (${urlSource})${why ? `: ${why}` : ""}`;
     return `Cannot connect to the database at ${this.where()} (${urlSource})${why ? `: ${why}` : ""}`;
+  }
+
+  /** Why a server the type check cannot read is refused, and what to point it at instead. */
+  notMysql(e: NotMysql): string {
+    return `Cannot type-check against the database at ${this.where()} (${this.project.urlSource}): it is ${e.server}, and Reylo type-checks MySQL statements against MySQL. Point the type check's URL at a MySQL server, 8.4 or later, with the same schema.`;
   }
 
   /** The database as a person names it: host, port and database, or the SQLite file. */

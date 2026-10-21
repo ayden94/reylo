@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Session } from "../src/analyze.ts";
 import { sqlModule } from "../src/loader.ts";
+import { notMysql } from "../src/mysql-describe.ts";
 
 // A throwaway Postgres server for the tests that need one, never a database anyone uses: each such
 // test makes a database of its own there and drops it after. The driver is the labs', never the
@@ -213,4 +214,93 @@ test("the Postgres fingerprint runs on the server, holds while nothing changes, 
     await admin.unsafe(`drop database if exists ${name}`);
     await admin.end();
   }
+});
+
+// A project whose mysql2 is a stand-in: its server answers version() with what the test sets, and
+// every other query with one row.
+function fakeMysql(): { root: string; serve(version: string): { queries: string[]; ended: () => boolean } } {
+  const root = mkdtempSync(join(tmpdir(), "reylo-not-mysql-"));
+  writeFileSync(join(root, "package.json"), "{}");
+  // In .env, so that a build step, which reads the process's environment, finds it too.
+  writeFileSync(join(root, ".env"), "DATABASE_URL=mysql://root@db.internal:3307/app\n");
+  mkdirSync(join(root, "node_modules", "mysql2"), { recursive: true });
+  writeFileSync(join(root, "node_modules", "mysql2", "package.json"), JSON.stringify({ name: "mysql2", version: "3.24.4" }));
+  writeFileSync(
+    join(root, "node_modules", "mysql2", "promise.js"),
+    `exports.createConnection = async () => {
+      const server = globalThis.reyloFakeMysql;
+      return {
+        on() {},
+        async query(q) {
+          const sql = typeof q === "string" ? q : q.sql;
+          server.queries.push(sql);
+          return [sql === "select version()" ? [[server.version]] : [["x"]], []];
+        },
+        async prepare() { throw Object.assign(new Error("the stand-in prepares nothing"), { fatal: true }); },
+        async end() { server.ended = true; },
+      };
+    };`,
+  );
+  return {
+    root,
+    serve(version) {
+      const server = { version, queries: [] as string[], ended: false };
+      (globalThis as any).reyloFakeMysql = server;
+      return { queries: server.queries, ended: () => server.ended };
+    },
+  };
+}
+
+test("a MariaDB server is refused by the type check, once per connection, with an error that says to type-check against MySQL", async () => {
+  const { root, serve } = fakeMysql();
+  const server = serve("11.8.2-MariaDB-ubu2404");
+  const session = await Session.open(root, {});
+  try {
+    for (const sql of ["select 1 as one", "select 2 as two"]) {
+      const outcome = await session.analyze(sql);
+      assert.ok(!outcome.ok);
+      assert.equal(outcome.code, 5);
+      assert.equal(
+        outcome.message,
+        `Cannot type-check against the database at db.internal:3307/app (DATABASE_URL in .env): it is MariaDB 11.8.2, and Reylo type-checks MySQL statements against MySQL. Point the type check's URL at a MySQL server, 8.4 or later, with the same schema.`,
+      );
+    }
+    // One connection asked once, then closed; nothing else ran on it.
+    assert.deepEqual(server.queries, ["select version()"]);
+    assert.ok(server.ended());
+    assert.ok((await session.schema()).fatal);
+  } finally {
+    await session.close();
+  }
+  // A build step, which reads the process's environment, fails at the file with the same error.
+  const saved = process.env.DATABASE_URL;
+  delete process.env.DATABASE_URL;
+  try {
+    await assert.rejects(sqlModule(join(root, "q.sql"), "select 1"), /q\.sql: Cannot type-check against .* it is MariaDB 11\.8\.2/);
+  } finally {
+    if (saved !== undefined) process.env.DATABASE_URL = saved;
+    for (const session of Session.opened()) await session.close();
+  }
+});
+
+test("a MySQL server is not refused: the type check goes on to read its schema", async () => {
+  const { root, serve } = fakeMysql();
+  const server = serve("8.4.6");
+  const session = await Session.open(root, {});
+  try {
+    const schema = await session.schema();
+    assert.ok(!schema.fatal);
+    assert.match(schema.value ?? "", /^[0-9a-f]{16}$/);
+    assert.equal(server.queries[0], "select version()");
+    assert.equal(server.queries.length, 2);
+  } finally {
+    await session.close();
+  }
+});
+
+test("the server's version names MariaDB in either form it is given, and no MySQL", () => {
+  assert.equal(notMysql("11.8.2-MariaDB-ubu2404"), "MariaDB 11.8.2");
+  assert.equal(notMysql("5.5.5-10.11.6-MariaDB-0+deb12u1"), "MariaDB 10.11.6");
+  assert.equal(notMysql("10.6.21-MariaDB"), "MariaDB 10.6.21");
+  for (const mysql of ["8.4.6", "9.7.0", "8.0.36-PlanetScale", "8.0.40-0ubuntu0.24.04.1", undefined, null]) assert.equal(notMysql(mysql), undefined);
 });
