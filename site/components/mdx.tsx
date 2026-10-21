@@ -2,6 +2,7 @@ import { AgentPrompt, docsMdxComponents } from 'docs-kit/components';
 import type { MDXComponents } from 'mdx/types';
 import type { ReactNode } from 'react';
 import { Dialect, DialectSwitch, DialectTabs } from './dialect-tabs';
+import { HeroActions } from './hero';
 import { HowItWorksDiagram } from './how-it-works-diagram';
 
 /**
@@ -14,6 +15,8 @@ export function getMDXComponents(components?: MDXComponents) {
     AgentPrompt: ({ children }: { children: ReactNode }) => <AgentPrompt title="Set up Reylo with an agent">{children}</AgentPrompt>,
     // The figure under How it works (components/how-it-works-diagram.tsx).
     HowItWorksDiagram,
+    // The badges and "Copy agent prompt" under the main page's subheader (components/hero.tsx).
+    HeroActions,
     // One dialect choice for the page: <DialectTabs> with a strip, <DialectTabs follow> without,
     // each holding <Dialect value="Postgres|MySQL|SQLite"> panels, in step with the code tabs
     // marked tab-group="dialect" (components/dialect-tabs.tsx).

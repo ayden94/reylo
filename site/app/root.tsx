@@ -6,6 +6,7 @@ import type { Route } from './+types/root';
 import caveatLatin from '../assets/fonts/caveat-latin.woff2?url';
 import geistLatin from '../assets/fonts/geist-latin.woff2?url';
 import geistMonoLatin from '../assets/fonts/geist-mono-latin.woff2?url';
+import orbitron from '../assets/fonts/orbitron.woff2?url';
 import fontsCss from './fonts.css?url';
 import { NotFound } from '@/components/not-found';
 import { DIALECTS } from '@/lib/dialects';
@@ -26,7 +27,7 @@ import { DIALECTS } from '@/lib/dialects';
 // stylesheet stays put.
 export const links: Route.LinksFunction = () => [
   { rel: 'stylesheet', href: fontsCss },
-  ...[geistLatin, geistMonoLatin, caveatLatin].map((href) => ({ rel: 'preload', href, as: 'font', type: 'font/woff2', crossOrigin: 'anonymous' as const })),
+  ...[geistLatin, geistMonoLatin, caveatLatin, orbitron].map((href) => ({ rel: 'preload', href, as: 'font', type: 'font/woff2', crossOrigin: 'anonymous' as const })),
   { rel: 'manifest', href: '/manifest.webmanifest' },
   { rel: 'apple-touch-icon', href: '/apple-icon.png', sizes: '180x180', type: 'image/png' },
   { rel: 'author', href: 'https://github.com/colinhacks' },

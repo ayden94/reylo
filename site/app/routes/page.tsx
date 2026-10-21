@@ -1,11 +1,11 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { use, useMemo } from 'react';
-import { CopyAgentPrompt } from 'docs-kit/components';
 import { DocsShell } from 'docs-kit/shell';
 import type { Root } from 'fumadocs-core/page-tree';
 import type { Route } from './+types/page';
 import { Brand } from '@/components/brand';
+import { HeroTitle } from '@/components/hero';
 import { getMDXComponents } from '@/components/mdx';
 import { loadPage } from '@/lib/content';
 import { githubUrl, markdownPath, pageTitle, siteTitle, siteUrl } from '@/lib/layout.shared';
@@ -118,20 +118,19 @@ function PageContent({ loaderData }: Pick<Route.ComponentProps, 'loaderData'>) {
   // of content/sections/, each a module of its own, and its table of contents is theirs in order.
   // The subheader under the title is the page's first element (`.dk-subheader`), since it may set
   // code; the frontmatter's description, in plain text, is the page's metadata (above). On the main
-  // page only, "Copy agent prompt" at the right end of the title's row copies the agent card at
-  // the top of Setup (docs-kit's CopyAgentPrompt finds it in the page, and no other page has one),
-  // and the structured data describes the site and the project. Every page's column ends on the licence.
+  // page only, the title is centred, the mark over the name (components/hero.tsx), and "Copy agent
+  // prompt" sits under the subheader with the badges (content/docs/index.mdx), copying the agent
+  // card at the top of Setup; and the structured data describes the site and the project. Every page's column ends on the licence.
   return (
     <DocsShell
       // The tree's names are the pages' titles, plain strings, so it reaches the browser as it is
       // (Fumadocs' serializer would wrap each name in a span of its own).
       tree={tree as Root}
-      title={title}
+      title={main ? <HeroTitle>{title}</HeroTitle> : title}
       toc={files.flatMap((file) => file.toc)}
       fold={FOLD[slug] ?? []}
       brand={<Brand />}
       github={githubUrl}
-      titleAside={main ? <CopyAgentPrompt /> : undefined}
       before={main ? <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: structuredData(description) }} /> : undefined}
       footer={<>Released under the MIT License. Copyright © 2026 Colin McDonnell.</>}
     >
