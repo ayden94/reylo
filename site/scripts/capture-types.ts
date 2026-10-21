@@ -148,9 +148,9 @@ async function render(session: Session, written: string, sql: string, json: Map<
   if (dialect === 'mysql') names = analysis.params.map((q) => q.name);
   // The mapper places these in the file as errors; a statement on the page must have none.
   if (analysis.diagnostics.length) return { error: analysis.diagnostics.map((d) => d.message).join('; ') };
-  if (project.strict) {
+  if (project.strictParams) {
     const untyped = analysis.params.filter((q) => q.type.kind === 'unknown' && !json.has(q.name));
-    if (untyped.length) return { error: `strict: nothing types ${untyped.map((q) => `:${q.name}`).join(', ')}` };
+    if (untyped.length) return { error: `strict_params: nothing types ${untyped.map((q) => `:${q.name}`).join(', ')}` };
   }
   const inferred = analysis.cardinality;
   const order = names;

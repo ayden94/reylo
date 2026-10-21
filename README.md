@@ -335,7 +335,7 @@ Reylo needs no configuration when the database is `DATABASE_URL`. Settings go in
 
 ```yaml
 url: ${DATABASE_URL}  # the default
-strict: true          # a parameter nothing in the statement types is an error
+strict_params: true   # a parameter nothing in the statement types is an error
 ```
 
 ## Documentation

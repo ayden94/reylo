@@ -34,9 +34,10 @@ pub struct Project {
     /// process environment wins over all of them.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub env: Option<Vec<String>>,
-    /// Whether a parameter the statement does not type is an error (`true`) or `unknown`.
+    /// Whether a parameter the statement does not type is an error (`true`) or `unknown`. The key
+    /// was `strict` until 2026-10-20.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub strict: Option<bool>,
+    pub strict_params: Option<bool>,
     #[serde(default, skip_serializing_if = "Cli::is_empty")]
     pub cli: Cli,
     #[serde(default, skip_serializing)]
@@ -87,6 +88,12 @@ pub fn parse(text: &str) -> Result<Project, ConfigError> {
             _ => message,
         };
         let end = text[start.min(text.len())..].find(['\n', ':']).map_or(text.len(), |n| start + n);
+        // `strict` was renamed `strict_params` on 2026-10-20: the old key is unknown like any
+        // other, and its error names the new one.
+        let message = match message.strip_prefix("unknown field `strict`,") {
+            Some(_) => "unknown field `strict`: the key is `strict_params` since 2026-10-20".to_string(),
+            None => message,
+        };
         ConfigError { message: unmask_placeholders(message.trim_end()), start, end }
     })?;
     if masked != text {
@@ -146,14 +153,14 @@ mod tests {
 
     #[test]
     fn reads_the_library_keys_and_leaves_the_later_sections_alone() {
-        let p = parse("url: ${DATABASE_URL}\ndirect_url: ${DIRECT_URL}\nenv: [.env]\nstrict: true\ncli:\n  include: [src/**/*.sql]\n  exclude: [src/legacy/**]\napi:\n  routes: api\nrest:\n  anything: { x: 1 }\n").unwrap();
+        let p = parse("url: ${DATABASE_URL}\ndirect_url: ${DIRECT_URL}\nenv: [.env]\nstrict_params: true\ncli:\n  include: [src/**/*.sql]\n  exclude: [src/legacy/**]\napi:\n  routes: api\nrest:\n  anything: { x: 1 }\n").unwrap();
         assert_eq!(p.url.as_deref(), Some("${DATABASE_URL}"));
         assert_eq!(p.direct_url.as_deref(), Some("${DIRECT_URL}"));
         assert_eq!(p.env, Some(vec![".env".to_string()]));
-        assert_eq!(p.strict, Some(true));
+        assert_eq!(p.strict_params, Some(true));
         assert!(p.api.is_some() && p.rest.is_some());
         // What a host reads back: the later sections are not its business.
-        assert_eq!(serde_json::to_value(&p).unwrap(), serde_json::json!({ "url": "${DATABASE_URL}", "direct_url": "${DIRECT_URL}", "env": [".env"], "strict": true, "cli": { "include": ["src/**/*.sql"], "exclude": ["src/legacy/**"] } }));
+        assert_eq!(serde_json::to_value(&p).unwrap(), serde_json::json!({ "url": "${DATABASE_URL}", "direct_url": "${DIRECT_URL}", "env": [".env"], "strict_params": true, "cli": { "include": ["src/**/*.sql"], "exclude": ["src/legacy/**"] } }));
         assert_eq!(parse("").unwrap(), Project::default());
         assert_eq!(parse("# nothing yet\n").unwrap(), Project::default());
     }
@@ -173,8 +180,14 @@ mod tests {
         assert_eq!(&text[e.start..e.end], "types");
         let e = parse("cli:\n  ignore: [x]\n").unwrap_err();
         assert!(e.message.contains("unknown field `ignore`"), "{}", e.message);
-        let e = parse("strict: sometimes\n").unwrap_err();
+        let e = parse("strict_params: sometimes\n").unwrap_err();
         assert!(e.message.contains("invalid type"), "{}", e.message);
+        // `strict` was renamed `strict_params` on 2026-10-20, with no alias: the old key is
+        // unknown, and the error names the new one.
+        let text = "url: postgres://x/db\nstrict: true\n";
+        let e = parse(text).unwrap_err();
+        assert_eq!(e.message, "unknown field `strict`: the key is `strict_params` since 2026-10-20");
+        assert_eq!(&text[e.start..e.end], "strict");
     }
 
     #[test]

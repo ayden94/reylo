@@ -16,7 +16,7 @@ export type ProjectFile = {
   url?: string;
   direct_url?: string;
   env?: string[];
-  strict?: boolean;
+  strict_params?: boolean;
   cli?: Cli;
 };
 
@@ -30,7 +30,7 @@ export type ResolvedProject = {
   root: string;
   dialect: Dialect;
   /** Whether a parameter the statement does not type is an error rather than `unknown`. */
-  strict: boolean;
+  strictParams: boolean;
   /** Which files `reylo generate` analyzes: `include` replaces every `.sql` file, `exclude` adds to what is left out. */
   cli: Cli;
   /** The connection the type check uses: `direct_url` when the file names one, else `url`. */
@@ -160,5 +160,5 @@ export function resolveProject(engine: Engine | MissingEngine, projectDir: strin
   const dialect = url ? dialectOf(url) : "postgres";
   if (url && !dialect) error ??= `Cannot tell the database from the URL (${urlSource}): reylo reads postgres://, postgresql://, mysql://, mariadb://, file: and sqlite: URLs.`;
   const watched = [...(file ? [file] : [join(root, PROJECT_FILE)]), ...envFiles];
-  return { file, root, dialect: dialect ?? "postgres", strict: config.strict ?? false, cli: config.cli ?? {}, url, urlSource, watched, error };
+  return { file, root, dialect: dialect ?? "postgres", strictParams: config.strict_params ?? false, cli: config.cli ?? {}, url, urlSource, watched, error };
 }

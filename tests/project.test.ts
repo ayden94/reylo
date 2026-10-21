@@ -31,11 +31,11 @@ test("without a project file, DATABASE_URL comes from the environment, then .env
   assert.deepEqual([set.url, set.urlSource, set.dialect], ["file:./x.db", "DATABASE_URL in the environment", "sqlite"]);
 });
 
-test("the project file sits beside package.json, and its url, env files and strict apply", async () => {
+test("the project file sits beside package.json, and its url, env files and strict_params apply", async () => {
   const e = await engine("postgres", ROOT);
   const root = tree({
     "package.json": "{}",
-    ".reylo.yaml": "url: postgres://pooler/app\ndirect_url: mysql://root:${DB_PASSWORD}@127.0.0.1:3306/app\nenv: [secrets.env]\nstrict: true\napi:\n  routes: api\n",
+    ".reylo.yaml": "url: postgres://pooler/app\ndirect_url: mysql://root:${DB_PASSWORD}@127.0.0.1:3306/app\nenv: [secrets.env]\nstrict_params: true\napi:\n  routes: api\n",
     "secrets.env": "DB_PASSWORD=hunter2\n",
     "src/db/tsconfig.json": "{}",
   });
@@ -47,7 +47,7 @@ test("the project file sits beside package.json, and its url, env files and stri
   assert.equal(r.url, "mysql://root:hunter2@127.0.0.1:3306/app");
   assert.equal(r.urlSource, '"direct_url" in ../../.reylo.yaml, DB_PASSWORD in ../../secrets.env');
   assert.equal(r.dialect, "mysql");
-  assert.equal(r.strict, true);
+  assert.equal(r.strictParams, true);
   assert.equal(r.error, undefined);
   assert.ok(r.watched.includes(join(root, "secrets.env")));
   // A package of its own below does not see the file above it.
@@ -76,6 +76,9 @@ test("a key the library does not know, and a variable nothing sets, are errors t
   const e = await engine("postgres", ROOT);
   const typo = tree({ "package.json": "{}", ".reylo.yaml": "url: postgres://x/db\n\nstirct: true\n" });
   assert.match(resolveProject(e, typo, {}).error!, /^\.reylo\.yaml:3:1: unknown field `stirct`/);
+  // `strict` was renamed `strict_params` on 2026-10-20, with no alias: the old key is unknown, and its error names the new one.
+  const renamed = tree({ "package.json": "{}", ".reylo.yaml": "url: postgres://x/db\nstrict: true\n" });
+  assert.equal(resolveProject(e, renamed, {}).error, ".reylo.yaml:2:1: unknown field `strict`: the key is `strict_params` since 2026-10-20");
   const unset = tree({ "package.json": "{}", ".reylo.yaml": "url: ${NOPE}\n" });
   const r = resolveProject(e, unset, {});
   assert.equal(r.url, undefined);
