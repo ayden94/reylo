@@ -18,11 +18,11 @@ const user = await getUser.run(db, { id: 1 });
 select id, name, email from users where id = :id::int
 ```
 
-The first argument of `.run()` is your database client, from any of the [supported drivers](#supported-drivers): a pool, a client, or a connection or transaction taken from one.
+Pass your database client as the first argument of `.run()`: a pool, a client, or a connection or transaction taken from one, from any of the [supported drivers](#supported-drivers).
 
 ### `.sql`
 
-The compiled query, as Reylo sends it to your database:
+To get the compiled query, as Reylo sends it to your database:
 
 ```ts twoslash
 import getUser from "./get_user.sql";
@@ -33,7 +33,7 @@ getUser.sql;
 
 <Callout>
 
-The file's contents, before Reylo compiles its [parameters](#parameters), are on `.raw`:
+To get the file's contents as written, before Reylo compiles its [parameters](#parameters), use `.raw`:
 
 ```ts twoslash
 import getUser from "./get_user.sql";
@@ -46,7 +46,7 @@ getUser.raw;
 
 ### `.run()`
 
-Runs the query with your driver's client:
+To run the query, pass it your driver's client:
 
 ```ts twoslash
 import getUser from "./get_user.sql";
@@ -68,7 +68,7 @@ It throws when the rows don't fit the shape, such as a second row for `Row | nul
 
 ### `.runSync()`
 
-Runs the query synchronously, on `better-sqlite3`, `node:sqlite` and the `Database` of `@tursodatabase/database/compat`:
+To run the query synchronously on `better-sqlite3`, `node:sqlite` or the `Database` of `@tursodatabase/database/compat`:
 
 ```ts twoslash dialect="sqlite"
 import Database from "better-sqlite3";
@@ -81,7 +81,7 @@ const user = getUser.runSync(db, { id: 1 });
 
 ### `.with()`
 
-Binds the query to a client, and returns a function that takes the parameters:
+To bind the query to a client, call `.with()`. It returns a function that takes the parameters:
 
 ```ts twoslash
 import getUser from "./get_user.sql";
@@ -92,7 +92,7 @@ const user = await get({ id: 1 });
 
 ### `.inputSchema`
 
-The parameters' JSON Schema, for an OpenAPI document, a form or an agent's tool:
+To get the parameters' JSON Schema, for an OpenAPI document, a form or an agent's tool:
 
 <DialectTabs follow>
 <Dialect value="Postgres">
@@ -159,7 +159,7 @@ getUser.inputSchema;
 
 ### `.outputSchema`
 
-The result's JSON Schema, as `JSON.stringify` writes it:
+To get the result's JSON Schema, as `JSON.stringify` writes it:
 
 <DialectTabs follow>
 <Dialect value="Postgres">
@@ -244,6 +244,6 @@ getUser.outputSchema;
 
 <Callout title="Standard JSON Schema">
 
-Every imported query is a [Standard JSON Schema](https://standardschema.dev/json-schema), so any library that accepts one takes the query as it is.
+Every imported query is a [Standard JSON Schema](https://standardschema.dev/json-schema), so you can pass it to any library that accepts one.
 
 </Callout>

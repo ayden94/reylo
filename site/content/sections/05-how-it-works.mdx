@@ -171,7 +171,7 @@ A unique index on an expression or with a `where` gives `many`.
 
 <Details summary="In CI, and in builds without a database" id="in-ci">
 
-A CI job that type-checks starts the database, applies the migrations, and runs `tsc --noEmit --runExternalCode` with `DATABASE_URL` set. Tests need the database too, or a filled `.reylo/`.
+In CI, start the database, apply the migrations, and run `tsc --noEmit --runExternalCode` with `DATABASE_URL` set. Your tests need the database too, or a filled `.reylo/`.
 
 Every step that loads a `.sql` file (the type check, a plugin, the preload) keeps its analysis in `.reylo/`, and a later step reads it from there:
 
@@ -179,6 +179,6 @@ Every step that loads a `.sql` file (the type check, a plugin, the preload) keep
 - When the database answers, an entry made against another schema is analyzed again. An editor or a dev server checks the schema again at most every 5 seconds.
 - When the database is out of reach, the entries are used as they are, and a statement that `.reylo/` lacks is an error.
 
-A build that can't reach the database, such as a container build, uses the `.reylo/` a type check filled. Its entries are keyed by the database's URL, so the build sets the same URL, even though it can't connect.
+A build that can't reach the database, such as a container build, reads the `.reylo/` a type check filled. Set the same database URL in the build, even though it can't connect: the entries are keyed by it.
 
 </Details>

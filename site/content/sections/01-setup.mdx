@@ -16,7 +16,7 @@ Each setup has a complete, working example project to copy, whose README's "How 
 3. Make .sql imports load wherever the project runs code, with Node's --import or the plugin for its runtime, bundler or framework: https://reylo.dev/#plugins
    The example for that setup shows it end to end (node, nub, bun, vite, nextjs, esbuild, webpack, rspack, jest or cloudflare-workers): https://github.com/colinhacks/reylo/tree/main/examples/<name>
 4. Set up the editor the project uses: https://reylo.dev/#editors
-5. Point Reylo at the development database with DATABASE_URL, or with url in .reylo.yaml: https://reylo.dev/#reyloyaml
+5. Point Reylo at the development database with DATABASE_URL, or with direct_url in .reylo.yaml: https://reylo.dev/#reyloyaml
 6. Write a first query and run it with the project's own driver: https://reylo.dev/#usage and https://reylo.dev/#supported-drivers
    For more queries, from a list to nested rows, follow the examples: https://reylo.dev/#examples
 7. Run the typecheck script. The query's types come from the database; an error in a .sql file shows at its line and column.
@@ -28,7 +28,7 @@ Install Reylo, add it to TypeScript and to each tool that loads your code, then 
 
 ### Install
 
-Reylo needs:
+You'll need:
 
 - **TypeScript 7.1 (currently in beta).** The first release with content mappers.
 - **Node 24 or later.**
@@ -88,7 +88,7 @@ preload = ["reylo/register"]
 preload = ["reylo/register"]
 ```
 
-Bun's bundler takes the esbuild plugin:
+For Bun's bundler, use the esbuild plugin:
 
 ```ts title="build.ts"
 import reylo from "reylo/esbuild";
@@ -124,7 +124,7 @@ export default defineConfig({
 });
 ```
 
-Import `.sql` files from server code only, such as a `.server/` directory: Vite bundles a query wherever it is imported, the browser included. Vitest needs only this plugin.
+Import `.sql` files from server code only, such as a `.server/` directory: Vite bundles a query wherever it is imported, the browser included. For Vitest, this plugin is all you need.
 
 </Tab>
 <Tab value="Next.js" id="setup-nextjs">
@@ -158,7 +158,7 @@ const nextConfig: NextConfig = {
 export default nextConfig;
 ```
 
-Next.js's own type check can't run content mappers, so run `tsc` before `next build`:
+Run `tsc` before `next build`, since Next.js's own type check can't run content mappers:
 
 ```json title="package.json"
 {
@@ -228,12 +228,12 @@ export default defineConfig({
 });
 ```
 
-A D1 binding is a client, as in `getUser.run(env.DB, { id: 1 })`, and Reylo needs no `nodejs_compat`. For the type check, set `direct_url` in `.reylo.yaml` to the local D1 file that `wrangler d1 migrations apply --local` creates, not in `.env`, which Wrangler loads into the Worker as secrets.
+Pass the D1 binding as the client, as in `getUser.run(env.DB, { id: 1 })`; you don't need `nodejs_compat`. For the type check, set `direct_url` in `.reylo.yaml` to the local D1 file that `wrangler d1 migrations apply --local` creates. Don't set it in `.env`, which Wrangler loads into the Worker as secrets.
 
 </Tab>
 <Tab value="Jest" id="setup-jest">
 
-Jest takes Reylo's transformer:
+Add Reylo's transformer to your Jest config:
 
 ```js title="jest.config.js"
 export default {
@@ -252,7 +252,7 @@ NODE_OPTIONS=--experimental-vm-modules npx jest
 
 ### Editors
 
-The editor needs the TypeScript 7.1 language server, with content mappers on.
+Set up your editor to use the TypeScript 7.1 language server, with content mappers on.
 
 <Tabs items={["VS Code", "Cursor", "Zed"]}>
 <Tab value="VS Code" id="editor-vscode">
