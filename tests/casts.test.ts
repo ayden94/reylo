@@ -82,7 +82,7 @@ test("SQLite: a cast is SQLite's own, a date's to TEXT, JSON's through json(), a
   }
 });
 
-test("MySQL: a cast is MySQL's own, LIMIT takes the bare placeholder, and a value the cast would change is refused", { skip: mysqlLive }, async () => {
+test("MySQL: a cast is MySQL's own, LIMIT and a text cast take the bare placeholder, and a value the cast would change is refused", { skip: mysqlLive }, async () => {
   const require = createRequire(join(DRIVERS, "mysql2", "package.json"));
   const mysql = require("mysql2/promise");
   const server = new URL(MYSQL!);
@@ -119,6 +119,25 @@ test("MySQL: a cast is MySQL's own, LIMIT takes the bare placeholder, and a valu
     assert.equal(doc.text, "select json_extract(CAST(? AS JSON), '$.a') as a, CAST(? AS UNSIGNED) as id");
     assert.deepEqual({ ...(await doc.query.run(db, { doc: { a: [1, 2] }, id: 7 })) }, { a: [1, 2], id: 7n });
     await assert.rejects(doc.query.run(db, { doc: {}, id: -1 }), /Parameter "id" is bigint unsigned, from 0 to 18446744073709551615; got -1/);
+    // A text cast is the bare placeholder: a CAST to CHAR would take the connection's collation
+    // (utf8mb4_unicode_ci under mysql2), which a utf8mb4_0900_ai_ci column refuses to compare with
+    // ("Illegal mix of collations"), while a bare placeholder takes the column's.
+    await db.query("create table people (id bigint primary key, name varchar(50) collate utf8mb4_0900_ai_ci not null, code char(3) collate utf8mb4_0900_ai_ci not null, uid char(36) collate utf8mb4_0900_ai_ci not null)");
+    await db.query("insert into people values (1, 'Ada', 'ADA', '6f1c1a8e-7a43-4c39-9d0c-3c1f8e3b8a01'), (2, 'Alan', 'ALN', '0b7e3f52-1d2c-4e8a-9f0e-5a6b7c8d9e02'), (3, 'Grace', 'GRC', 'c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e03')");
+    await assert.rejects(db.execute("select name from people where name like concat(cast(? as char), '%')", ["A"]), /Illegal mix of collations/);
+    const prefix = await built(root, url.href, "prefix", "select name from people where name like concat(:prefix::text, '%') and code <> :code::char(3) and uid <> :uid::uuid order by id");
+    assert.equal(prefix.text, "select name from people where name like concat(?, '%') and code <> ? and uid <> ? order by id");
+    // MySQL types the bare placeholder as a string, and the parameter keeps its cast.
+    assert.match(prefix.code, /"prefix":\{"type":\{"kind":"scalar","name":"text"\},"cast":"text"\}/);
+    const alone = await built(root, url.href, "alone", "select :p::varchar(5) as p");
+    assert.equal(alone.text, "select ? as p");
+    assert.match(alone.code, /"p":\{"type":\{"kind":"scalar","name":"text"\},"cast":"varchar\(5\)"\}/);
+    assert.deepEqual({ ...(await alone.query.run(db, { p: "abc" })) }, { p: "abc" });
+    assert.deepEqual(plain(await prefix.query.run(db, { prefix: "A", code: "ALN", uid: "c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e03" })), [{ name: "Ada" }]);
+    // The run time still checks the value against the cast.
+    await assert.rejects(prefix.query.run(db, { prefix: 1, code: "ALN", uid: "c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e03" }), /Parameter "prefix" is text, a string; got 1/);
+    await assert.rejects(prefix.query.run(db, { prefix: "A", code: "ALAN", uid: "c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e03" }), /Parameter "code" is char\(3\), at most 3 characters; got 4/);
+    await assert.rejects(prefix.query.run(db, { prefix: "A", code: "ALN", uid: "not-a-uuid" }), /Parameter "uid" is uuid, a UUID in hexadecimal/);
     await assert.rejects(built(root, url.href, "flag", "select :b::bool as b"), /MySQL has no boolean type/);
     await assert.rejects(built(root, url.href, "zone", "select :t::timestamptz as t"), /drops the zone/);
   } finally {

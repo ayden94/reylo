@@ -32,13 +32,17 @@
 //! The same pass writes a parameter's `::type` cast on MySQL and SQLite, which have no `::`, as the
 //! dialect's own cast (the maintainer, 2026-10-20: `::` everywhere, beside each dialect's own cast
 //! syntax, converted by the compiler). The types are written as on Postgres, and each dialect
-//! takes its own spelling of one: MySQL's `CAST` takes `SIGNED` for an integer and `CHAR` for
-//! text, and SQLite's reads a type by its affinity, which for a date or a boolean is NUMERIC and
-//! turns `'2026-10-12'` into 2026, so a date is cast to TEXT, as SQLite keeps one. MySQL refuses an
-//! expression in `LIMIT` and `OFFSET`, which type a placeholder as an integer themselves, so a cast
-//! there is the bare placeholder. Both databases' casts turn a value they cannot read into 0 or
-//! NULL instead of failing, so the run time checks such a parameter against its type before the
-//! statement runs.
+//! takes its own spelling of one: MySQL's `CAST` takes `SIGNED` for an integer, and SQLite's
+//! reads a type by its affinity, which for a date or a boolean is NUMERIC and turns `'2026-10-12'`
+//! into 2026, so a date is cast to TEXT, as SQLite keeps one. MySQL refuses an expression in
+//! `LIMIT` and `OFFSET`, which type a placeholder as an integer themselves, so a cast there is the
+//! bare placeholder. A text cast on MySQL (`::text`, `::varchar(n)`, `::char(n)`, `::uuid`) is the
+//! bare placeholder too, since 2026-10-20: a CAST to CHAR takes the connection's collation, which
+//! a column of another collation refuses to compare with ("Illegal mix of collations"), while a
+//! bare placeholder takes the column's; the parameter is typed as text all the same, which MySQL
+//! does for a bare placeholder and MariaDB does not. Both databases' casts turn a value they
+//! cannot read into 0 or NULL instead of failing, so the run time checks such a parameter against
+//! its type before the statement runs, a text cast's included.
 
 use crate::api::{Analysis, Describe, Diagnostic, Scope};
 use crate::dialect::Dialect;
@@ -248,6 +252,12 @@ fn integer_type(written: &str) -> bool {
     matches!(base, "int" | "int2" | "int4" | "int8" | "integer" | "bigint" | "smallint" | "tinyint" | "mediumint" | "signed" | "unsigned")
 }
 
+/// Whether a type as written, without its modifiers, is one MySQL keeps as text: a string type,
+/// or a UUID, which MySQL keeps as CHAR(36).
+fn mysql_text(base: &str) -> bool {
+    matches!(base, "text" | "varchar" | "char" | "character" | "character varying" | "bpchar" | "uuid")
+}
+
 /// What a `::type` cast after a parameter is written as on MySQL or SQLite: the text before and
 /// after the placeholder, none for the bare placeholder, or why the dialect cannot cast to it.
 fn cast_around(written: &str, dialect: Dialect, limit: bool) -> Result<Option<(String, String)>, String> {
@@ -289,8 +299,12 @@ fn cast_around(written: &str, dialect: Dialect, limit: bool) -> Result<Option<(S
         "numeric" | "decimal" | "dec" | "fixed" => cast(&format!("DECIMAL{modifiers}")),
         "float4" | "real" | "float" => cast("FLOAT"),
         "float8" | "double" | "double precision" => cast("DOUBLE"),
-        "text" | "varchar" | "char" | "character" | "character varying" | "bpchar" => cast(&format!("CHAR{modifiers}")),
-        "uuid" => cast("CHAR(36)"),
+        // A CAST to CHAR takes the connection's collation with IMPLICIT coercibility
+        // (`utf8mb4_unicode_ci` under mysql2), which a column of another one refuses to compare
+        // with ("Illegal mix of collations"), while a bare placeholder is COERCIBLE and takes the
+        // column's. So the cast is the bare placeholder, typed as text (`analyze` below),
+        // and the run time still checks the value is a string that fits.
+        b if mysql_text(b) => Ok(None),
         "date" => cast("DATE"),
         "time" => cast(&format!("TIME{modifiers}")),
         "timestamp" | "datetime" => cast(&if modifiers.is_empty() { "DATETIME(6)".to_string() } else { format!("DATETIME{modifiers}") }),
@@ -1161,6 +1175,12 @@ pub fn analyze<D: Describe>(sql: &str, dialect: Dialect, host: &Host<'_, D>, inn
         if let Some(cast) = &f.plain {
             if let Some(p) = analysis.params.iter_mut().find(|p| p.name == f.name) {
                 p.cast = Some(cast.written.clone());
+                // A text cast on MySQL is the bare placeholder, which MySQL types as a string
+                // and MariaDB does not type at all: the cast says it is text.
+                let base = cast.written.split('(').next().unwrap_or(&cast.written);
+                if dialect == Dialect::Mysql && cast.around.is_none() && mysql_text(base) && matches!(p.ty, Type::Unknown) {
+                    p.ty = Type::Scalar { name: "text".to_string() };
+                }
                 // SQLite's `json(?)` takes JSON text, and the parameter is a JSON value, written
                 // as its text as every MySQL and SQLite JSON parameter is.
                 if dialect == Dialect::Sqlite && matches!(cast.written.as_str(), "json" | "jsonb") {
@@ -1668,7 +1688,14 @@ mod tests {
         );
         assert_eq!(my("select 1 from t limit :a::int, :b::int"), "select 1 from t limit :a, :b");
         assert_eq!(my("select 1 from t limit 5 offset :o::bigint"), "select 1 from t limit 5 offset :o");
-        assert_eq!(my("select :a::text, :b::varchar(20), :c::datetime, :d::double precision, :e::json, :f::int unsigned, ?::date, :u::uuid"), "select CAST(:a AS CHAR), CAST(:b AS CHAR(20)), CAST(:c AS DATETIME(6)), CAST(:d AS DOUBLE), CAST(:e AS JSON), CAST(:f AS UNSIGNED), CAST(? AS DATE), CAST(:u AS CHAR(36))");
+        assert_eq!(my("select :a::text, :b::varchar(20), :c::datetime, :d::double precision, :e::json, :f::int unsigned, ?::date, :u::uuid"), "select :a, :b, CAST(:c AS DATETIME(6)), CAST(:d AS DOUBLE), CAST(:e AS JSON), CAST(:f AS UNSIGNED), CAST(? AS DATE), :u");
+        // A text cast is the bare placeholder, which takes the collation of the column it meets,
+        // where a CAST to CHAR would take the connection's and fail the comparison; the
+        // parameter keeps its cast, which the run time checks.
+        let sql = "select name from users where name like concat(:prefix::text, '%') and code = :c::char(3) and nick = ? :: character varying and id = :u::uuid";
+        assert_eq!(my(sql), "select name from users where name like concat(:prefix, '%') and code = :c and nick = ? and id = :u");
+        let casts: Vec<_> = find(sql, Dialect::Mysql).unwrap().into_iter().map(|f| f.plain.map(|c| (c.written, c.around))).collect();
+        assert_eq!(casts, [Some(("text".to_string(), None)), Some(("char(3)".to_string(), None)), Some(("character varying".to_string(), None)), Some(("uuid".to_string(), None))]);
         assert!(err("select :p::bool", Dialect::Mysql).contains("no boolean type"));
         assert!(err("select :p::timestamptz", Dialect::Mysql).contains("drops the zone"));
         assert!(err("select :p::interval", Dialect::Mysql).contains("has no type for `::interval`"));
