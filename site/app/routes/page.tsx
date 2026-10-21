@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { use } from 'react';
+import { use, useMemo } from 'react';
 import { CopyAgentPrompt } from 'docs-kit/components';
 import { DocsShell } from 'docs-kit/shell';
 import type { Root } from 'fumadocs-core/page-tree';
@@ -95,7 +95,18 @@ export function meta({ loaderData }: Route.MetaArgs): Route.MetaDescriptors {
   ];
 }
 
+/**
+ * A link to a heading of the page (`#examples`, in the table of contents or the text) is a
+ * navigation to React Router, which renders the route again on the `popstate` the browser fires:
+ * the whole page, every section and code block, held the main thread for 270ms in the built site
+ * and 1.1s under the dev server before the browser could paint the jump. The page is the same, so
+ * the rendered tree is kept for as long as the route's data is, and the jump is the browser's own.
+ */
 export default function Page({ loaderData }: Route.ComponentProps) {
+  return useMemo(() => <PageContent loaderData={loaderData} />, [loaderData]);
+}
+
+function PageContent({ loaderData }: Pick<Route.ComponentProps, 'loaderData'>) {
   const { slug, path, title, description, tree } = loaderData;
   const files = use(loadPage(path));
   const components = getMDXComponents();
