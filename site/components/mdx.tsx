@@ -1,7 +1,7 @@
 import { AgentPrompt, docsMdxComponents } from 'docs-kit/components';
 import type { MDXComponents } from 'mdx/types';
 import type { ReactNode } from 'react';
-import { Dialect, DialectTabs } from './dialect-tabs';
+import { Dialect, DialectSwitch, DialectTabs } from './dialect-tabs';
 import { HowItWorksDiagram } from './how-it-works-diagram';
 
 /**
@@ -19,6 +19,8 @@ export function getMDXComponents(components?: MDXComponents) {
     // marked tab-group="dialect" (components/dialect-tabs.tsx).
     DialectTabs,
     Dialect,
+    // The switch at the right end of an example's strip (lib/remark-mapper.ts writes it).
+    DialectSwitch,
     ...components,
   });
 }

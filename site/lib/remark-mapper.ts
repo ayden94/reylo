@@ -38,6 +38,10 @@ export { pageFiles };
 //   group of dialects is code tabs named for their dialect (`tab="MySQL"`), or file tabs that each say
 //   theirs (`tab="users.sql (MySQL)" file="users.sql" dialect="mysql"`), the way every example shows a
 //   statement that differs per dialect beside its `main.ts` tab.
+// - Such file tabs, once the TypeScript beside them follows, become one tab named for the file
+//   (`users.sql`), whose panel follows the page's dialect choice as well, and the group gets a
+//   <DialectSwitch aside>, which docs-kit draws at the right end of its strip: `main.ts | users.sql`
+//   on the left, Postgres | MySQL | SQLite on the right (`mergeDialectFiles`).
 // - `db` is declared unless the block declares or imports it; a block that names `Bun.` or imports
 //   `bun` or `bun:sqlite` gets Bun's types, and one that names `D1Database` without importing it
 //   gets Cloudflare's Workers types.
@@ -354,6 +358,52 @@ export function readModules(site = process.cwd()): Modules {
   return existsSync(file) ? (JSON.parse(readFileSync(file, 'utf8')) as Modules) : {};
 }
 
+/**
+ * Each code-tab group's file tabs that each say their dialect (`users.sql (Postgres)`,
+ * `users.sql (MySQL)`, `users.sql (SQLite)`) become one tab, `users.sql`, holding <DialectTabs follow>
+ * with a <Dialect value> panel per block, and the group gets a <DialectSwitch aside>, which docs-kit
+ * draws at the right end of the strip (its code-tabs.tsx). A tab per file and dialect made a strip of
+ * four tabs that ran wider than the column on nine of the pages' examples, and on a phone on every
+ * one; the strip is now a tab per file and the switch. Runs after the TypeScript beside them has
+ * become <DialectTabs follow>, which reads these blocks as a group of dialects.
+ */
+function mergeDialectFiles(blocks: Block[]) {
+  const groups = new Map<MdNode, Map<string, Block[]>>();
+  for (const block of blocks) {
+    // The file is the tab's label without its dialect: `users.sql` of `users.sql (MySQL)`, and
+    // `main.ts` of `main.ts (MySQL)` where the TypeScript differs per dialect too.
+    const label = /^(.+) \((Postgres|MySQL|SQLite)\)$/.exec(block.node.data?.tab ?? '');
+    if (!label || !block.group || block.group.name !== 'CodeBlockTabs' || block.from !== 'meta' || dialectOf(label[2]) !== block.dialect) continue;
+    const files = groups.get(block.group) ?? new Map<string, Block[]>();
+    files.set(label[1]!, [...(files.get(label[1]!) ?? []), block]);
+    groups.set(block.group, files);
+  }
+  for (const [group, files] of groups) {
+    const strip = group.children!.find((child) => child.name === 'CodeBlockTabsList');
+    const dialects = new Set<Dialect>();
+    for (const [name, list] of files) {
+      if (list.length < 2 || !strip) continue;
+      list.sort((a, b) => DIALECTS.indexOf(DIALECT_NAME[a.dialect]) - DIALECTS.indexOf(DIALECT_NAME[b.dialect]));
+      const tabs = list.map((block) => block.parent);
+      const values = tabs.map((tab) => attr(tab, 'value'));
+      const panels = list.map((block) => jsx('Dialect', [['value', DIALECT_NAME[block.dialect]]], block.parent.children!));
+      const at = Math.min(...tabs.map((tab) => group.children!.indexOf(tab)));
+      group.children = group.children!.filter((child) => !tabs.includes(child));
+      group.children.splice(at, 0, jsx('CodeBlockTab', [['value', name]], [jsx('DialectTabs', [['follow', null]], panels)]));
+      const first = strip.children!.findIndex((trigger) => values.includes(attr(trigger, 'value')));
+      strip.children = strip.children!.filter((trigger) => !values.includes(attr(trigger, 'value')));
+      strip.children.splice(first, 0, jsx('CodeBlockTabsTrigger', [['value', name]], [{ type: 'text', value: name }]));
+      const chosen = group.attributes?.find((a) => a.name === 'defaultValue');
+      if (chosen && values.includes(chosen.value)) chosen.value = name;
+      for (const block of list) dialects.add(block.dialect);
+    }
+    // The switch offers the dialects the group shows; with the page's choice elsewhere, the group
+    // shows its first (docs-kit's style.css).
+    const offered = DIALECTS.filter((d) => dialects.has(DIALECT_OF[d.toLowerCase()]!));
+    if (offered.length) group.children!.push(jsx('DialectSwitch', [['aside', null], ...(offered.length < DIALECTS.length ? [['dialects', offered.join(',')] as [string, string]] : [])], []));
+  }
+}
+
 export function remarkMapper() {
   return (tree: MdNode, file: { path?: string; data?: Record<string, unknown> }) => {
     // fumadocs-mdx hands remark plugins the loader's compiler (its own remark-include uses it):
@@ -381,6 +431,7 @@ export function remarkMapper() {
       const index = block.parent.children!.indexOf(block.node);
       block.parent.children!.splice(index, 1, jsx('DialectTabs', [['follow', null]], panels));
     }
+    mergeDialectFiles(blocks);
     // The dialect and the file name are read; Shiki and Twoslash do not know the attributes.
     for (const { node } of blocks) if (node.meta) node.meta = node.meta.replace(/(?:^|\s)(?:dialect|file|strict)=(?:"[^"]*"|'[^']*'|\S+)/g, '').trim();
   };

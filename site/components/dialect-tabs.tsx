@@ -1,4 +1,4 @@
-import { Variant, VariantTabs } from 'docs-kit/components';
+import { Variant, VariantSwitch, VariantTabs } from 'docs-kit/components';
 import type { ReactNode } from 'react';
 import { DIALECTS, type DialectName } from '@/lib/dialects';
 
@@ -25,4 +25,15 @@ export function DialectTabs({ follow = false, children }: { follow?: boolean; ch
 /** One dialect's panel inside `<DialectTabs>`. */
 export function Dialect({ value, children }: { value: DialectName; children: ReactNode }) {
   return <Variant value={value}>{children}</Variant>;
+}
+
+/**
+ * Postgres | MySQL | SQLite as a small switch at the right end of a code-tab strip: lib/remark-mapper.ts
+ * puts one, marked `aside`, in each example whose statement differs per dialect, beside the tabs
+ * `main.ts | <name>.sql`, whose panels follow the choice.
+ */
+export function DialectSwitch({ dialects }: { aside?: boolean; dialects?: string }) {
+  // `dialects` names the group's, comma-separated, when it shows fewer than three.
+  const values = dialects ? DIALECTS.filter((d) => dialects.split(',').includes(d)) : DIALECTS;
+  return <VariantSwitch group="dialect" values={values} label="Database" />;
 }
