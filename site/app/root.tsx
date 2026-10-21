@@ -6,6 +6,7 @@ import type { Route } from './+types/root';
 import caveatLatin from '../assets/fonts/caveat-latin.woff2?url';
 import geistLatin from '../assets/fonts/geist-latin.woff2?url';
 import geistMonoLatin from '../assets/fonts/geist-mono-latin.woff2?url';
+import fontsCss from './fonts.css?url';
 import { NotFound } from '@/components/not-found';
 import { DIALECTS } from '@/lib/dialects';
 
@@ -17,8 +18,14 @@ import { DIALECTS } from '@/lib/dialects';
 // rewrapped the opening paragraph, a layout shift of 0.057 at 1440 wide and 0.146 at 390, measured
 // 2026-10-20), Geist's size-adjusted fallback, and the system's monospace behind Geist Mono. Their
 // Latin files are preloaded, so they make the first paint on any ordinary connection; a first view
-// whose fonts take longer keeps the fallbacks, and the next view has them cached.
+// whose fonts take longer keeps the fallbacks, and the next view has them cached. The faces are a
+// stylesheet of their own, linked here rather than imported by global.css: under `vite dev`, React
+// Router serves the imported CSS as a stylesheet that it removes once the page hydrates, when Vite
+// injects its own copy, and the faces declared again then missed `optional`'s window, so the page
+// went from Geist to Arial and Menlo for the rest of the visit (docs-kit's README). A linked
+// stylesheet stays put.
 export const links: Route.LinksFunction = () => [
+  { rel: 'stylesheet', href: fontsCss },
   ...[geistLatin, geistMonoLatin, caveatLatin].map((href) => ({ rel: 'preload', href, as: 'font', type: 'font/woff2', crossOrigin: 'anonymous' as const })),
   { rel: 'manifest', href: '/manifest.webmanifest' },
   { rel: 'apple-touch-icon', href: '/apple-icon.png', sizes: '180x180', type: 'image/png' },

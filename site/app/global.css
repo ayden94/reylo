@@ -2,10 +2,9 @@
    layout, the measure, prose, headings, the table of contents, code, Twoslash, collapsibles, tabs,
    the agent card and the cursors. Below it, only what is Reylo's own. */
 @import 'docs-kit/style.css';
-@import './fonts.css';
 
-/* The page's three faces (app/fonts.css, the files next/font served before the site left Next.js),
-   as the variables docs-kit's stylesheet reads: Geist for text, behind it its size-adjusted Arial;
+/* The page's three faces (app/fonts.css, which app/root.tsx links: the files next/font served
+   before the site left Next.js), as the variables docs-kit's stylesheet reads: Geist for text, behind it its size-adjusted Arial;
    Geist Mono for code, behind it the system's monospace; Caveat for the "Leave a star!" note. */
 :root {
   --font-text: 'Geist', 'Geist Fallback';
