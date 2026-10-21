@@ -3,85 +3,68 @@
 // URL. The card is drawn here rather than in a module this file imports, so that a change to the
 // card changes the URL and the caches of X and Slack fetch the new card.
 //
-// The whole card is a code block, drawn as the page draws its opening example: a tab strip naming
-// `main.ts` and `get_author.sql`, the subheader's claim as a comment, the import of a `.sql` file
-// and its `run`, and the type of `author` in a popup at the code's own size, as the page shows it
-// on hover. The wordmark and the address sit in gaps the code leaves: the wordmark at the end of
-// the tab strip, the address beside the popup's last line. The maintainer asked for that on
-// 2026-10-20 ("the entire card is the code block, but then you're able to put the logo, the website
-// link, and things like that into the natural gaps within the code"); the card before it set the
-// claim as a headline over two lines of code, with the type on one line in smaller text.
-//
-// Drawn by Next.js's ImageResponse (Satori) in the site's dark theme: Geist Mono (assets/fonts, SIL
-// Open Font License) on the dark code block's colours, the code in the page's GitHub Dark colours
-// with its brighter comment grey (docs-kit/src/style.css). Geist Mono's characters are 0.6 em wide,
-// so the popup is placed by character. Satori lays out flex boxes only, so every element with more
-// than one child is a flex box.
+// The wordmark, the subheader's claim, and the opening example with the type of `author` in a
+// popup, as the page shows it on hover. Drawn by Next.js's ImageResponse (Satori), in the site's
+// dark theme: Geist and Geist Mono (assets/fonts, SIL Open Font License) on the dark page's
+// colours, with the code in the page's GitHub Dark colours. Satori lays out flex boxes only, so
+// every element with more than one child is a flex box. A card drawn entirely as a code block, with
+// the type on five lines at the code's size, replaced this one for an hour on 2026-10-20; the
+// maintainer preferred this one ("that's worse than the old card. I liked the old card").
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ImageResponse } from 'next/og';
-import type { ReactNode } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { wordmark } from '@/components/wordmark';
 
 export const size = { width: 1200, height: 630 };
 export const contentType = 'image/png';
 
 export const alt =
-  'Reylo: a code editor showing main.ts. A comment reads "Import .sql files into TypeScript, fully typed", the code imports getAuthor from "./get_author.sql" and runs it, and a popup gives the type of the result: { id: number; name: string; post_count: number } | null.';
+  'Reylo: import .sql files into TypeScript, fully typed. Code imports getAuthor from "./get_author.sql" and runs it, and the result is typed { id: number; name: string; post_count: number } | null.';
 
 // The dark theme of app/global.css, and Shiki's GitHub Dark for the code.
 const color = {
+  page: '#0e0e0e',
   surface: '#161616',
-  popup: '#1d1d1d',
+  popup: '#1b1b1b',
   border: '#2b2b2b',
   headings: '#fafafa',
   muted: '#a1a1a1',
   yellow: '#fbd22d',
+  pill: 'rgba(251, 210, 45, 0.14)',
   keyword: '#f97583',
   string: '#9ecbff',
   function: '#b392f0',
   constant: '#79b8ff',
   plain: '#e1e4e8',
   property: '#ffab70',
-  comment: '#8b949e',
 };
 
 type Token = [text: string, color: keyof typeof color, hovered?: true];
 
-const code: Token[][] = [
-  [['// Import .sql files into TypeScript, fully typed', 'comment']],
+const example: Token[][] = [
   [['import', 'keyword'], [' getAuthor ', 'plain'], ['from', 'keyword'], [' "./get_author.sql"', 'string'], [';', 'plain']],
-  [],
   [['const', 'keyword'], [' ', 'plain'], ['author', 'constant', true], [' = ', 'keyword'], ['await', 'keyword'], [' getAuthor.', 'plain'], ['run', 'function'], ['(db, { id: ', 'plain'], ['1', 'constant'], [' });', 'plain']],
 ];
 
-// The type the page's popup shows for `author` (site/lib/sql-modules.json), laid out as the page lays it out.
+// The type the page's popup shows for `author` (site/lib/sql-modules.json), on one line.
 const authorType: Token[][] = [
-  [['const', 'keyword'], [' author', 'constant'], [': {', 'plain']],
-  [['    id', 'property'], [': ', 'plain'], ['number', 'constant'], [';', 'plain']],
-  [['    name', 'property'], [': ', 'plain'], ['string', 'constant'], [';', 'plain']],
-  [['    post_count', 'property'], [': ', 'plain'], ['number', 'constant'], [';', 'plain']],
-  [['} | ', 'plain'], ['null', 'constant']],
+  [['const', 'keyword'], [' author', 'constant'], [': { ', 'plain'], ['id', 'property'], [': ', 'plain'], ['number', 'constant'], ['; ', 'plain'], ['name', 'property'], [': ', 'plain'], ['string', 'constant'], ['; ', 'plain'], ['post_count', 'property'], [': ', 'plain'], ['number', 'constant'], [' } | ', 'plain'], ['null', 'constant']],
 ];
 
 // Sizes, in pixels of the 1200 × 630 image.
-const SIZE = 30;
-const ROW = SIZE * 1.6;
-const CHAR = SIZE * 0.6;
 const PAD = 64;
-const TABS = 78;
-const TOP = 42;
-const MARK = 40;
-const HOVERED = 3; // the line of `author`
-const POPUP_Y = 12;
+const CODE = 27;
+const POPUP = 22;
+const HEADLINE = 66;
 
-function Lines({ lines }: { lines: Token[][] }) {
+function Code({ lines, size }: { lines: Token[][]; size: number }) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', fontFamily: 'Geist Mono', fontSize: SIZE }}>
+    <div style={{ display: 'flex', flexDirection: 'column', fontFamily: 'Geist Mono', fontSize: size, lineHeight: 1.6 }}>
       {lines.map((line, i) => (
-        <div key={i} style={{ display: 'flex', whiteSpace: 'pre', height: ROW, alignItems: 'center' }}>
+        <div key={i} style={{ display: 'flex', whiteSpace: 'pre' }}>
           {line.map(([text, ink, hovered], j) => (
-            <span key={j} style={{ color: color[ink], ...(hovered ? { borderBottom: `3px solid ${color.yellow}`, paddingBottom: 1 } : {}) }}>
+            <span key={j} style={{ color: color[ink], ...(hovered ? { borderBottom: `3px solid ${color.yellow}` } : {}) }}>
               {text}
             </span>
           ))}
@@ -91,49 +74,69 @@ function Lines({ lines }: { lines: Token[][] }) {
   );
 }
 
-function Card(): ReactNode {
-  const popupTop = TABS + TOP + ROW * (HOVERED + 1) + 6;
+/** A headline line, with `.sql` set as the page sets inline code: mono, on a yellow tint. */
+function HeadlineLine({ text }: { text: string }) {
+  const [before, after] = text.split('.sql');
+  const pill: CSSProperties = { fontFamily: 'Geist Mono', fontWeight: 500, fontSize: HEADLINE * 0.9, background: color.pill, borderRadius: HEADLINE * 0.16, padding: `${HEADLINE * 0.02}px ${HEADLINE * 0.14}px` };
   return (
-    <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', position: 'relative', background: color.surface, fontFamily: 'Geist Mono' }}>
-      <div style={{ display: 'flex', alignItems: 'flex-end', height: TABS, padding: `0 ${PAD}px`, borderBottom: `1.5px solid ${color.border}`, fontSize: 24 }}>
-        <div style={{ display: 'flex', color: color.yellow, borderBottom: `3px solid ${color.yellow}`, paddingBottom: 16, marginRight: 36 }}>main.ts</div>
-        <div style={{ display: 'flex', color: color.muted, paddingBottom: 19 }}>get_author.sql</div>
-        <div style={{ display: 'flex', flex: 1 }} />
-        <div style={{ display: 'flex', paddingBottom: (TABS - MARK) / 2 - 2 }}>
-          <svg width={(MARK * wordmark.width) / wordmark.height} height={MARK} viewBox={wordmark.viewBox}>
-            <path fill={color.headings} d={wordmark.mark} />
-            <path fill={color.headings} transform={wordmark.wordTransform} d={wordmark.word} />
-          </svg>
+    <div style={{ display: 'flex', alignItems: 'center', whiteSpace: 'pre' }}>
+      <span>{before}</span>
+      {after !== undefined ? <span style={pill}>.sql</span> : null}
+      {after !== undefined ? <span>{after}</span> : null}
+    </div>
+  );
+}
+
+function Card(): ReactNode {
+  const codeLeft = 28;
+  const codeTop = 22;
+  return (
+    <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', padding: `60px ${PAD}px 0`, background: color.page, fontFamily: 'Geist' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <svg width={(44 * wordmark.width) / wordmark.height} height={44} viewBox={wordmark.viewBox}>
+          <path fill={color.headings} d={wordmark.mark} />
+          <path fill={color.headings} transform={wordmark.wordTransform} d={wordmark.word} />
+        </svg>
+        <div style={{ display: 'flex', fontFamily: 'Geist Mono', fontSize: 23, color: color.muted }}>reylo.dev</div>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', marginTop: 62, fontSize: HEADLINE, fontWeight: 600, letterSpacing: -HEADLINE * 0.025, lineHeight: 1.12, color: color.headings }}>
+        <HeadlineLine text="Import .sql files into TypeScript," />
+        <HeadlineLine text="fully typed" />
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', position: 'relative', marginTop: 52 }}>
+        <div style={{ display: 'flex', padding: `${codeTop}px ${codeLeft}px`, background: color.surface, border: `1.5px solid ${color.border}`, borderRadius: 16 }}>
+          <Code lines={example} size={CODE} />
         </div>
-      </div>
-      <div style={{ display: 'flex', padding: `${TOP}px ${PAD}px 0` }}>
-        <Lines lines={code} />
-      </div>
-      {/* Under `author`, which starts six characters into its line, as the page's popup opens. */}
-      <div
-        style={{
-          position: 'absolute',
-          left: PAD + CHAR * 6 - 24,
-          top: popupTop,
-          display: 'flex',
-          padding: `${POPUP_Y}px 24px`,
-          background: color.popup,
-          border: `1.5px solid ${color.border}`,
-          borderRadius: 14,
-          boxShadow: '0 16px 48px rgba(0, 0, 0, 0.5)',
-        }}
-      >
-        <Lines lines={authorType} />
-      </div>
-      <div style={{ position: 'absolute', right: PAD, top: popupTop + POPUP_Y + ROW * 4, height: ROW, display: 'flex', alignItems: 'center', fontSize: 24, color: color.muted }}>
-        reylo.dev
+        {/* Under `author`, which starts six characters into its line, as the page's popup opens. */}
+        <div
+          style={{
+            position: 'absolute',
+            left: codeLeft + CODE * 0.6 * 6 - 22,
+            top: codeTop * 2 + CODE * 1.6 * 2 + 6,
+            display: 'flex',
+            padding: '12px 22px',
+            background: color.popup,
+            border: `1.5px solid ${color.border}`,
+            borderRadius: 12,
+            boxShadow: '0 12px 40px rgba(0, 0, 0, 0.45)',
+          }}
+        >
+          <Code lines={authorType} size={POPUP} />
+        </div>
       </div>
     </div>
   );
 }
 
+const font = async (file: string, name: string, weight: 400 | 500 | 600) => ({
+  name,
+  weight,
+  style: 'normal' as const,
+  data: await readFile(join(process.cwd(), 'assets/fonts', file)),
+});
+
 /** The preview as a PNG, built once, with the site. */
 export default async function Image() {
-  const mono = await readFile(join(process.cwd(), 'assets/fonts/GeistMono-400.ttf'));
-  return new ImageResponse(<Card />, { ...size, fonts: [{ name: 'Geist Mono', weight: 400, style: 'normal', data: mono }] });
+  const fonts = await Promise.all([font('Geist-600.ttf', 'Geist', 600), font('GeistMono-400.ttf', 'Geist Mono', 400), font('GeistMono-500.ttf', 'Geist Mono', 500)]);
+  return new ImageResponse(<Card />, { ...size, fonts });
 }
