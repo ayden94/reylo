@@ -430,7 +430,9 @@ export function remarkMapper() {
         block.node.value = withSetup(block, variants[0]!, modules, page);
         continue;
       }
-      const panels = variants.map((variant) => jsx('Dialect', [['value', DIALECT_NAME[variant.dialect]]], [{ ...block.node, data: { ...block.node.data }, value: withSetup(block, variant, modules, page) }]));
+      // Each copy names its dialect, `// @variant:`, so the page's Markdown, which shows the block
+      // once, says which dialect each type is (docs-kit's twoslash.ts).
+      const panels = variants.map((variant) => jsx('Dialect', [['value', DIALECT_NAME[variant.dialect]]], [{ ...block.node, data: { ...block.node.data }, value: `// @variant: ${DIALECT_NAME[variant.dialect]}\n${withSetup(block, variant, modules, page)}` }]));
       const index = block.parent.children!.indexOf(block.node);
       block.parent.children!.splice(index, 1, jsx('DialectTabs', [['follow', null]], panels));
     }
