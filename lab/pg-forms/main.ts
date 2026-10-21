@@ -371,9 +371,9 @@ type CastsRow = {
 };
 const casts1: CastsRow | null = null! as Awaited<ReturnType<typeof casts.run>>;
 const casts2: Awaited<ReturnType<typeof casts.run>> = null! as CastsRow | null;
-// A cast types its parameter: `:since::timestamptz` takes a Date or its text.
-const casts3: { since: Date | string; id: number } = null! as CastsParams;
-const casts4: CastsParams = null! as { since: Date | string; id: number };
+// A cast types its parameter: `:since::timestamptz` takes the text that names its zone, as run returns it.
+const casts3: { since: string; id: number } = null! as CastsParams;
+const casts4: CastsParams = null! as { since: string; id: number };
 
 // ---------------------------------------------------------------------------
 // 13. Types no driver parses

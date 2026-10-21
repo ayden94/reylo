@@ -381,8 +381,10 @@ function isJsonValue(query: QueryModule, name: string, v: unknown): boolean {
 // statement runs. A `timestamp` or a `date` (MySQL's DATETIME and TIMESTAMP are the engine's
 // `timestamp`) takes no Date: pg and mysql2 wrote its wall-clock time in the app's zone,
 // postgres.js in the server's, PGlite and Bun.sql in UTC, and Bun.sql's `date` failed in every
-// zone. A string for a `timestamptz` names its zone: without one the server reads it in the
-// session's TimeZone, which the driver or the server sets.
+// zone. A `timestamptz` takes a string that names its zone, which is what `run` returns for one:
+// without a zone the server reads the text in the session's TimeZone, which the driver or the
+// server sets, and a Date is refused too, as every other type's value is but a string (the
+// maintainer, 2026-10-20), with the call that writes it as one.
 
 const isTime = (type: EngineType | undefined) => type?.kind === "scalar" && type.name.split("|").every((part) => part === "timestamp" || part === "timestamptz" || part === "date");
 
@@ -394,11 +396,14 @@ function checkTime(type: EngineType | undefined, name: string, v: unknown): void
   }
   if (type.kind !== "scalar") return;
   if (type.name === "timestamptz") {
+    if (v instanceof Date) {
+      throw new TypeError(`Parameter "${name}" is a timestamptz, which takes the instant as a string that names its zone, as \`.run()\` returns one, not a Date: pass date.toISOString() ("2026-10-12T19:06:48.282Z").`);
+    }
     if (typeof v === "string" && !zoned.test(v.trim())) {
-      throw new TypeError(`Parameter "${name}" is a timestamptz, an instant, so a string for it names its zone ("2026-10-12T19:06:48.282Z", "2026-10-12 19:06:48+09", "2026-10-12 19:06:48 America/Los_Angeles"); got ${JSON.stringify(v)}, which the server would read in the session's time zone. A Date is the instant it is.`);
+      throw new TypeError(`Parameter "${name}" is a timestamptz, an instant, so a string for it names its zone ("2026-10-12T19:06:48.282Z", "2026-10-12 19:06:48+09", "2026-10-12 19:06:48 America/Los_Angeles"); got ${JSON.stringify(v)}, which the server would read in the session's time zone.`);
     }
   } else if (v instanceof Date && type.name.split("|").every((part) => part === "timestamp" || part === "date")) {
-    throw new TypeError(`Parameter "${name}" is a ${type.name === "date" ? "date" : "timestamp"} without a time zone, so it takes the wall-clock text ("2026-10-12 19:06:48.282", "2026-10-12"), not a Date: drivers write a Date's time in different zones (the app's, the server's or UTC). A timestamptz parameter takes a Date.`);
+    throw new TypeError(`Parameter "${name}" is a ${type.name === "date" ? "date" : "timestamp"} without a time zone, so it takes the wall-clock text ("2026-10-12 19:06:48.282", "2026-10-12"), not a Date: drivers write a Date's time in different zones (the app's, the server's or UTC).`);
   }
 }
 

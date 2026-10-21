@@ -518,7 +518,7 @@ export const SCENARIOS: Scenario[] = [
     },
   },
   {
-    id: "S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called",
+    id: "S1h date and time params: a timestamptz takes its zoned text, timestamp and date their text, and a Date for any of them is refused before the driver is called",
     on: "client",
     dialects: ["postgres", "mysql"],
     async run(ctx, client, q) {
@@ -527,18 +527,24 @@ export const SCENARIOS: Scenario[] = [
       // postgres.js read a date or time string through new Date(): the timestamp moved by the
       // app's offset, and the zone name failed with "Invalid time value".
       const at = "2026-01-02 03:04:05.006";
-      const row = await call(ctx, q.times, client, { tz: new Date(Date.UTC(2026, 0, 2, 3, 4, 5, 6)), named: "2026-01-02 12:04:05.006 Asia/Tokyo", at, day: "2026-01-02" });
+      const row = await call(ctx, q.times, client, { tz: "2026-01-02T03:04:05.006Z", named: "2026-01-02 12:04:05.006 Asia/Tokyo", at, day: "2026-01-02" });
       eq({ ...row, tz: Boolean(Number(row.tz)) }, { tz: true, at: ctx.job.dialect === "postgres" ? at : `${at}000`, day: "2026-01-02" }, "row");
-      const sent = spy(client);
-      let refused: unknown = null;
-      try {
-        await call(ctx, q.times, client, { tz: new Date(0), named: "2026-01-02T03:04:05Z", at, day: new Date(Date.UTC(2026, 0, 2)) });
-      } catch (e) {
-        refused = e;
+      // A Date is refused for a date and, since the maintainer's answer of 2026-10-20, for a
+      // timestamptz too, which takes the zoned text run returns for one.
+      const refusals: [Record<string, unknown>, RegExp][] = [[{ tz: "1970-01-01T00:00:00Z", named: "2026-01-02T03:04:05Z", at, day: new Date(Date.UTC(2026, 0, 2)) }, /^Parameter "day" is a date without a time zone/]];
+      if (ctx.job.dialect === "postgres") refusals.push([{ tz: new Date(0), named: "2026-01-02T03:04:05Z", at, day: "2026-01-02" }, /^Parameter "tz" is a timestamptz, .*not a Date: pass date\.toISOString\(\)/]);
+      for (const [params, message] of refusals) {
+        const sent = spy(client);
+        let refused: unknown = null;
+        try {
+          await call(ctx, q.times, client, params);
+        } catch (e) {
+          refused = e;
+        }
+        const called = sent.stop();
+        if (!(refused instanceof TypeError) || !message.test(refused.message)) throw new Violation(`a Date was not refused with reylo's TypeError ${message}: ${describe(refused)}`);
+        if (!called.startsWith("no method") && !called.startsWith("the client as a function")) throw new Violation(`reylo called ${called} before refusing the Date`);
       }
-      const called = sent.stop();
-      if (!(refused instanceof TypeError) || !/^Parameter "day" is a date without a time zone/.test(refused.message)) throw new Violation(`a Date for a date parameter was not refused with reylo's TypeError: ${describe(refused)}`);
-      if (!called.startsWith("no method") && !called.startsWith("the client as a function")) throw new Violation(`reylo called ${called} before refusing the Date`);
     },
   },
   {
@@ -547,7 +553,7 @@ export const SCENARIOS: Scenario[] = [
     dialects: ["postgres"],
     async run(ctx, client, q) {
       // postgres.js types an array by its first element, and Bun.sql binds none.
-      const row = await call(ctx, q.typedArrays, client, { b: [true, false], d: [new Date(Date.UTC(2026, 0, 2, 3, 4, 5, 6))], x: [Uint8Array.of(1, 2), Uint8Array.of(255)] });
+      const row = await call(ctx, q.typedArrays, client, { b: [true, false], d: ["2026-01-02T03:04:05.006Z"], x: [Uint8Array.of(1, 2), Uint8Array.of(255)] });
       eq(row, { b: "{t,f}", d: "1767323045.006000", x: "{0102,ff}" }, "row");
     },
   },

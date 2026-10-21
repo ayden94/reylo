@@ -188,16 +188,14 @@ function scalar(name: string, written: string, v: unknown, dialect: Dialect, fai
       if (typeof v === "string" && /^\{?[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}\}?$/i.test(v)) return v;
       return fail(`is ${written}, a UUID in hexadecimal; got ${describe(v)}.`);
     case "timestamptz":
-      if (v instanceof Date) {
-        if (Number.isNaN(v.getTime())) fail(`is ${written}, and the Date is invalid.`);
-        return dialect === "postgres" ? postgresYear(v.toISOString()) : v.toISOString();
-      }
+      // A string that names its zone, as `.run()` returns one; no Date (the maintainer, 2026-10-20).
+      if (v instanceof Date) return fail(`is ${written}, which takes the instant as a string that names its zone, not a Date: pass date.toISOString() ("2026-10-12T19:06:48.282Z").`);
       if (typeof v === "string" && zoned.test(v.trim())) return dialect === "postgres" ? postgresYear(v) : v;
-      return fail(`is ${written}, an instant: a Date, or a string that names its zone ("2026-10-12T19:06:48.282Z", "2026-10-12 19:06:48+09"); got ${describe(v)}, which the server would read in the session's time zone.`);
+      return fail(`is ${written}, an instant: a string that names its zone ("2026-10-12T19:06:48.282Z", "2026-10-12 19:06:48+09"); got ${describe(v)}, which the server would read in the session's time zone.`);
     case "timestamp":
     case "date":
       if (typeof v === "string") return dialect === "postgres" ? postgresYear(v) : v;
-      return fail(`is ${written}, a wall-clock reading with no zone, which takes its text ("2026-10-12 19:06:48.282", "2026-10-12"), not a Date: drivers write a Date's time in different zones.${v instanceof Date ? " A timestamptz takes a Date." : ` Got ${describe(v)}.`}`);
+      return fail(`is ${written}, a wall-clock reading with no zone, which takes its text ("2026-10-12 19:06:48.282", "2026-10-12"), not a Date: drivers write a Date's time in different zones.${v instanceof Date ? "" : ` Got ${describe(v)}.`}`);
     case "bytea":
     case "blob": {
       // Binary data travels as hexadecimal text: Postgres's own `\x` form, and bare digits that

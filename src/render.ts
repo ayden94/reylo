@@ -173,8 +173,9 @@ export function declaredType(t: EngineType, declared: unknown): string | undefin
  * describes every integer context as a BIGINT and every BIT one alike: a BIGINT column's is
  * `int8`, a TINYINT(1)'s or a BIT(1)'s `bool|int4`, which takes the truth value the row returns;
  * a SQLite BOOLEAN column's is NUMERIC, which takes it too, and `src/execute.ts` binds it as 1 or 0. A `timestamptz` is
- * an instant, which every Postgres driver binds a `Date` as; a string for it must name its zone
- * (`src/execute.ts`). A `timestamp` or a `date` (MySQL's DATETIME and TIMESTAMP are the engine's
+ * an instant, which `run` returns as its ISO 8601 text in UTC, and takes that text, or any that
+ * names its zone (`src/execute.ts`), and no `Date`, which `date.toISOString()` writes as such a
+ * string (the maintainer, 2026-10-20: "for now, let's just keep it as strings"). A `timestamp` or a `date` (MySQL's DATETIME and TIMESTAMP are the engine's
  * `timestamp`) is a wall-clock reading with no zone, and the drivers write a `Date`'s in different
  * zones, the app's (pg, mysql2), the server's (postgres.js) or UTC (PGlite, Bun.sql), so it takes
  * the text alone (the maintainer, 2026-10-12). An array's elements take NULL, which the run time
@@ -184,7 +185,6 @@ export function declaredType(t: EngineType, declared: unknown): string | undefin
 export function renderParamType(t: EngineType, dialect: Dialect = "postgres"): string {
   if (t.kind === "scalar" && dialect !== "sqlite") {
     if (t.name === "int8") return "number | bigint | string";
-    if (t.name === "timestamptz") return "Date | string";
     if (t.name.split("|").every((name) => name === "timestamp" || name === "timestamptz" || name === "date")) return "string";
   }
   // A SQLite driver binds a number for an INTEGER. A BOOLEAN column has NUMERIC affinity, so a

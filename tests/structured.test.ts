@@ -197,13 +197,13 @@ test("Postgres: a rows insert keeps the array's order and exact 64-bit ids, a ke
     assert.deepEqual(a.columns.map((c) => [c.name, c.nullable]), [["id", false], ["status", false], ["amount", true]]);
     const q = await built(root, url.href, "insert_events", insert);
     // postgres.js serializes a JSON parameter itself; pg takes its text.
-    assert.deepEqual(plain(await q.run(sql, { events: [{ id: 9007199254740993n, ts: new Date("2026-10-20T10:00:00Z"), status: "done", amount: "1.50", meta: { a: 1 } }] })), [{ id: 9007199254740993n, status: "done", amount: "1.50" }]);
+    assert.deepEqual(plain(await q.run(sql, { events: [{ id: 9007199254740993n, ts: "2026-10-20T10:00:00Z", status: "done", amount: "1.50", meta: { a: 1 } }] })), [{ id: 9007199254740993n, status: "done", amount: "1.50" }]);
     const pg = require("pg");
     const client = new pg.Client(url.href);
     await client.connect();
     try {
       assert.deepEqual(plain(await q.run(client, { events: [{ id: 2, ts: "2026-10-20 12:00:00+02" }] })), [{ id: 2n, status: "new", amount: null }]);
-      await assert.rejects(q.run(client, { events: [{ id: 3, ts: new Date(), amount: "1.234" }] }), /would be rounded/);
+      await assert.rejects(q.run(client, { events: [{ id: 3, ts: "2026-10-20T10:00:00Z", amount: "1.234" }] }), /would be rounded/);
     } finally {
       await client.end();
     }

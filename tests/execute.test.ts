@@ -141,7 +141,7 @@ test("a query without inputs, defined by hand or built before them, binds every 
   assert.deepEqual(seen, [['{"2"}']]);
 });
 
-test("a Date for a timestamp or date parameter, and a string without its zone for a timestamptz one, is refused before the statement runs", async () => {
+test("a Date for any date or time parameter, and a string without its zone for a timestamptz one, is refused before the statement runs", async () => {
   const time = (name: string) => ({ type: { kind: "scalar" as const, name } });
   const q: QueryModule<"postgres"> = {
     dialect: "postgres",
@@ -151,13 +151,16 @@ test("a Date for a timestamp or date parameter, and a string without its zone fo
   };
   const seen: unknown[][] = [];
   const client = { query: async (_: string, values?: unknown[]) => (seen.push(values!), { rows: [] }) };
-  const ok = { at: "2026-10-12 19:06:48.282", day: "2026-10-12", tz: new Date(0), tzs: ["2026-10-12T19:06:48.282Z", "2026-10-12 19:06:48+09", "2026-10-12 19:06:48.5-07:30", "2026-10-12 19:06 America/Los_Angeles", "2026-10-12 19:06:48 UTC", "infinity", "-infinity", "0001-01-01 00:00:00+00 BC", null, new Date(0)], days: [["2026-10-12"]] };
+  const ok = { at: "2026-10-12 19:06:48.282", day: "2026-10-12", tz: "1970-01-01T00:00:00Z", tzs: ["2026-10-12T19:06:48.282Z", "2026-10-12 19:06:48+09", "2026-10-12 19:06:48.5-07:30", "2026-10-12 19:06 America/Los_Angeles", "2026-10-12 19:06:48 UTC", "infinity", "-infinity", "0001-01-01 00:00:00+00 BC", null, "+010000-01-01T00:00:00Z"], days: [["2026-10-12"]] };
   await execute(client, q, ok);
   assert.equal(seen.length, 1);
   const refused = async (values: Record<string, unknown>, message: RegExp) => assert.rejects(Promise.resolve().then(() => execute(client, q, { ...ok, ...values })), (e: Error) => e instanceof TypeError && message.test(e.message));
   await refused({ at: new Date() }, /^Parameter "at" is a timestamp without a time zone, so it takes the wall-clock text/);
   await refused({ day: new Date() }, /^Parameter "day" is a date without a time zone/);
   await refused({ days: [[new Date()]] }, /^Parameter "days" is a date/);
+  // A timestamptz takes the string `.run()` returns for one, and a Date nowhere (the maintainer, 2026-10-20).
+  await refused({ tz: new Date(0) }, /^Parameter "tz" is a timestamptz, which takes the instant as a string that names its zone, as `\.run\(\)` returns one, not a Date: pass date\.toISOString\(\)/);
+  await refused({ tzs: ["2026-10-12T00:00:00Z", new Date(0)] }, /^Parameter "tzs" is a timestamptz, .*not a Date/);
   for (const tz of ["2026-10-12 19:06:48", "2026-10-12T19:06:48.282", "2026-10-12"]) await refused({ tz }, /^Parameter "tz" is a timestamptz, an instant, so a string for it names its zone/);
   await refused({ tzs: ["2026-10-12T00:00:00Z", "2026-10-12 19:06"] }, /^Parameter "tzs" is a timestamptz/);
   assert.equal(seen.length, 1);
@@ -169,7 +172,7 @@ test("a Date for a timestamp or date parameter, and a string without its zone fo
 test("postgres: postgres.js, which binds a date or time string through new Date(), gets one declared unknown; Bun.sql gets the string", async () => {
   const time = (name: string) => ({ type: { kind: "scalar" as const, name } });
   const q: QueryModule<"postgres"> = { dialect: "postgres", sql: "select :at::timestamp, :day::date, :tz::timestamptz, :d::timestamptz, :name::text", params: ["at", "day", "tz", "d", "name"], inputs: { at: time("timestamp"), day: time("date"), tz: time("timestamptz"), d: time("timestamptz"), name: time("text") } };
-  const values = { at: "2026-01-02 03:04:05.006", day: "infinity", tz: "2026-01-02 03:04:05 America/New_York", d: new Date(0), name: "ada" };
+  const values = { at: "2026-01-02 03:04:05.006", day: "infinity", tz: "2026-01-02 03:04:05 America/New_York", d: "1970-01-01T00:00:00Z", name: "ada" };
   const seen: unknown[][] = [];
   const unsafe = async (_: string, v?: unknown[]) => (seen.push(v!), []);
   const typed = (value: unknown, type: number) => ({ value, type });
@@ -178,8 +181,8 @@ test("postgres: postgres.js, which binds a date or time string through new Date(
   const bun = { unsafe, typed, commitDistributed: async () => {} };
   await execute(bun, q, values);
   assert.deepEqual(seen, [
-    [{ value: "2026-01-02 03:04:05.006", type: 705 }, { value: "infinity", type: 705 }, { value: "2026-01-02 03:04:05 America/New_York", type: 705 }, new Date(0), "ada"],
-    ["2026-01-02 03:04:05.006", "infinity", "2026-01-02 03:04:05 America/New_York", new Date(0), "ada"],
+    [{ value: "2026-01-02 03:04:05.006", type: 705 }, { value: "infinity", type: 705 }, { value: "2026-01-02 03:04:05 America/New_York", type: 705 }, { value: "1970-01-01T00:00:00Z", type: 705 }, "ada"],
+    ["2026-01-02 03:04:05.006", "infinity", "2026-01-02 03:04:05 America/New_York", "1970-01-01T00:00:00Z", "ada"],
   ]);
 });
 

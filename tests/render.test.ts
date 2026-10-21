@@ -173,9 +173,9 @@ test("parameters take what every driver binds, whatever Reylo returns", () => {
   assert.equal(renderType(inner, false, "postgres"), "{ b: string; n: number }");
 });
 
-test("a timestamptz parameter takes a Date or a string; a timestamp or a date, which has no zone, a string", () => {
-  assert.equal(renderParamType(scalar("timestamptz"), "postgres"), "Date | string");
-  assert.equal(renderParamType({ kind: "array", of: scalar("timestamptz") }, "postgres"), "(Date | string | null)[]");
+test("every date and time parameter takes a string: a timestamptz one the text that names its zone, which run returns, and no Date", () => {
+  assert.equal(renderParamType(scalar("timestamptz"), "postgres"), "string");
+  assert.equal(renderParamType({ kind: "array", of: scalar("timestamptz") }, "postgres"), "(string | null)[]");
   for (const name of ["timestamp", "date"]) {
     assert.equal(renderParamType(scalar(name), "postgres"), "string");
     assert.equal(renderParamType(scalar(name), "mysql"), "string");
