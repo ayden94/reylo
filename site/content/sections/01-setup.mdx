@@ -16,7 +16,7 @@ Each setup has a complete, working example project to copy, whose README's "How 
 3. Make .sql imports load wherever the project runs code, with Node's --import or the plugin for its runtime, bundler or framework: https://reylo.dev/#plugins
    The example for that setup shows it end to end (node, nub, bun, vite, nextjs, esbuild, webpack, rspack, jest or cloudflare-workers): https://github.com/colinhacks/reylo/tree/main/examples/<name>
 4. Set up the editor the project uses: https://reylo.dev/#editors
-5. Point Reylo at the development database with DATABASE_URL, or with direct_url in .reylo.yaml: https://reylo.dev/#reyloyaml
+5. Point Reylo at the development database with DATABASE_URL, or with direct_url in .reylo.yaml: https://reylo.dev/#database
 6. Write a first query and run it with the project's own driver: https://reylo.dev/#usage and https://reylo.dev/#supported-drivers
    For more queries, from a list to nested rows, follow the examples: https://reylo.dev/#examples
 7. Run the typecheck script. The query's types come from the database; an error in a .sql file shows at its line and column.
@@ -32,7 +32,7 @@ You'll need:
 
 - **TypeScript 7.1 (currently in beta).** The first release with content mappers.
 - **Node 24 or later.**
-- **A running dev database.** Postgres, MySQL 8.0.22 or later, or a SQLite file: Reylo reads your current schema from it. See [`.reylo.yaml`](#reyloyaml) to point Reylo at it.
+- **A running dev database.** Postgres, MySQL 8.0.22 or later, or a SQLite file: Reylo reads your current schema from it. See [Database](#database) to point Reylo at it.
 
 ```sh
 npm install reylo
@@ -334,7 +334,9 @@ Zed doesn't send `.sql` files to the language server, so an error inside one sho
 </Tab>
 </Tabs>
 
-### `.reylo.yaml`
+### Database
+
+**Reylo requires a connection to a live dev database.** It retrieves the types of each compiled query, its parameters and its columns, from the database itself.
 
 Reylo finds your dev database through the `DATABASE_URL` environment variable.
 
