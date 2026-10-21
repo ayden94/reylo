@@ -12,7 +12,7 @@ This page is the reference behind [the main docs](/) for SQLite: the place to lo
 | Versions | The type check prepares each statement in Reylo's own SQLite 3.53, against the schema of your database file; your app runs on its driver's SQLite ([Functions](#functions)) |
 | URL | A `file:` or `sqlite:` URL and a path, which starts at the directory of `package.json`, in `DATABASE_URL` or [`url`](/#url) |
 | Type check | Reads the schema through Node's built-in `node:sqlite`, so it needs no driver |
-| Drivers | better-sqlite3, `node:sqlite`, `bun:sqlite`, libSQL, Cloudflare D1, sqlite3, sqlite and Bun.sql ([Drivers](#drivers)) |
+| Drivers | better-sqlite3, `node:sqlite`, `bun:sqlite`, libSQL, Turso's engine, Cloudflare D1, sqlite3, sqlite and Bun.sql ([Drivers](#drivers)) |
 
 <Details summary="View the schema behind the examples" id="schema">
 
@@ -83,7 +83,7 @@ const counts = await orderCounts.run(db);
 //    ^?
 ```
 
-- better-sqlite3, `node:sqlite` and `bun:sqlite` read the exact integer, and Reylo refuses one past 2^53. The drivers sqlite3 and sqlite, Cloudflare D1, and Bun.sql without `safeIntegers` round it before Reylo sees it, and Reylo refuses the rounded number. libSQL at its default `intMode` refuses it itself, with a `RangeError` that names no column.
+- better-sqlite3, `node:sqlite`, `bun:sqlite` and Turso's engine read the exact integer, and Reylo refuses one past 2^53. The drivers sqlite3 and sqlite, Cloudflare D1, and Bun.sql without `safeIntegers` round it before Reylo sees it, and Reylo refuses the rounded number. libSQL at its default `intMode` refuses it itself, with a `RangeError` that names no column.
 - An `INTEGER` parameter takes a `number`.
 
 ### Decimals
@@ -160,7 +160,7 @@ const rows = await orderSummaries.run(db);
 
 ### Binary
 
-A `BLOB` is a `Uint8Array` on every driver: better-sqlite3, sqlite3 and sqlite give a `Buffer`, which is one, libSQL an `ArrayBuffer` and Cloudflare D1 an array of numbers, which Reylo turns into one.
+A `BLOB` is a `Uint8Array` on every driver: better-sqlite3, Turso's engine, sqlite3 and sqlite give a `Buffer`, which is one, libSQL an `ArrayBuffer` and Cloudflare D1 an array of numbers, which Reylo turns into one.
 
 - A `BLOB` parameter takes a `Uint8Array`, a `Buffer` or not, on every driver.
 
@@ -193,7 +193,7 @@ SQLite says nothing of a function's result, so Reylo keeps a table of SQLite's b
 - A function that SQLite answers with `NULL` for some non-null arguments is `| null` whatever its arguments. The date and time functions return `NULL` for text they cannot read as a date and for a failing modifier, so `date(placed_at)` is `string | null`, while `date('now')` and `datetime('now', '+7 days')` are `string`. The math functions with a domain (`sqrt`, `ln`, `log`, `acos`, `pow`, …) return `NULL` outside it, and `printf` returns `NULL` when its format writes nothing.
 - A function the table lacks is `unknown`: one your application registers (better-sqlite3's `db.function()`, `node:sqlite`'s `db.function()`), or one a loadable extension adds. Cast its result to type it: `cast(slugify(name) as text)`.
 - Which functions exist is the answer of the SQLite in the Node that runs the type check, from `pragma_function_list`: a call to one it lacks is an error at the call, "no such function: soundex on this database's SQLite". Builds differ in the math functions, `soundex` and each release's additions.
-- Your app runs on its driver's SQLite, which may be older: better-sqlite3 12.11 carries 3.53.2, and libSQL, Cloudflare D1 and `bun:sqlite` carry their own. The check is by name, so an argument count only a newer SQLite takes (`iif` with two arguments, before 3.48) is not caught.
+- Your app runs on its driver's SQLite, which may be older: better-sqlite3 12.11 carries 3.53.2, and libSQL, Cloudflare D1 and `bun:sqlite` carry their own. Turso's engine is a rewrite of SQLite, not a build of it, with functions of its own. The check is by name, so an argument count only a newer SQLite takes (`iif` with two arguments, before 3.48) is not caught.
 - A table whose `CHECK`, index or generated column calls a function the type check's SQLite lacks is read with that function stubbed, so it types as any other.
 
 ### Values Reylo refuses
@@ -335,13 +335,15 @@ Every SQLite driver turns each stored value into a JavaScript value in native co
 | --- | --- | --- |
 | better-sqlite3, `node:sqlite`, `bun:sqlite` | Reylo's own statement, prepared once per database, with its own integer setting, whatever the database's | |
 | libSQL | The driver's rows, each value given its type | At its default `intMode`, an integer past 2^53, which libSQL refuses; with `intMode: "string"`, an integer in a column with no type is its digits |
+| Turso's engine, `@tursodatabase/database` | Reylo's own statement, prepared per call, with its own integer setting, whatever the database's | |
 | sqlite3, sqlite | The driver's rows; the statement is not kept, since a statement left open makes the app's `close()` fail | An integer past 2^53, rounded |
 | Cloudflare D1 | The driver's rows; a `BLOB`'s array of numbers made a `Uint8Array` | An integer past 2^53, rounded |
 | Bun.sql | The driver's rows | An integer past 2^53, rounded, without `safeIntegers`; no rows, with no error, for a statement with a `"` inside a single-quoted string |
 
-- better-sqlite3, `node:sqlite` and `bun:sqlite` take `.runSync()` too, which returns the result itself, so it works inside better-sqlite3's and `bun:sqlite`'s `db.transaction(fn)`.
+- better-sqlite3, `node:sqlite`, `bun:sqlite` and the Database of `@tursodatabase/database/compat` take `.runSync()` too, which returns the result itself, so it works inside their `db.transaction(fn)`.
 - The drivers sqlite3 and sqlite bind a `bigint` as `NULL`, so Reylo passes them one that a `number` holds as that number, and refuses a larger one before the statement runs. Every other SQLite driver binds a `bigint` exactly.
-- Each driver takes its transactions too: libSQL's `.transaction()`, Bun.sql's `.begin()` and `.savepoint()`, and D1's `.withSession()` sessions.
+- Each driver takes its transactions too: libSQL's `.transaction()`, the handle Turso's `.transactionAsync()` passes its function, Bun.sql's `.begin()` and `.savepoint()`, and D1's `.withSession()` sessions.
+- Turso's engine 0.8 stops the process on a recursive `WITH` whose anchor and recursive member both read a CTE over `json_each`, such as one over a [JSON parameter](/#json-parameters), with no Reylo involved. Write that CTE `as materialized`.
 
 The type check needs no driver: it reads the schema through `node:sqlite`, which Node has built in since 22.5.
 

@@ -323,7 +323,7 @@ Reylo is bring-your-own-driver: `.run()` takes a client from any of these, or a 
 | --- | --- |
 | Postgres | `pg`, postgres.js, Bun.sql, PGlite, Neon, pg-promise, `@vercel/postgres` |
 | MySQL | mysql2, mariadb, PlanetScale 1.x, Bun.sql |
-| SQLite | better-sqlite3, `node:sqlite`, `bun:sqlite`, libSQL, Cloudflare D1, sqlite3, sqlite, Bun.sql |
+| SQLite | better-sqlite3, `node:sqlite`, `bun:sqlite`, libSQL, Turso's engine (`@tursodatabase/database`), Cloudflare D1, sqlite3, sqlite, Bun.sql |
 
 The type check reads the schema through `pg` or postgres.js on Postgres and through mysql2 on MySQL, so an app on another driver adds one of those as a dev dependency.
 

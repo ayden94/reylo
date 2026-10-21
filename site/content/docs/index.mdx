@@ -1190,6 +1190,15 @@ const db = createClient({ url: "file:app.db" });
 const user = await getUser.run(db, { id: 1 });
 ```
 
+```ts twoslash tab="Turso" dialect="sqlite"
+import { connect } from "@tursodatabase/database";
+import getUser from "./get_user.sql";
+
+const db = await connect("app.db");
+
+const user = await getUser.run(db, { id: 1 });
+```
+
 ```ts twoslash tab="Cloudflare D1" dialect="sqlite"
 import type { D1Database } from "@cloudflare/workers-types";
 import getUser from "./get_user.sql";
@@ -1230,7 +1239,7 @@ const db = new SQL({ adapter: "sqlite", filename: "app.db" });
 const user = await getUser.run(db, { id: 1 });
 ```
 
-Each takes its transactions too: libSQL's `.transaction()`, Bun.sql's `.begin()` and `.savepoint()`, and D1's `.withSession()` sessions. better-sqlite3, `node:sqlite` and `bun:sqlite` take `.runSync()` as well ([Run statements in a transaction](#run-statements-in-a-transaction)).
+Each takes its transactions too: libSQL's `.transaction()`, the handle Turso's `.transactionAsync()` passes its function, Bun.sql's `.begin()` and `.savepoint()`, and D1's `.withSession()` sessions. better-sqlite3, `node:sqlite`, `bun:sqlite` and the Database of `@tursodatabase/database/compat` take `.runSync()` as well ([Run statements in a transaction](#run-statements-in-a-transaction)).
 
 ## Data types
 
