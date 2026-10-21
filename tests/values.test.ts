@@ -123,6 +123,13 @@ test("coerce: a value a driver decoded, given its kind; an integer a number cann
   assert.deepEqual(coerce("int8[]", ["1", 2n], "c"), [1n, 2n]);
   assert.equal(coerce("decimal", 1.5, "c"), "1.5");
   assert.equal(coerce("date", new Date("2026-10-20T00:00:00Z"), "c"), "2026-10-20");
+  // Bun.sql decodes a date or timestamp before 1 AD as an Invalid Date (its infinities are ±Infinity):
+  // refused, never read as infinity.
+  for (const kind of ["date", "timestamp", "timestamptz", "timestamp|timestamptz"]) {
+    assert.throws(() => coerce(kind, new Date(Number.NaN), "born"), (e: Error) => e instanceof DecodeError && /^Column "born": the driver returned an Invalid Date/.test(e.message), kind);
+  }
+  assert.equal(coerce("timestamptz", Infinity, "c"), "infinity");
+  assert.equal(coerce("timestamptz", -Infinity, "c"), "-infinity");
   assert.equal(coerce("timestamp", new Date("2026-10-20T10:00:00.500Z"), "c"), "2026-10-20T10:00:00.5");
   assert.equal(coerce("timestamptz", new Date("2026-10-20T10:00:00.500Z"), "c"), "2026-10-20T10:00:00.5Z", "Bun.sql's Date, to its millisecond");
   assert.equal(coerce("timestamptz", new Date("2026-10-20T10:00:00Z"), "c"), "2026-10-20T10:00:00Z");

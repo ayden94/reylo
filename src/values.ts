@@ -199,9 +199,8 @@ export function instant(x: string): string {
  * millisecond, which is all a Date holds, with its fraction's trailing zeros dropped as the server
  * drops them, so that a value the driver did not cut reads alike on every driver.
  */
-export function instantOfDate(d: Date): string {
-  const t = d.getTime();
-  if (Number.isNaN(t)) return "infinity";
+export function instantOfDate(d: Date, column: string): string {
+  validDate(d, column);
   return d.toISOString().replace(/\.?0+Z$/, "Z");
 }
 
@@ -377,12 +376,20 @@ export function refuseTruth(column: string, shown: string): never {
 }
 
 /**
+ * A Date a driver handed back must hold a time. Bun.sql 1.4 decodes a date, timestamp or timestamptz
+ * before 1 AD as an Invalid Date (its infinities come as the numbers ±Infinity), so an Invalid Date
+ * is a value the driver lost, and Reylo refuses it rather than return a wrong one.
+ */
+function validDate(d: Date, column: string): void {
+  if (Number.isNaN(d.getTime())) throw new DecodeError(`Column "${column}": the driver returned an Invalid Date, which is how Bun.sql decodes a date or timestamp before 1 AD. Reylo refuses it rather than return a wrong value.`);
+}
+
+/**
  * A Date a driver read as UTC (Bun.sql's date and timestamp) back to the wall-clock text the server
  * wrote: `YYYY-MM-DD`, or with `T` and the fraction the driver kept, and ` BC` for a year before 1.
  */
-function utcText(d: Date, kind: "date" | "timestamp"): string {
-  const t = d.getTime();
-  if (Number.isNaN(t)) return "infinity";
+function utcText(d: Date, kind: "date" | "timestamp", column: string): string {
+  validDate(d, column);
   const year = d.getUTCFullYear();
   const date = `${pad(year > 0 ? year : 1 - year, 4)}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
   const bc = year > 0 ? "" : " BC";
@@ -425,13 +432,13 @@ export function coerce(kind: Kind, v: unknown, column: string): unknown {
       return v;
     case "date":
     case "timestamp":
-      if (v instanceof Date) return utcText(v, kind as "date" | "timestamp");
+      if (v instanceof Date) return utcText(v, kind as "date" | "timestamp", column);
       // Bun.sql's `infinity`.
       if (v === Infinity || v === -Infinity) return v > 0 ? "infinity" : "-infinity";
       return v;
     case "timestamptz":
       if (typeof v === "string") return instant(v);
-      if (v instanceof Date) return instantOfDate(v);
+      if (v instanceof Date) return instantOfDate(v, column);
       // Bun.sql's `infinity`.
       if (v === Infinity || v === -Infinity) return v > 0 ? "infinity" : "-infinity";
       return v;
@@ -471,7 +478,7 @@ function coerceEither(kind: Kind, v: unknown, column: string): unknown {
     if (kinds.includes("int")) return exactInteger(v, column);
     return kinds.includes("int8") ? bigInteger(v, column) : v;
   }
-  if (v instanceof Date) return kinds.includes("timestamp") ? utcText(v, "timestamp") : kinds.includes("date") ? utcText(v, "date") : kinds.includes("timestamptz") ? instantOfDate(v) : v;
+  if (v instanceof Date) return kinds.includes("timestamp") ? utcText(v, "timestamp", column) : kinds.includes("date") ? utcText(v, "date", column) : kinds.includes("timestamptz") ? instantOfDate(v, column) : v;
   if (v instanceof ArrayBuffer || (Array.isArray(v) && kinds.includes("bytes"))) return coerce("bytes", v, column);
   return v;
 }
