@@ -4,7 +4,7 @@ title: "Supported drivers"
 
 ## Supported drivers
 
-Pass `.run()` a client from any of these drivers, or a transaction or connection taken from one.
+Pass `.run()` a client from any of these drivers. Transactions and connections taken from a client work too ([an example](#run-statements-in-a-transaction)).
 
 The type check reads your schema through `pg` or postgres.js on Postgres, and `mysql2` on MySQL. An app on another driver adds one as a dev dependency.
 
@@ -73,8 +73,6 @@ import getUser from "./get_user.sql";
 const user = await getUser.run(sql, { id: 1 });
 ```
 
-Each takes its transactions and connections too: `pg`'s `Pool`, `Client` and `PoolClient`; postgres.js's and `Bun.sql`'s `.begin()`, `.savepoint()` and `.reserve()`; PGlite's `.transaction()`; Neon's `Pool` and `Client`; and `pg-promise`'s `.task()` and `.tx()`.
-
 **MySQL**
 
 ```ts twoslash tab="mysql2" dialect="mysql"
@@ -104,8 +102,6 @@ const db = new SQL(process.env.DATABASE_URL!);
 
 const user = await getUser.run(db, { id: 1 });
 ```
-
-Each takes its transactions and connections too: `mysql2`'s promise or callback API, PlanetScale's `.transaction()`, and `Bun.sql`'s `.begin()`, `.savepoint()` and `.reserve()`.
 
 **SQLite**
 
@@ -193,5 +189,3 @@ const db = new SQL({ adapter: "sqlite", filename: "app.db" });
 
 const user = await getUser.run(db, { id: 1 });
 ```
-
-Each takes its transactions too: libSQL's `.transaction()`, the handle Turso's `.transactionAsync()` passes its function, `Bun.sql`'s `.begin()` and `.savepoint()`, and D1's `.withSession()` sessions. On `better-sqlite3`, `node:sqlite`, `bun:sqlite` and the `Database` of `@tursodatabase/database/compat`, [`.runSync()`](#runsync) works too.
