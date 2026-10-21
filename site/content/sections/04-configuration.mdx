@@ -36,11 +36,11 @@ DATABASE_URL=mysql://root@localhost:3306/app
 DATABASE_URL=file:./app.db
 ```
 
-A `${VAR}` comes from the environment, then from the [`env`](#env) files:
+You can interpolate other variables from your environment to construct a connection string.
 
 ```yaml title=".reylo.yaml"
 # the default is ${DATABASE_URL}
-url: ${APP_DATABASE_URL}
+url: postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:5432/app
 ```
 
 ### `direct_url`
