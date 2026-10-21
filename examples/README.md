@@ -8,7 +8,7 @@ One complete, working project for each setup the [docs](https://reylo.dev/#setup
 | [nub](./nub) | the preload in `nub.jsonc` ([nub](https://reylo.dev/#setup-nub)) | SQLite, `node:sqlite` | a script, and tests with `nub --test` |
 | [bun](./bun) | the preload in `bunfig.toml`, and `Bun.build` with `reylo/esbuild` ([Bun](https://reylo.dev/#setup-bun)) | SQLite, `bun:sqlite` | a script, `bun test`, and a bundle |
 | [vite](./vite) | `reylo/vite` in a React Router app ([Vite](https://reylo.dev/#setup-vite)) | Postgres, pg | the dev server, the production server, and Vitest |
-| [nextjs](./nextjs) | `reylo/turbopack` under Turbopack and `reylo/webpack` under webpack ([Next.js](https://reylo.dev/#setup-nextjs)) | Postgres, postgres.js | an App Router app: `next dev`, and `next build` and `next start` with each bundler |
+| [nextjs](./nextjs) | `withReylo` from `reylo/next`: the loader under Turbopack and webpack, and the type check inside `next build` ([Next.js](https://reylo.dev/#setup-nextjs)) | Postgres, postgres.js | an App Router app: `next dev`, and `next build` and `next start` with each bundler |
 | [esbuild](./esbuild) | `reylo/esbuild`: a standalone ES module ([esbuild](https://reylo.dev/#setup-esbuild)) | Postgres, postgres.js | an HTTP server, bundled into one file that runs with plain `node`, and built without a database from `.reylo/` |
 | [webpack](./webpack) | `reylo/webpack` ([webpack](https://reylo.dev/#setup-webpack)) | MySQL, mysql2 | an HTTP server, bundled into one ES module |
 | [rspack](./rspack) | `reylo/webpack` ([Rspack](https://reylo.dev/#setup-rspack)) | Postgres, pg | an HTTP server, bundled into one ES module |

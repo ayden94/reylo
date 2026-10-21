@@ -9,12 +9,12 @@ mkdir -p node_modules/@reylosql && ln -sfn ../../../../packages/postgres node_mo
 echo 'DATABASE_URL=postgres://localhost:5432/postgres' > .env   # the lab/basic tables
 nub run typecheck        # next typegen, then tsc --noEmit --runExternalCode
 nub run dev              # Turbopack; nub run dev:webpack for webpack
-nub run build && nub run start   # build:webpack for webpack
+nub run build && nub run start   # next build, whose type check runs Reylo's; build:webpack for webpack
 curl 'http://localhost:3000/api/user?id=1'
 ```
 
-- `next.config.ts` registers the loader for `*.sql` in `turbopack.rules`, as `reylo/turbopack`, and in the `webpack` hook, as `reylo/webpack`, on the server only: a client component that imports a `.sql` file fails the build instead of shipping the statement to the browser.
-- `next build` type-checks by running the project's `tsc` without `--runExternalCode`, so the content mapper cannot run there and every `.sql` import is TS2307 (plus TS100024 on the tsconfig, TS18068 from the nightly of 2026-09-23). `typescript.ignoreBuildErrors` turns that step off, and the `build` script runs `next typegen` and `tsc --noEmit --runExternalCode` first, which also checks the route types Next generates in `.next/types`.
+- `next.config.ts` wraps the config in `withReylo` from `reylo/next`, which registers the loader for `*.sql` in `turbopack.rules`, as `reylo/turbopack`, and in the `webpack` hook, as `reylo/webpack`, on the server only: a client component that imports a `.sql` file fails the build instead of shipping the statement to the browser.
+- `next build` type-checks by running the project's `tsc` without `--runExternalCode`, so the content mapper cannot run there and every `.sql` import is TS2307 (plus TS100024 on the tsconfig, TS18068 from the nightly of 2026-09-23). `withReylo` sets `typescript.ignoreBuildErrors` to turn that step off, and runs `tsc --noEmit --runExternalCode` in `compiler.runAfterProductionCompile`, after the compile and before the prerender, which also checks the route types Next generates in `.next/types` (`wiki/nextjs.md`). The `typecheck` script is the same check without a build.
 - `turbopack.root` is the repository root because `node_modules/reylo` is a symlink to it and Turbopack resolves nothing outside its root; an app that installs Reylo keeps the default.
 - `allowImportingTsExtensions` is needed because the symlink reaches Reylo's TypeScript sources, whose imports end in `.ts`. The published package is compiled (`nub run build` writes it to `dist/`), so an app that installs it needs neither this setting nor the `turbopack.root` above; that was checked with the lab copied out of the repository and the built tarball installed.
 - `/api/user` also returns `rewritten`, the statement as the engine rewrote it for the database, which the loader puts in every module.

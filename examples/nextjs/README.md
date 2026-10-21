@@ -13,7 +13,7 @@ cp .env.example .env          # DATABASE_URL=postgres://localhost:5432/reylo_nex
 nub run setup                 # creates users and posts: "created users and posts"
 nub run typecheck             # next typegen, then tsc --noEmit --runExternalCode: "✓ Types generated successfully", exit 0
 nub run dev                   # next dev (Turbopack) on http://localhost:3000; nub run dev:webpack for webpack
-nub run build                 # the type check, then next build (Turbopack): "◐ /" and "ƒ /api/users/[id]"
+nub run build                 # next build (Turbopack), whose type check runs Reylo's: "◐ /" and "ƒ /api/users/[id]"
 nub run start                 # next start on http://localhost:3000
 nub run build:webpack         # the same build with webpack; then nub run start
 ```
@@ -29,19 +29,24 @@ $ curl -w ' %{http_code}\n' localhost:3000/api/users/99
 
 While `nub run dev` or `nub run dev:webpack` runs, an edit to a `.sql` file is picked up on the next request, with no restart: change `order by p.id` to `order by p.id desc` in `queries/list_posts.sql` and reload `/`.
 
-Misspell a column in `queries/list_posts.sql` and `nub run typecheck` reports it at the file's line and column, and `nub run build` stops there:
+Misspell a column in `queries/list_posts.sql` and `nub run typecheck` reports it at the file's line and column:
 
 ```text
 queries/list_posts.sql(1,14): error reylo6: column p.titel does not exist (42703)
 ```
 
-On their own, `next dev` and `next build` report the same error from the loader, as `queries/list_posts.sql:1:14: column p.titel does not exist (42703)`.
+The loader reports the same error to `next dev` and `next build`, which stops there, as `queries/list_posts.sql:1:14: column p.titel does not exist (42703)`. A query's caller fails the build too: misspell `post.author` in `app/page.tsx` and `nub run build` stops after the compile, with Turbopack or webpack:
+
+```text
+app/page.tsx(24,40): error TS2551: Property 'authr' does not exist on type '{ id: number; title: string; body: string | null; author: string; }'. Did you mean 'author'?
+⨯ Failed to run runAfterProductionCompile: Failed to type check (tsc --runExternalCode).
+```
 
 ## How Reylo is wired in
 
 - In `package.json`, `reylo` is a dependency (the loader, and the run time each query module imports); `@reylosql/postgres` (the engine that analyzes each statement) and `typescript` 7.1 beta are dev dependencies. The `postgres` package is the driver the app runs the queries with, and the type check reads the schema through it too.
-- In the `package.json` scripts, `typecheck` is `next typegen && tsc --noEmit --runExternalCode`: `next typegen` writes the route types (`LayoutProps`, `RouteContext`) the app uses, and `--runExternalCode` lets `tsc` run the content mapper. The `build` script runs the same check before `next build`, whose own type check cannot run content mappers (below). The scripts `dev`, `start` and the webpack variants `dev:webpack` and `build:webpack` are Next's own commands.
-- In `next.config.ts`, `turbopack.rules` sends `*.sql` through `reylo/turbopack`, with `condition: { not: "browser" }` so only server code may import a query, and `as: "*.js"` so Turbopack treats the loader's output as JavaScript. The `webpack` hook adds `reylo/webpack`, the same loader under webpack's name, on the server only, for `--webpack`. The option `typescript.ignoreBuildErrors` turns off `next build`'s type check, which runs the project's `tsc` without `--runExternalCode` and so fails on every `.sql` import (TS2307, and TS18068 on `tsconfig.json`); the `build` script has run the real check by then. The option `turbopack.root` is there only because Reylo is linked from this repository (below).
+- In the `package.json` scripts, `typecheck` is `next typegen && tsc --noEmit --runExternalCode`, the type check without a build: `next typegen` writes the route types (`LayoutProps`, `RouteContext`) the app uses, and `--runExternalCode` lets `tsc` run the content mapper. The other scripts are Next's own commands: `dev`, `build`, `start`, and the webpack variants `dev:webpack` and `build:webpack`.
+- In `next.config.ts`, `withReylo` from `reylo/next` wraps the config. It adds a `turbopack.rules` entry that sends `*.sql` through `reylo/turbopack`, with `condition: { not: "browser" }` so only server code may import a query, and `as: "*.js"` so Turbopack treats the loader's output as JavaScript, and a `webpack` hook that adds `reylo/webpack`, the same loader under webpack's name, on the server only, for `--webpack`. And it moves the type check: `next build` checks with the project's `tsc` but without `--runExternalCode`, so on its own it fails on every `.sql` import (TS2307, and TS18068 on `tsconfig.json`). The wrapper sets `typescript.ignoreBuildErrors` to turn that check off, and runs `tsc --noEmit --runExternalCode` in `compiler.runAfterProductionCompile`, after the compile and before the prerender; `next build` still prints "Skipping validation of types" for its own check. The option `turbopack.root` is there only because Reylo is linked from this repository (below).
 - In `tsconfig.json`, `contentMappers` names `reylo` for `.sql`; the rest is what `create-next-app` writes. Its `include` takes `.ts` and `.tsx` files only, so `setup.sql`, a script rather than one query, stays out of the type check, and the queries come in through their imports.
 - The `queries/*.sql` files hold one statement per file, with `:name` parameters, imported as `@/queries/<name>.sql` through the template's `@/*` path. They sit in a top-level `queries/` beside `lib/` rather than in `app/`, because they are the app's data layer, shared by routes, and no route segment owns them. The query `get_user.sql` resolves to a row or `null`, `list_posts.sql` to an array, and `create_post.sql`, an insert with `returning`, to the row it wrote.
 - The module `lib/db.ts` holds the one postgres.js client every query runs on, marked `server-only`, and kept on `globalThis` so that `next dev` does not open another pool each time it evaluates the module again.

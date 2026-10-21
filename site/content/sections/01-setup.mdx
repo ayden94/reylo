@@ -130,46 +130,36 @@ Import `.sql` files from server code only, such as a `.server/` directory: Vite 
 </Tab>
 <Tab value="Next.js" id="setup-nextjs">
 
+Wrap your Next.js config with `withReylo`:
+
 ```ts title="next.config.ts"
 import type { NextConfig } from "next";
+import { withReylo } from "reylo/next";
 
 const nextConfig: NextConfig = {
-  // the build script runs the type check first
-  typescript: { ignoreBuildErrors: true },
-  turbopack: {
-    rules: {
-      "*.sql": {
-        condition: { not: "browser" },
-        loaders: ["reylo/turbopack"],
-        as: "*.js",
-      },
-    },
-  },
-  webpack(config, { isServer }) {
-    if (isServer) {
-      config.module.rules.push({
-        test: /\.sql$/,
-        use: "reylo/webpack",
-      });
-    }
-    return config;
-  },
+  // ...
 };
 
-export default nextConfig;
+export default withReylo(nextConfig);
 ```
 
-Run `tsc` before `next build`, since Next.js's own type check can't run content mappers:
+Your server code can now import `.sql` files, with Turbopack or webpack, and `next build` fails on a type error in a query or its caller.
+
+To type-check without building, run `next typegen` first, which writes the route types:
 
 ```json title="package.json"
 {
   "scripts": {
-    "dev": "next dev",
-    "typecheck": "next typegen && tsc --noEmit --runExternalCode",
-    "build": "npm run typecheck && next build"
+    "typecheck": "next typegen && tsc --noEmit --runExternalCode"
   }
 }
 ```
+
+<Details summary="How the build checks the types" id="nextjs-type-check">
+
+Next.js type-checks with your project's `tsc` but without `--runExternalCode`, so `withReylo` turns that check off and runs `tsc --noEmit --runExternalCode` itself, after the compile and before the prerender. Next.js still prints "Skipping validation of types" for its own check.
+
+</Details>
 
 </Tab>
 <Tab value="esbuild" id="setup-esbuild">
