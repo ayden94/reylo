@@ -594,6 +594,24 @@ const NOT_QUERIES: &[&str] = &[
     "vacuum", "xa",
 ];
 
+/// How a file the type check refuses because it is not one query (a migration or a schema file,
+/// which nothing imports, but which tsconfig.json's `include` hands to the content mapper all the
+/// same) is left out of it.
+const LEAVE_OUT: &str = "so if it is a migration or a schema file, leave it out of the type check with \"exclude\" in tsconfig.json, as in \"exclude\": [\"db/**\"]";
+
+/// The error of a file that holds several statements, on every database.
+pub fn several_statements() -> String {
+    format!("A typed .sql file holds one statement and this one holds several, {LEAVE_OUT}.")
+}
+
+/// The error of a file whose one statement is not of the `kinds` a database types (DDL, a
+/// session setting, a transaction's control), on every database.
+pub fn not_a_query(kinds: &[&str]) -> String {
+    let named: Vec<String> = kinds.iter().filter(|k| **k != "with").map(|k| k.to_ascii_uppercase()).collect();
+    let (last, rest) = named.split_last().map_or(("", &[][..]), |(l, r)| (l.as_str(), r));
+    format!("A typed .sql file holds one {} or {last} statement and this one holds another kind, {LEAVE_OUT}.", rest.join(", "))
+}
+
 /// Whether the text is one statement whose first keyword (past whitespace and comments) is one
 /// of `kinds`, or an opening parenthesis: nothing but whitespace, semicolons and comments may
 /// follow its first semicolon outside the text spans. SQLite prepares only the first statement
@@ -623,7 +641,7 @@ pub fn one_statement(sql: &str, lexed: &Lexed, kinds: &[&str]) -> Result<(), Str
             }
         }
         if i < bytes.len() {
-            return Err("expected exactly one statement".into());
+            return Err(several_statements());
         }
     }
     let start = past_comments(0);
@@ -631,9 +649,7 @@ pub fn one_statement(sql: &str, lexed: &Lexed, kinds: &[&str]) -> Result<(), Str
     if kinds.contains(&word.as_str()) || sql[start..].starts_with('(') || !NOT_QUERIES.contains(&word.as_str()) {
         return Ok(());
     }
-    let named: Vec<String> = kinds.iter().filter(|k| **k != "with").map(|k| k.to_ascii_uppercase()).collect();
-    let (last, rest) = named.split_last().map_or(("", &[][..]), |(l, r)| (l.as_str(), r));
-    Err(format!("only {} and {last} statements are typed", rest.join(", ")))
+    Err(not_a_query(kinds))
 }
 
 #[cfg(test)]
@@ -916,10 +932,14 @@ mod tests {
         assert_eq!(check("select 1;\n-- a trailing comment\n;\n"), Ok(()));
         assert_eq!(check("select ';' as a"), Ok(()));
         assert_eq!(check("with x as (select 1) delete from t where id in (select * from x)"), Ok(()));
-        assert_eq!(check("select 1; select 2").unwrap_err(), "expected exactly one statement");
-        assert_eq!(check("create table t (id integer primary key);\ncreate index i on t (id);").unwrap_err(), "expected exactly one statement");
-        assert_eq!(check("create table t (id integer primary key)").unwrap_err(), "only SELECT, VALUES, INSERT, REPLACE, UPDATE and DELETE statements are typed");
-        assert_eq!(check("pragma table_info(t)").unwrap_err(), "only SELECT, VALUES, INSERT, REPLACE, UPDATE and DELETE statements are typed");
+        // A migration or a schema file: the error says what a typed file holds, and how to leave
+        // such a file out of the type check.
+        let several = "A typed .sql file holds one statement and this one holds several, so if it is a migration or a schema file, leave it out of the type check with \"exclude\" in tsconfig.json, as in \"exclude\": [\"db/**\"].";
+        assert_eq!(check("select 1; select 2").unwrap_err(), several);
+        assert_eq!(check("create table t (id integer primary key);\ncreate index i on t (id);").unwrap_err(), several);
+        let other = "A typed .sql file holds one SELECT, VALUES, INSERT, REPLACE, UPDATE or DELETE statement and this one holds another kind, so if it is a migration or a schema file, leave it out of the type check with \"exclude\" in tsconfig.json, as in \"exclude\": [\"db/**\"].";
+        assert_eq!(check("create table t (id integer primary key)").unwrap_err(), other);
+        assert_eq!(check("pragma table_info(t)").unwrap_err(), other);
         // A misspelt keyword is a syntax error the database reports, not a statement of another kind.
         assert_eq!(check("selec id from users"), Ok(()));
     }

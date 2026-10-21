@@ -151,9 +151,9 @@ const cteDml4: CteDmlParams = null! as { uid: number; title: string };
 // ---------------------------------------------------------------------------
 // 6. DECLARE: a cursor statement and a DO block
 // ---------------------------------------------------------------------------
-// Neither is a statement reylo types, and the engine says so on the statement (`reylo10: only
-// SELECT, INSERT, UPDATE, DELETE and MERGE statements are typed`) rather than handing back
-// `unknown` in silence. A mapper error stops the type check, so the two files live in
+// Neither is a statement reylo types, and the engine says so on the statement (reylo10, which
+// says that a typed file holds one SELECT, INSERT, UPDATE, DELETE or MERGE statement and how to
+// leave a migration out of the type check) rather than handing back `unknown` in silence. A mapper error stops the type check, so the two files live in
 // `untyped/`, a project of their own whose check must fail with exactly those two errors.
 
 // ---------------------------------------------------------------------------

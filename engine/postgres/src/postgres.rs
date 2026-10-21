@@ -26,6 +26,9 @@ use serde_json::{json, Value};
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+/// The statements the Postgres analysis types (`analyze.rs`), as its refusal names them.
+const KINDS: &[&str] = &["select", "insert", "update", "delete", "merge"];
+
 /// How many statements one analysis may synthesize to settle its columns: one per set-operation
 /// arm, one per statement whose expressions read a column, one per JSON constructor context.
 const MAX_PROBES: usize = 8;
@@ -309,10 +312,18 @@ impl<'a> Engine<'a> {
         let parsed = match analyze::analyze(&rewritten.sql) {
             Ok(p) => Some(p),
             // A statement the engine does not type (a cursor, a DO block, DDL) says so on the
-            // whole statement, rather than coming back as `unknown` with no word.
-            Err(e @ analyze::AnalyzeError::UnsupportedStatement) => {
-                diagnostics.push(diag(e.to_string(), 0, sql.trim_end().len(), 10));
+            // whole statement, rather than coming back as `unknown` with no word, and so does a
+            // file of several statements, which the server would refuse to describe; each says
+            // what a typed file holds and how to leave a migration out of the type check, as on
+            // the other databases. `AnalyzeError` words both for Reylo Framework, which has no
+            // tsconfig.json to leave a file out of.
+            Err(analyze::AnalyzeError::UnsupportedStatement) => {
+                diagnostics.push(diag(lex::not_a_query(KINDS), 0, sql.trim_end().len(), 10));
                 None
+            }
+            Err(analyze::AnalyzeError::NotOneStatement(n)) if n > 1 => {
+                diagnostics.push(diag(lex::several_statements(), 0, sql.trim_end().len(), 10));
+                return Some(bare(sql, lexed, Dialect::Postgres, diagnostics));
             }
             Err(_) => None,
         };
@@ -1739,6 +1750,22 @@ mod tests {
         // The fix reads the value from a WITH.
         let a = replay("with input as (select concat('%', :q::text, '%') as pattern) select 1 as one from input where input.pattern like input.pattern");
         assert!(a.diagnostics.iter().all(|d| d.code != 3), "{:?}", a.diagnostics);
+    }
+
+    #[test]
+    fn a_migration_says_what_a_typed_file_holds_and_how_to_leave_it_out() {
+        // Several statements are refused before the server is asked, which would refuse to
+        // describe them; one statement of another kind is refused on its whole text.
+        let sql = "create table users (id integer primary key);\ncreate table posts (id integer primary key);\n";
+        let none = HashMap::new();
+        let host = Host::new(&none);
+        let a = analyze(sql, &host).expect("refused without a round trip");
+        assert!(host.needs().is_empty());
+        assert_eq!(a.diagnostics.iter().map(|d| (d.code, d.start, d.length)).collect::<Vec<_>>(), [(10, 0, sql.trim_end().len())]);
+        assert_eq!(a.diagnostics[0].message, "A typed .sql file holds one statement and this one holds several, so if it is a migration or a schema file, leave it out of the type check with \"exclude\" in tsconfig.json, as in \"exclude\": [\"db/**\"].");
+        let a = replay("create table tags (id integer primary key)");
+        assert_eq!(a.diagnostics.iter().map(|d| d.code).collect::<Vec<_>>(), [10]);
+        assert_eq!(a.diagnostics[0].message, "A typed .sql file holds one SELECT, INSERT, UPDATE, DELETE or MERGE statement and this one holds another kind, so if it is a migration or a schema file, leave it out of the type check with \"exclude\" in tsconfig.json, as in \"exclude\": [\"db/**\"].");
     }
 
     #[test]
