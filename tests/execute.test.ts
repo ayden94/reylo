@@ -465,7 +465,7 @@ test("sqlite: Turso's @tursodatabase/database, its Database in every release and
   assert.deepEqual([prepared, closed], [2, 2]);
 });
 
-test("sqlite: sqlite3 and the sqlite package, which bind a BigInt as NULL, get one a number holds as that number, and a larger one is refused", async () => {
+test("sqlite: sqlite3 and the sqlite package, which bind a BigInt as NULL, get one a number holds as that number, a larger one its digits where the parameter is a BIGINT column's, and is refused elsewhere", async () => {
   const seen: unknown[][] = [];
   const sqlite3 = { all: (_: string, v: unknown[], cb: (e: Error | null, rows: unknown[]) => void) => (seen.push(v), cb(null, [])), exec: () => {} };
   const sqlite = { all: async (_: string, v?: unknown[]) => (seen.push(v!), []), getDatabaseInstance: () => ({}) };
@@ -474,6 +474,11 @@ test("sqlite: sqlite3 and the sqlite package, which bind a BigInt as NULL, get o
   assert.deepEqual([...seen], [[7, "ada", 7], [-7, "ada", -7]]);
   for (const client of [sqlite3, sqlite]) await assert.rejects(Promise.resolve().then(() => execute(client, lite, { id: BigInt("9007199254740993"), name: "ada" })), /^TypeError: sqlite3 binds a BigInt as NULL, and 9007199254740993 is past 2\^53 - 1/);
   assert.equal(seen.length, 2);
+  // A BIGINT column's parameter (the engine's int8), whose INTEGER affinity reads the digits as that integer.
+  const big: QueryModule<"sqlite"> = { ...lite, inputs: { id: { type: { kind: "scalar", name: "int8" } }, name: { type: { kind: "scalar", name: "text" } } } };
+  await execute(sqlite3, big, { id: BigInt("9007199254740993"), name: "ada" });
+  await execute(sqlite, big, { id: BigInt("-9007199254740993"), name: "ada" });
+  assert.deepEqual([...seen].slice(2), [["9007199254740993", "ada", "9007199254740993"], ["-9007199254740993", "ada", "-9007199254740993"]]);
 });
 
 test("sqlite: sqlite3's callback all(), its errors, and the sqlite package's promise all()", async () => {

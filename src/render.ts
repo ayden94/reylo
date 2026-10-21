@@ -191,7 +191,9 @@ export function renderParamType(t: EngineType, dialect: Dialect = "postgres"): s
   // parameter written to or compared with one is NUMERIC, and takes the truth value the column
   // returns, which the run time binds as 1 or 0.
   // A column declared BIGINT's parameter keeps an INTEGER's type for now.
-  if (t.kind === "scalar" && dialect === "sqlite" && (t.name === "integer" || t.name === "int8")) return "number";
+  if (t.kind === "scalar" && dialect === "sqlite" && t.name === "integer") return "number";
+  // A BIGINT, INT8 or UNSIGNED BIG INT column comes back as a bigint, which its parameter takes.
+  if (t.kind === "scalar" && dialect === "sqlite" && t.name === "int8") return "number | bigint";
   if (t.kind === "scalar" && dialect === "sqlite" && t.name === "numeric") return "number | string | boolean";
   if (t.kind === "scalar" && dialect === "sqlite" && t.name === "bool") return "boolean | number";
   // Every driver binds a Uint8Array (a Buffer is one) for a binary value, mariadb and Neon's

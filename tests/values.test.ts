@@ -115,11 +115,11 @@ test("SQLite: the kinds, and a NUMERIC column of either", () => {
   assert.deepEqual(["int", "int|float|text", "unknown", "bytes"].map(kindType), ["number", "number | string", "unknown", "Uint8Array"]);
 });
 
-test("SQLite: a column declared BIGINT, INT8 or UNSIGNED BIG INT (the engine's int8) is a BigInt, as on Postgres and MySQL; its parameter keeps an INTEGER's type", () => {
+test("SQLite: a column declared BIGINT, INT8 or UNSIGNED BIG INT (the engine's int8) is a BigInt, as on Postgres and MySQL, and its parameter takes one back", () => {
   assert.equal(scalarKind("int8", "sqlite"), "int8");
   assert.equal(renderType(scalar("int8"), false, "sqlite"), "bigint");
   assert.equal(renderType(scalar("int8"), true, "sqlite"), "number", "inside a JSON document, the number SQLite writes");
-  assert.equal(renderParamType(scalar("int8"), "sqlite"), "number");
+  assert.equal(renderParamType(scalar("int8"), "sqlite"), "number | bigint");
   assert.deepEqual(typeSchema(scalar("int8"), "sqlite"), { type: "integer", format: "int64" }, "the BigInt, as the JSON integer it is");
   assert.deepEqual(typeSchema(scalar("int8"), "sqlite"), typeSchema(scalar("int8"), "postgres"));
   assert.deepEqual(typeSchema(scalar("int8"), "sqlite", true), { type: "integer", format: "int64" }, "a parameter");

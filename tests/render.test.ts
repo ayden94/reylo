@@ -133,7 +133,7 @@ const ROUND_TRIPS: Record<"postgres" | "mysql" | "sqlite", [column: EngineType, 
     [{ kind: "json" }, { kind: "json" }],
   ],
   sqlite: [
-    ...["integer", "real", "text", "blob", "numeric"].map((n): [EngineType, EngineType] => [scalar(n), scalar(n)]),
+    ...["integer", "int8", "real", "text", "blob", "numeric"].map((n): [EngineType, EngineType] => [scalar(n), scalar(n)]),
     [scalar("bool"), scalar("numeric")],
     [{ kind: "unknown" }, { kind: "unknown" }],
   ],

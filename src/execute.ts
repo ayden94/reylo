@@ -298,9 +298,9 @@ async function executeAsync(c: AnyClient | null | undefined, query: QueryModule,
       if (typeof c.execute === "function") return normalize((await c.execute({ sql: text, args: values })).rows, columns);
       if (isTurso(c)) return await runTurso(c, text, values, columns);
       // The sqlite package wraps sqlite3, and sqlite3 binds a BigInt as NULL.
-      if (typeof c.getDatabaseInstance === "function") return normalize(await c.all(text, values.map(sqlite3Value)), columns);
+      if (typeof c.getDatabaseInstance === "function") return normalize(await c.all(text, values.map((v, i) => sqlite3Value(v, type(i)))), columns);
       if (typeof c.all === "function" && typeof c.exec === "function") {
-        const bound = values.map(sqlite3Value);
+        const bound = values.map((v, i) => sqlite3Value(v, type(i)));
         return normalize(
           await new Promise<unknown[]>((resolve, reject) => c.all(text, bound, (error: Error | null, rows: unknown[]) => (error ? reject(error) : resolve(rows)))),
           columns,
@@ -447,10 +447,13 @@ function encode(type: EngineType | undefined, v: unknown, dialect: Dialect): unk
 
 // sqlite3 6.0.1 binds a BigInt as NULL, with no error (`select cast(? as text)` with
 // 9007199254740993n gave null), where every other SQLite driver binds it exactly. A BigInt a
-// number holds exactly goes as that number; a larger one is refused, since sqlite3 cannot bind it.
-function sqlite3Value(v: unknown): unknown {
+// number holds exactly goes as that number. A larger one goes as its digits to a parameter of a
+// BIGINT column (the engine's int8), whose INTEGER affinity reads the text as that integer in an
+// insert and a comparison alike, and is refused anywhere else, where the text would stay text.
+function sqlite3Value(v: unknown, type: EngineType | undefined): unknown {
   if (typeof v !== "bigint") return v;
   if (v >= BigInt(Number.MIN_SAFE_INTEGER) && v <= BigInt(Number.MAX_SAFE_INTEGER)) return Number(v);
+  if (type?.kind === "scalar" && type.name === "int8") return String(v);
   throw new TypeError(`sqlite3 binds a BigInt as NULL, and ${v} is past 2^53 - 1, where a number stops being exact: pass it as a string of digits, which SQLite stores as that integer in an INTEGER column, or run the statement on better-sqlite3, node:sqlite or libSQL, which bind a BigInt.`);
 }
 
