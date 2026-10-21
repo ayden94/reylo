@@ -8,7 +8,7 @@
 import { bunRows, neonCallable, postgresJs, queryPostgres } from "./decode.ts";
 import { mariadb, mysql2, planetscale } from "./decode-mysql.ts";
 import { normalize, runSyncSqlite } from "./decode-sqlite.ts";
-import type { Columns } from "./values.ts";
+import { postgresYear, type Columns } from "./values.ts";
 import type { EngineType } from "./engine-type.ts";
 import { lexPlaceholders } from "./lex.ts";
 import type { JsonSchema } from "./engine-type.ts";
@@ -335,6 +335,7 @@ function statement(query: QueryModule, input: ParamsInput) {
     const cast = query.inputs?.[name]?.cast;
     if (cast !== undefined && type !== undefined) checkCast(name, cast, type, bound.values[i], query.dialect);
     checkTime(type, name, bound.values[i]);
+    bound.values[i] = encode(type, bound.values[i], query.dialect);
   });
   // Every MySQL and SQLite driver binds JSON text as text, which the database reads as JSON (a
   // structured parameter's is written already).
@@ -394,6 +395,19 @@ function checkTime(type: EngineType | undefined, name: string, v: unknown): void
   } else if (v instanceof Date && type.name.split("|").every((part) => part === "timestamp" || part === "date")) {
     throw new TypeError(`Parameter "${name}" is a ${type.name === "date" ? "date" : "timestamp"} without a time zone, so it takes the wall-clock text ("2026-10-12 19:06:48.282", "2026-10-12"), not a Date: drivers write a Date's time in different zones (the app's, the server's or UTC). A timestamptz parameter takes a Date.`);
   }
+}
+
+// What `run` returns goes back in as the database reads it (the round-trip rule, src/render.ts):
+// on Postgres a date or time with an extended or BC year in Postgres's own form, which refuses
+// `+010000` and `0000`; on SQLite a truth value, which a BOOLEAN column returns, as 1 or 0, since
+// better-sqlite3 refuses a boolean ("SQLite3 can only bind numbers, strings, bigints, buffers, and
+// null") and libSQL binds `true` as the REAL 1.0. A query without `inputs` gets neither.
+function encode(type: EngineType | undefined, v: unknown, dialect: Dialect): unknown {
+  if (type === undefined || v == null) return v;
+  if (dialect === "sqlite") return typeof v === "boolean" ? (v ? 1 : 0) : v;
+  if (dialect !== "postgres") return v;
+  if (type.kind === "array") return Array.isArray(v) ? v.map((e) => encode(Array.isArray(e) ? type : type.of, e, dialect)) : v;
+  return typeof v === "string" && isTime(type) ? postgresYear(v) : v;
 }
 
 function asByteaHex(v: unknown) {

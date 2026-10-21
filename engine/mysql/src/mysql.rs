@@ -281,6 +281,12 @@ pub fn analyze(sql: &str, lexed: &Lexed, text: Option<MysqlText>, host: &Host) -
         Some(statement) => crate::mysql_params::nullable(statement, &names, host)?,
         None => HashSet::new(),
     };
+    // A parameter's type from the column it is written to or compared with, where the prepare's
+    // says less (`mysql_params::column_types`).
+    let column_typed = match &parsed {
+        Some(statement) => crate::mysql_params::column_types(statement, &names, host)?,
+        None => HashMap::new(),
+    };
     // JSON shapes: the constructors' value expressions, prepared as columns of their own statements.
     let mut shaped: Vec<(String, Type, bool)> = Vec::new();
     let mut outer_not_null: Vec<usize> = Vec::new();
@@ -412,6 +418,11 @@ pub fn analyze(sql: &str, lexed: &Lexed, text: Option<MysqlText>, host: &Host) -
             let (ty, type_name) = match index.and_then(|i| raw.params.get(i)) {
                 Some(p) => param_type(p.r#type, p.charset),
                 None => (Type::Unknown, ""),
+            };
+            // Only an integer or a BIT context is narrowed: those are the ones the prepare describes alike for every column.
+            let ty = match (&ty, column_typed.get(name)) {
+                (Type::Scalar { name: server }, Some(column)) if server == "int4" || server == "bool|bytea" => Type::Scalar { name: (*column).to_string() },
+                _ => ty,
             };
             Param { name: name.clone(), ty, type_name: type_name.to_string(), nullable: nullable.contains(name), schema: None, cast: None }
         })
@@ -1012,10 +1023,14 @@ fn column_type(code: u32, charset: u32) -> (Type, &'static str) {
 }
 
 /// A parameter's type from the server's context guess. Every integer context comes back as
-/// LONGLONG, whatever the column's width, so an integer parameter is a plain number.
+/// LONGLONG, whatever the column's width, so an integer parameter is a plain number (the run
+/// time's parameter types widen it to the BIGINT and TINYINT(1) values a row returns). A BIT
+/// context comes back as BIT with the length 64, whatever the column's, and a BIT(1) column is a
+/// truth value where a row holds it, so the parameter is either.
 fn param_type(code: u32, charset: u32) -> (Type, &'static str) {
     match code {
         1 | 2 | 3 | 8 | 9 | 13 => (Type::Scalar { name: "int4".into() }, "int"),
+        16 => (Type::Scalar { name: "bool|bytea".into() }, "bit"),
         _ => column_type(code, charset),
     }
 }
@@ -2013,6 +2028,15 @@ mod tests {
         assert_eq!(one(r"select 'C:\' as p, id from t where id = ?", plain), r"SELECT 'C:\' AS p, id FROM t WHERE id = ?");
         assert!(Parser::parse_sql(&SessionDialect(MysqlText::default()), r"select 'C:\' as p, id from t where id = ?").is_err());
         assert_eq!(one(r#"select "id" from "t" where "id" = 1"#, ansi), r#"SELECT "id" FROM "t" WHERE "id" = 1"#);
+    }
+
+    #[test]
+    fn a_bit_context_parameter_is_a_truth_value_or_bytes() {
+        // MySQL 8.4 describes `bit1 = ?` as BIT (16) of length 64, a BIT(1) column's and a BIT(8)'s alike.
+        let described = json!({ "columns": [{ "name": "id", "type": 3, "flags": 1 }], "params": [{ "type": 16 }, { "type": 253, "charset": 63 }, { "type": 8 }] });
+        let (analysis, _) = analyzed("select id from users where bit1 = :b and raw = :r and big = :n", described, "STRICT_TRANS_TABLES");
+        let types: Vec<String> = analysis.params.iter().map(|p| format!("{}={:?}", p.name, p.ty)).collect();
+        assert_eq!(types, ["b=Scalar { name: \"bool|bytea\" }", "r=Scalar { name: \"bytea\" }", "n=Scalar { name: \"int4\" }"]);
     }
 
     #[test]

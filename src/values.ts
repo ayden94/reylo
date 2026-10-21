@@ -177,6 +177,20 @@ const pad = (n: number, width = 2) => String(n).padStart(width, "0");
 const isoYear = (y: number) => (y >= 0 && y <= 9999 ? pad(y, 4) : `${y < 0 ? "-" : "+"}${pad(Math.abs(y), 6)}`);
 
 /**
+ * A date or time parameter's text as Postgres reads it, the inverse of `isoYear` for what `run`
+ * returns (the round-trip rule): Postgres 18 refuses an ISO 8601 extended year (`+010000-01-01`,
+ * "time zone displacement out of range") and the year 0000 ("date/time field value out of range"),
+ * and reads `10000-01-01` and a year before 1 as its own ` BC` form, year 1 − n, so `-000001` is
+ * `0002 … BC` and `0000` or `+000000` is `0001 … BC`. Any other text is left as it is.
+ */
+export function postgresYear(text: string): string {
+  const m = /^([+-]\d{6}|0000)(-.*)$/.exec(text);
+  if (m === null || /\sbc$/i.test(text)) return text;
+  const year = +m[1]!;
+  return year > 0 ? `${pad(year, 4)}${m[2]}` : `${pad(1 - year, 4)}${m[2]} BC`;
+}
+
+/**
  * A timestamptz's text as the instant's ISO 8601 text in UTC: `2026-10-20 10:00:00.123456+02` is
  * `2026-10-20T08:00:00.123456Z`, the fraction as the server wrote it (trailing zeros dropped, none
  * for a whole second), which `Temporal.Instant.from` reads. `infinity` and `-infinity` stay those

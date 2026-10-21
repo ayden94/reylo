@@ -183,6 +183,36 @@ test("postgres: postgres.js, which binds a date or time string through new Date(
   ]);
 });
 
+test("what run returns goes back in: a SQLite truth value as 1 or 0, a Postgres extended or BC year in Postgres's own form", async () => {
+  const s = (name: string) => ({ type: { kind: "scalar" as const, name } });
+  // SQLite: better-sqlite3 refuses a boolean and libSQL binds it as the REAL 1.0.
+  const lq: QueryModule<"sqlite"> = { dialect: "sqlite", sql: "select :a as a, :b as b, :n as n", params: ["a", "b", "n"], inputs: { a: s("numeric"), b: s("integer"), n: s("integer") } };
+  const seen: unknown[][] = [];
+  await execute({ execute: async (st: { args: unknown[] }) => (seen.push(st.args), { rows: [] }), executeMultiple: async () => {} }, lq, { a: true, b: false, n: 7 });
+  assert.deepEqual([...seen], [[1, 0, 7]]);
+  // MySQL's drivers bind a boolean as 1 themselves.
+  const mq: QueryModule<"mysql"> = { dialect: "mysql", sql: "select :f as f", params: ["f"], inputs: { f: s("int4") } };
+  seen.length = 0;
+  await execute({ execute: async (_: string, v?: unknown[]) => (seen.push(v!), [[], []] as [unknown, unknown]) }, mq, { f: true });
+  assert.deepEqual([...seen], [[true]]);
+  // Postgres refuses `+010000` and the year 0000, which run returns for years past 9999 and 1 BC.
+  const pq: QueryModule<"postgres"> = {
+    dialect: "postgres",
+    sql: "select :far::timestamptz, :bc::timestamptz, :zero::date, :now::timestamptz, :days::date[]",
+    params: ["far", "bc", "zero", "now", "days"],
+    inputs: { far: s("timestamptz"), bc: s("timestamptz"), zero: s("date"), now: s("timestamptz"), days: { type: { kind: "array", of: { kind: "scalar", name: "date" } } } },
+  };
+  const values = { far: "+010000-01-01T00:00:00Z", bc: "-000001-06-01T12:00:00.5Z", zero: "0000-01-01", now: "2026-10-20T10:00:00Z", days: ["+010000-01-01", "2026-10-20"] };
+  seen.length = 0;
+  await execute({ query: async (_: string, v?: unknown[]) => (seen.push(v!), { rows: [] }) }, pq, values);
+  assert.deepEqual([...seen], [["10000-01-01T00:00:00Z", "0002-06-01T12:00:00.5Z BC", "0001-01-01 BC", "2026-10-20T10:00:00Z", '{"10000-01-01","2026-10-20"}']]);
+  // Without inputs, as defined by hand, every value goes as it is.
+  const { inputs: _, ...bare } = lq;
+  seen.length = 0;
+  await execute({ execute: async (st: { args: unknown[] }) => (seen.push(st.args), { rows: [] }), executeMultiple: async () => {} }, bare, { a: true, b: false, n: 7 });
+  assert.deepEqual([...seen], [[true, false, 7]]);
+});
+
 test("arrayLiteral writes a Postgres array literal as pg does: nesting, NULL, quotes, backslashes, binary, dates, the empty array", () => {
   assert.equal(arrayLiteral([]), "{}");
   assert.equal(arrayLiteral([1, 2n, 1.5, true]), '{"1","2","1.5","true"}');

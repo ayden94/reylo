@@ -291,6 +291,17 @@ export function queries(d: Dialect, typed = true) {
     syntax: q(`selec 1`, [], "many"),
     // The columns a build step writes for the statement (src/loader.ts, src/values.ts).
     typed: q(`select ${Object.keys(TYPED[d]).join(", ")} from ${t("typed")} where id = 1`, [], "one", { columns: TYPED_COLUMNS[d] }),
+    // Each column of the `typed` row compared with a parameter, with the types the engine gives
+    // those parameters (src/render.ts's round-trip table): the row `typed` returns goes back in.
+    roundTrip: q(
+      `select ${Object.keys(ROUND_TRIP[d]).map((c) => `${ROUND_TRIP_SQL[d](c)} as ${c}`).join(", ")} from ${t("typed")} where id = :id`,
+      [...Object.keys(ROUND_TRIP[d]), "id"],
+      "one",
+      { inputs: Object.fromEntries([...Object.entries(ROUND_TRIP[d]), ["id", { kind: "scalar", name: "int4" }]].map(([c, type]) => [c, { type }])), columns: Object.keys(ROUND_TRIP[d]).map((c) => [c, "bool"]) },
+    ),
+    // An instant past 9999 and one before 1, which come back as `+010000-…Z` and `-000001-…Z`.
+    farInstants: q(`select '10000-01-01 00:00:00+00'::timestamptz as far, '0002-01-01 00:00:00+00 BC'::timestamptz as bc`, [], "one", { columns: [["far", "timestamptz"], ["bc", "timestamptz"]] }),
+    farBack: q(`select :far::timestamptz = '10000-01-01 00:00:00+00'::timestamptz as far, :bc::timestamptz = '0002-01-01 00:00:00+00 BC'::timestamptz as bc`, ["far", "bc"], "one", { inputs: { far: { type: { kind: "scalar", name: "timestamptz" } }, bc: { type: { kind: "scalar", name: "timestamptz" } } }, columns: [["far", "bool"], ["bc", "bool"]] }),
     typedBig: q(`select id, big from ${t("typed")} where id = 1`, [], "one", { columns: [["id", "int"], ["big", d === "sqlite" ? "int" : "int8"]] }),
     dup: q(`insert into ${t("uniq")} (k) values (:k)`, ["k"], "none"),
   };
@@ -314,6 +325,24 @@ const TYPED_COLUMNS: Record<Dialect, [string, string][]> = {
   mysql: [["id", "int"], ["big", "int8"], ["ubig", "int8"], ["amount", "decimal"], ["day", "date"], ["at", "timestamp"], ["doc", "json"], ["bit1", "bool"], ["raw", "bytes"], ["tags", "text"], ["kind", "text"], ["flag", "bool"], ["yr", "int"], ["f8", "float"], ["tm", "text"], ["s", "text"]],
   // A SQLite JSON column and truth value as the engine types them where it can tell, a column with no type unknown.
   sqlite: [["id", "int"], ["n", "int"], ["r", "float"], ["s", "text"], ["b", "bytes"], ["doc", "json"], ["flag", "bool"], ["x", "unknown"]],
+};
+
+const sc = (name: string) => ({ kind: "scalar", name });
+const enumArray = { kind: "array", of: { kind: "enum", name: "mood", labels: ["ok", "sad"] } };
+/** The parameter types the engine gives `c = :c` for each `typed` column (tests/render.test.ts, ROUND_TRIPS): on MySQL by the column (engine/mysql `column_types`), on SQLite by the column's affinity. */
+const ROUND_TRIP: Record<Dialect, Record<string, unknown>> = {
+  postgres: {
+    big: sc("int8"), amount: sc("numeric"), day: sc("date"), at: sc("timestamp"), stamp: sc("timestamptz"), doc: { kind: "json" }, docb: { kind: "json" }, raw: sc("bytea"), flag: sc("bool"), f8: sc("float8"),
+    tags: { kind: "array", of: sc("text") }, ints: { kind: "array", of: sc("int4") }, moods: enumArray, span: sc("interval"), uid: sc("uuid"),
+  },
+  mysql: { big: sc("int8"), ubig: sc("int8"), amount: sc("numeric"), day: sc("date"), at: sc("timestamp"), doc: { kind: "json" }, bit1: sc("bool|int4"), raw: sc("bytea"), tags: sc("text"), kind: sc("text"), flag: sc("bool|int4"), yr: sc("int4"), f8: sc("float8"), tm: sc("time"), s: sc("text") },
+  sqlite: { n: sc("integer"), r: sc("real"), s: sc("text"), b: sc("blob"), flag: sc("numeric"), x: { kind: "unknown" } },
+};
+/** The comparison for each column: Postgres's json has no `=`; MariaDB has no `cast(? as json)`, and json_extract's document is a JSON parameter on both servers. */
+const ROUND_TRIP_SQL: Record<Dialect, (c: string) => string> = {
+  postgres: (c) => (c === "doc" ? `doc::jsonb = :doc::jsonb` : `${c} = :${c}`),
+  mysql: (c) => (c === "doc" ? `doc = json_extract(:doc, '$')` : `${c} = :${c}`),
+  sqlite: (c) => `${c} = :${c}`,
 };
 
 /** A value with its JavaScript type spelled out, so that 1 and "1", or a Buffer and a Uint8Array of the same bytes, compare as they are. */
@@ -819,6 +848,31 @@ export const SCENARIOS: Scenario[] = [
         if (e instanceof RangeError && /cannot be safely represented/.test(e.message)) return `libSQL's own: ${e.message}`;
         throw new Mismatch(`not the refusal of an integer past 2^53: ${describe(e)}`);
       }
+    },
+  },
+  {
+    id: "S11 round trip: the row S10 returns goes back in as the parameters it came from, every column equal",
+    on: "client",
+    async run(ctx, client, q) {
+      const d = ctx.job.dialect;
+      // What run returns for each type, which the parameter of that type takes (src/render.ts):
+      // a BIGINT's BigInt, a TINYINT(1)'s and a BIT(1)'s boolean on MySQL, a SQLite truth value
+      // (bound as 1 or 0), an int8, a numeric's text, a timestamptz's UTC text, parsed JSON, bytes.
+      const row = (await call(ctx, q.typed, client)) as Record<string, unknown>;
+      const params = Object.fromEntries([...Object.keys(ROUND_TRIP[d]).map((c) => [c, row[c]]), ["id", 1]]);
+      eq(await call(ctx, q.roundTrip, client, params), Object.fromEntries(Object.keys(ROUND_TRIP[d]).map((c) => [c, true])), "each column equal to the value it returned");
+    },
+  },
+  {
+    id: "S11b round trip: an instant past 9999 and one before 1 go back in",
+    on: "client",
+    dialects: ["postgres"],
+    async run(ctx, client, q) {
+      // They come back as `+010000-…Z` and `-000001-…Z`, which Postgres refuses as input
+      // ("time zone displacement out of range"); Reylo writes them as `10000-…` and `0002-… BC`.
+      const far = (await call(ctx, q.farInstants, client)) as Record<string, unknown>;
+      eq(far, { far: "+010000-01-01T00:00:00Z", bc: "-000001-01-01T00:00:00Z" }, "the instants past 9999 and before 1");
+      eq(await call(ctx, q.farBack, client, far), { far: true, bc: true }, "the same instants passed back");
     },
   },
   {

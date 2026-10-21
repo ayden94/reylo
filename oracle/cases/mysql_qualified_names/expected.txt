@@ -25,4 +25,4 @@ spaced_count_subquery_limit.sql: many () -> { id: int8, n: int8? }
 spaced_max.sql: one () -> { n: int8? }
 unqualified_count.sql: one () -> { n: int8 }
 unqualified_lower.sql: maybeOne (e: text) -> { id: int8 }
-unqualified_table.sql: maybeOne (id: int4) -> { id: int8 }
+unqualified_table.sql: maybeOne (id: int8) -> { id: int8 }

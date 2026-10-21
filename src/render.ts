@@ -165,13 +165,21 @@ export function declaredType(t: EngineType, declared: unknown): string | undefin
 }
 
 /**
- * The type a parameter accepts, which is what every driver binds rather than what Reylo returns:
- * every Postgres and MySQL driver binds a number, a BigInt or a digit string for a 64-bit integer,
- * so `limit :n` takes a number. A `timestamptz` is an instant, which every Postgres driver binds a
- * `Date` as; a string for it must name its zone (`src/execute.ts`). A `timestamp` or a `date`
- * (MySQL's DATETIME and TIMESTAMP are the engine's `timestamp`) is a wall-clock reading with no
- * zone, and the drivers write a `Date`'s in different zones, the app's (pg, mysql2), the server's
- * (postgres.js) or UTC (PGlite, Bun.sql), so it takes the text alone (the maintainer, 2026-10-12).
+ * The type a parameter accepts: what `run` returns for its SQL type, so that a row goes back in as
+ * it came out (the round-trip rule, the maintainer, 2026-10-20), and what else every driver binds
+ * the same way. Every Postgres and MySQL driver binds a number, a BigInt or a digit string for a
+ * 64-bit integer, so `limit :n` takes a number. On MySQL the engine types a parameter by the
+ * column it is written to or compared with (engine/mysql `column_types`), since the prepare
+ * describes every integer context as a BIGINT and every BIT one alike: a BIGINT column's is
+ * `int8`, a TINYINT(1)'s or a BIT(1)'s `bool|int4`, which takes the truth value the row returns;
+ * a SQLite BOOLEAN column's is NUMERIC, which takes it too, and `src/execute.ts` binds it as 1 or 0. A `timestamptz` is
+ * an instant, which every Postgres driver binds a `Date` as; a string for it must name its zone
+ * (`src/execute.ts`). A `timestamp` or a `date` (MySQL's DATETIME and TIMESTAMP are the engine's
+ * `timestamp`) is a wall-clock reading with no zone, and the drivers write a `Date`'s in different
+ * zones, the app's (pg, mysql2), the server's (postgres.js) or UTC (PGlite, Bun.sql), so it takes
+ * the text alone (the maintainer, 2026-10-12). An array's elements take no NULL in their type,
+ * though the run time binds one, since only a statement that builds an array returns a NULL
+ * element and the type of `= any(:ids)` reads plainly as `number[]`.
  */
 export function renderParamType(t: EngineType, dialect: Dialect = "postgres"): string {
   if (t.kind === "scalar" && dialect !== "sqlite") {
@@ -179,8 +187,12 @@ export function renderParamType(t: EngineType, dialect: Dialect = "postgres"): s
     if (t.name === "timestamptz") return "Date | string";
     if (t.name.split("|").every((name) => name === "timestamp" || name === "timestamptz" || name === "date")) return "string";
   }
-  // A SQLite driver binds a number for an INTEGER.
+  // A SQLite driver binds a number for an INTEGER. A BOOLEAN column has NUMERIC affinity, so a
+  // parameter written to or compared with one is NUMERIC, and takes the truth value the column
+  // returns, which the run time binds as 1 or 0.
   if (t.kind === "scalar" && dialect === "sqlite" && t.name === "integer") return "number";
+  if (t.kind === "scalar" && dialect === "sqlite" && t.name === "numeric") return "number | string | boolean";
+  if (t.kind === "scalar" && dialect === "sqlite" && t.name === "bool") return "boolean | number";
   // Every driver binds a Uint8Array (a Buffer is one) for a binary value, mariadb and Neon's
   // neon() before 0.10 once `execute` has converted it, a digit string for a decimal, and any
   // JSON value for a JSON parameter.
@@ -195,6 +207,9 @@ export function renderParamType(t: EngineType, dialect: Dialect = "postgres"): s
     return t.one ? row : `readonly ${row}[]`;
   }
   if (t.kind === "array") {
+    // An array of row values comes back as the text Postgres prints, which the parameter takes back
+    // beside an array of each row's own text.
+    if ((t.of.kind === "scalar" && t.of.name === "record") || t.of.kind === "composite") return "string | string[]";
     const inner = renderParamType(t.of, dialect);
     return /[|&]/.test(inner) ? `(${inner})[]` : `${inner}[]`;
   }

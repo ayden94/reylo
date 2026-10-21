@@ -1,9 +1,9 @@
 bigint_arithmetic.sql: maybeOne (id: int4) -> { id: int8 }
 bigint_float_literal.sql: maybeOne () -> { id: int8 }
-bigint_param.sql: maybeOne (id: int4) -> { id: int8 }
-bigint_param_scan.sql: maybeOne (id: int4) -> { id: int8 }
-bigint_unsigned.sql: maybeOne (u: int4) -> { u: int8? }
-bigint_unsigned_scan.sql: maybeOne (u: int4) -> { u: int8? }
+bigint_param.sql: maybeOne (id: int8) -> { id: int8 }
+bigint_param_scan.sql: maybeOne (id: int8) -> { id: int8 }
+bigint_unsigned.sql: maybeOne (u: int8) -> { u: int8? }
+bigint_unsigned_scan.sql: maybeOne (u: int8) -> { u: int8? }
 binary_param.sql: maybeOne (fixed: bytea) -> { fixed: bytea? }
 bit64_arithmetic.sql: maybeOne (n: int4) -> { bits64: bytea? }
 bit64_float.sql: maybeOne () -> { bits64: bytea? }

@@ -1368,6 +1368,7 @@ Reylo refuses what would change its values and that it cannot undo: a `pg` clien
 
 <Details summary="Binary, date and JSON values, in and out">
 
+- Every value `run` returns goes back in as a parameter of its type, on every driver, so a row can be passed straight to the next statement: a `bigint` to a `bigint` column, a MySQL `TINYINT(1)` or `BIT(1)` column's `true`, which Reylo's MySQL drivers bind as 1, and a SQLite truth value, which Reylo binds as 1 or 0, since better-sqlite3 refuses a boolean.
 - A `Buffer`, which several drivers return for binary data, is a `Uint8Array`.
 - A binary parameter takes a `Uint8Array`, a `Buffer` or not, on every driver: mariadb, which writes any other value as JSON, gets it from Reylo as a `Buffer`.
 - On Postgres, an array parameter takes a JavaScript array on every driver, for a SQL array (`any(:ids)`, `:tags::text[]`) and for JSON (`:data::jsonb`) alike: Reylo writes it in the form the driver binds right.

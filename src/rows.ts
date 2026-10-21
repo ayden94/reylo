@@ -7,6 +7,7 @@
 // defaults").
 import type { EngineType } from "./engine-type.ts";
 import { validate, withDefaults } from "./json-schema.ts";
+import { postgresYear } from "./values.ts";
 
 type Dialect = "postgres" | "mysql" | "sqlite";
 export type RowsType = Extract<EngineType, { kind: "rows" }>;
@@ -156,7 +157,7 @@ function scalar(name: string, written: string, v: unknown, dialect: Dialect, fai
   }
   const range = INTEGERS[name];
   if (range) {
-    const n = integer(range, name === "int8", written, v, fail);
+    const n = integer(range, name === "int8", written, v, fail, dialect !== "postgres");
     if (!WIDE.has(name)) return Number(n);
     return dialect === "postgres" ? n.toString() : new Raw(n.toString());
   }
@@ -189,13 +190,13 @@ function scalar(name: string, written: string, v: unknown, dialect: Dialect, fai
     case "timestamptz":
       if (v instanceof Date) {
         if (Number.isNaN(v.getTime())) fail(`is ${written}, and the Date is invalid.`);
-        return v.toISOString();
+        return dialect === "postgres" ? postgresYear(v.toISOString()) : v.toISOString();
       }
-      if (typeof v === "string" && zoned.test(v.trim())) return v;
+      if (typeof v === "string" && zoned.test(v.trim())) return dialect === "postgres" ? postgresYear(v) : v;
       return fail(`is ${written}, an instant: a Date, or a string that names its zone ("2026-10-12T19:06:48.282Z", "2026-10-12 19:06:48+09"); got ${describe(v)}, which the server would read in the session's time zone.`);
     case "timestamp":
     case "date":
-      if (typeof v === "string") return v;
+      if (typeof v === "string") return dialect === "postgres" ? postgresYear(v) : v;
       return fail(`is ${written}, a wall-clock reading with no zone, which takes its text ("2026-10-12 19:06:48.282", "2026-10-12"), not a Date: drivers write a Date's time in different zones.${v instanceof Date ? " A timestamptz takes a Date." : ` Got ${describe(v)}.`}`);
     case "bytea":
     case "blob": {
@@ -217,9 +218,14 @@ function scalar(name: string, written: string, v: unknown, dialect: Dialect, fai
 }
 
 /** An integer in `range`, as a number, a BigInt or, where `digits`, a string of its digits. */
-function integer(range: readonly [bigint, bigint], digits: boolean, written: string, v: unknown, fail: (message: string) => never): bigint {
+/**
+ * `truth`: MySQL and SQLite, where a truth value is an integer, and a TINYINT(1), BIT(1) or BOOLEAN
+ * column returns a boolean, which goes back in as 1 or 0 (the round-trip rule, src/render.ts).
+ */
+function integer(range: readonly [bigint, bigint], digits: boolean, written: string, v: unknown, fail: (message: string) => never, truth = false): bigint {
   let n: bigint;
   if (typeof v === "bigint") n = v;
+  else if (typeof v === "boolean" && truth) n = BigInt(v ? 1 : 0);
   else if (typeof v === "number" && Number.isInteger(v)) {
     if (!Number.isSafeInteger(v)) fail(`is ${written}; ${v} is past 2^53 - 1, where a number stops being exact, so pass it as a BigInt${digits ? " or a string of digits" : ""}.`);
     n = BigInt(v);
@@ -259,7 +265,7 @@ export function checkCast(name: string, written: string, type: EngineType, v: un
   const signed = dialect === "sqlite" ? (/int/i.test(base) ? INTEGERS.integer : undefined) : MYSQL_INTEGERS[base.replace(/\s*unsigned$/, "") || "bigint"];
   if (signed) {
     const range: readonly [bigint, bigint] = dialect === "mysql" && base.endsWith("unsigned") ? [BigInt(0), signed[1] * BigInt(2) + BigInt(1)] : signed;
-    integer(range, dialect === "mysql" && range[1] >= INTEGERS.int8![1], written, v, fail);
+    integer(range, dialect === "mysql" && range[1] >= INTEGERS.int8![1], written, v, fail, true);
     return;
   }
   if (base === "uuid") {

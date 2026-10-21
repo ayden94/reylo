@@ -94,8 +94,61 @@ test("SQLite: an INTEGER is a number, exact or an error; a NUMERIC whichever the
   assert.equal(renderType(scalar("blob"), false, "sqlite"), "Uint8Array");
   assert.equal(renderType(scalar("bool"), false, "sqlite"), "boolean");
   assert.equal(renderType({ kind: "unknown" }, false, "sqlite"), "unknown");
-  // The driver binds a number for an INTEGER.
+  // The driver binds a number for an INTEGER, and the run time a truth value as 1 or 0.
   assert.equal(renderParamType(scalar("integer"), "sqlite"), "number");
+  assert.equal(renderParamType(scalar("numeric"), "sqlite"), "number | string | boolean");
+});
+
+// Each column type beside the type the engine gives a parameter compared with that column, as
+// the engine reported them on 2026-10-20 against Postgres 18.6, MySQL 8.4.11 and SQLite for the
+// driver matrix's `typed` fixture (`select c from typed` and `select id from typed where c = :v`).
+// MySQL describes every integer context as a BIGINT and a BIT one as BIT, so the engine types a
+// parameter by the column it is compared with (engine/mysql `column_types`), and keeps the
+// prepare's (`int4`, `bool|bytea`) for an expression; SQLite types a parameter by the column's
+// affinity, a BOOLEAN column's being NUMERIC.
+const array = (of: EngineType): EngineType => ({ kind: "array", of });
+const composite: EngineType = { kind: "composite", name: "user_in", fields: [{ name: "name", type: scalar("text"), nullable: true }] };
+const ROUND_TRIPS: Record<"postgres" | "mysql" | "sqlite", [column: EngineType, param: EngineType][]> = {
+  postgres: [
+    ...["int2", "int4", "int8", "float4", "float8", "numeric", "bool", "text", "uuid", "interval", "time", "money", "date", "timestamp", "timestamptz", "bytea"].map((n): [EngineType, EngineType] => [scalar(n), scalar(n)]),
+    [{ kind: "json" }, { kind: "json" }],
+    [{ kind: "enum", name: "mood", labels: ["ok", "sad"] }, { kind: "enum", name: "mood", labels: ["ok", "sad"] }],
+    ...["int4", "int8", "text", "bool", "timestamptz", "date", "bytea", "numeric"].map((n): [EngineType, EngineType] => [array(scalar(n)), array(scalar(n))]),
+    [array({ kind: "enum", name: "mood", labels: ["ok", "sad"] }), array({ kind: "enum", name: "mood", labels: ["ok", "sad"] })],
+    [array(composite), array(composite)],
+    [array(scalar("record")), array(scalar("record"))],
+  ],
+  mysql: [
+    [scalar("int8"), scalar("int8")],
+    [scalar("int4"), scalar("int4")],
+    [scalar("int2"), scalar("int4")],
+    [scalar("bool"), scalar("bool|int4")],
+    [scalar("bool"), scalar("bool|bytea")],
+    [scalar("bytea"), scalar("bool|bytea")],
+    [scalar("bytea"), scalar("bytea")],
+    ...["numeric", "float8", "text", "date", "timestamp", "time"].map((n): [EngineType, EngineType] => [scalar(n), scalar(n)]),
+    [{ kind: "json" }, { kind: "json" }],
+  ],
+  sqlite: [
+    ...["integer", "real", "text", "blob", "numeric"].map((n): [EngineType, EngineType] => [scalar(n), scalar(n)]),
+    [scalar("bool"), scalar("numeric")],
+    [{ kind: "unknown" }, { kind: "unknown" }],
+  ],
+};
+
+/** Whether every value of the column's type is one the parameter's type takes, member by member of the union, element by element of an array. */
+function admits(column: EngineType, param: EngineType, dialect: "postgres" | "mysql" | "sqlite"): boolean {
+  if (column.kind === "array" && param.kind === "array" && renderType(column, false, dialect).endsWith("[]")) return admits(column.of, param.of, dialect);
+  const takes = renderParamType(param, dialect).split(" | ");
+  return takes.includes("unknown") || renderType(column, false, dialect).split(" | ").every((member) => takes.includes(member));
+}
+
+test("a parameter takes every value run returns for the column it is compared with, on every dialect: the round-trip rule", () => {
+  for (const [dialect, pairs] of Object.entries(ROUND_TRIPS) as ["postgres" | "mysql" | "sqlite", [EngineType, EngineType][]][]) {
+    for (const [column, param] of pairs) {
+      assert.ok(admits(column, param, dialect), `${dialect}: a column of ${JSON.stringify(column)} returns ${renderType(column, false, dialect)}, which a parameter of ${JSON.stringify(param)}, typed ${renderParamType(param, dialect)}, does not take`);
+    }
+  }
 });
 
 test("parameters take what every driver binds, whatever Reylo returns", () => {
