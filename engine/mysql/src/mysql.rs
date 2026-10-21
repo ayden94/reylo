@@ -290,7 +290,19 @@ pub fn analyze(sql: &str, lexed: &Lexed, text: Option<MysqlText>, host: &Host) -
     // JSON shapes: the constructors' value expressions, prepared as columns of their own statements.
     let mut shaped: Vec<(String, Type, bool)> = Vec::new();
     let mut outer_not_null: Vec<usize> = Vec::new();
+    // What the WHERE proves (`mysql_nulls`): the columns it tests, and the statement with the outer
+    // joins inner whose null-extended rows it rejects, which every probe below reads in its place.
+    let tested: Vec<usize> = match &parsed {
+        Some(Statement::Query(q)) => crate::mysql_nulls::tested(q),
+        _ => Vec::new(),
+    };
+    let reduced: Option<Query> = match &parsed {
+        Some(Statement::Query(q)) => crate::mysql_nulls::reduce(q),
+        _ => None,
+    };
+    let mut reduced_not_null: Vec<usize> = Vec::new();
     if let Some(Statement::Query(q)) = &parsed {
+        let q: &Query = reduced.as_ref().unwrap_or(q);
         // Whose an aggregate in a scalar subquery is can turn on the columns of the subquery's
         // tables, which the plan asks for by naming them; the probes are the same either way.
         let mut plan = crate::mysql_shape::plan(q, &Default::default());
@@ -332,6 +344,14 @@ pub fn analyze(sql: &str, lexed: &Lexed, text: Option<MysqlText>, host: &Host) -
                     outcomes.push(None);
                     documents.push(Vec::new());
                 }
+            }
+        }
+        // The flags of the statement with its outer joins reduced, by position.
+        if let Some(reduced) = &reduced {
+            match host.describe(&reduced.to_string()) {
+                Some(Ok(d)) if d.columns.len() == raw.columns.len() => reduced_not_null.extend(d.columns.iter().enumerate().filter(|(_, c)| c.flags & 1 != 0).map(|(i, _)| i)),
+                Some(_) => {}
+                None => pending = true,
             }
         }
         // The outer columns' flags without the subquery items' pessimism, by projection position.
@@ -388,7 +408,7 @@ pub fn analyze(sql: &str, lexed: &Lexed, text: Option<MysqlText>, host: &Host) -
             let truth = computed || flag_column(c, views.as_ref());
             let ty = if truth && !matches!(ty, Type::Json { .. }) { Type::Scalar { name: "bool".into() } } else { ty };
             let name = if computed { "boolean" } else { name };
-            let not_null = c.flags & 1 != 0 || outer_not_null.contains(&position);
+            let not_null = c.flags & 1 != 0 || outer_not_null.contains(&position) || reduced_not_null.contains(&position) || tested.contains(&position);
             let shape = shaped.iter().enumerate().find(|(i, (n, _, _))| n == &c.name && !shapes_used[*i]);
             match shape {
                 // A constructor never returns SQL NULL, whatever the server's flag says; an
@@ -2185,5 +2205,57 @@ mod tests {
         let raw: MysqlDescribe = serde_json::from_value(json!({ "columns": [column(3, 11, "users")], "params": [] })).unwrap();
         let lexed = lex::lex("select 1", Dialect::Mysql).unwrap();
         assert_eq!(settle("select 1", &lexed, &lex::rewrite("select 1", &lexed, Target::Question), None, &raw, None), vec![Some(Type::Scalar { name: "int4|int8".into() })]);
+    }
+
+    /// Analyzes with a host that describes each statement as `describe` says, answers the mode
+    /// query with the default mode and any other query with no rows.
+    fn analyzed_by(sql: &str, describe: &dyn Fn(&str) -> Value) -> Analysis {
+        let mut answers: HashMap<String, crate::api::Answer> = HashMap::new();
+        for _ in 0..16 {
+            let host = Host::new(&answers);
+            if let Some(analysis) = analyze_text(sql, &host) {
+                return analysis;
+            }
+            for need in host.needs() {
+                let (id, answer) = match need {
+                    crate::api::Need::Describe { id, sql } => (id, json!({ "mysql": describe(&sql) })),
+                    crate::api::Need::Query { id, sql, .. } if sql == SQL_MODE_QUERY => (id, json!({ "rows": [["ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION"]] })),
+                    crate::api::Need::Query { id, .. } => (id, json!({ "rows": [] })),
+                };
+                answers.insert(id, serde_json::from_value(answer).unwrap());
+            }
+        }
+        panic!("the analysis never settled")
+    }
+
+    #[test]
+    fn a_strict_where_proves_the_joined_row_and_the_column_it_tests() {
+        // As 8.4 describes it: `title` is NOT NULL only where the join is inner, and `published_at`
+        // is a nullable column either way.
+        let describe = |sql: &str| {
+            let title = if sql.contains("INNER JOIN") { 1 } else { 0 };
+            json!({ "columns": [{ "name": "name", "type": 253, "flags": 1 }, { "name": "title", "type": 253, "flags": title }, { "name": "published_at", "type": 12, "flags": 0 }], "params": [] })
+        };
+        let nullable = |sql: &str| analyzed_by(sql, &describe).columns.iter().map(|c| c.nullable).collect::<Vec<_>>();
+        let select = "select u.name, p.title, p.published_at from users u left join posts p on p.user_id = u.id where";
+        assert_eq!(nullable(&format!("{select} p.published_at is not null")), [false, false, false]);
+        assert_eq!(nullable(&format!("{select} p.id > 0")), [false, false, true]);
+        // A test NULL can pass proves nothing.
+        assert_eq!(nullable(&format!("{select} p.published_at is not null or u.email is not null")), [false, true, true]);
+        assert_eq!(nullable(&format!("{select} coalesce(p.published_at, now()) > '2000-01-01'")), [false, true, true]);
+        assert_eq!(nullable(&format!("{select} p.id is null")), [false, true, true]);
+    }
+
+    #[test]
+    fn json_arrayagg_under_a_plain_group_by_is_never_null() {
+        let describe = |sql: &str| {
+            let column = if sql.starts_with("SELECT title") { json!({ "name": "title", "type": 253, "flags": 1 }) } else { json!({ "name": "titles", "type": 245, "flags": 0 }) };
+            json!({ "columns": [column], "params": [] })
+        };
+        let nullable = |sql: &str| analyzed_by(sql, &describe).columns[0].nullable;
+        assert!(!nullable("select json_arrayagg(title) as titles from posts group by user_id"));
+        assert!(nullable("select json_arrayagg(title) as titles from posts"));
+        assert!(nullable("select json_arrayagg(title) as titles from posts group by user_id with rollup"));
+        assert!(nullable("select json_arrayagg(title) over (rows between 1 following and 1 following) as titles from posts group by title"));
     }
 }

@@ -22,7 +22,7 @@ returning_merge_by_source.sql: many () -> { action: text, source_name: text?, so
 returning_merge_by_target.sql: many () -> { source_name: text, cur: text, old_name: text?, new_name: text }
 returning_merge_delete.sql: many () -> { old_name: text, new_name: text?, cur: text, source_name: text }
 returning_row_or_column.sql: maybeOne (name: text, id: int4) -> { before: json?, after: { id: int4, name: text, nick: text?, o: text? }, old_row: text?, n_name: text }
-returning_rows.sql: maybeOne (name: text, id: int4) -> { before: { id: int4, name: text, nick: text?, o: text? }, after: { id: int4, name: text, nick: text?, o: text? }, old_row: users{ id: int4, name: text, nick: text?, o: text? }?, now_name: text, j: { id: int4, name: text, nick: text?, o: text? } }
+returning_rows.sql: maybeOne (name: text, id: int4) -> { before: { id: int4, name: text, nick: text?, o: text? }, after: { id: int4, name: text, nick: text?, o: text? }, old_row: users{ id: int4, name: text, nick: text?, o: text? }, now_name: text, j: { id: int4, name: text, nick: text?, o: text? } }
 returning_rows_insert.sql: one (id: int4, name: text) -> { before: { id: int4, name: text, nick: text?, o: text? }?, after: { id: int4, name: text, nick: text?, o: text? }, old_row: users{ id: int4, name: text, nick: text?, o: text? }?, old_name: text?, old_shout: text? }
 returning_subquery.sql: maybeOne (name: text, id: int4) -> { same: int8, inner_old: text?, known: bool }
 returning_table_named_old.sql: one (id: int4, name: text) -> { from_table: text, new_name: text }

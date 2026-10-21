@@ -1,7 +1,7 @@
 array_agg.sql: one () -> { ids: [int4]? }
 array_agg_distinct_items.sql: one () -> { tags: [{ n: int4, tag: text? }]? }
 array_agg_empty.sql: one () -> { ids: [int4]? }
-array_agg_grouped.sql: many () -> { user_id: int4, titles: [text]? }
+array_agg_grouped.sql: many () -> { user_id: int4, titles: [text] }
 array_agg_guarded.sql: one () -> { ids: [int4] }
 array_agg_guarded_bad_cast.sql: one () -> { ids: text? }
 array_agg_guarded_cast.sql: one () -> { ids: [int4] }
@@ -15,7 +15,7 @@ array_agg_guarded_object.sql: one () -> { ids: json? }
 array_agg_guarded_param.sql: one (fallback: json) -> { ids: unknown? }
 array_agg_guarded_string.sql: one () -> { ids: text }
 array_agg_guarded_two.sql: one () -> { ids: [int4] }
-array_agg_literal.sql: many () -> { l: [bool]? }
+array_agg_literal.sql: many () -> { l: [bool] }
 array_agg_nullable_items.sql: one () -> { emails: [text?]? }
 array_agg_objects.sql: one () -> { list: [{ id: int4, name: text }]? }
 array_agg_of_json_column.sql: one () -> { docs: [json?]?, wrapped: [{ doc: json? }]? }
@@ -23,9 +23,9 @@ array_agg_ordered_subquery.sql: many () -> { titles: [unknown?]? }
 array_agg_placeholder_passed.sql: one (p: numeric?) -> { l: [numeric|int8|float8|text?]? }
 array_agg_truth.sql: one () -> { l: [bool|int8]? }
 array_agg_truth_buffered.sql: one () -> { l: [bool|int8]? }
-array_agg_truth_cast.sql: many () -> { l: [bool]? }
-array_agg_truth_join.sql: many () -> { l: [bool|int8]? }
-array_agg_truth_object.sql: many () -> { l: [{ t: bool }]? }
+array_agg_truth_cast.sql: many () -> { l: [bool] }
+array_agg_truth_join.sql: many () -> { l: [bool|int8] }
+array_agg_truth_object.sql: many () -> { l: [{ t: bool }] }
 array_agg_truth_window.sql: many () -> { l: [bool|int8]? }
 array_agg_window.sql: many () -> { ids: [int4]? }
 cast_as_json.sql: many () -> { o: { id: int4 }, n: json? }
@@ -81,7 +81,7 @@ object_truth_all_aggregated.sql: one () -> { o: { c: bool?, n: int8, l: bool, t:
 object_truth_any_value.sql: many () -> { o: { any_value: bool|int8 } }
 object_truth_bang.sql: many () -> { o: json? }
 object_truth_beside_aggregate.sql: many () -> { o: { t: unknown?, m: unknown?, c: unknown?, l: unknown? } }
-object_truth_beside_list.sql: many () -> { o: { t: bool|int8, titles: [text]? } }
+object_truth_beside_list.sql: many () -> { o: { t: bool|int8, titles: [text] } }
 object_truth_beside_outer_aggregate.sql: many () -> { o: { e: bool|int8, n: unknown? } }
 object_truth_beside_subquery.sql: many () -> { o: { t: bool, posts: [{ id: int4, first: bool }] } }
 object_truth_beside_window.sql: many () -> { o: { t: bool|int8, w: int8 } }

@@ -280,7 +280,8 @@ A column is `| null` unless Reylo proves it never is. On Postgres, Reylo reads t
 - **An outer join** makes the joined table's columns nullable: the right side of a `left join`, the left side of a `right join`, both sides of a `full join`.
 - **A test in the `where`** that fails on `NULL` proves the column, and a later inner join's `on` proves the joined row exists: `where o.total > 0`, `where email is not null`, `where lower(email) = :email`.
 - **An expression** is non-null when Reylo's rules prove it: a literal, a cast, `||`, a comparison and arithmetic over non-null operands, a built-in function that returns `NULL` only for a `NULL` argument (`length`, `lower`, `round`, …), a `coalesce` with a non-null argument, a `case` whose branches and `else` are all non-null, `count`, `exists` and `is null`.
-- **An aggregate** other than `count` is `NULL` over no rows, so it is nullable without a `group by`, and with one it is non-null where its argument is.
+- **An aggregate** other than `count` is `NULL` over no rows, so it is nullable without a `group by`. With one, every group has a row: `array_agg`, `json_agg`, `jsonb_agg` and `jsonb_object_agg`, which write a `NULL` into what they build, are non-null, and `sum`, `max`, `string_agg` and the others, which skip a `NULL`, are non-null where their argument is. A `filter` can leave a group no rows, so an aggregate with one stays nullable.
+- **A table's whole row** (`select e`, `jsonb_agg(e)`) is never `NULL` unless an outer join nulls it, and keeps its columns' `NOT NULL` and their `CHECK` lists.
 - **A scalar subquery** is non-null only when it is an aggregate without a `group by` over a non-null value, as `(select count(*) …)` is.
 - **A column of a `union`** is non-null when it is in every arm.
 - **An operator, function or cast your database defines**, or an extension does, proves nothing: the rules stand down wherever Postgres could pick one of those over the built-in.

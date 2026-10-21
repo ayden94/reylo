@@ -227,12 +227,13 @@ Each driver hands Reylo exact integers and dates as text, so one value is refuse
 
 ## Nullability
 
-A column is `| null` unless Reylo proves it never is. On MySQL the proof is the server's: it marks each result column `NOT NULL` or not, and Reylo reads that mark.
+A column is `| null` unless Reylo proves it never is. On MySQL the proof is the server's: it marks each result column `NOT NULL` or not, and Reylo reads that mark and adds what the statement's `where` and `group by` prove.
 
 - **A table's column** is non-null where the table says `NOT NULL`, exactly.
-- **An outer join** makes the joined table's columns nullable, and a test in the `where` does not prove them again.
+- **An outer join** makes the joined table's columns nullable, unless a test in the `where` that fails on `NULL` proves the joined row exists, as `where p.published_at is not null` or `where p.id > 0` does, or a later inner join's `on` does.
 - **An expression** is non-null where the server says so: `coalesce` and `ifnull` with a non-null argument, `count`, `length`, arithmetic over non-null integers, comparisons. The server is cautious with string and date functions, most casts and division: `upper(name)`, `concat(name, '!')`, `date(created_at)`, `cast(id as char)` and `id / 2` are `| null` even when their input is `NOT NULL`.
-- **A `where … is not null`** filters the rows and leaves the column's type as it was.
+- **A test in the `where`** that fails on `NULL` proves the column it tests: `where email is not null`, `where email like '%@%'`, `where lower(email) = :email`. A test under an `or` whose other arm tests another column proves nothing, nor do `coalesce`, `ifnull` and `<=>`.
+- **`json_arrayagg`** is `NULL` over no rows, and never under a `group by`, where every group has a row.
 - **A `WITH ROLLUP`** adds a row per level whose grouped columns are `NULL`, and the type says so.
 - **A correlated subquery** in the select list makes the server clear `NOT NULL` on the outer table's columns. Reylo asks again without the subquery and restores it.
 

@@ -2,49 +2,49 @@ bigint_arithmetic.sql: maybeOne (id: int4) -> { id: int8 }
 bigint_float_literal.sql: maybeOne () -> { id: int8 }
 bigint_param.sql: maybeOne (id: int8) -> { id: int8 }
 bigint_param_scan.sql: maybeOne (id: int8) -> { id: int8 }
-bigint_unsigned.sql: maybeOne (u: int8) -> { u: int8? }
-bigint_unsigned_scan.sql: maybeOne (u: int8) -> { u: int8? }
-binary_param.sql: maybeOne (fixed: bytea) -> { fixed: bytea? }
-bit64_arithmetic.sql: maybeOne (n: int4) -> { bits64: bytea? }
-bit64_float.sql: maybeOne () -> { bits64: bytea? }
-bit64_param.sql: maybeOne (bits: bytea) -> { bits64: bytea? }
-bit64_scan.sql: maybeOne (bits: bytea) -> { bits64: bytea? }
-bit_literal.sql: many () -> { bits: bytea? }
-bit_number.sql: maybeOne () -> { bits: bytea? }
-bit_param.sql: maybeOne (bits: bytea) -> { bits: bytea? }
-bit_scan.sql: maybeOne (bits: bytea) -> { bits: bytea? }
-char_padded.sql: maybeOne (v: text) -> { c: text? }
-char_padded_scan.sql: maybeOne (v: text) -> { c: text? }
-collation_bin.sql: maybeOne (v: text) -> { bin: text? }
-collation_bin_convert.sql: many (v: text) -> { bin: text? }
-collation_bin_explicit.sql: many (v: text) -> { bin: text? }
-collation_bin_introducer.sql: many () -> { bin: text? }
-collation_bin_lower.sql: maybeOne (v: text) -> { bin: text? }
-collation_bin_scan.sql: maybeOne (v: text) -> { bin: text? }
-collation_ci.sql: maybeOne (v: text) -> { ci: text? }
-collation_ci_scan.sql: maybeOne (v: text) -> { ci: text? }
-collation_cs.sql: maybeOne (v: text) -> { cs: text? }
-collation_cs_scan.sql: maybeOne (v: text) -> { cs: text? }
-collation_cs_user.sql: many () -> { cs: text? }
-collation_latin.sql: maybeOne (v: text) -> { latin: text? }
-collation_latin_scan.sql: maybeOne (v: text) -> { latin: text? }
-collation_pad.sql: maybeOne (v: text) -> { pad: text? }
-collation_pad_scan.sql: maybeOne (v: text) -> { pad: text? }
+bigint_unsigned.sql: maybeOne (u: int8) -> { u: int8 }
+bigint_unsigned_scan.sql: maybeOne (u: int8) -> { u: int8 }
+binary_param.sql: maybeOne (fixed: bytea) -> { fixed: bytea }
+bit64_arithmetic.sql: maybeOne (n: int4) -> { bits64: bytea }
+bit64_float.sql: maybeOne () -> { bits64: bytea }
+bit64_param.sql: maybeOne (bits: bytea) -> { bits64: bytea }
+bit64_scan.sql: maybeOne (bits: bytea) -> { bits64: bytea }
+bit_literal.sql: many () -> { bits: bytea }
+bit_number.sql: maybeOne () -> { bits: bytea }
+bit_param.sql: maybeOne (bits: bytea) -> { bits: bytea }
+bit_scan.sql: maybeOne (bits: bytea) -> { bits: bytea }
+char_padded.sql: maybeOne (v: text) -> { c: text }
+char_padded_scan.sql: maybeOne (v: text) -> { c: text }
+collation_bin.sql: maybeOne (v: text) -> { bin: text }
+collation_bin_convert.sql: many (v: text) -> { bin: text }
+collation_bin_explicit.sql: many (v: text) -> { bin: text }
+collation_bin_introducer.sql: many () -> { bin: text }
+collation_bin_lower.sql: maybeOne (v: text) -> { bin: text }
+collation_bin_scan.sql: maybeOne (v: text) -> { bin: text }
+collation_ci.sql: maybeOne (v: text) -> { ci: text }
+collation_ci_scan.sql: maybeOne (v: text) -> { ci: text }
+collation_cs.sql: maybeOne (v: text) -> { cs: text }
+collation_cs_scan.sql: maybeOne (v: text) -> { cs: text }
+collation_cs_user.sql: many () -> { cs: text }
+collation_latin.sql: maybeOne (v: text) -> { latin: text }
+collation_latin_scan.sql: maybeOne (v: text) -> { latin: text }
+collation_pad.sql: maybeOne (v: text) -> { pad: text }
+collation_pad_scan.sql: maybeOne (v: text) -> { pad: text }
 composite_both.sql: maybeOne (tenant: int4, slug: text) -> { id: int4 }
 composite_first.sql: many (tenant: int4) -> { id: int4 }
 composite_mixed_class.sql: many (tenant: int4) -> { id: int4 }
 composite_second.sql: many (slug: text) -> { id: int4 }
-date_number.sql: maybeOne () -> { day: date? }
-date_param.sql: maybeOne (day: date) -> { day: date? }
-date_scan.sql: maybeOne (day: date) -> { day: date? }
-date_zero.sql: maybeOne () -> { day: date? }
+date_number.sql: maybeOne () -> { day: date }
+date_param.sql: maybeOne (day: date) -> { day: date }
+date_scan.sql: maybeOne (day: date) -> { day: date }
+date_zero.sql: maybeOne () -> { day: date }
 datetime_arithmetic.sql: maybeOne (n: int4) -> { at: timestamp }
 datetime_concat.sql: maybeOne (a: text, b: text) -> { at: timestamp }
-datetime_micro.sql: maybeOne (at: timestamp) -> { at6: timestamp? }
-datetime_micro_decimal.sql: maybeOne () -> { at6: timestamp? }
-datetime_micro_double.sql: maybeOne () -> { at6: timestamp? }
-datetime_micro_number.sql: maybeOne (n: int4) -> { at6: timestamp? }
-datetime_micro_scan.sql: maybeOne (at: timestamp) -> { at6: timestamp? }
+datetime_micro.sql: maybeOne (at: timestamp) -> { at6: timestamp }
+datetime_micro_decimal.sql: maybeOne () -> { at6: timestamp }
+datetime_micro_double.sql: maybeOne () -> { at6: timestamp }
+datetime_micro_number.sql: maybeOne (n: int4) -> { at6: timestamp }
+datetime_micro_scan.sql: maybeOne (at: timestamp) -> { at6: timestamp }
 datetime_now.sql: many () -> { at: timestamp }
 datetime_number.sql: maybeOne () -> { at: timestamp }
 datetime_number_scan.sql: maybeOne () -> { at: timestamp }
@@ -60,19 +60,19 @@ decimal_float_small.sql: maybeOne () -> { amount: numeric }
 decimal_param.sql: maybeOne (amount: numeric) -> { amount: numeric }
 decimal_param_scan.sql: maybeOne (amount: numeric) -> { amount: numeric }
 decimal_string_literal.sql: many () -> { amount: numeric }
-decimal_whole.sql: maybeOne (whole: numeric) -> { whole: numeric? }
-decimal_whole_float.sql: maybeOne () -> { whole: numeric? }
-decimal_whole_scan.sql: maybeOne (whole: numeric) -> { whole: numeric? }
-double_decimal_literal.sql: maybeOne () -> { d: float8? }
-double_param.sql: maybeOne (d: float8) -> { d: float8? }
-double_string_literal.sql: many () -> { d: float8? }
+decimal_whole.sql: maybeOne (whole: numeric) -> { whole: numeric }
+decimal_whole_float.sql: maybeOne () -> { whole: numeric }
+decimal_whole_scan.sql: maybeOne (whole: numeric) -> { whole: numeric }
+double_decimal_literal.sql: maybeOne () -> { d: float8 }
+double_param.sql: maybeOne (d: float8) -> { d: float8 }
+double_string_literal.sql: many () -> { d: float8 }
 enum_literal.sql: maybeOne () -> { kind: text }
 enum_number.sql: many () -> { kind: text }
 enum_param.sql: maybeOne (kind: text) -> { kind: text }
 enum_scan.sql: maybeOne (kind: text) -> { kind: text }
-float_decimal_literal.sql: maybeOne () -> { f: float4? }
-float_param.sql: maybeOne (f: float8) -> { f: float4? }
-float_scan.sql: maybeOne (f: float8) -> { f: float4? }
+float_decimal_literal.sql: maybeOne () -> { f: float4 }
+float_param.sql: maybeOne (f: float8) -> { f: float4 }
+float_scan.sql: maybeOne (f: float8) -> { f: float4 }
 functional_key.sql: many (email: text) -> { id: int4 }
 functional_key_column.sql: many (email: text) -> { id: int4 }
 int_abs.sql: maybeOne (id: int4) -> { id: int4 }
@@ -119,8 +119,8 @@ int_view.sql: many (id: int4) -> { id: int4|int8 }
 int_xor.sql: many (id: int4) -> { id: int4 }
 prefix_key.sql: maybeOne (name: text) -> { name: text }
 prefix_key_scan.sql: maybeOne (name: text) -> { name: text }
-set_param.sql: maybeOne (flags: text) -> { flags: text? }
-set_scan.sql: maybeOne (flags: text) -> { flags: text? }
+set_param.sql: maybeOne (flags: text) -> { flags: text }
+set_scan.sql: maybeOne (flags: text) -> { flags: text }
 system_variable_key.sql: many () -> { id: int4 }
 text_abs.sql: many (n: text) -> { id: int4 }
 text_arithmetic.sql: many (n: int4) -> { id: int4 }
@@ -146,27 +146,27 @@ text_true.sql: many () -> { id: int4 }
 text_user.sql: many () -> { id: int4 }
 text_uuid.sql: many () -> { id: int4 }
 text_zero_literal.sql: many () -> { id: int4 }
-time_micro_double.sql: maybeOne () -> { t6: time? }
-time_micro_scan.sql: maybeOne (t: time) -> { t6: time? }
-time_number.sql: maybeOne () -> { t: time? }
-time_param.sql: maybeOne (t: time) -> { t: time? }
-time_scan.sql: maybeOne (t: time) -> { t: time? }
+time_micro_double.sql: maybeOne () -> { t6: time }
+time_micro_scan.sql: maybeOne (t: time) -> { t6: time }
+time_number.sql: maybeOne () -> { t: time }
+time_param.sql: maybeOne (t: time) -> { t: time }
+time_scan.sql: maybeOne (t: time) -> { t: time }
 timestamp_in_composite.sql: many (tenant: int4, at: timestamp) -> { tenant: int4, at: timestamp }
 timestamp_in_composite_scan.sql: many (tenant: int4, at: timestamp) -> { tenant: int4, at: timestamp }
 timestamp_invisible_key.sql: many (at: timestamp) -> { id: int4, at: timestamp }
-timestamp_param.sql: many (ts: timestamp) -> { ts: timestamp? }
-timestamp_param_scan.sql: many (ts: timestamp) -> { ts: timestamp? }
-timestamp_string.sql: many () -> { ts: timestamp? }
-timestamp_string_scan.sql: many () -> { ts: timestamp? }
-varbinary_literal.sql: maybeOne () -> { raw: bytea? }
-varbinary_number.sql: many () -> { raw: bytea? }
-varbinary_param.sql: maybeOne (raw: bytea) -> { raw: bytea? }
-varbinary_scan.sql: maybeOne (raw: bytea) -> { raw: bytea? }
+timestamp_param.sql: many (ts: timestamp) -> { ts: timestamp }
+timestamp_param_scan.sql: many (ts: timestamp) -> { ts: timestamp }
+timestamp_string.sql: many () -> { ts: timestamp }
+timestamp_string_scan.sql: many () -> { ts: timestamp }
+varbinary_literal.sql: maybeOne () -> { raw: bytea }
+varbinary_number.sql: many () -> { raw: bytea }
+varbinary_param.sql: maybeOne (raw: bytea) -> { raw: bytea }
+varbinary_scan.sql: maybeOne (raw: bytea) -> { raw: bytea }
 variable_integer_key.sql: many () -> { id: int4 }
 variable_quoted_text_key.sql: many () -> { id: int4 }
 variable_text_key.sql: many () -> { id: int4 }
 variable_unset.sql: many () -> { id: int4 }
-year_param.sql: maybeOne (y: int4) -> { y: int2? }
-year_scan.sql: maybeOne (y: int4) -> { y: int2? }
-year_string.sql: many () -> { y: int2? }
-year_two_digits.sql: maybeOne () -> { y: int2? }
+year_param.sql: maybeOne (y: int4) -> { y: int2 }
+year_scan.sql: maybeOne (y: int4) -> { y: int2 }
+year_string.sql: many () -> { y: int2 }
+year_two_digits.sql: maybeOne () -> { y: int2 }

@@ -28,7 +28,7 @@ json_table_statement.sql: many () -> { a: int4? }
 leading_comment.sql: maybeOne (id: int4) -> { id: int4 }
 lock_tables.sql: many () -> {  } !! reylo10: A typed .sql file holds one SELECT, TABLE, VALUES, INSERT, REPLACE, UPDATE or DELETE statement and this one holds another kind, so if it is a migration or a schema file, leave it out of the type check with "exclude" in tsconfig.json, as in "exclude": ["db/**"].
 match_against.sql: many (q: text) -> { id: int4 }
-match_against_score.sql: many (q: text) -> { id: int4, score: float8? }
+match_against_score.sql: many (q: text) -> { id: int4, score: float8 }
 member_of.sql: many () -> { id: int4 }
 optimizer_hint.sql: maybeOne (id: int4) -> { id: int4 }
 optimizer_hint_set_var.sql: many () -> { id: int4 }
