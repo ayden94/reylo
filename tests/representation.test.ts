@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { Session } from "../src/analyze.ts";
 import { sqlModule } from "../src/loader.ts";
+import { renderType } from "../src/render.ts";
 
 // Reylo's one representation per SQL type (src/values.ts), on the real drivers, each set up by the
 // app against it: the module a build step writes, run on each, must give the same rows, and each
@@ -359,5 +360,92 @@ test("SQLite: a column declared BIGINT or INT8 is a BigInt on every driver, exac
   const wrapper = await open({ filename: file, driver: sqlite3.Database });
   await assert.rejects(exact.run(wrapper), rounded);
   assert.deepEqual(plain(await byV.run(wrapper, { v: 5n })), [{ id: 2, v: 5n }], "sqlite: a BIGINT within 2^53");
+  await wrapper.close();
+});
+
+test("SQLite: JSON a statement builds is the object its type says on every driver, and a text column that holds JSON stays a string", { skip: drivers === true ? false : drivers, timeout: 60_000 }, async () => {
+  const Database = require("better-sqlite3");
+  const { createClient } = require("@libsql/client");
+  const sqlite3 = require("sqlite3");
+  const { open } = require("sqlite");
+  const root = project();
+  const file = join(root, "app.db");
+  const setup = new DatabaseSync(file);
+  setup.exec(`create table users (id integer primary key, name text not null, github_id bigint, score real, active boolean not null default 1, doc text);
+    create table posts (id integer primary key, user_id integer not null references users (id), title text not null, body text) strict;
+    insert into users values (1, 'ann', 9007199254740993, 1.5, 1, '[1]'), (2, 'bob', null, null, 0, null);
+    insert into posts values (10, 1, 'hello', null), (11, 1, 'world', 'b')`);
+  setup.close();
+  const sql = {
+    profile: `select json_object(
+  'user', json_object('id', u.id, 'name', u.name),
+  'posts', (select json_group_array(json_object('id', p.id, 'title', p.title)) from posts p where p.user_id = u.id)
+) as profile
+from users u where u.id = :id::int`,
+    // A BIGINT inside JSON is a JSON number, which JSON.parse rounds past 2^53, as on Postgres;
+    // a truth value is 1 or 0 there, and a BOOLEAN column what it holds.
+    values: `select json_object('big', github_id, 'score', score, 'flag', active, 'more', id > 1, 'pair', json_array(name, score), 'doc', doc) as o,
+  doc, json_object('n', name) || '' as glued from users order by id`,
+  };
+  // The types the module declares, as the type check renders them.
+  writeFileSync(join(root, ".env"), "DATABASE_URL=file:./app.db\n");
+  const session = await Session.for(root);
+  try {
+    const types: Record<string, string> = {};
+    for (const [name, text] of Object.entries(sql)) {
+      const outcome = await session.analyze(text);
+      assert.ok(outcome.ok, `${name}: ${outcome.ok ? "" : outcome.message}`);
+      types[name] = outcome.analysis.columns.map((c) => `${c.name}: ${renderType(c.type, false, "sqlite")}${c.nullable ? " | null" : ""}`).join("; ");
+    }
+    assert.deepEqual(types, {
+      profile: "profile: { user: { id: number; name: string }; posts: { id: number; title: string }[] }",
+      values: "o: { big: number | null; score: number | null; flag: number | string; more: number; pair: [string, number | null]; doc: string | null }; doc: string | null; glued: string",
+    });
+  } finally {
+    await session.close();
+  }
+  const profile = await built(root, "file:./app.db", "profile", sql.profile);
+  const values = await built(root, "file:./app.db", "values", sql.values);
+  const ann = { profile: { user: { id: 1, name: "ann" }, posts: [{ id: 10, title: "hello" }, { id: 11, title: "world" }] } };
+  const bob = { profile: { user: { id: 2, name: "bob" }, posts: [] } };
+  const rows = [
+    { o: { big: 9007199254740992, score: 1.5, flag: 1, more: 0, pair: ["ann", 1.5], doc: "[1]" }, doc: "[1]", glued: '{"n":"ann"}' },
+    { o: { big: null, score: null, flag: 0, more: 1, pair: ["bob", null], doc: null }, doc: null, glued: '{"n":"bob"}' },
+  ];
+  const check = async (label: string, run: (q: any, params?: object) => unknown) => {
+    assert.deepEqual(plain(await run(profile, { id: 1 })), ann, `${label}: the profile`);
+    assert.deepEqual(plain(await run(profile, { id: 2 })), bob, `${label}: a user with no posts`);
+    assert.deepEqual(plain(await run(values)), rows, `${label}: the values`);
+  };
+  for (const safe of [false, true]) {
+    const db = new Database(file);
+    db.defaultSafeIntegers(safe);
+    await check(`better-sqlite3 with defaultSafeIntegers(${safe})`, (q, p) => q.runSync(db, p));
+    assert.equal(typeof db.prepare("select json_object('a', 1) as o").get().o, "string", "the control: the app's own statement");
+    db.close();
+  }
+  for (const readBigInts of [false, true]) {
+    const node = new DatabaseSync(file, { readBigInts });
+    await check(`node:sqlite with readBigInts ${readBigInts}`, (q, p) => q.run(node, p));
+    node.close();
+  }
+  for (const intMode of ["number", "bigint", "string"]) {
+    const client = createClient({ url: `file:${file}`, intMode });
+    await check(`libSQL with intMode ${intMode}`, (q, p) => q.run(client, p));
+    client.close();
+  }
+  const turso = await import(pathToFileURL(require.resolve("@tursodatabase/database")).href);
+  const { Database: TursoCompat } = await import(pathToFileURL(require.resolve("@tursodatabase/database/compat")).href);
+  const tdb = await turso.connect(file);
+  await check("Turso's engine", (q, p) => q.run(tdb, p));
+  await tdb.close();
+  const compat = new TursoCompat(file);
+  await check("Turso's compat Database", (q, p) => q.runSync(compat, p));
+  compat.close();
+  const s3 = new sqlite3.Database(file);
+  await check("sqlite3", (q, p) => q.run(s3, p));
+  await new Promise((resolve) => s3.close(resolve));
+  const wrapper = await open({ filename: file, driver: sqlite3.Database });
+  await check("sqlite", (q, p) => q.run(wrapper, p));
   await wrapper.close();
 });

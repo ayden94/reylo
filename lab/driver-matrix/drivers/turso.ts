@@ -4,7 +4,9 @@
 //   --api compat   the synchronous Database of @tursodatabase/database/compat, and its
 //                  db.transaction(fn), as better-sqlite3's
 // 0.4 has no SAVEPOINT ("SAVEPOINT not supported yet"), so its shapes skip S7c, as the compat
-// db.transaction(fn) does on every release.
+// db.transaction(fn) does on every release. And 0.4 answers json_group_array and json_group_object
+// over no rows with NULL, where SQLite and Turso 0.6 and later answer `[]` and `{}`, so it skips
+// S10j, whose `none` is such an array: Reylo types it as never NULL, as SQLite has it.
 import { args, callbackTx, manualTx, notRun, rawSavepoint, requireFrom, runJob, type Shape } from "../lib/harness.ts";
 
 const a = args();
@@ -20,6 +22,7 @@ try {
 }
 const savepoints = !a.version!.startsWith("0.4.");
 const noSavepoint = savepoints ? undefined : { S7c: "Turso 0.4 has no SAVEPOINT (\"SAVEPOINT not supported yet\")" };
+const emptyAggregates = savepoints ? undefined : { S10j: "Turso 0.4 answers json_group_array over no rows with NULL, where SQLite and Turso 0.6 and later answer []" };
 
 await runJob(meta, async () => {
   if (compat) {
@@ -30,7 +33,7 @@ await runJob(meta, async () => {
       // A transaction function called inside another fails, where better-sqlite3's runs as a savepoint.
       { name: "compat db.transaction(fn)", kind: "sync", syncTx: db, skip: { S7c: "the compat Database's db.transaction(fn) inside another fails (\"cannot start a transaction within a transaction\"), where better-sqlite3's runs as a savepoint" } },
     ];
-    return { ...meta, dialect: "sqlite", count: async (tag) => Number(counter.get(tag).n), shapes, close: async () => db.close() };
+    return { ...meta, dialect: "sqlite", count: async (tag) => Number(counter.get(tag).n), shapes, close: async () => db.close(), skip: emptyAggregates };
   }
   const db = await turso.connect(a.file!);
   const shapes: Shape[] = [
@@ -75,5 +78,6 @@ await runJob(meta, async () => {
     count: async (tag) => Number((await db.prepare("select count(*) as n from scratch where tag = ?").get(tag)).n),
     shapes,
     close: async () => db.close(),
+    skip: emptyAggregates,
   };
 });

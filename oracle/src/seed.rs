@@ -796,6 +796,13 @@ pub fn check_sqlite(db: &rusqlite::Connection, statements: &[(String, String, Va
                                 Some(value) if col["type_name"] == "int8" && !matches!(value, rusqlite::types::Value::Null | rusqlite::types::Value::Integer(_)) => {
                                     found.push(format!("{file}: column {name} typed int8 holds {value:?} with ({shown})"));
                                 }
+                                // JSON a constructor built is text that parses as that JSON,
+                                // each value of the type the engine gave it.
+                                Some(value) if is_built(&col["type"]) && *value != rusqlite::types::Value::Null => {
+                                    if let Some(why) = built_contradiction(&col["type"], value) {
+                                        found.push(format!("{file}: column {name} {why} with ({shown})"));
+                                    }
+                                }
                                 Some(rusqlite::types::Value::Text(text)) => {
                                     if let Some(why) = contradiction(&col["type"], text) {
                                         found.push(format!("{file}: column {name} {why} with ({shown})"));
@@ -847,6 +854,87 @@ pub fn check_sqlite(db: &rusqlite::Connection, statements: &[(String, String, Va
         }
     }
     Ok(report(statements, &tallies, timeout_ms, problems, notes))
+}
+
+/// Whether a SQLite column's type is JSON a constructor built (an object, a list, or the JSON
+/// Schema of a tuple or of an object of any keys), which the run time parses.
+fn is_built(ty: &Value) -> bool {
+    matches!(ty["kind"].as_str(), Some("object" | "list")) || (ty["kind"] == "json" && ty.get("schema").is_some())
+}
+
+/// Why a SQLite value typed as built JSON contradicts its type, if it does: it is no text, the
+/// text is no JSON, or the JSON is not of the type, down to each value ([`built_value`]). SQLite
+/// writes an infinity as `9.0e+999`, which serde_json refuses as out of range and JSON.parse
+/// reads as one.
+fn built_contradiction(ty: &Value, value: &rusqlite::types::Value) -> Option<String> {
+    let rusqlite::types::Value::Text(text) = value else { return Some(format!("typed as built JSON holds {value:?}, which is no text")) };
+    let parsed = serde_json::from_str::<Value>(text).or_else(|_| serde_json::from_str::<Value>(&text.replace("9.0e+999", "1.0e308")));
+    match parsed {
+        Ok(json) => built_value(ty, &json, ""),
+        Err(e) => Some(format!("typed as built JSON holds {text:?}, which is no JSON ({e})")),
+    }
+}
+
+/// Why a value inside a document SQLite built contradicts its type: an INTEGER (a 64-bit column's
+/// too) is a JSON integer, a REAL a number, a TEXT a string, a NUMERIC a number or a string; an
+/// object has exactly its keys, each null only where it may be; a list's items likewise; a JSON
+/// Schema admits the value. Any JSON (`unknown`, `json` without a schema) admits null.
+fn built_value(ty: &Value, json: &Value, path: &str) -> Option<String> {
+    let at = if path.is_empty() { "the top".to_string() } else { path.to_string() };
+    let admits_null = |t: &Value| matches!(t["kind"].as_str(), Some("unknown")) || (t["kind"] == "json" && t.get("schema").is_none());
+    match ty["kind"].as_str() {
+        Some("scalar") => {
+            let fits = match ty["name"].as_str() {
+                Some("integer" | "int8") => json.is_i64() || json.is_u64(),
+                Some("real") => json.is_number(),
+                Some("text") => json.is_string(),
+                Some("numeric") => json.is_number() || json.is_string(),
+                _ => true,
+            };
+            (!fits).then(|| format!("holds {json} at {at}, typed {}", ty["name"]))
+        }
+        Some("object") => {
+            let Some(obj) = json.as_object() else { return Some(format!("holds {json} at {at}, typed an object")) };
+            let fields = ty["fields"].as_array().cloned().unwrap_or_default();
+            if let Some(extra) = obj.keys().find(|k| !fields.iter().any(|f| f["name"].as_str() == Some(k.as_str()))) {
+                return Some(format!("has the key {extra:?} at {at}, which its type lacks"));
+            }
+            for f in &fields {
+                let name = f["name"].as_str().unwrap_or("?");
+                let Some(v) = obj.get(name) else { return Some(format!("lacks the key {name:?} at {at}")) };
+                if v.is_null() {
+                    if !f["nullable"].as_bool().unwrap_or(true) && !admits_null(&f["type"]) {
+                        return Some(format!("has a null at {path}.{name}, typed non-null"));
+                    }
+                    continue;
+                }
+                if let Some(why) = built_value(&f["type"], v, &format!("{path}.{name}")) {
+                    return Some(why);
+                }
+            }
+            None
+        }
+        Some("list") => {
+            let Some(items) = json.as_array() else { return Some(format!("holds {json} at {at}, typed a list")) };
+            for (i, item) in items.iter().enumerate() {
+                if item.is_null() {
+                    if !ty["nullable_items"].as_bool().unwrap_or(true) && !admits_null(&ty["of"]) {
+                        return Some(format!("has a null item at {path}[{i}], typed non-null"));
+                    }
+                    continue;
+                }
+                if let Some(why) = built_value(&ty["of"], item, &format!("{path}[{i}]")) {
+                    return Some(why);
+                }
+            }
+            None
+        }
+        Some("json") => {
+            let schema = ty.get("schema")?;
+            (!reylo_engine_core::schema_type::admits(schema, json)).then(|| format!("holds {json} at {at}, which the schema {schema} does not admit"))
+        }
+        _ => None,
+    }
 }
 
 /// Run one statement under the timeout, each row handed to `each` as it comes: the rows it
@@ -999,6 +1087,36 @@ mod tests {
 
     fn column(category: &str, base: &str) -> Column {
         Column { name: "c".into(), ty: base.into(), category: category.into(), kind: "b".into(), base: base.into(), is_array: false, labels: Vec::new(), generated: false }
+    }
+
+    #[test]
+    fn built_json_is_held_to_its_type_down_to_each_value() {
+        let text = |s: &str| rusqlite::types::Value::Text(s.into());
+        let scalar = |name: &str| json!({"kind": "scalar", "name": name});
+        let ty = json!({"kind": "object", "fields": [
+            {"name": "id", "type": scalar("integer"), "nullable": false},
+            {"name": "r", "type": scalar("real"), "nullable": true},
+            {"name": "doc", "type": {"kind": "unknown"}, "nullable": false},
+            {"name": "tags", "type": {"kind": "list", "of": scalar("text"), "nullable_items": false}, "nullable": false},
+            {"name": "pair", "type": {"kind": "json", "schema": {"type": "array", "prefixItems": [{"type": "integer"}, {"type": "string"}], "items": false, "minItems": 2}}, "nullable": false},
+        ]});
+        assert_eq!(built_contradiction(&ty, &text(r#"{"id":1,"r":9.0e+999,"doc":null,"tags":["a"],"pair":[1,"a"]}"#)), None);
+        assert_eq!(built_contradiction(&ty, &text(r#"{"id":1,"r":null,"doc":{"a":1},"tags":[],"pair":[1,"a"]}"#)), None);
+        for (bad, why) in [
+            (r#"{"id":1.5,"r":1,"doc":1,"tags":[],"pair":[1,"a"]}"#, "holds 1.5 at .id, typed \"integer\""),
+            (r#"{"id":"1","r":1,"doc":1,"tags":[],"pair":[1,"a"]}"#, "holds \"1\" at .id, typed \"integer\""),
+            (r#"{"r":1,"doc":1,"tags":[],"pair":[1,"a"]}"#, "lacks the key \"id\" at the top"),
+            (r#"{"id":1,"r":1,"doc":1,"tags":[],"pair":[1,"a"],"x":1}"#, "has the key \"x\" at the top, which its type lacks"),
+            (r#"{"id":null,"r":1,"doc":1,"tags":[],"pair":[1,"a"]}"#, "has a null at .id, typed non-null"),
+            (r#"{"id":1,"r":1,"doc":1,"tags":[null],"pair":[1,"a"]}"#, "has a null item at .tags[0], typed non-null"),
+            (r#"{"id":1,"r":1,"doc":1,"tags":"[]","pair":[1,"a"]}"#, "holds \"[]\" at .tags, typed a list"),
+            (r#"[1]"#, "holds [1] at the top, typed an object"),
+        ] {
+            assert_eq!(built_contradiction(&ty, &text(bad)).as_deref(), Some(why), "{bad}");
+        }
+        assert!(built_contradiction(&ty, &text(r#"{"id":1,"r":1,"doc":1,"tags":[],"pair":[1,2]}"#)).is_some_and(|why| why.contains("does not admit")));
+        assert!(built_contradiction(&ty, &text("not json")).is_some_and(|why| why.contains("which is no JSON")));
+        assert_eq!(built_contradiction(&ty, &Integer(1)).as_deref(), Some("typed as built JSON holds Integer(1), which is no text"));
     }
 
     #[test]

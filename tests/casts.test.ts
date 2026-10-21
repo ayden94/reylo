@@ -66,11 +66,12 @@ test("SQLite: a cast is SQLite's own, a date's to TEXT, JSON's through json(), a
     const born = await built(root, url, "born", "select name from users where born > :since::date order by born");
     assert.equal(born.text, "select name from users where born > CAST(? AS TEXT) order by born");
     assert.deepEqual(plain(await born.query.run(db, { since: "1900-01-01" })), [{ name: "Grace" }, { name: "Alan" }]);
-    // json() makes the text a JSON value inside SQLite's JSON functions, where text alone is a string.
+    // json() makes the text a JSON value inside SQLite's JSON functions, where text alone is a
+    // string; the object json_object builds comes back parsed.
     const doc = await built(root, url, "doc", "select json_extract(:doc::json, '$.a') as a, json_object('d', :inner::json, 's', :text) as d");
     assert.equal(doc.text, "select json_extract(json(?), '$.a') as a, json_object('d', json(?), 's', ?) as d");
     assert.match(doc.code, /"doc":\{"type":\{"kind":"json"/);
-    assert.deepEqual({ ...(await doc.query.run(db, { doc: { a: 5 }, inner: [1], text: "[1]" })) }, { a: 5, d: '{"d":[1],"s":"[1]"}' });
+    assert.deepEqual({ ...(await doc.query.run(db, { doc: { a: 5 }, inner: [1], text: "[1]" })) }, { a: 5, d: { d: [1], s: "[1]" } });
     const short = await built(root, url, "short", "select :s::varchar(3) as s, :x::real * 2 as x");
     await assert.rejects(short.query.run(db, { s: "abcd", x: 1 }), /Parameter "s" is varchar\(3\), at most 3 characters; got 4/);
     await assert.rejects(short.query.run(db, { s: "abc", x: "2" }), /Parameter "x" is real, a finite number; got "2"/);

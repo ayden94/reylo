@@ -219,6 +219,8 @@ static void expr(sqlite3_str *s, Expr *p, Select *pSel){
       sqlite3_free(zName);
       kv_bool(s, "agg", p->op==TK_AGG_FUNCTION);
       kv_bool(s, "window", ExprHasProperty(p, EP_WinFunc));
+      /* A FILTER alone is held as a window too; `over` is a call with an OVER clause. */
+      kv_bool(s, "over", IsWindowFunc(p));
       kv_bool(s, "distinct", ExprHasProperty(p, EP_Distinct));
       kv_bool(s, "infix", ExprHasProperty(p, EP_InfixFunc));
       key(s, "args");

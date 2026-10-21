@@ -306,6 +306,15 @@ export function queries(d: Dialect, typed = true) {
     typedBig: q(`select id, big from ${t("typed")} where id = 1`, [], "one", { columns: [["id", "int"], ["big", d === "sqlite" ? "int" : "int8"]] }),
     // SQLite's column declared BIGINT, which the engine types int8.
     typedWide: q(`select id, wide from ${t("typed")} where id = 1`, [], "one", { columns: [["id", "int"], ["wide", "int8"]] }),
+    // SQLite: JSON the statement builds, with the kinds the loader writes from the engine's types
+    // (tests/representation.test.ts pins those types): `json` for each column a constructor
+    // builds, `text` for one that holds JSON text the statement did not build.
+    builtJson: q(
+      `select json_object('user', json_object('id', p.id, 'name', p.name), 'scores', (select json_group_array(json_object('id', s.id, 'score', s.score)) from people s where s.active = 1), 'none', (select json_group_array(s.id) from people s where s.id < 0)) as profile, json_array(p.id, p.name, p.score) as pair, json_object('n', p.name) || '' as glued, t.doc as doc from people p, typed t where p.id = 1`,
+      [],
+      "one",
+      { columns: [["profile", "json"], ["pair", "json"], ["glued", "text"], ["doc", "text"]] },
+    ),
     dup: q(`insert into ${t("uniq")} (k) values (:k)`, ["k"], "none"),
   };
 }
@@ -871,6 +880,19 @@ export const SCENARIOS: Scenario[] = [
         if (e instanceof RangeError && /cannot be safely represented/.test(e.message)) return `libSQL's own: ${e.message}`;
         throw new Mismatch(`not the refusal of an integer past 2^53: ${describe(e)}`);
       }
+    },
+  },
+  {
+    id: "S10j built JSON: SQLite's text of the JSON a statement builds is parsed into the object its type says, other JSON text stays a string",
+    on: "client",
+    params: false,
+    dialects: ["sqlite"],
+    async run(ctx, client, q) {
+      typedEq(
+        await call(ctx, q.builtJson, client),
+        { profile: { user: { id: 1, name: "ada" }, scores: [{ id: 1, score: 10 }, { id: 3, score: 30 }], none: [] }, pair: [1, "ada", 10], glued: '{"n":"ada"}', doc: '{"a":[1,2]}' },
+        "row",
+      );
     },
   },
   {
