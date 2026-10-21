@@ -237,6 +237,22 @@ A column is `| null` unless Reylo proves it never is. On MySQL the proof is the 
 - **A `WITH ROLLUP`** adds a row per level whose grouped columns are `NULL`, and the type says so.
 - **A correlated subquery** in the select list makes the server clear `NOT NULL` on the outer table's columns. Reylo asks again without the subquery and restores it.
 
+A test in the `where` proves the joined row, so its columns are non-null:
+
+```ts twoslash tab="main.ts"
+import shipped from "./my_shipped.sql";
+
+const rows = await shipped.run(db);
+//    ^?
+```
+
+```sql tab="my_shipped.sql" dialect="mysql"
+select u.name, o.total, o.ships_on
+from users u
+left join orders o on o.user_id = u.id
+where o.ships_on is not null
+```
+
 Where the server cannot see what you know, `coalesce` and `ifnull` give a default, and the column is non-null:
 
 ```ts twoslash tab="main.ts"
