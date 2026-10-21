@@ -8,7 +8,7 @@ Reylo lets you use the full power of SQL provided by your database. Postgres, SQ
 
 For convenience, there is some Reylo-specific syntax that can be used inside your `.sql` files. This syntax is transpiled into the idiomatic form for your database's dialect.
 
-### Named parameters
+### Naming
 
 Name a parameter with a colon:
 
@@ -49,7 +49,7 @@ findPosts.sql; // the query your database receives
 //        ^?
 ```
 
-### JSON parameters
+### Typed JSON
 
 When casting to `json` or `jsonb`, you can define a JSON Schema annotation:
 

@@ -371,7 +371,7 @@ group by kind
 
 ### Insert many rows
 
-Pass the rows as one [JSON parameter](#json-parameters): the schema in its cast types them, and Reylo checks every row before the statement runs.
+Pass the rows as one [JSON parameter](#typed-json): the schema in its cast types them, and Reylo checks every row before the statement runs.
 
 ```ts twoslash tab="main.ts"
 import createUsers, { type Params } from "./create_users.sql";

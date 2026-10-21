@@ -171,7 +171,7 @@ join users u on u.id = o.user_id
 - What `json_extract`, `->` and `->>` return is `unknown`, since it depends on the document.
 - A `CHECK` that holds a column to a JSON Schema (sqlite-jsonschema's `jsonschema_matches`) types nothing, since `pragma ignore_check_constraints` lets any connection write past it.
 - JavaScript's `JSON.parse` rounds an integer past 2^53 inside a document.
-- A typed JSON parameter (`:events::json('…')`) is bound as its JSON text, which `json_each` reads, as in the main docs' [JSON parameters](/#json-parameters).
+- A typed JSON parameter (`:events::json('…')`) is bound as its JSON text, which `json_each` reads, as in the main docs' [JSON parameters](/#typed-json).
 
 ### Binary
 
@@ -417,7 +417,7 @@ Reylo runs its own query on the database you pass and gives each value its type 
 - The drivers `better-sqlite3`, `node:sqlite`, `bun:sqlite` and the `Database` of `@tursodatabase/database/compat` take `.runSync()` too, which returns the result itself, so it works inside their `db.transaction(fn)`.
 - The drivers `sqlite3` and `sqlite` bind a `bigint` as `NULL`, so Reylo passes them one that a `number` holds as that number, and refuses a larger one before the statement runs. Every other SQLite driver binds a `bigint` exactly.
 - Each driver takes its transactions too: libSQL's `.transaction()`, the handle Turso's `.transactionAsync()` passes its function, `Bun.sql`'s `.begin()` and `.savepoint()`, and D1's `.withSession()` sessions.
-- Turso's engine 0.8 stops the process on a recursive `WITH` whose anchor and recursive member both read a CTE over `json_each`, such as one over a [JSON parameter](/#json-parameters), with no Reylo involved. Write that CTE `as materialized`.
+- Turso's engine 0.8 stops the process on a recursive `WITH` whose anchor and recursive member both read a CTE over `json_each`, such as one over a [JSON parameter](/#typed-json), with no Reylo involved. Write that CTE `as materialized`.
 
 The type check needs no driver: it reads the schema through `node:sqlite`, which Node has built in since 22.5.
 
