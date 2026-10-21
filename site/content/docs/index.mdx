@@ -12,7 +12,7 @@ Reylo lets you import `.sql` files with full type safety. It's powered by TypeSc
 import postgres from "postgres";
 import getAuthor from "./get_author.sql";
 
-const db = postgres(process.env.DATABASE_URL!);
+const db = postgres(process.env.DATABASE_URL);
 
 // hover over author to see its type
 const author = await getAuthor.run(db, { id: 1 });
@@ -138,7 +138,7 @@ create table events (
 - 🌵 **DRY.** The types come from the SQL itself: no hand-written row types, no schema file to keep in sync.
 - 🎯 **Checked against your database.** A misspelled column, a wrong parameter or a dropped table is a type error, in `tsc` and in your editor.
 - 🤖 **Agent-friendly.** Each fact lives in one place, so an agent cannot leave a stale type behind, and the type check finds every caller it missed.
-- 🧩 **Postgres, MySQL and SQLite.** Bring your own driver: `pg`, postgres.js, `mysql2`, `better-sqlite3`, Bun, Cloudflare D1 and [more](#supported-drivers).
+- 🧩 **Postgres, MySQL and SQLite.** Bring your own driver: `pg`, postgres.js, `mysql2`, `better-sqlite3`, Cloudflare D1 and [more](#supported-drivers).
 - ⚡ **No codegen.** The type checker asks Reylo directly: no generated files, no watcher.
 
 </div>

@@ -286,7 +286,7 @@ MySQL has no `returning`, so a write resolves to nothing. Read a new id with `la
 import mysql from "mysql2/promise";
 import lastInsertId from "./my_last_insert_id.sql";
 
-const db = mysql.createPool(process.env.DATABASE_URL!);
+const db = mysql.createPool(process.env.DATABASE_URL);
 const conn = await db.getConnection();
 // … run an insert on conn, then:
 const { id } = await lastInsertId.run(conn);

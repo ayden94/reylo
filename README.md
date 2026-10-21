@@ -16,7 +16,7 @@ group by u.id
 import postgres from "postgres";
 import getAuthor from "./get_author.sql";
 
-const db = postgres(process.env.DATABASE_URL!);
+const db = postgres(process.env.DATABASE_URL);
 
 const author = await getAuthor.run(db, { id: 1 });
 //    ^? { id: number; name: string; post_count: number } | null

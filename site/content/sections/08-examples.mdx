@@ -517,7 +517,7 @@ import insertUsers, { type Params } from "./insert_users.sql";
 //                         ^?
 import insertPosts from "./insert_posts.sql";
 
-const db = mysql.createPool(process.env.DATABASE_URL!);
+const db = mysql.createPool(process.env.DATABASE_URL);
 const users = [
   {
     name: "Ada",
@@ -680,7 +680,7 @@ import postgres from "postgres";
 import getUser from "./get_user.sql";
 import renameUser from "./rename_user.sql";
 
-const db = postgres(process.env.DATABASE_URL!);
+const db = postgres(process.env.DATABASE_URL);
 
 await db.begin(async (tx) => {
   const user = await getUser.run(tx, { id: 1 });
@@ -694,7 +694,7 @@ await db.begin(async (tx) => {
 import mysql from "mysql2/promise";
 import renameUser from "./rename_user.sql";
 
-const db = mysql.createPool(process.env.DATABASE_URL!);
+const db = mysql.createPool(process.env.DATABASE_URL);
 
 const conn = await db.getConnection();
 try {

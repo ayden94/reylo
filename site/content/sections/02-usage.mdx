@@ -10,7 +10,7 @@ Write a query in a `.sql` file, import it, and run it with your database driver.
 import postgres from "postgres";
 import getUser from "./get_user.sql";
 
-const db = postgres(process.env.DATABASE_URL!);
+const db = postgres(process.env.DATABASE_URL);
 const user = await getUser.run(db, { id: 1 });
 ```
 
@@ -68,7 +68,7 @@ It throws when the rows don't fit the shape, such as a second row for `Row | nul
 
 ### `.runSync()`
 
-Runs the query synchronously, on `better-sqlite3`, `node:sqlite`, `bun:sqlite` and the `Database` of `@tursodatabase/database/compat`:
+Runs the query synchronously, on `better-sqlite3`, `node:sqlite` and the `Database` of `@tursodatabase/database/compat`:
 
 ```ts twoslash dialect="sqlite"
 import Database from "better-sqlite3";

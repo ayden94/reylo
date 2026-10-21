@@ -237,6 +237,9 @@ export function withSetup(block: Block, variant: Variant, modules: Modules, file
   if (/\bBun\.|\bfrom\s+["']bun(?::sqlite)?["']/.test(code)) globals.push('/// <reference types="bun" />');
   if (/\bD1Database\b/.test(code) && !/@cloudflare\/workers-types/.test(code)) globals.push('/// <reference types="@cloudflare/workers-types" />');
   if (variant.needs.length && !declaresDb(code)) globals.push(`declare const db: ${CLIENT[variant.dialect]};`);
+  // The examples read `process.env.DATABASE_URL` with no `!`, as a project that declares it on
+  // `process.env` does.
+  if (/\bprocess\.env\.DATABASE_URL\b/.test(code)) globals.push('declare namespace NodeJS { interface ProcessEnv { DATABASE_URL: string } }');
   if (globals.length) files.push(`// @filename: globals.d.ts\n${globals.join('\n')}\n`);
   if (!files.length) return code;
   const title = attribute(block.node.meta, 'title');
