@@ -279,12 +279,12 @@ Every Postgres driver but `Bun.sql` hands Reylo each value's text, which Reylo d
 
 ## Nullability
 
-A column is `| null` unless Reylo proves it never is. On Postgres, Reylo reads the catalog and the statement:
+A column is `| null` unless Reylo infers it never is. On Postgres, Reylo reads the catalog and the statement:
 
-- **A table's column** is non-null where its `NOT NULL` is valid and holds in every table that inherits from it. A `NOT NULL` added `NOT VALID` proves nothing, since rows written before it may hold `NULL`.
+- **A table's column** is non-null where its `NOT NULL` is valid and holds in every table that inherits from it. A `NOT NULL` added `NOT VALID` tells Reylo nothing, since rows written before it may hold `NULL`.
 - **An outer join** makes the joined table's columns nullable: the right side of a `left join`, the left side of a `right join`, both sides of a `full join`.
-- **A test in the `where`** that fails on `NULL` proves the column, and a later inner join's `on` proves the joined row exists: `where o.total > 0`, `where email is not null`, `where lower(email) = :email`.
-- **An expression** is non-null when Reylo's rules prove it:
+- **A test in the `where`** that fails on `NULL` makes the column non-null, and a later inner join's `on` shows the joined row exists: `where o.total > 0`, `where email is not null`, `where lower(email) = :email`.
+- **An expression** is non-null when Reylo's rules infer it:
   - a literal, a cast, `count`, `exists` and `is null`;
   - concatenation with `||`, a comparison and arithmetic over non-null operands;
   - a built-in function that returns `NULL` only for a `NULL` argument (`length`, `lower`, `round`, …);
@@ -297,7 +297,7 @@ A column is `| null` unless Reylo proves it never is. On Postgres, Reylo reads t
 - **A table's whole row** (`select e`, `jsonb_agg(e)`) is never `NULL` unless an outer join nulls it, and keeps its columns' `NOT NULL` and their `CHECK` lists.
 - **A scalar subquery** is non-null only when it is an aggregate without a `group by` over a non-null value, as `(select count(*) …)` is.
 - **A column of a `union`** is non-null when it is in every arm.
-- **An operator, function or cast your database defines**, or an extension does, proves nothing: the rules stand down wherever Postgres could pick one of those over the built-in.
+- **An operator, function or cast your database defines**, or an extension does, tells Reylo nothing: the rules stand down wherever Postgres could pick one of those over the built-in.
 
 ```ts twoslash tab="main.ts"
 import userTotals from "./pg_user_totals.sql";
@@ -312,7 +312,7 @@ from users u
 left join orders o on o.user_id = u.id
 ```
 
-A test in the `where` proves the joined row, so its columns are non-null; a window function is typed like any other, `lag` nullable on the first row:
+A test in the `where` shows the joined row exists, so its columns are non-null; a window function is typed like any other, `lag` nullable on the first row:
 
 ```ts twoslash tab="main.ts"
 import paidOrders from "./pg_paid_orders.sql";
@@ -342,11 +342,11 @@ select id, placed_at,
 from orders
 ```
 
-Where you know more than Reylo can prove, say it in the statement: `coalesce(x, …)` gives a default, and a `where x is not null` test both filters and proves.
+Where you know more than Reylo can infer, say it in the statement: `coalesce(x, …)` gives a default, and a `where x is not null` test both filters and makes the column non-null.
 
 ## Row counts
 
-How many rows `.run()` resolves to comes from what Reylo proves the statement can return:
+How many rows `.run()` resolves to comes from what Reylo infers the statement can return:
 
 | Resolves to | `cardinality` | On Postgres, when the statement |
 | --- | --- | --- |
@@ -369,8 +369,8 @@ select id, name from users where lower(email) = lower(:email)
 ```
 
 - The expression is matched as Postgres stores it in the index. An index over a domain column stores a cast, `lower((email)::text)`, and the statement must write it the same way to match.
-- A partial unique index without its predicate in the `where` proves nothing: `where slug = :slug` over an index on `slug` `where not deleted` is `Row[]`.
-- Part of a composite key proves nothing, and neither does a `having`, or an `insert … select … returning`.
+- A partial unique index without its predicate in the `where` counts for nothing: `where slug = :slug` over an index on `slug` `where not deleted` is `Row[]`.
+- Part of a composite key counts for nothing, and neither does a `having`, or an `insert … select … returning`.
 - At run time a `Row` statement throws unless it gets exactly one row, and a `Row | null` statement throws when it gets more than one.
 
 ## Parameters

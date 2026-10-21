@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import { Dialect, DialectSwitch, DialectTabs } from './dialect-tabs';
 import { HeroActions } from './hero';
 import { HowItWorksDiagram } from './how-it-works-diagram';
+import { Inferred, InferredRow, InferredTypes } from './inferred';
 
 /**
  * docs-kit's components (headings with the link icon and the copy-as-Markdown button, accordions,
@@ -24,6 +25,11 @@ export function getMDXComponents(components?: MDXComponents) {
     Dialect,
     // The switch at the right end of an example's strip (lib/remark-mapper.ts writes it).
     DialectSwitch,
+    // The Inference section's cards: a statement and the types Reylo infers for it, in labelled
+    // rows (components/inferred.tsx; lib/remark-mapper.ts fills them).
+    Inferred,
+    InferredRow,
+    InferredTypes,
     ...components,
   });
 }

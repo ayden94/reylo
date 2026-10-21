@@ -33,6 +33,12 @@ const URLS: Record<Exclude<Dialect, 'sqlite'>, string> = {
   postgres: process.env.REYLO_CAPTURE_POSTGRES ?? 'postgres://postgres@localhost:54329/reylo_capture',
   mysql: process.env.REYLO_CAPTURE_MYSQL ?? 'mysql://root@127.0.0.1:54336/reylo_capture',
 };
+/** The scratch database an `<Inferred>` card's own schema is built in, on the same server: made again for each card. */
+const cardUrl = (url: string) => {
+  const u = new URL(url);
+  u.pathname = `/${decodeURIComponent(u.pathname.slice(1))}_card`;
+  return u.href;
+};
 // The driver each scratch project names, whose defaults the types follow, as for a project with
 // that driver: postgres.js, mysql2, and node:sqlite (no package).
 const DRIVER: Record<Dialect, string | undefined> = { postgres: 'postgres', mysql: 'mysql2', sqlite: undefined };
@@ -158,8 +164,8 @@ function scratch(url: string): { db: string; admin: URL } {
   return { db, admin: u };
 }
 
-async function buildPostgres(schema: string): Promise<string> {
-  const { db, admin } = scratch(URLS.postgres);
+async function buildPostgres(schema: string, url = URLS.postgres): Promise<string> {
+  const { db, admin } = scratch(url);
   admin.pathname = '/postgres';
   const server = postgres(admin.href, { max: 1, onnotice: () => {} });
   try {
@@ -168,17 +174,17 @@ async function buildPostgres(schema: string): Promise<string> {
   } finally {
     await server.end();
   }
-  const sql = postgres(URLS.postgres, { max: 1, onnotice: () => {} });
+  const sql = postgres(url, { max: 1, onnotice: () => {} });
   try {
     await sql.unsafe(schema).simple();
   } finally {
     await sql.end();
   }
-  return URLS.postgres;
+  return url;
 }
 
-async function buildMysql(schema: string): Promise<string> {
-  const { db, admin } = scratch(URLS.mysql);
+async function buildMysql(schema: string, url = URLS.mysql): Promise<string> {
+  const { db, admin } = scratch(url);
   admin.pathname = '/';
   const conn = await mysql.createConnection({ uri: admin.href, multipleStatements: true });
   try {
@@ -189,7 +195,7 @@ async function buildMysql(schema: string): Promise<string> {
   } finally {
     await conn.end();
   }
-  return URLS.mysql;
+  return url;
 }
 
 function buildSqlite(dir: string, schema: string): string {
@@ -206,8 +212,8 @@ function buildSqlite(dir: string, schema: string): string {
  * A project of its own per dialect, as an app using Reylo has: its `package.json` names the driver
  * (which picks the types' defaults), and the driver resolves from the site's node_modules.
  */
-function project(root: string, dialect: Dialect): string {
-  const dir = path.join(root, dialect);
+function project(root: string, dialect: Dialect, name: string = dialect): string {
+  const dir = path.join(root, name);
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
   const driver = DRIVER[dialect];
@@ -233,6 +239,8 @@ try {
     try {
       blocks = collectFiles(page, site);
       needed = new Set(plan(blocks).flatMap((p) => p.variants.flatMap((v) => v.needs.map((n) => n.block))));
+      // An <Inferred> card shows its statement's types, so its module is kept whether or not a block imports it.
+      for (const block of blocks) if (block.inferred) needed.add(block);
     } catch (e) {
       errors.push(`${shown}: ${(e as Error).message}`);
       continue;
@@ -253,6 +261,41 @@ try {
         for (const block of mine) report(block, `the page has no ${DIALECT_NAME[dialect]} ${SCHEMA_FILE} block to build its schema from; add one, or pass --schema ${dialect}=<file>`);
         continue;
       }
+      // One statement's module, from a session on the schema it is analyzed against.
+      const analyze = async (session: Session, block: Block) => {
+        const written = block.node.value;
+        let sql: string;
+        const json = new Map<string, string>();
+        try {
+          sql = compile(written, dialect);
+          for (const p of jsonParams(written)) json.set(p.name, schemaType(p.schema as never, dialect, `:${p.name}`));
+        } catch (e) {
+          report(block, (e as Error).message);
+          return;
+        }
+        // A block that shows what `strict_params: false` gives says so with `strict="false"`, and is
+        // analyzed as such a project would be; every other block must type each parameter.
+        const strict = !/(?:^|\s)strict="false"(?:\s|$)/.test(block.node.meta ?? '') && session.project.strictParams;
+        const result = await render(session, `${written}\n`, `${sql}\n`, json, strict);
+        if ('error' in result) {
+          report(block, result.error);
+          return;
+        }
+        analyzed++;
+        if (!needed.has(block)) {
+          console.log(`${DIALECT_NAME[dialect].padEnd(8)} ${block.name}: ${summary(result.text)}  (nothing imports it)`);
+          return;
+        }
+        const slot = ((modules[dialect] ??= {})[block.name!] ??= {});
+        if (slot[block.hash] === result.text) return;
+        if (slot[block.hash] !== undefined) {
+          errors.push(`${block.file ?? shown}:${block.line}: ${DIALECT_NAME[dialect]} ${block.name}: another page has the same statement with other types (another schema); give one of them another file name`);
+          return;
+        }
+        slot[block.hash] = result.text;
+        captured++;
+        console.log(`${DIALECT_NAME[dialect].padEnd(8)} ${block.name}: ${summary(result.text)}`);
+      };
       const dir = project(root, dialect);
       let url: string;
       try {
@@ -264,45 +307,33 @@ try {
       const session = await Session.open(dir, { DATABASE_URL: url });
       try {
         const done = new Set<string>();
-        for (const block of mine) {
+        for (const block of mine.filter((b) => b.schema === undefined)) {
           const key = `${block.name}\0${block.hash}`;
           if (done.has(key) && !needed.has(block)) continue;
           done.add(key);
-          const written = block.node.value;
-          let sql: string;
-          const json = new Map<string, string>();
-          try {
-            sql = compile(written, dialect);
-            for (const p of jsonParams(written)) json.set(p.name, schemaType(p.schema as never, dialect, `:${p.name}`));
-          } catch (e) {
-            report(block, (e as Error).message);
-            continue;
-          }
-          // A block that shows what `strict_params: false` gives says so with `strict="false"`, and is
-          // analyzed as such a project would be; every other block must type each parameter.
-          const strict = !/(?:^|\s)strict="false"(?:\s|$)/.test(block.node.meta ?? '') && session.project.strictParams;
-          const result = await render(session, `${written}\n`, `${sql}\n`, json, strict);
-          if ('error' in result) {
-            report(block, result.error);
-            continue;
-          }
-          analyzed++;
-          if (!needed.has(block)) {
-            console.log(`${DIALECT_NAME[dialect].padEnd(8)} ${block.name}: ${summary(result.text)}  (nothing imports it)`);
-            continue;
-          }
-          const slot = ((modules[dialect] ??= {})[block.name!] ??= {});
-          if (slot[block.hash] === result.text) continue;
-          if (slot[block.hash] !== undefined) {
-            errors.push(`${block.file ?? shown}:${block.line}: ${DIALECT_NAME[dialect]} ${block.name}: another page has the same statement with other types (another schema); give one of them another file name`);
-            continue;
-          }
-          slot[block.hash] = result.text;
-          captured++;
-          console.log(`${DIALECT_NAME[dialect].padEnd(8)} ${block.name}: ${summary(result.text)}`);
+          await analyze(session, block);
         }
       } finally {
         await session.close();
+      }
+      // A statement of an <Inferred> card that shows its own schema is analyzed against that schema,
+      // built for it alone: in a scratch database made again for each card, beside the page's, and
+      // a project of its own, so no session or cache of the page's schema answers for it.
+      for (const [i, block] of mine.filter((b) => b.schema !== undefined).entries()) {
+        const own = project(root, dialect, `${dialect}-card-${i}`);
+        let cardDb: string;
+        try {
+          cardDb = dialect === 'postgres' ? await buildPostgres(block.schema!, cardUrl(URLS.postgres)) : dialect === 'mysql' ? await buildMysql(block.schema!, cardUrl(URLS.mysql)) : buildSqlite(own, block.schema!);
+        } catch (e) {
+          report(block, `the card's schema fails: ${(e as Error).message}`);
+          continue;
+        }
+        const cardSession = await Session.open(own, { DATABASE_URL: cardDb });
+        try {
+          await analyze(cardSession, block);
+        } finally {
+          await cardSession.close();
+        }
       }
     }
   }

@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pageMarkdown } from 'docs-kit/remark-sections';
 import { siteUrl } from '@/lib/layout.shared';
+import { expandInferred } from '@/lib/inferred-markdown';
 import { pageFiles } from '@/lib/page-files';
 
 /**
@@ -14,6 +15,7 @@ import { pageFiles } from '@/lib/page-files';
  */
 export async function markdownOf(slug: string): Promise<string> {
   const files = slug ? [path.resolve('content/docs', `${slug}.mdx`)] : pageFiles();
-  const sources = await Promise.all(files.map((file) => readFile(file, 'utf8')));
+  // Each `<Inferred>` card with the types the page shows for it (lib/inferred-markdown.ts).
+  const sources = (await Promise.all(files.map((file) => readFile(file, 'utf8')))).map((text) => expandInferred(text));
   return pageMarkdown(sources, { site: siteUrl, page: slug ? `/${slug}` : '/' });
 }

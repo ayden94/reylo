@@ -5,6 +5,7 @@ import { createProcessor } from '@mdx-js/mdx';
 import { remarkCodeTab } from 'fumadocs-core/mdx-plugins';
 import type { Plugin } from 'vite';
 import { pageFiles } from './page-files.ts';
+import { formatType, resultType } from './type-format.ts';
 
 export { pageFiles };
 
@@ -42,6 +43,10 @@ export { pageFiles };
 //   (`users.sql`), whose panel follows the page's dialect choice as well, and the group gets a
 //   <DialectSwitch aside>, which docs-kit draws at the right end of its strip: `main.ts | users.sql`
 //   on the left, Postgres | MySQL | SQLite on the right (`mergeDialectFiles`).
+// - An `<Inferred>` element is a card of the Inference section: its ```sql file="<name>.sql"``` block
+//   (with `dialect="all"`, or one per dialect) is a statement whose types the card shows, and its
+//   ```sql schema dialect="…"``` blocks, where it has any, are the schema that statement is analyzed
+//   against in place of the page's, its module keyed by both texts (`renderInferred`).
 // - `db` is declared unless the block declares or imports it; a block that names `Bun.` or imports
 //   `bun` or `bun:sqlite` gets Bun's types, and one that names `D1Database` without importing it
 //   gets Cloudflare's Workers types.
@@ -96,6 +101,10 @@ export type Block = {
   group: MdNode | undefined;
   line: number;
   hash: string;
+  /** Inside an `<Inferred>` card: the card's schema for the block's dialect, when it shows one, which the statement is analyzed against in place of the page's. */
+  schema?: string;
+  /** Inside an `<Inferred>` card, whose statements the page shows with their types. */
+  inferred?: boolean;
 };
 
 /** The key a statement's module has in lib/sql-modules.json, under its dialect and file name. */
@@ -117,6 +126,8 @@ export function collect(tree: MdNode): Block[] {
     for (const child of node.children ?? []) {
       if (child.type === 'code') {
         const code = child as Code;
+        // A card's schema is no statement of its own: the card's statements are analyzed against it.
+        if (isSchemaBlock(code) && node.name === INFERRED) continue;
         const tab = code.data?.tab;
         const tabDialect = dialectOf(tab);
         const panel = ancestors
@@ -128,13 +139,25 @@ export function collect(tree: MdNode): Block[] {
         if (metaDialect !== undefined && !every && !dialectOf(metaDialect)) throw new Error(`${where(code)}: dialect="${metaDialect}" names no dialect; write postgres, mysql, sqlite or all.`);
         const dialect = tabDialect ?? panelDialect ?? dialectOf(metaDialect) ?? 'postgres';
         const name = attribute(code.meta, 'title') ?? attribute(code.meta, 'file') ?? (tab && !tabDialect ? tab : undefined);
-        const shared = { node: code, parent: node, name, line: code.position?.start.line ?? 0, hash: hashOf(code.value) };
+        const card = node.name === INFERRED ? node : undefined;
+        const shared = { node: code, parent: node, name, line: code.position?.start.line ?? 0, hash: hashOf(code.value), ...(card && { inferred: true }) };
+        // In a card, a dialect's statement is analyzed against the card's schema for that dialect, and
+        // its module is keyed by both texts.
+        const local = (d: Dialect) => {
+          const schema = card && cardSchema(card, d);
+          return schema === undefined ? {} : { schema, hash: hashOf(`${schema}\n\0\n${code.value}`) };
+        };
         // The same statement in every dialect: one block per dialect, grouped as a code-tab group
         // of dialects is, so that an import of it expands into a panel per dialect.
-        if (every) for (const each of DIALECTS) blocks.push({ ...shared, order: blocks.length, dialect: DIALECT_OF[each.toLowerCase()]!, from: 'meta', group: code });
+        if (every)
+          for (const each of DIALECTS) {
+            const d = DIALECT_OF[each.toLowerCase()]!;
+            blocks.push({ ...shared, ...local(d), order: blocks.length, dialect: d, from: 'meta', group: code });
+          }
         else
           blocks.push({
             ...shared,
+            ...local(dialect),
             order: blocks.length,
             dialect,
             from: tabDialect ? 'tab' : panelDialect ? 'panel' : metaDialect ? 'meta' : 'default',
@@ -152,6 +175,17 @@ function attr(node: MdNode, name: string): unknown {
   return node.attributes?.find((a) => a.type === 'mdxJsxAttribute' && a.name === name)?.value;
 }
 const where = (node: MdNode) => `line ${node.position?.start.line ?? '?'}`;
+
+/** The element that shows its statements with the types Reylo infers for them (`renderInferred`). */
+export const INFERRED = 'Inferred';
+/** A card's schema block: ```sql schema dialect="postgres"```. */
+const isSchemaBlock = (code: MdNode) => (code.lang ?? 'sql') === 'sql' && /(?:^|\s)schema(?:\s|$)/.test(code.meta ?? '');
+/** The card's schema for a dialect: its schema block of that dialect, or of every dialect. */
+function cardSchema(card: MdNode, dialect: Dialect): string | undefined {
+  const schemas = (card.children ?? []).filter((c) => c.type === 'code' && isSchemaBlock(c)) as Code[];
+  const of = (c: Code) => attribute(c.meta, 'dialect') ?? 'all';
+  return (schemas.find((c) => dialectOf(of(c)) === dialect) ?? schemas.find((c) => of(c) === 'all'))?.value;
+}
 
 /** A `.sql` block that a page analyzes: every SQL block named `*.sql` but the schema (a TypeScript tab named Bun.sql is not one). */
 export const isStatement = (block: Block) => (block.node.lang ?? 'sql') === 'sql' && !!block.name?.endsWith('.sql') && block.name !== SCHEMA_FILE;
@@ -407,6 +441,68 @@ function mergeDialectFiles(blocks: Block[]) {
   }
 }
 
+/**
+ * How an `<Inferred>` card lays out its rows (components/inferred.tsx): `side` puts the parameters
+ * and the result in a column beside the query, `rows` under it. The types are broken over lines to
+ * the width they get: about 30 characters in the side column, 64 under the query.
+ */
+export const INFERRED_LAYOUT: 'side' | 'rows' = 'rows';
+const TYPE_WIDTH = { side: 30, rows: 64 } as const;
+
+/** A statement's module (as `render` in scripts/capture-types.ts writes it): its parameters, row and cardinality. */
+function moduleTypes(module: string): { params: string | undefined; row: string; cardinality: string } {
+  const params = /^export type Params = (.*);$/m.exec(module)?.[1];
+  const row = /^export type Row = (.*);$/m.exec(module)?.[1];
+  const cardinality = /declare const query: Query<[\s\S]*, "(one|maybeOne|many|none)", "(?:postgres|mysql|sqlite)"> & \{/.exec(module)?.[1];
+  if (params === undefined || row === undefined || cardinality === undefined) throw new Error(`a module lib/remark-mapper.ts cannot read:\n${module}`);
+  return { params: params === 'Record<never, never>' ? undefined : params, row, cardinality };
+}
+
+const codeNode = (lang: string, value: string): MdNode => ({ type: 'code', lang, meta: null, value });
+
+/**
+ * Each `<Inferred>` card of the file: its schema blocks (```sql schema```, one per dialect or one for
+ * every dialect) and its statement (```sql file="name.sql" dialect="…"```, once for every dialect or
+ * once per dialect) become, per dialect, labelled rows, Schema (where the card has one), Query, Params
+ * (where the statement has any) and Returns, holding what `.run()` takes and resolves to, read off
+ * the statement's captured module, in a <DialectTabs follow> that follows the page's dialect choice.
+ */
+function renderInferred(tree: MdNode, blocks: Block[], modules: Modules, page: string) {
+  const width = TYPE_WIDTH[INFERRED_LAYOUT];
+  const cards: MdNode[] = [];
+  const find = (node: MdNode) => {
+    for (const child of node.children ?? []) {
+      if (child.type === 'mdxJsxFlowElement' && child.name === INFERRED) cards.push(child);
+      else find(child);
+    }
+  };
+  find(tree);
+  for (const card of cards) {
+    const statements = blocks.filter((b) => b.parent === card && isStatement(b));
+    if (!statements.length) throw new Error(`${page}:${where(card)}: an <Inferred> card shows no statement; give it a \`sql\` block with file="<name>.sql".`);
+    const dialects = (Object.keys(DIALECT_NAME) as Dialect[]).filter((d) => statements.some((b) => b.dialect === d));
+    const panels = dialects.map((dialect) => {
+      const block = statements.find((b) => b.dialect === dialect)!;
+      const module = modules[dialect]?.[block.name!]?.[block.hash];
+      if (module === undefined) throw new Error(`${page}:${block.line}: lib/sql-modules.json holds no module for the ${DIALECT_NAME[dialect]} statement ${block.name} of this <Inferred> card; run \`nub run capture\` in site/ (with the scratch databases running), then build again.`);
+      const { params, row, cardinality } = moduleTypes(module);
+      const rows: MdNode[] = [];
+      if (block.schema !== undefined) rows.push(jsx('InferredRow', [['label', 'Schema']], [codeNode('sql', block.schema)]));
+      rows.push(jsx('InferredRow', [['label', 'Query']], [codeNode('sql', block.node.value)]));
+      const types: MdNode[] = [];
+      if (params) types.push(jsx('InferredRow', [['label', 'Params']], [codeNode('ts', formatType(params, width))]));
+      types.push(jsx('InferredRow', [['label', 'Returns']], [codeNode('ts', formatType(resultType(row, cardinality), width))]));
+      rows.push(jsx('InferredTypes', [], types));
+      return jsx('Dialect', [['value', DIALECT_NAME[dialect]]], rows);
+    });
+    card.attributes = [
+      { type: 'mdxJsxAttribute', name: 'dialects', value: dialects.map((d) => DIALECT_NAME[d]).join(',') },
+      { type: 'mdxJsxAttribute', name: 'layout', value: INFERRED_LAYOUT },
+    ];
+    card.children = [jsx('DialectTabs', [['follow', null]], panels)];
+  }
+}
+
 export function remarkMapper() {
   return (tree: MdNode, file: { path?: string; data?: Record<string, unknown> }) => {
     // fumadocs-mdx hands remark plugins the loader's compiler (its own remark-include uses it):
@@ -424,7 +520,7 @@ export function remarkMapper() {
     } catch (e) {
       throw new Error(`${page}: ${(e as Error).message}`);
     }
-    const modules = plans.some((p) => p.variants.some((v) => v.needs.length)) ? readModules() : {};
+    const modules = plans.some((p) => p.variants.some((v) => v.needs.length)) || blocks.some((b) => b.inferred) ? readModules() : {};
     for (const { block, variants, expand } of plans) {
       if (!expand) {
         block.node.value = withSetup(block, variants[0]!, modules, page);
@@ -437,6 +533,11 @@ export function remarkMapper() {
       block.parent.children!.splice(index, 1, jsx('DialectTabs', [['follow', null]], panels));
     }
     mergeDialectFiles(blocks);
+    try {
+      renderInferred(tree, blocks, modules, page);
+    } catch (e) {
+      throw new Error((e as Error).message.startsWith(page) ? (e as Error).message : `${page}: ${(e as Error).message}`);
+    }
     // The dialect and the file name are read; Shiki and Twoslash do not know the attributes.
     for (const { node } of blocks) if (node.meta) node.meta = node.meta.replace(/(?:^|\s)(?:dialect|file|strict)=(?:"[^"]*"|'[^']*'|\S+)/g, '').trim();
   };

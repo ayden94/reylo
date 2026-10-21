@@ -97,7 +97,7 @@ Reylo reads the schema from the database file and [prepares](https://sqlite.org/
 | Column types | the declared type's affinity |
 | Nullability | the table's `NOT NULL`, outer joins, Reylo's table of SQLite's built-in functions |
 | Row count | unique indexes and `integer primary key` |
-| Nested JSON | `string` |
+| Nested JSON | built with `json_object` and `json_group_array`, typed from their arguments |
 
 </Dialect>
 </DialectTabs>

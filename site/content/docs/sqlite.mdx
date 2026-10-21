@@ -232,11 +232,11 @@ Every SQLite driver hands Reylo the stored value, so two values are refused, eac
 
 ## Nullability
 
-A column is `| null` unless Reylo proves it never is. SQLite's own check says "may be null" of everything but a literal or a column, so Reylo reads the schema and the statement:
+A column is `| null` unless Reylo infers it never is. SQLite's own check says "may be null" of everything but a literal or a column, so Reylo reads the schema and the statement:
 
 - **A table's column** is non-null where it is declared `NOT NULL`.
 - **An outer join** makes the joined table's columns nullable, by SQLite's own mark on the join.
-- **A test in the `where`** that fails on `NULL` proves the column: `where nick is not null`, `where lower(nick) = :nick`, and a `left join`'s column tested in the `where`.
+- **A test in the `where`** that fails on `NULL` makes the column non-null: `where nick is not null`, `where lower(nick) = :nick`, and a `left join`'s column tested in the `where`.
 - **An expression** is non-null by Reylo's table of SQLite's functions: `length(name)`, `coalesce(nick, name)`, `name || '!'` and `id + 1` over non-null inputs, `count`. A division is `| null`, since SQLite answers `NULL` for a division by zero. Arithmetic on a `REAL` with no answer is the one exception ([Limits](#limits)).
 - **An aggregate** other than `count` is `NULL` over no rows.
 
@@ -252,7 +252,7 @@ select upper(nick) as shout, coalesce(nick, name) as label
 from users
 ```
 
-A test in the `where` proves the joined row, so its columns are non-null; a window function is typed like any other, `lag` nullable on the first row:
+A test in the `where` shows the joined row exists, so its columns are non-null; a window function is typed like any other, `lag` nullable on the first row:
 
 ```ts twoslash tab="main.ts"
 import shipped from "./lite_shipped.sql";
@@ -282,11 +282,11 @@ select id, total_cents,
 from orders
 ```
 
-Where you know more than Reylo can prove, say it in the statement: `coalesce(x, …)` gives a default, and a `where x is not null` test both filters and proves.
+Where you know more than Reylo can infer, say it in the statement: `coalesce(x, …)` gives a default, and a `where x is not null` test both filters and makes the column non-null.
 
 ## Row counts
 
-How many rows `.run()` resolves to comes from what Reylo proves the statement can return:
+How many rows `.run()` resolves to comes from what Reylo infers the statement can return:
 
 | Resolves to | `cardinality` | On SQLite, when the statement |
 | --- | --- | --- |
@@ -295,7 +295,7 @@ How many rows `.run()` resolves to comes from what Reylo proves the statement ca
 | `void` | `none` | is an `insert`, `update`, `delete` or `replace` without `returning` |
 | `Row[]` | `many` | is anything else |
 
-What proves nothing on SQLite:
+What counts for nothing on SQLite:
 
 - **A unique index on an expression, or with a `where`.** A statement with `where lower(email) = :email` is `Row[]`, whatever index `lower(email)` has.
 - **A key that SQLite converts.** SQLite gives a numeric side's affinity to a `TEXT` or untyped key, so `where code = cast(:code as integer)` matches `'1'` and `'01'`.

@@ -128,9 +128,9 @@ from users u
 left join posts p on p.user_id = u.id
 ```
 
-### Prove a column is not null
+### Rule out null in a column
 
-A test in the `where` that rejects `null` proves the column, and the joined row it belongs to.
+A test in the `where` that rejects `null` makes the column non-null, and the joined row it belongs to.
 
 ```ts twoslash tab="main.ts"
 import publishedPosts from "./published_posts.sql";
