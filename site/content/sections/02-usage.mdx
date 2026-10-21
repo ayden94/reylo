@@ -18,6 +18,8 @@ const user = await getUser.run(db, { id: 1 });
 select id, name, email from users where id = :id::int
 ```
 
+The first argument of `.run()` is your database client, from any of the [supported drivers](#supported-drivers): a pool, a client, or a connection or transaction taken from one.
+
 ### `.sql`
 
 The compiled query, as Reylo sends it to your database:
@@ -29,9 +31,9 @@ getUser.sql;
 //      ^?
 ```
 
-### `.raw`
+<Callout title="The query as written">
 
-The file's contents, before Reylo compiles its [parameters](#parameters):
+The file's contents, before Reylo compiles its [parameters](#parameters), are on `.raw`:
 
 ```ts twoslash
 import getUser from "./get_user.sql";
@@ -39,6 +41,8 @@ import getUser from "./get_user.sql";
 getUser.raw;
 //      ^?
 ```
+
+</Callout>
 
 ### `.run()`
 
@@ -60,7 +64,7 @@ It resolves to the rows, shaped by how many the query can return:
 | An `insert`, `update` or `delete` without `returning` | `void` |
 | Anything else | `Row[]` |
 
-It throws when the rows don't fit the shape, such as a second row for `Row | null`. The client can also be a transaction or a connection ([Supported drivers](#supported-drivers)).
+It throws when the rows don't fit the shape, such as a second row for `Row | null`.
 
 ### `.runSync()`
 
@@ -88,7 +92,7 @@ const user = await get({ id: 1 });
 
 ### `.inputSchema`
 
-The parameters' JSON Schema, for an OpenAPI document, a form, an agent's tool or a library that reads [Standard Schema](https://standardschema.dev):
+The parameters' JSON Schema, for an OpenAPI document, a form or an agent's tool:
 
 <DialectTabs follow>
 <Dialect value="Postgres">
@@ -237,3 +241,9 @@ getUser.outputSchema;
 
 </Dialect>
 </DialectTabs>
+
+<Callout title="Standard JSON Schema">
+
+Every imported query is a [Standard JSON Schema](https://standardschema.dev/json-schema), so any library that accepts one takes the query as it is.
+
+</Callout>
