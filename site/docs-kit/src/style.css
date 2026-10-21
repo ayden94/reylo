@@ -20,8 +20,8 @@
 
 /* docs-kit: the stylesheet of a one-page Fumadocs docs site. A site imports it first in its own
    global.css and then sets its colours: Fumadocs' `--color-fd-*` variables for both themes (`:root`
-   and `.dark`), and `--dk-accent`, the brand colour that marks links, the open Twoslash name,
-   the bar under an h3 and the selection. Inline code and the table of contents' code chips are a
+   and `.dark`), and `--dk-accent`, the brand colour that marks links, the open Twoslash name
+   and the selection. Inline code and the table of contents' code chips are a
    wash of the text's own grey (`--dk-code-tint`), and the washes are variables too, for a palette
    that wants them lighter or stronger. Everything else here is the maintainer's rules for the docs
    sites, from the reviews of Reylo's site (Reylo's wiki/docs-site.md): the layout follows zod.dev
@@ -124,31 +124,33 @@ html .prose {
     letter-spacing: -0.02em;
   }
 
-  /* An h3 is a step inside a section: smaller than an h2, and marked by a short bar of the accent
-     under its first letters where an h2 is ruled across the column (the maintainer, 2026-10-20: "I
-     kind of feel like h3s should have an underline. It may not need to go full width, but some
-     indication that they're an h3"; chosen from seven marks mocked for him: a bar of the accent or
-     of grey, a rule as wide as the heading, full-width rules solid, dotted or fading). The bar
-     hangs below the heading's box, which keeps its height, so the link icon and the copy button
-     stay centred on its text; the margin under the heading makes room for it. */
+  /* An h3 is a step inside a section: smaller than an h2, and ruled across the column by a hairline
+     fainter than the h2's rule (the maintainer, 2026-10-20: "I kind of feel like h3s should have
+     an underline. It may not need to go full width, but some indication that they're an h3"). A
+     short bar of the accent under the first letters came first, chosen from seven marks; that
+     evening, on Motherload's page, he called it "absolute trash" and, from ten treatments mocked
+     there (a leader line, an accent underline, a gold bar, section numbers, a bar in the margin, a
+     highlighter, a fading rule, amber text, heavier type, this hairline), said: "Honestly, the
+     hairline is fine." The rule hangs below the heading's box, which keeps its height, so the
+     link icon and the copy button stay centred on its text; the margin under the heading makes
+     room for it. */
   & > h3 {
     color: var(--color-fd-headings);
     font-size: 1.2rem;
     font-weight: 600;
     line-height: 1.4;
     @apply mt-10;
-    margin-bottom: calc(0.6em + 0.625rem);
+    margin-bottom: calc(0.6em + 0.5rem);
   }
 
   & > h3::after {
     content: '';
     position: absolute;
     left: 0;
-    bottom: -0.625rem;
-    width: 2rem;
-    height: 2px;
-    border-radius: 1px;
-    background-color: var(--dk-accent);
+    right: 0;
+    bottom: -0.5rem;
+    height: 1px;
+    background-color: color-mix(in oklab, var(--color-fd-border) 80%, transparent);
     pointer-events: none;
   }
 
@@ -506,6 +508,24 @@ code {
 #nd-page [role='tablist'] {
   flex-wrap: wrap;
   row-gap: 0;
+}
+
+/* A strip of seven tabs or more stays on one line in the 40rem column: its labels are 11px and 5px
+   a side, in place of 12px and 8px, the active tab's rule keeps to its label, and the strip starts
+   11px in, so the first label still lines up with the code under it, and ends 4px in. Of the
+   strip's 623px, Motherload's hero (main.ts and its seven files) takes 588px, where it needed
+   682px of 622px, and Reylo's nine SQLite drivers 611px. On a phone such a strip still wraps. */
+#nd-page [role='tablist']:has(> [role='tab']:nth-child(7)) {
+  padding-inline: 0.6875rem 0.25rem;
+}
+
+#nd-page [role='tablist']:has(> [role='tab']:nth-child(7)) > [role='tab'] {
+  font-size: 0.6875rem;
+  padding-inline: 0.3125rem;
+}
+
+#nd-page [role='tablist']:has(> [role='tab']:nth-child(7)) > [role='tab'] > div {
+  inset-inline: 0.3125rem;
 }
 
 .dk-code-tabs-file {
@@ -915,6 +935,24 @@ code {
    the 268px table of contents. */
 #nd-page {
   max-width: calc(var(--dk-column) + 4rem);
+}
+
+/* The foot of the column (`DocsShell`'s `footer`): a hairline, then one quiet line, the licence and
+   the copyright, with room under it, so the page ends on purpose rather than at its last example. */
+#nd-page .dk-footer {
+  margin-top: 4rem;
+  padding-block: 1.25rem 3rem;
+  border-top: 1px solid var(--color-fd-border);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: var(--color-fd-muted-foreground);
+}
+
+#nd-page .dk-footer a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--dk-accent);
+  text-underline-offset: 3px;
 }
 
 #nd-page .prose {

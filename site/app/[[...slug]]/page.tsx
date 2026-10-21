@@ -39,7 +39,7 @@ export default async function Page({ params }: Props) {
   // page's metadata (app/layout.tsx, and generateMetadata below for every other page). On the main
   // page only, "Copy agent prompt" at the right end of the title's row copies the agent card at the
   // top of Setup (docs-kit's CopyAgentPrompt finds it in the page, and no other page has one), and
-  // the structured data describes the site and the project.
+  // the structured data describes the site and the project. Every page's column ends on the licence.
   return (
     <DocsShell
       tree={source.getPageTree()}
@@ -50,6 +50,7 @@ export default async function Page({ params }: Props) {
       github={githubUrl}
       titleAside={main ? <CopyAgentPrompt /> : undefined}
       before={main ? <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: structuredData(page.data.description ?? '') }} /> : undefined}
+      footer={<>Released under the MIT License. Copyright © 2026 Colin McDonnell.</>}
     >
       <MDX components={getMDXComponents()} />
     </DocsShell>
