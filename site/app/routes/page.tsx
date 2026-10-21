@@ -8,8 +8,7 @@ import type { Route } from './+types/page';
 import { Brand } from '@/components/brand';
 import { getMDXComponents } from '@/components/mdx';
 import { loadPage } from '@/lib/content';
-import { githubUrl, pageTitle, siteTitle, siteUrl } from '@/lib/layout.shared';
-import { markdownPath } from '@/lib/markdown';
+import { githubUrl, markdownPath, pageTitle, siteTitle, siteUrl } from '@/lib/layout.shared';
 import { ogAlt, ogSize } from '@/lib/og';
 import { source } from '@/lib/source';
 

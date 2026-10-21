@@ -4,6 +4,13 @@ export const githubUrl = 'https://github.com/colinhacks/reylo';
 export const siteUrl = 'https://reylo.dev';
 
 /**
+ * The address of a page's Markdown, by its slug: /index.md for the main page, /<slug>.md for
+ * another (lib/markdown.ts writes them). Here, not there, since the page's `meta`, which links it,
+ * runs in the browser too, and lib/markdown.ts reads the disk.
+ */
+export const markdownPath = (slug: string) => `/${slug || 'index'}.md`;
+
+/**
  * The title search results and link previews show: the name and what it does, in under 60
  * characters so that Google does not cut it. The page's h1 stays the name alone.
  */

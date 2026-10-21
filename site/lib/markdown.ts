@@ -17,6 +17,3 @@ export async function markdownOf(slug: string): Promise<string> {
   const sources = await Promise.all(files.map((file) => readFile(file, 'utf8')));
   return pageMarkdown(sources, { site: siteUrl, page: slug ? `/${slug}` : '/' });
 }
-
-/** The address of a page's Markdown, by its slug: /index.md for the main page, /<slug>.md for another. */
-export const markdownPath = (slug: string) => `/${slug || 'index'}.md`;
