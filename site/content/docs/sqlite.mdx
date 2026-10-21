@@ -326,6 +326,7 @@ Every value `.run()` returns goes back in as a parameter of its type, on every d
 | A typed JSON parameter | what its schema admits |
 
 - A `boolean` is bound as 1 or 0 on every driver.
+- The `sqlite3` and `sqlite` drivers bind a `bigint` as `NULL`, so Reylo passes them one within 2^53 as a `number` and one past it as its digits to a `BIGINT` column's parameter, and refuses one past it anywhere else.
 
 ### Parameters without a type
 
