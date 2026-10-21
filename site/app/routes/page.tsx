@@ -9,6 +9,7 @@ import { Brand } from '@/components/brand';
 import { getMDXComponents } from '@/components/mdx';
 import { loadPage } from '@/lib/content';
 import { githubUrl, pageTitle, siteTitle, siteUrl } from '@/lib/layout.shared';
+import { markdownPath } from '@/lib/markdown';
 import { ogAlt, ogSize } from '@/lib/og';
 import { source } from '@/lib/source';
 
@@ -71,7 +72,7 @@ export function meta({ loaderData }: Route.MetaArgs): Route.MetaDescriptors {
     { name: 'robots', content: 'index, follow' },
     { name: 'googlebot', content: 'index, follow, max-image-preview:large, max-snippet:-1' },
     { tagName: 'link', rel: 'canonical', href: url },
-    { tagName: 'link', rel: 'alternate', type: 'text/markdown', href: `${siteUrl}/llms.txt` },
+    { tagName: 'link', rel: 'alternate', type: 'text/markdown', href: `${siteUrl}${markdownPath(loaderData.slug)}` },
     { property: 'og:title', content: title },
     { property: 'og:description', content: description },
     { property: 'og:url', content: url },

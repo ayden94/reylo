@@ -1,9 +1,16 @@
+import { readdirSync } from 'node:fs';
 import { route, type RouteConfig } from '@react-router/dev/routes';
 
-// The pages, at / and /<dialect> (content/docs), the page a missing address gets, and the files
-// beside them, each rendered to a file at build time (react-router.config.ts).
+// The pages, at / and /<dialect> (content/docs), each page's Markdown, at /index.md and
+// /<dialect>.md, the page a missing address gets, and the files beside them, each rendered to a
+// file at build time (react-router.config.ts).
+const markdown = readdirSync('content/docs')
+  .filter((name) => name.endsWith('.mdx'))
+  .map((name) => `${name.slice(0, -'.mdx'.length)}.md`);
+
 export default [
   route(':slug?', 'routes/page.tsx'),
+  ...markdown.map((file) => route(file, 'routes/markdown.ts', { id: `markdown/${file}` })),
   route('404', 'routes/not-found.tsx'),
   route('llms.txt', 'routes/llms.ts'),
   route('robots.txt', 'routes/robots.ts'),
