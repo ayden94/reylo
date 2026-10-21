@@ -52,18 +52,16 @@ serve({
       // A transform for a project this process never opened: answer, never throw, so the file
       // keeps its default export instead of becoming an empty module.
       diagnostics.push(diag(`The content mapper has no project for this file; restart the TypeScript server.`, 0, 1, 9));
-      return { extension: ".ts" as const, diagnostics, text: `import type { Query } from "reylo";\nexport type Params = unknown;\nexport type Values = unknown[];\nexport type Row = unknown;\ndeclare const query: Query<unknown, unknown, "many", "postgres">;\nexport default query;\n` };
+      return { extension: ".ts" as const, diagnostics, text: `import type { Query } from "reylo";\nexport type Params = unknown;\nexport type Row = unknown;\ndeclare const query: Query<unknown, unknown, "many", "postgres">;\nexport default query;\n` };
     }
     // `compiled` is the statement as Reylo sends it to the database (the engine's rewritten text),
     // which an analysis that failed has not given: then `sql` is any string.
-    const emit = (compiled: string | undefined, paramsType: string, rowType: string, cardinality: string, names: string[], valuesType = "unknown[]") => ({
+    const emit = (compiled: string | undefined, paramsType: string, rowType: string, cardinality: string, names: string[]) => ({
       extension: ".ts" as const,
       diagnostics,
       text: [
         `import type { Query } from "reylo";`,
         `export type Params = ${paramsType};`,
-        // The same parameters as an array, in the order of `params`, for `run(client, [1, "ada"])`.
-        `export type Values = ${valuesType};`,
         `export type Row = ${rowType};`,
         `export declare const sql: ${compiled === undefined ? "string" : JSON.stringify(compiled)};`,
         `export declare const raw: ${JSON.stringify(sql)};`,
@@ -72,7 +70,7 @@ serve({
         // hover shows the row's shape (`{ id: number; ... } | null`) and not `Row | null`. The two
         // texts go in by `typeof`, so a hover over the query names them and one over its `sql`
         // shows the statement.
-        `declare const query: Query<${paramsType}, ${rowType}, ${JSON.stringify(cardinality)}, ${JSON.stringify(project.dialect)}, ${valuesType}> & { readonly sql: typeof sql; readonly raw: typeof raw };`,
+        `declare const query: Query<${paramsType}, ${rowType}, ${JSON.stringify(cardinality)}, ${JSON.stringify(project.dialect)}> & { readonly sql: typeof sql; readonly raw: typeof raw };`,
         `export default query;`,
         ``,
       ].join("\n"),
@@ -115,9 +113,9 @@ serve({
     diagnostics.push(...analysis.diagnostics.map((d) => diag(d.message, d.start, d.length, d.code)));
     strict(analysis);
     const inferred = analysis.cardinality;
-    // The declared names are the lexer's, in order of first use: the module's `params` at run time,
-    // which an array of values follows. Each parameter appears once in a statement; a second use is
-    // the engine's diagnostic (code 3), placed above.
+    // The declared names are the lexer's, in order of first use: the module's `params` at run time.
+    // Each parameter appears once in a statement; a second use is the engine's diagnostic (code 3),
+    // placed above.
     const order = names;
     if (analysis.diagnostics.some((d) => d.code === 6) || (dialect === "postgres" && analysis.kind === "")) return emit(analysis.rewritten.sql, "unknown", "unknown", inferred, order);
     const columns = analysis.columns.map((c) => `${ident(c.name)}: ${renderType(c.type, false, dialect)}${c.nullable ? " | null" : ""}`);
@@ -127,13 +125,7 @@ serve({
     // A typed JSON parameter whose schema has a `default` may be left out (docs/typed-json-params.md).
     const optional = new Set(analysis.params.filter((q) => q.schema !== null && typeof q.schema === "object" && "default" in q.schema).map((q) => q.name));
     const paramTypes = typed.map(([name, type]) => `${ident(name)}${optional.has(name) ? "?" : ""}: ${type}`);
-    // The array form names each element after its parameter (`$1` for a positional one), when
-    // every name can be a label.
-    const types = new Map(typed);
-    const labels = order.map((n) => (/^\d+$/.test(n) ? `$${n}` : n));
-    const labeled = labels.every((l) => /^[A-Za-z_$][\w$]*$/.test(l));
-    const valuesType = `[${order.map((n, i) => `${labeled ? `${labels[i]}: ` : ""}${types.get(n) ?? "unknown"}${optional.has(n) ? " | undefined" : ""}`).join(", ")}]`;
-    return emit(analysis.rewritten.sql, paramTypes.length ? `{ ${paramTypes.join("; ")} }` : "Record<never, never>", columns.length ? `{ ${columns.join("; ")} }` : "never", inferred, order, valuesType);
+    return emit(analysis.rewritten.sql, paramTypes.length ? `{ ${paramTypes.join("; ")} }` : "Record<never, never>", columns.length ? `{ ${columns.join("; ")} }` : "never", inferred, order);
   },
   async closeProject(params) {
     const handle = (params as { projectHandle: string }).projectHandle;

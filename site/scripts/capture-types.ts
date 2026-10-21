@@ -125,16 +125,15 @@ async function render(session: Session, written: string, sql: string, json: Map<
     if (q.type.kind === 'unknown') return 'unknown';
     return q.nullable ? `${rendered} | null` : rendered;
   };
-  const emit = (compiled: string, paramsType: string, rowType: string, cardinality: string, names: string[], valuesType = 'unknown[]') =>
+  const emit = (compiled: string, paramsType: string, rowType: string, cardinality: string, names: string[]) =>
     [
       `import type { Query } from "reylo";`,
       `export type Params = ${paramsType};`,
-      `export type Values = ${valuesType};`,
       `export type Row = ${rowType};`,
       `export declare const sql: ${JSON.stringify(compiled)};`,
       `export declare const raw: ${JSON.stringify(written)};`,
       `export declare const params: readonly [${names.map((n) => JSON.stringify(n)).join(', ')}];`,
-      `declare const query: Query<${paramsType}, ${rowType}, ${JSON.stringify(cardinality)}, ${JSON.stringify(project.dialect)}, ${valuesType}> & { readonly sql: typeof sql; readonly raw: typeof raw };`,
+      `declare const query: Query<${paramsType}, ${rowType}, ${JSON.stringify(cardinality)}, ${JSON.stringify(project.dialect)}> & { readonly sql: typeof sql; readonly raw: typeof raw };`,
       `export default query;`,
       ``,
     ].join('\n');
@@ -159,11 +158,7 @@ async function render(session: Session, written: string, sql: string, json: Map<
   const columns = analysis.columns.map((c) => `${ident(c.name)}: ${renderType(c.type, false, dialect)}${c.nullable ? ' | null' : ''}`);
   const typed = analysis.params.map((q) => [q.name, paramType(q, renderParamType(q.type, dialect))] as const);
   const paramTypes = typed.map(([name, type]) => `${ident(name)}: ${type}`);
-  const types = new Map(typed);
-  const labels = order.map((n) => (/^\d+$/.test(n) ? `$${n}` : n));
-  const labeled = labels.every((l) => /^[A-Za-z_$][\w$]*$/.test(l));
-  const valuesType = `[${order.map((n, i) => `${labeled ? `${labels[i]}: ` : ''}${types.get(n) ?? 'unknown'}`).join(', ')}]`;
-  return { text: emit(analysis.rewritten.sql, paramTypes.length ? `{ ${paramTypes.join('; ')} }` : 'Record<never, never>', columns.length ? `{ ${columns.join('; ')} }` : 'never', inferred, order, valuesType), analysis };
+  return { text: emit(analysis.rewritten.sql, paramTypes.length ? `{ ${paramTypes.join('; ')} }` : 'Record<never, never>', columns.length ? `{ ${columns.join('; ')} }` : 'never', inferred, order), analysis };
 }
 
 // ---- The scratch databases ----

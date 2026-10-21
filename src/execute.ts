@@ -140,11 +140,11 @@ export type Inputs = Readonly<Record<string, { readonly type: EngineType; readon
 type AnyClient = Record<string, any> & ((...args: any[]) => any);
 
 /**
- * The parameters: an object keyed by name, or an array whose element i binds the query's
- * `params[i]` (for `$1` and `$2`, `params` is `["1", "2"]`), for callers that hold the values
- * in order already.
+ * The parameters: an object keyed by name, or by number for positional placeholders (`$1` and
+ * `?` give `{ 1: ..., 2: ... }`, and `params` is `["1", "2"]`). An array is refused, since
+ * 2026-10-20 (DESIGN.md §9).
  */
-export type ParamsInput = Record<string, unknown> | readonly unknown[];
+export type ParamsInput = Record<string, unknown>;
 
 /**
  * Runs the statement and returns its rows (an empty array for a statement that returns none).
@@ -174,6 +174,7 @@ export function executeSync<D extends Dialect>(client: SyncClientFor<D>, query: 
 }
 
 function executeSyncSqlite(c: AnyClient, query: QueryModule, params: ParamsInput): unknown[] | Promise<unknown[]> {
+  checkParams(query, params);
   if (query.fresh && due(query)) {
     let rows: unknown[] | undefined;
     try {
@@ -202,6 +203,7 @@ function isSyncSqlite(c: AnyClient | null | undefined): boolean {
 
 async function executeAsync(c: AnyClient | null | undefined, query: QueryModule, params: ParamsInput): Promise<unknown[]> {
   if (c == null || (typeof c !== "object" && typeof c !== "function")) throw unsupported(c, query.dialect);
+  checkParams(query, params);
   // The catalog facts the statement relied on, read again through the same client.
   if (query.fresh && due(query)) {
     const fresh = query.fresh;
@@ -288,19 +290,20 @@ async function executeAsync(c: AnyClient | null | undefined, query: QueryModule,
   throw unsupported(c, query.dialect);
 }
 
+// The parameters are an object, refused before anything reaches the database otherwise: an
+// array, which `run` took in the order of `params` from 2026-10-03, was dropped on 2026-10-20
+// (DESIGN.md §9), so the call says which key each value binds.
+function checkParams(query: QueryModule, input: unknown): asserts input is Record<string, unknown> {
+  if (input !== null && typeof input === "object" && !Array.isArray(input)) return;
+  const keys = query.params.map((name) => `${/^(?:[A-Za-z_$][\w$]*|\d+)$/.test(name) ? name : JSON.stringify(name)}: ...`);
+  const takes = keys.length ? `This statement takes { ${keys.join(", ")} }.` : "This statement takes none: leave them out.";
+  throw new TypeError(`The parameters must be an object keyed by parameter name, or by number for positional placeholders ({ 1: ..., 2: ... }); got ${Array.isArray(input) ? "an array" : String(input)}. ${takes}`);
+}
+
 // The rows are bound positionally in every dialect. A value left out binds NULL, as pg,
 // PGlite, better-sqlite3 and Bun.sql already do; postgres.js, mysql2, node:sqlite and libSQL
-// would reject it instead. An array shorter than `params` leaves the rest out.
-function statement(query: QueryModule, input: ParamsInput) {
-  let params: Record<string, unknown>;
-  if (Array.isArray(input)) {
-    if (input.length > query.params.length) {
-      throw new TypeError(`The statement takes ${query.params.length} parameter${query.params.length === 1 ? "" : "s"} (${query.params.map((name) => JSON.stringify(name)).join(", ") || "none"}); got an array of ${input.length} value${input.length === 1 ? "" : "s"}.`);
-    }
-    params = Object.fromEntries(query.params.map((name, i) => [name, input[i]]));
-  } else if (input === null || typeof input !== "object") {
-    throw new TypeError(`The parameters must be an object keyed by parameter name (or by number, { 1: ... }, for positional placeholders), or an array in the order of the query's params; got ${String(input)}.`);
-  } else params = input as Record<string, unknown>;
+// would reject it instead.
+function statement(query: QueryModule, params: ParamsInput) {
   // The build step already compiled the statement; only the values need ordering.
   const compiled = compile(query);
   const bound: { text: string; values: unknown[]; names: readonly string[] } = { text: compiled.text, values: compiled.order.map((name) => value(params, name)), names: compiled.order };

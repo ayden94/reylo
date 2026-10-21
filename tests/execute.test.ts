@@ -446,7 +446,7 @@ test("an unsupported client rejects, naming what it has and what reylo takes", a
   await assert.rejects(() => execute({ query: async () => ({ rows: [] }) } as never, lite) as Promise<unknown>, /sqlite statement on an object with query/);
 });
 
-test("parameters may be an array: element i binds params[i], for a named and a positional statement on every dialect", async () => {
+test("positional placeholders take an object keyed by number, bound by number on every dialect", async () => {
   const seen: [string, unknown[]][] = [];
   const pgClient = { query: async (text: string, values: unknown[]) => (seen.push([text, values]), { rows: [] }) };
   const mysqlPool = { query: async () => [[], []] as [unknown, unknown], execute: async (options: { sql: string }, values: unknown[]) => (seen.push([options.sql, values]), [[], []] as [unknown, unknown]) };
@@ -456,32 +456,47 @@ test("parameters may be an array: element i binds params[i], for a named and a p
     mysql: { dialect: "mysql", sql: "select ? as id, ? as name", params: ["1", "2"] },
     sqlite: { dialect: "sqlite", sql: "select ?1 as id, ?2 as name, ?1 as again", params: ["1", "2"] },
   };
-  for (const [client, named, dialect] of [[pgClient, pg, "postgres"], [mysqlPool, my, "mysql"], [d1, lite, "sqlite"]] as const) {
-    seen.length = 0;
-    await execute(client as never, named, [1, "ada"]);
-    await execute(client as never, named, { id: 1, name: "ada" });
-    assert.deepEqual(seen[0], seen[1], `${dialect}: [1, "ada"] binds as { id: 1, name: "ada" }`);
-    seen.length = 0;
-    await execute(client as never, positional[dialect]!, [1, "ada"]);
-    await execute(client as never, positional[dialect]!, { 1: 1, 2: "ada" });
-    assert.deepEqual(seen[0], seen[1], `${dialect}: [1, "ada"] binds as { 1: 1, 2: "ada" }`);
-  }
-  assert.deepEqual(seen.at(-1), ["select ? as id, ? as name, ? as again", [1, "ada", 1]]);
+  for (const [client, dialect] of [[pgClient, "postgres"], [mysqlPool, "mysql"], [d1, "sqlite"]] as const) await execute(client as never, positional[dialect]!, { 1: 1, 2: "ada" });
+  assert.deepEqual(seen, [
+    ["select $2::text as name, $1::int as id", [1, "ada"]],
+    ["select ? as id, ? as name", [1, "ada"]],
+    ["select ? as id, ? as name, ? as again", [1, "ada", 1]],
+  ]);
   // The mapper's rewritten statement binds by `order`, which names params.
   const unsafe: unknown[][] = [];
-  await execute({ unsafe: async (_: string, values: unknown[]) => (unsafe.push(values), []) }, { ...pg, text: "select $1, $2, $1", order: ["name", "id", "name"] }, [1, "ada"]);
+  await execute({ unsafe: async (_: string, values: unknown[]) => (unsafe.push(values), []) }, { ...pg, text: "select $1, $2, $1", order: ["name", "id", "name"] }, { id: 1, name: "ada" });
   assert.deepEqual(unsafe, [["ada", 1, "ada"]]);
-  // runSync takes an array too.
-  assert.deepEqual((execute(new DatabaseSync(":memory:"), lite, [1, "ada"]) as unknown[]).map((r) => ({ ...(r as object) })), [row]);
 });
 
-test("an array shorter than params binds NULL for the rest; a longer one is a TypeError naming both lengths", async () => {
-  const seen: unknown[][] = [];
-  await execute({ unsafe: async (_: string, values: unknown[]) => (seen.push(values), []) }, pg, [1]);
-  assert.deepEqual(seen, [[1, null]]);
-  await assert.rejects(() => execute({ unsafe: async () => [] }, pg, [1, "ada", true]) as Promise<unknown>, (e: TypeError) => e instanceof TypeError && /takes 2 parameters \("id", "name"\); got an array of 3 values/.test(e.message));
-  assert.throws(() => execute(new DatabaseSync(":memory:"), { dialect: "sqlite", sql: "select 1", params: [] }, [1]), /takes 0 parameters \(none\); got an array of 1 value\./);
-  await assert.rejects(() => execute({ unsafe: async () => [] }, pg, "ada" as never) as Promise<unknown>, /must be an object .* or an array .*; got ada/);
+test("an array of parameters is refused before anything runs, with a TypeError that says to pass an object (the maintainer, 2026-10-20)", async () => {
+  const calls: unknown[] = [];
+  const client = { unsafe: async (...args: unknown[]) => (calls.push(args), []) };
+  const named = /^TypeError: The parameters must be an object keyed by parameter name, or by number for positional placeholders \(\{ 1: \.\.\., 2: \.\.\. \}\); got an array\. This statement takes \{ id: \.\.\., name: \.\.\. \}\.$/;
+  const refused = (re: RegExp) => (e: Error) => e instanceof TypeError && re.test(String(e));
+  // A freshness check would be a round trip: the array is refused before it too.
+  await assert.rejects(() => execute(client, { ...pg, fresh: { query: "select 1", rows: [], inserts: [] } }, [1, "ada"] as never) as Promise<unknown>, refused(named));
+  const positional: QueryModule<"postgres"> = { dialect: "postgres", sql: "select $1::int, $2::text", params: ["1", "2"] };
+  await assert.rejects(() => execute(client, positional, [1, "ada"] as never) as Promise<unknown>, refused(/got an array\. This statement takes \{ 1: \.\.\., 2: \.\.\. \}\.$/));
+  await assert.rejects(() => execute(client, pg, "ada" as never) as Promise<unknown>, refused(/positional placeholders \(\{ 1: \.\.\., 2: \.\.\. \}\); got ada\. This statement takes \{ id: \.\.\., name: \.\.\. \}\.$/));
+  await assert.rejects(() => execute(client, pg, null as never) as Promise<unknown>, refused(/got null\./));
+  assert.deepEqual(calls, []);
+  // On a synchronous SQLite client the TypeError is thrown.
+  const db = new DatabaseSync(":memory:");
+  assert.throws(() => execute(db, lite, [1, "ada"] as never), refused(named));
+  assert.throws(() => execute(db, { dialect: "sqlite", sql: "select 1", params: [] }, [] as never), refused(/got an array\. This statement takes none: leave them out\.$/));
+  // Through the query object: run and with reject, runSync throws, and the types refuse it too.
+  const q = defineQuery<{ id: number; name: string }, { id: number; name: string; again: number }, "one", "sqlite">({ dialect: "sqlite", sql: lite.sql, params: lite.params, cardinality: "one" });
+  // @ts-expect-error the parameters are an object, never an array
+  await assert.rejects(() => q.run(db, [1, "ada"]), refused(named));
+  // @ts-expect-error the parameters are an object, never an array
+  await assert.rejects(() => q.with(db)([1, "ada"]), refused(named));
+  // @ts-expect-error the parameters are an object, never an array
+  assert.throws(() => q.runSync(db, [1, "ada"]), refused(named));
+  assert.deepEqual({ ...(q.runSync(db, { id: 1, name: "ada" }) as object) }, row);
+  const p = defineQuery<{ 1: number; 2: string }, { id: number }, "one", "postgres">({ dialect: "postgres", sql: positional.sql, params: positional.params, cardinality: "one" });
+  // @ts-expect-error positional placeholders take an object keyed by number
+  await assert.rejects(() => p.run(client, [1, "ada"]), refused(/This statement takes \{ 1: \.\.\., 2: \.\.\. \}\./));
+  db.close();
 });
 
 test("runSync: on a synchronous client the value comes back at once and an error is thrown, so db.transaction(fn) rolls back", () => {
