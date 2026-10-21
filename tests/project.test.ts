@@ -29,6 +29,11 @@ test("without a project file, DATABASE_URL comes from the environment, then .env
   assert.deepEqual([local.url, local.urlSource, local.dialect, local.error], ["postgres://from-local/db", "DATABASE_URL in .env.local", "postgres", undefined]);
   const set = resolveProject(e, dir, { DATABASE_URL: "file:./x.db" });
   assert.deepEqual([set.url, set.urlSource, set.dialect], ["file:./x.db", "DATABASE_URL in the environment", "sqlite"]);
+  // A parameter nothing types is an error unless the project file says otherwise (since 2026-10-20).
+  assert.equal(local.strictParams, true);
+  const loose = tree({ "package.json": "{}", ".reylo.yaml": "url: file:./x.db\nstrict_params: false\n" });
+  assert.equal(resolveProject(e, loose, {}).strictParams, false);
+  assert.equal(resolveProject(e, tree({ "package.json": "{}", ".reylo.yaml": "url: file:./x.db\n" }), {}).strictParams, true);
 });
 
 test("the project file sits beside package.json, and its url, env files and strict_params apply", async () => {

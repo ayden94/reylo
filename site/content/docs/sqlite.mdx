@@ -292,7 +292,7 @@ import echo, { type Params } from "./lite_echo.sql";
 //                  ^?
 ```
 
-With [`strict_params: true`](/#strict_params) in `.reylo.yaml`, a parameter nothing types is an error instead of `unknown`.
+By default such a parameter is an error in the type check, which asks for a cast; [`strict_params: false`](/#strict_params) in `.reylo.yaml` leaves it `unknown`, as above.
 
 ### Parameters that may be null
 

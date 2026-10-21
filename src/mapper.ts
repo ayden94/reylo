@@ -86,15 +86,23 @@ serve({
       ({ params: names, placeholders } = session.lex(sql));
     } catch {}
     const cardinality = "many";
-    // `strict_params: true`: a parameter nothing in the statement types is an error at its first use.
+    // A parameter nothing in the statement types is an error at its first use, unless the project
+    // file says `strict_params: false` (the default is true since 2026-10-20).
+    // A statement the engine already refused (a parameter written twice, an error from the server)
+    // was not analysed to its end, so its parameters are untyped for that reason: its own error is
+    // the one to fix first.
     const strictParams = (analysis: Analysis) => {
-      if (!project.strictParams) return;
+      if (!project.strictParams || analysis.diagnostics.length) return;
       for (const q of analysis.params) {
         if (q.type.kind !== "unknown") continue;
         const at = placeholders.find((h) => h.name === q.name);
-        // The engine's offsets are UTF-8 bytes, as the diagnostics' are.
-        const written = at ? Buffer.from(sql, "utf8").subarray(at.start, at.end).toString("utf8") : `:${q.name}`;
-        diagnostics.push(diag(`Nothing in the statement gives the parameter ${written} a type; cast it, as in cast(${written} as integer), or remove strict_params: true from .reylo.yaml.`, at?.start ?? 0, at ? at.end - at.start : 1, 12));
+        // The engine's offsets are UTF-8 bytes, as the diagnostics' are. A MySQL placeholder's span
+        // takes in the `::type` the engine rewrote, which is no part of its name.
+        const span = at ? Buffer.from(sql, "utf8").subarray(at.start, at.end).toString("utf8") : `:${q.name}`;
+        const written = span.replace(/\s*::[\s\S]*$/, "");
+        const length = at ? Buffer.byteLength(written) : 1;
+        const message = `Nothing in the statement gives the parameter ${written} a type; cast it, as in ${written}::text, or set strict_params: false in .reylo.yaml.`;
+        diagnostics.push(diag(message, at?.start ?? 0, length, 12));
       }
     };
     const outcome = await session.analyze(sql);
