@@ -304,6 +304,8 @@ export function queries(d: Dialect, typed = true) {
     farInstants: q(`select '10000-01-01 00:00:00+00'::timestamptz as far, '0002-01-01 00:00:00+00 BC'::timestamptz as bc`, [], "one", { columns: [["far", "timestamptz"], ["bc", "timestamptz"]] }),
     farBack: q(`select :far::timestamptz = '10000-01-01 00:00:00+00'::timestamptz as far, :bc::timestamptz = '0002-01-01 00:00:00+00 BC'::timestamptz as bc`, ["far", "bc"], "one", { inputs: { far: { type: { kind: "scalar", name: "timestamptz" } }, bc: { type: { kind: "scalar", name: "timestamptz" } } }, columns: [["far", "bool"], ["bc", "bool"]] }),
     typedBig: q(`select id, big from ${t("typed")} where id = 1`, [], "one", { columns: [["id", "int"], ["big", d === "sqlite" ? "int" : "int8"]] }),
+    // SQLite's column declared BIGINT, which the engine types int8.
+    typedWide: q(`select id, wide from ${t("typed")} where id = 1`, [], "one", { columns: [["id", "int"], ["wide", "int8"]] }),
     dup: q(`insert into ${t("uniq")} (k) values (:k)`, ["k"], "none"),
   };
 }
@@ -844,6 +846,20 @@ export const SCENARIOS: Scenario[] = [
       if (d !== "sqlite") {
         typedEq(await call(ctx, q.typedBig, client), { id: 1, big: TYPED[d].big }, "an int8 past 2^53");
         return;
+      }
+      // A column declared BIGINT is a BigInt, exact past 2^53 where the driver reads the integer
+      // itself (Reylo's own statement on better-sqlite3, node:sqlite, bun:sqlite and Turso's
+      // engine); where the driver rounds it first, Reylo's error naming the column; libSQL's own
+      // error at its default intMode.
+      const rounds = /^(sqlite3|sqlite|miniflare D1|Bun\.sql)\b/.test(ctx.job.pkg);
+      try {
+        const r = await call(ctx, q.typedWide, client);
+        if (rounds || ctx.job.pkg.startsWith("@libsql")) throw new Mismatch(`expected the BIGINT past 2^53 to be refused, got ${oneLine(safeJson(r))}`);
+        typedEq(r, { id: 1, wide: 9007199254740993n }, "a BIGINT past 2^53");
+      } catch (e) {
+        if (e instanceof Mismatch || e instanceof Violation) throw e;
+        const refused = (rounds && e instanceof TypeError && /^Column "wide" is a 64-bit integer, and the driver already rounded its value to 9007199254740992/.test(e.message)) || (ctx.job.pkg.startsWith("@libsql") && e instanceof RangeError && /cannot be safely represented/.test(e.message));
+        if (!refused) throw new Mismatch(`not the BIGINT past 2^53 read exactly or refused as rounded: ${describe(e)}`);
       }
       // An INTEGER past 2^53, which a number cannot hold: Reylo's error naming the column, or libSQL's own at its default intMode.
       try {

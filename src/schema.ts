@@ -34,7 +34,7 @@ function scalar(name: string, dialect: Dialect, inJson: boolean, input: boolean)
     // document; as `run` returns it, its kind's.
     if (inJson || input) {
       switch (name) {
-        case "integer": return { type: "integer", format: "int64" };
+        case "integer": case "int8": return { type: "integer", format: "int64" };
         case "real": return { type: "number", format: "double" };
         case "text": return { type: "string" };
         case "blob": return { type: "string", format: "byte", contentEncoding: "base64" };

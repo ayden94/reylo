@@ -351,15 +351,29 @@ impl Fact {
 }
 
 /// The type of a table column's values: its affinity, except that a column declared with no type,
-/// or `ANY` in a STRICT table, holds a value of any storage class. (`ANY` in a table that is not
-/// STRICT is a declared type like any other, with NUMERIC affinity.)
+/// or `ANY` in a STRICT table, holds a value of any storage class, and that a column declared with
+/// a 64-bit integer's name ([`is_int8_declared`]) is `int8`, the type Postgres's `int8` and MySQL's
+/// `BIGINT` are: the declared width decides, on every database (wiki/driver-decoding.md). (`ANY` in
+/// a table that is not STRICT is a declared type like any other, with NUMERIC affinity.)
 fn column_type(declared: &str, aff: &str, strict: bool) -> Type {
     let declared = declared.trim();
     if declared.is_empty() || (strict && declared.eq_ignore_ascii_case("any")) {
         Type::Unknown
+    } else if aff == "integer" && is_int8_declared(declared) {
+        Type::Scalar { name: "int8".into() }
     } else {
         affinity_type(aff)
     }
+}
+
+/// Whether a declared type names a 64-bit integer: `BIGINT`, `INT8` or `UNSIGNED BIG INT`, the
+/// names SQLite's own documentation lists for one, in any case, with any spacing between words and
+/// a size after it ignored (`bigint(20)`, as a MySQL dump writes it). `INTEGER`, `INT` and the
+/// other integer names are SQLite's INTEGER, a `number`; so is the rowid, whatever its alias is
+/// declared, since only `INTEGER PRIMARY KEY` is one.
+fn is_int8_declared(declared: &str) -> bool {
+    let base = declared.split('(').next().unwrap_or("").split_whitespace().map(str::to_ascii_lowercase).collect::<Vec<_>>().join(" ");
+    matches!(base.as_str(), "bigint" | "int8" | "unsigned big int")
 }
 
 /// An affinity name as the type model; `none` is unknown.
@@ -378,15 +392,37 @@ fn scalar_name(t: &Type) -> Option<&str> {
 }
 
 fn is_numeric(t: &Type) -> bool {
-    matches!(scalar_name(t), Some("integer" | "real" | "numeric"))
+    matches!(scalar_name(t), Some("integer" | "int8" | "real" | "numeric"))
 }
 
-/// The type several arms share: one type when they agree, `real` for a mix of numbers, unknown otherwise.
+/// Whether a type is an integer's: SQLite's INTEGER, or a column declared 64 bits wide.
+fn is_integral(t: &Type) -> bool {
+    matches!(scalar_name(t), Some("integer" | "int8"))
+}
+
+/// The type of a value computed from one of type `t`: a 64-bit column's value passes through
+/// unchanged only as itself (a column, a subquery's or view's column, `min`, `max`, `coalesce`, a
+/// `CASE` arm, a window's `lag`), and what SQLite computes from it (`-id`, `abs(id)`, `sum(id)`,
+/// `id + 1`) is SQLite's INTEGER, as `count(*)` is.
+fn computed(t: Type) -> Type {
+    if scalar_name(&t) == Some("int8") {
+        Type::Scalar { name: "integer".into() }
+    } else {
+        t
+    }
+}
+
+/// The type several arms share: one type when they agree, `int8` for a mix of integers of which
+/// one is a 64-bit column's (`coalesce(user_id, 0)`: any integer is exact as a BigInt), `real` for
+/// another mix of numbers, unknown otherwise.
 fn shared(facts: &[&Fact]) -> Type {
     let known: Vec<&Type> = facts.iter().map(|f| &f.ty).filter(|t| !matches!(t, Type::Unknown)).collect();
     let Some(first) = known.first() else { return Type::Unknown };
     if known.iter().all(|t| t == first) {
         return (*first).clone();
+    }
+    if known.iter().all(|t| is_integral(t)) {
+        return Type::Scalar { name: "int8".into() };
     }
     if known.iter().all(|t| is_numeric(t)) {
         return Type::Scalar { name: "real".into() };
@@ -946,7 +982,7 @@ impl Analyzer<'_> {
             }
             "neg" => {
                 let l = arg(&n.left);
-                Fact { ty: if is_numeric(&l.ty) { l.ty } else { Type::Scalar { name: "real".into() } }, non_null: l.non_null }
+                Fact { ty: if is_numeric(&l.ty) { computed(l.ty) } else { Type::Scalar { name: "real".into() } }, non_null: l.non_null }
             }
             // Unary plus does nothing to any storage class: `+name` is the text 'bob'. SQLite's
             // parser also writes a one-element `x IN (e)` as `x = +e`.
@@ -1003,7 +1039,7 @@ impl Analyzer<'_> {
                 "percent_rank" | "cume_dist" => done("real", Nulls::Never),
                 "count" => done("integer", Nulls::Never),
                 "total" => done("real", total_nulls(&first)),
-                "sum" => typed(if is_numeric(&first.ty) { first.ty.clone() } else { Type::Scalar { name: "real".into() } }, Nulls::Always),
+                "sum" => typed(if is_numeric(&first.ty) { computed(first.ty.clone()) } else { Type::Scalar { name: "real".into() } }, Nulls::Always),
                 "avg" => done("real", Nulls::Always),
                 "min" | "max" | "lag" | "lead" | "first_value" | "last_value" | "nth_value" => typed(first.ty.clone(), Nulls::Always),
                 "group_concat" | "string_agg" => done("text", Nulls::Always),
@@ -1019,7 +1055,7 @@ impl Analyzer<'_> {
             return match name {
                 "count" => done("integer", Nulls::Never),
                 "total" => done("real", total_nulls(&first)),
-                "sum" => typed(if is_numeric(&first.ty) { first.ty.clone() } else { Type::Scalar { name: "real".into() } }, Nulls::Always),
+                "sum" => typed(if is_numeric(&first.ty) { computed(first.ty.clone()) } else { Type::Scalar { name: "real".into() } }, Nulls::Always),
                 "avg" => done("real", Nulls::Always),
                 "min" | "max" => typed(first.ty.clone(), if grouped { Nulls::IfArgs } else { Nulls::Always }),
                 "group_concat" | "string_agg" => done("text", if grouped { Nulls::IfArgs } else { Nulls::Always }),
@@ -1030,7 +1066,7 @@ impl Analyzer<'_> {
         }
         // A number for SQLite's math functions: a value of INTEGER or REAL type. Any other gives
         // NULL, text that reads as no number included (`sqrt('abc')`, `sign('')`).
-        let numbers = all_non_null && args.iter().all(|a| matches!(scalar_name(&a.ty), Some("integer" | "real")));
+        let numbers = all_non_null && args.iter().all(|a| matches!(scalar_name(&a.ty), Some("integer" | "int8" | "real")));
         match name {
             "coalesce" | "ifnull" => Fact { ty: shared(&args.iter().collect::<Vec<_>>()), non_null: args.iter().any(|a| a.non_null) },
             "nullif" => Fact { ty: first.ty.clone(), non_null: false },
@@ -1042,7 +1078,7 @@ impl Analyzer<'_> {
             }
             "min" | "max" => Fact { ty: shared(&args.iter().collect::<Vec<_>>()), non_null: all_non_null },
             // `abs` of the least integer is an error, not NULL; of text, 0.0.
-            "abs" => typed(if is_numeric(&first.ty) { first.ty.clone() } else { Type::Scalar { name: "real".into() } }, Nulls::IfArgs),
+            "abs" => typed(if is_numeric(&first.ty) { computed(first.ty.clone()) } else { Type::Scalar { name: "real".into() } }, Nulls::IfArgs),
             "round" => done("real", Nulls::IfArgs),
             "length" | "instr" | "json_valid" | "octet_length" => done("integer", Nulls::IfArgs),
             // A path that finds nothing is NULL: `json_array_length('{}', '$.a')`, `json_type('{}', '$.a')`.
@@ -1835,7 +1871,7 @@ fn iif_values(count: usize) -> Vec<usize> {
 /// When `total` is NULL: never over integers, but over reals a `1e999` and a `-1e999` add up to
 /// NaN, which SQLite gives as NULL.
 fn total_nulls(arg: &Fact) -> Nulls {
-    if matches!(scalar_name(&arg.ty), Some("integer")) { Nulls::Never } else { Nulls::Always }
+    if is_integral(&arg.ty) { Nulls::Never } else { Nulls::Always }
 }
 
 /// Whether a date and time function always reads its time value and modifiers. SQLite gives NULL
@@ -2052,7 +2088,7 @@ fn cursors(n: &Node) -> Option<Vec<i64>> {
 /// The type of `a op b` for `+`, `-`, `*`, `/`, `%`: integer stays integer, anything else is real.
 fn arithmetic(l: &Type, r: &Type) -> Type {
     match (scalar_name(l), scalar_name(r)) {
-        (Some("integer"), Some("integer")) => Type::Scalar { name: "integer".into() },
+        (Some("integer" | "int8"), Some("integer" | "int8")) => Type::Scalar { name: "integer".into() },
         _ => Type::Scalar { name: "real".into() },
     }
 }
@@ -3244,6 +3280,50 @@ mod tests {
         assert_ne!(scalar_name(&r.analysis.columns[0].ty), Some("bool"));
         let r = analyze_ddl("select done from flags union all select id > 1 from flags", &ddl, &Extras::default());
         assert_eq!(scalar_name(&r.analysis.columns[0].ty), Some("bool"));
+    }
+
+    #[test]
+    fn a_column_declared_64_bits_wide_is_int8_and_what_sqlite_computes_from_it_an_integer() {
+        let ddl = vec![
+            "create table orders (id integer primary key, user_id BIGINT not null, ref Int8, big unsigned  big  int, wide bigint(20), n integer not null, i int, small tinyint, r real)".to_string(),
+            "create table keyed (id bigint primary key, name text)".to_string(),
+            "create view v as select user_id, n from orders".to_string(),
+        ];
+        let types = |sql: &str| {
+            let r = analyze_ddl(sql, &ddl, &Extras::default());
+            assert!(r.analysis.diagnostics.is_empty(), "{sql}: {:?}", r.analysis.diagnostics);
+            r.analysis.columns.iter().map(|c| scalar_name(&c.ty).unwrap_or("unknown").to_string()).collect::<Vec<_>>()
+        };
+        // The declared width decides: BIGINT, INT8 and UNSIGNED BIG INT in any case and spacing,
+        // with a size or not; every other integer name, and the rowid, is SQLite's INTEGER.
+        assert_eq!(types("select id, user_id, ref, big, wide, n, i, small, r from orders"), ["integer", "int8", "int8", "int8", "int8", "integer", "integer", "integer", "real"]);
+        // A BIGINT PRIMARY KEY is no rowid alias: a column of its own, declared 64 bits wide.
+        assert_eq!(types("select id, rowid as r from keyed"), ["int8", "integer"]);
+        // What passes the column through unchanged keeps its type: a subquery's or view's column,
+        // min and max, coalesce and a CASE over integers, a window's lag, unary plus.
+        assert_eq!(
+            types("select x.user_id, v.user_id as through_view, max(o.user_id) as most, coalesce(o.ref, 0) as co, ifnull(o.ref, o.n) as ifn, case when o.n > 0 then o.user_id else 0 end as cs, +o.user_id as pos, (select max(user_id) from orders) as sub from orders o, (select user_id from orders) x, v group by o.id"),
+            ["int8", "int8", "int8", "int8", "int8", "int8", "int8", "int8"],
+        );
+        assert_eq!(types("select lag(user_id) over (order by id) as prev, min(user_id, ref) as least from orders"), ["int8", "int8"]);
+        assert_eq!(types("select user_id from orders union all select 1"), ["int8"]);
+        // What SQLite computes from it is SQLite's INTEGER, as count(*) is; a mix with a real is a real.
+        assert_eq!(
+            types("select user_id + 1 as plus, user_id * n as times, -user_id as neg, abs(user_id) as a, sum(user_id) as s, count(user_id) as c, cast(user_id as integer) as ci, coalesce(ref, 1.5) as cr, total(user_id) as t from orders"),
+            ["integer", "integer", "integer", "integer", "integer", "integer", "integer", "real", "real"],
+        );
+        // total() over a 64-bit column is over integers, so it is never NaN.
+        let r = analyze_ddl("select total(user_id) as t from orders", &ddl, &Extras::default());
+        assert_eq!(col(&r.analysis, "t"), ("real".into(), false));
+        // A parameter compared with or written to one takes its type.
+        let r = analyze_ddl("select id from orders where user_id = :u and ref in (:a, :b)", &ddl, &Extras::default());
+        assert_eq!([param(&r.analysis, "u"), param(&r.analysis, "a"), param(&r.analysis, "b")], ["int8", "int8", "int8"]);
+        let r = analyze_ddl("insert into orders (user_id, n) values (:u, :n) returning user_id", &ddl, &Extras::default());
+        assert_eq!([param(&r.analysis, "u"), param(&r.analysis, "n")], ["int8", "integer"]);
+        assert_eq!(col(&r.analysis, "user_id"), ("int8".into(), false));
+        assert_eq!(r.analysis.columns[0].type_name, "int8");
+        assert!(["bigint", "BIGINT", " int8 ", "Unsigned Big Int", "bigint(20)", "unsigned big int (8)"].iter().all(|d| is_int8_declared(d)));
+        assert!(!["integer", "int", "bigint unsigned", "big int", "int64", "biginteger", "unsigned bigint"].iter().any(|d| is_int8_declared(d)));
     }
 
     #[test]

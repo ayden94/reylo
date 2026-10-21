@@ -22,7 +22,7 @@ const json: Record<string, string> = {
   hstore: "string", ltree: "string", lquery: "string", ltxtquery: "string",
   record: "string",
 };
-const sqliteJson: Record<string, string> = { integer: "number", real: "number", numeric: "number | string", text: "string", bool: "boolean" };
+const sqliteJson: Record<string, string> = { integer: "number", int8: "number", real: "number", numeric: "number | string", text: "string", bool: "boolean" };
 
 export const ident = (name: string) => (/^[A-Za-z_$][\w$]*$/.test(name) ? name : JSON.stringify(name));
 
@@ -190,7 +190,8 @@ export function renderParamType(t: EngineType, dialect: Dialect = "postgres"): s
   // A SQLite driver binds a number for an INTEGER. A BOOLEAN column has NUMERIC affinity, so a
   // parameter written to or compared with one is NUMERIC, and takes the truth value the column
   // returns, which the run time binds as 1 or 0.
-  if (t.kind === "scalar" && dialect === "sqlite" && t.name === "integer") return "number";
+  // A column declared BIGINT's parameter keeps an INTEGER's type for now.
+  if (t.kind === "scalar" && dialect === "sqlite" && (t.name === "integer" || t.name === "int8")) return "number";
   if (t.kind === "scalar" && dialect === "sqlite" && t.name === "numeric") return "number | string | boolean";
   if (t.kind === "scalar" && dialect === "sqlite" && t.name === "bool") return "boolean | number";
   // Every driver binds a Uint8Array (a Buffer is one) for a binary value, mariadb and Neon's

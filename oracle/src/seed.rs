@@ -791,6 +791,11 @@ pub fn check_sqlite(db: &rusqlite::Connection, statements: &[(String, String, Va
                                 Some(value) if col["type_name"] == "bool" && !matches!(value, rusqlite::types::Value::Null | rusqlite::types::Value::Integer(0 | 1)) => {
                                     found.push(format!("{file}: column {name} typed bool holds {value:?} with ({shown})"));
                                 }
+                                // A column declared 64 bits wide, and what passes one through,
+                                // is a BigInt to the run time, which only an INTEGER is.
+                                Some(value) if col["type_name"] == "int8" && !matches!(value, rusqlite::types::Value::Null | rusqlite::types::Value::Integer(_)) => {
+                                    found.push(format!("{file}: column {name} typed int8 holds {value:?} with ({shown})"));
+                                }
                                 Some(rusqlite::types::Value::Text(text)) => {
                                     if let Some(why) = contradiction(&col["type"], text) {
                                         found.push(format!("{file}: column {name} {why} with ({shown})"));

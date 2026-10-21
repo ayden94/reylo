@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { execute, type QueryModule } from "../src/execute.ts";
-import { renderType } from "../src/render.ts";
+import { renderParamType, renderType } from "../src/render.ts";
 import { typeSchema } from "../src/schema.ts";
 import { coerce, columnKind, DecodeError, instant, kindType, scalarKind, textDecoder } from "../src/values.ts";
 import type { EngineType } from "../src/engine-type.ts";
@@ -115,6 +115,43 @@ test("SQLite: the kinds, and a NUMERIC column of either", () => {
   assert.deepEqual(["int", "int|float|text", "unknown", "bytes"].map(kindType), ["number", "number | string", "unknown", "Uint8Array"]);
 });
 
+test("SQLite: a column declared BIGINT, INT8 or UNSIGNED BIG INT (the engine's int8) is a BigInt, as on Postgres and MySQL; its parameter keeps an INTEGER's type", () => {
+  assert.equal(scalarKind("int8", "sqlite"), "int8");
+  assert.equal(renderType(scalar("int8"), false, "sqlite"), "bigint");
+  assert.equal(renderType(scalar("int8"), true, "sqlite"), "number", "inside a JSON document, the number SQLite writes");
+  assert.equal(renderParamType(scalar("int8"), "sqlite"), "number");
+  assert.deepEqual(typeSchema(scalar("int8"), "sqlite"), { type: "integer", format: "int64" }, "the BigInt, as the JSON integer it is");
+  assert.deepEqual(typeSchema(scalar("int8"), "sqlite"), typeSchema(scalar("int8"), "postgres"));
+  assert.deepEqual(typeSchema(scalar("int8"), "sqlite", true), { type: "integer", format: "int64" }, "a parameter");
+});
+
+test("SQLite: a BIGINT column on node:sqlite exact past 2^53 beside an INTEGER read as a number, whatever the database's setting; on the drivers that round, a BigInt within 2^53 and a rounded value refused", async () => {
+  for (const readBigInts of [false, true]) {
+    const db = new DatabaseSync(":memory:", { readBigInts });
+    db.exec("create table t (id integer primary key, n integer, big bigint); insert into t values (1, 5, 9007199254740993), (2, 6, -9007199254740993), (3, 7, null)");
+    const q: QueryModule<"sqlite"> = { dialect: "sqlite", sql: "select id, n, big from t order by id", params: [], columns: [["id", "int"], ["n", "int"], ["big", "int8"]] };
+    assert.deepEqual(execute(db, q), [{ id: 1, n: 5, big: 9007199254740993n }, { id: 2, n: 6, big: -9007199254740993n }, { id: 3, n: 7, big: null }]);
+    // The failing control: the app's own statement at the database's setting, which without
+    // readBigInts refuses the value with an error that names no column.
+    const own = () => ({ ...(db.prepare("select n, big from t where id = 1").get() as object) });
+    if (readBigInts) assert.deepEqual(own(), { n: 5n, big: 9007199254740993n });
+    else assert.throws(own, /^RangeError: Value is too large to be represented as a JavaScript number: 9007199254740993/);
+    db.close();
+  }
+  const q: QueryModule<"sqlite"> = { dialect: "sqlite", sql: "select n, big from t", params: [], columns: [["n", "int"], ["big", "int8"]] };
+  const d1 = (results: unknown[]) => ({ batch: async () => [], prepare: () => ({ first: async () => null, bind: () => ({ all: async () => ({ results }) }) }) });
+  assert.deepEqual(await execute(d1([{ n: 5, big: 9007199254740991 }, { n: 6, big: -3 }]), q), [{ n: 5, big: 9007199254740991n }, { n: 6, big: -3n }]);
+  await assert.rejects(execute(d1([{ n: 5, big: 9007199254740992 }]), q) as Promise<unknown>, (e: Error) => e instanceof DecodeError && /^Column "big" is a 64-bit integer, and the driver already rounded its value to 9007199254740992/.test(e.message));
+  // libSQL under each intMode: a number, a BigInt or the digits.
+  const libsql = (rows: unknown[]) => ({ execute: async () => ({ rows }), executeMultiple: async () => {} });
+  for (const big of [7, 7n, "7"]) assert.deepEqual(await execute(libsql([{ n: 5, big }]), q), [{ n: 5, big: 7n }], typeof big);
+  assert.deepEqual(await execute(libsql([{ n: 5, big: "9007199254740993" }]), q), [{ n: 5, big: 9007199254740993n }]);
+  // Bun.sql's SQLite, with safeIntegers or without.
+  const bun = (rows: unknown[]) => ({ unsafe: async () => rows, commitDistributed: async () => {} });
+  assert.deepEqual(await execute(bun([{ n: 5, big: 9007199254740993n }]), q), [{ n: 5, big: 9007199254740993n }]);
+  await assert.rejects(execute(bun([{ n: 5, big: 9007199254740992 }]), q) as Promise<unknown>, /Column "big" is a 64-bit integer, and the driver already rounded/);
+});
+
 test("coerce: a value a driver decoded, given its kind; an integer a number cannot hold is refused, naming the column", () => {
   assert.equal(coerce("int8", 9007199254740993n, "c"), 9007199254740993n);
   assert.equal(coerce("int8", "9007199254740993", "c"), 9007199254740993n, "a driver's exact text");
@@ -143,6 +180,9 @@ test("coerce: a value a driver decoded, given its kind; an integer a number cann
   assert.deepEqual(coerce("bytes", Uint8Array.of(3).buffer, "c"), Uint8Array.of(3), "libSQL's BLOB");
   assert.deepEqual(coerce("json", '{"a":1}', "c"), { a: 1 });
   assert.equal(coerce("int", 9007199254740991n, "c"), 9007199254740991);
+  // The bounds, exactly: ±(2^53 - 1) is a number, ±2^53 refused.
+  assert.deepEqual([9007199254740991n, -9007199254740991n, 0n].map((v) => coerce("int", v, "n")), [9007199254740991, -9007199254740991, 0]);
+  for (const v of [9007199254740992n, -9007199254740992n, 2n ** 63n - 1n, -(2n ** 63n)]) assert.throws(() => coerce("int", v, "n"), DecodeError, String(v));
   assert.throws(() => coerce("int", 9007199254740993n, "big_id"), (e: Error) => e instanceof DecodeError && /^Column "big_id" holds 9007199254740993, an integer past ±\(2\^53 - 1\)/.test(e.message));
   assert.throws(() => coerce("int", 9007199254740992, "big_id"), /Column "big_id" holds an integer past ±\(2\^53 - 1\), which the driver already rounded to 9007199254740992/);
   // A NUMERIC may hold a REAL past 2^53, which is no rounded integer.

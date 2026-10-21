@@ -69,14 +69,16 @@ const SQL_KINDS: Readonly<Record<string, ScalarKind>> = {
 };
 
 /**
- * SQLite's: the engine names a column by its affinity. An INTEGER is a number, exact or an error
- * (`int8` here would make it a BigInt on every SQLite driver: src/decode-sqlite.ts reads either);
- * a NUMERIC holds whichever storage class the row stored; `bool` is a truth value or a column
- * declared BOOLEAN; a column with no declared type, or ANY in a STRICT table, is whatever the
- * driver gives.
+ * SQLite's: the engine names a column by its affinity, and a column declared BIGINT, INT8 or
+ * UNSIGNED BIG INT `int8`, since the declared width decides on every database (the maintainer,
+ * 2026-10-20). An INTEGER is a number, exact or an error; an `int8` a BigInt on every SQLite
+ * driver (src/decode-sqlite.ts reads either); a NUMERIC holds whichever storage class the row
+ * stored; `bool` is a truth value or a column declared BOOLEAN; a column with no declared type,
+ * or ANY in a STRICT table, is whatever the driver gives.
  */
 const SQLITE_KINDS: Readonly<Record<string, Kind>> = {
   integer: "int",
+  int8: "int8",
   real: "float",
   text: "text",
   blob: "bytes",
@@ -324,8 +326,13 @@ const MAX_SAFE = Number.MAX_SAFE_INTEGER;
 /** An integer as a number, refused where a number cannot hold it exactly. */
 export function exactInteger(v: number | bigint, column: string): number {
   if (typeof v === "bigint") {
-    if (v > BigInt(MAX_SAFE) || v < -BigInt(MAX_SAFE)) throw outOfRange(String(v), column);
-    return Number(v);
+    // Exact: a BigInt past ±(2^53 - 1) converts to a number at least 2^53 in magnitude, since
+    // rounding keeps the order and 2^53 is a number. Comparing BigInts instead took a five-column
+    // row with a SQLite BIGINT, beside which better-sqlite3 reads every integer as a BigInt, from
+    // 3.3 to 5.2 ms per 10,000 rows.
+    const n = Number(v);
+    if (n > MAX_SAFE || n < -MAX_SAFE) throw outOfRange(String(v), column);
+    return n;
   }
   if (v > MAX_SAFE || v < -MAX_SAFE) throw outOfRange(String(v), column, true);
   return v;

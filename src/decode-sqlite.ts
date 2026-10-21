@@ -10,10 +10,13 @@
 //   database, once per database and text (a WeakMap keyed by the database), and sets that
 //   statement's own integer mode, whatever the database's, and no other statement of the app's
 //   changes. node:sqlite's statement, and better-sqlite3's and bun:sqlite's where a column has no
-//   type the module knows, read every INTEGER as a BigInt: each is then a number, or an error naming
-//   its column past 2^53. Where every column is typed, better-sqlite3's and bun:sqlite's read numbers
-//   (a BigInt per integer cost +70% on 10,000 rows), and a number past 2^53 in a column that may hold
-//   an INTEGER can only be a rounded one, which is refused. bun:sqlite's statement comes from
+//   type the module knows or is a BIGINT's (`int8`, a BigInt), read every INTEGER as a BigInt: an
+//   INTEGER's is then a number, or an error naming its column past 2^53. Where every column is
+//   typed and none is a BIGINT's, better-sqlite3's and bun:sqlite's read numbers (a BigInt per
+//   integer cost +70% on 10,000 rows when `exactInteger` compared BigInts, and +17 to 20% since it
+//   converts first, which is also what a five-column row costs with one of its INTEGER columns
+//   declared BIGINT), and a number past 2^53 in a column that may hold an INTEGER can only be a
+//   rounded one, which is refused. bun:sqlite's statement comes from
 //   `prepare`, never `query`, whose cache by text would carry Reylo's mode into the app's statement.
 // - Turso's new engine (@tursodatabase/database): Reylo prepares its statement and sets its integer
 //   mode as on better-sqlite3, per call and closed after it, since a Transaction's statements end
@@ -23,7 +26,8 @@
 // - sqlite3 and the sqlite wrapper, libSQL, D1 and Bun.SQL's SQLite: the rows the driver gives,
 //   normalized. sqlite3 and sqlite are not cached: a statement left open makes the app's close()
 //   fail with SQLITE_BUSY. An INTEGER the driver already rounded (sqlite3, sqlite, D1, Bun.SQL
-//   without safeIntegers) is refused in an INTEGER column, where a number past 2^53 can only be one.
+//   without safeIntegers) is refused in an INTEGER or BIGINT column, where a number past 2^53 can
+//   only be one; a BIGINT's number within 2^53, or libSQL's BigInt or digits, is its BigInt.
 import { bigInteger, coerce, exactInteger, refuseTruth, truth, type Columns, type Kind } from "./values.ts";
 
 type AnyClient = Record<string, any>;
@@ -149,8 +153,9 @@ type Plan = {
  */
 function plan(name: string, kind: Kind, exact: boolean): Plan {
   if (kind === "bool") return { name, big: (v) => truth(v, name), num: (v) => truth(v, name), str: (v) => truth(v, name), blob: () => refuseTruth(name, "a BLOB") };
-  // An INTEGER as a BigInt, were the table to say so: a number past 2^53 is a rounded one where the
-  // driver did not read integers exact; a number is a REAL where it did.
+  // A column declared BIGINT, INT8 or UNSIGNED BIG INT, and what passes one through: a BigInt. A
+  // number past 2^53 is a rounded one where the driver did not read integers exact (sqlite3, D1,
+  // libSQL's intMode "number"), and is refused; a number is a REAL where it did.
   if (kind === "int8") return { name, big: (v) => v, num: exact ? undefined : (v) => bigInteger(v, name), str: (v) => bigInteger(v, name) };
   if (kind === "json") return { name, big: (v) => exactInteger(v, name), num: undefined, str: (v) => JSON.parse(v) };
   if (kind === "text") return { name, big: String, num: undefined, str: undefined };

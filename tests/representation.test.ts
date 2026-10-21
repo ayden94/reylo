@@ -285,3 +285,79 @@ test("SQLite: one row on every driver, whatever its integer setting; an integer 
   assert.deepEqual(plain(await q.run(wrapper)), rows, "sqlite");
   await wrapper.close();
 });
+
+test("SQLite: a column declared BIGINT or INT8 is a BigInt on every driver, exact past 2^53 or refused where the driver rounded it, an INTEGER a number; its value goes back in as a parameter", { skip: drivers === true ? false : drivers, timeout: 60_000 }, async () => {
+  const Database = require("better-sqlite3");
+  const { createClient } = require("@libsql/client");
+  const sqlite3 = require("sqlite3");
+  const { open } = require("sqlite");
+  const root = project();
+  const file = join(root, "app.db");
+  const setup = new DatabaseSync(file);
+  setup.exec(`create table acct (id integer primary key, n integer not null, v bigint, w Int8);
+    insert into acct values (1, 5, 9007199254740993, 7), (2, 6, 5, null)`);
+  setup.close();
+  const all = await built(root, "file:./app.db", "acct_all", "select id, n, v, w, max(v, 0) as most, v + 0 as plus from acct group by id order by id");
+  const byV = await built(root, "file:./app.db", "acct_by_v", "select id, v from acct where v = :v");
+  const rows = [
+    { id: 1, n: 5, v: 9007199254740993n, w: 7n, most: 9007199254740993n, plus: 9007199254740993 },
+    { id: 2, n: 6, v: 5n, w: null, most: 5n, plus: 5 },
+  ];
+  // `v + 0` is an integer SQLite computes, a number, so row 1's is refused; the rest of the columns read alone.
+  const plusError = /Column "plus" holds 9007199254740993, an integer past/;
+  const exact = await built(root, "file:./app.db", "acct_exact", "select id, n, v, w, max(v, 0) as most from acct order by id");
+  const exactRows = rows.map(({ plus: _, ...r }) => r);
+  const rounded = /Column "v" is a 64-bit integer, and the driver already rounded its value to 9007199254740992/;
+  // better-sqlite3 at its default, every integer a number: Reylo's statement reads the BIGINT
+  // column exact, and the INTEGER column as a number, whatever the database says.
+  for (const safe of [false, true]) {
+    const db = new Database(file);
+    db.defaultSafeIntegers(safe);
+    assert.deepEqual(plain(exact.runSync(db)), exactRows, `better-sqlite3 with defaultSafeIntegers(${safe})`);
+    assert.throws(() => all.runSync(db), plusError);
+    const own = db.prepare("select n, v from acct where id = 1").get();
+    assert.deepEqual(own, safe ? { n: 5n, v: 9007199254740993n } : { n: 5, v: 9007199254740992 }, "the control: the app's own statement keeps its setting, and rounds v without safeIntegers");
+    // What `run` returns goes back in.
+    assert.deepEqual(plain(byV.runSync(db, { v: exactRows[0]!.v })), [{ id: 1, v: 9007199254740993n }], "better-sqlite3: the BIGINT's value as a parameter");
+    db.close();
+  }
+  for (const readBigInts of [false, true]) {
+    const node = new DatabaseSync(file, { readBigInts });
+    assert.deepEqual(plain(await exact.run(node)), exactRows, `node:sqlite with readBigInts ${readBigInts}`);
+    await assert.rejects(all.run(node), plusError);
+    assert.deepEqual(plain(await byV.run(node, { v: 9007199254740993n })), [{ id: 1, v: 9007199254740993n }], "node:sqlite: the BIGINT's value as a parameter");
+    node.close();
+  }
+  for (const intMode of ["number", "bigint", "string"]) {
+    const client = createClient({ url: `file:${file}`, intMode });
+    // At its default intMode libSQL refuses an integer past 2^53 itself, before Reylo sees it.
+    if (intMode === "number") await assert.rejects(exact.run(client), RangeError);
+    else assert.deepEqual(plain(await exact.run(client)), exactRows, `libSQL with intMode ${intMode}`);
+    assert.deepEqual(plain(await byV.run(client, { v: 5n })), [{ id: 2, v: 5n }], `libSQL with intMode ${intMode}: a BIGINT within 2^53`);
+    if (intMode !== "number") assert.deepEqual(plain(await byV.run(client, { v: 9007199254740993n })), [{ id: 1, v: 9007199254740993n }], `libSQL with intMode ${intMode}: the BIGINT's value as a parameter`);
+    client.close();
+  }
+  const turso = await import(pathToFileURL(require.resolve("@tursodatabase/database")).href);
+  const { Database: TursoCompat } = await import(pathToFileURL(require.resolve("@tursodatabase/database/compat")).href);
+  for (const safe of [false, true]) {
+    const tdb = await turso.connect(file);
+    tdb.defaultSafeIntegers(safe);
+    assert.deepEqual(plain(await exact.run(tdb)), exactRows, `Turso's engine with defaultSafeIntegers(${safe})`);
+    assert.deepEqual(plain(await byV.run(tdb, { v: 9007199254740993n })), [{ id: 1, v: 9007199254740993n }], "Turso's engine: the BIGINT's value as a parameter");
+    assert.equal((await tdb.prepare("select v from acct where id = 1").get()).v, safe ? 9007199254740993n : 9007199254740992, "the control: the app's own statement");
+    await tdb.close();
+  }
+  const compat = new TursoCompat(file);
+  assert.deepEqual(plain(exact.runSync(compat)), exactRows, "Turso's compat Database");
+  compat.close();
+  // sqlite3 and sqlite round past 2^53 before Reylo sees the value: refused, naming the column; a
+  // value within it is a BigInt, and goes back in (a larger one is refused before the statement runs).
+  const s3 = new sqlite3.Database(file);
+  await assert.rejects(exact.run(s3), rounded);
+  assert.deepEqual(plain(await byV.run(s3, { v: 5n })), [{ id: 2, v: 5n }], "sqlite3: a BIGINT within 2^53, as a parameter and back");
+  await new Promise((resolve) => s3.close(resolve));
+  const wrapper = await open({ filename: file, driver: sqlite3.Database });
+  await assert.rejects(exact.run(wrapper), rounded);
+  assert.deepEqual(plain(await byV.run(wrapper, { v: 5n })), [{ id: 2, v: 5n }], "sqlite: a BIGINT within 2^53");
+  await wrapper.close();
+});

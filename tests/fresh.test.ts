@@ -92,7 +92,8 @@ test("SQLite on Turso's engine: a query built on node:sqlite runs, whose types T
     const facts = JSON.parse(/"rows":(\[\[.*?\]\]),"inserts"/.exec(readFileSync(join(root, "read.mjs"), "utf8"))![1]!) as string[][];
     assert.deepEqual(facts.map((r) => r[2]), ["TEXT", "INTEGER", "bigInt", "boolean"], "the facts node:sqlite gave the build, the names it knows upper-cased");
     assert.deepEqual((await db.prepare("select type from pragma_table_xinfo('users')").all()).map((r: { type: string }) => r.type), ["integer", "text", "bigInt", "boolean"], "the control: Turso's engine gives each type as declared");
-    assert.deepEqual(await read.run(db), [{ id: 1, email: "a@x", n: 7, ok: true }]);
+    // A column declared BIGINT, in any case, is a BigInt.
+    assert.deepEqual(await read.run(db), [{ id: 1, email: "a@x", n: 7n, ok: true }]);
     const read2 = await built(root, url, "read2", "select id, email from users order by id");
     await db.exec("alter table users rename column email to mail");
     await assert.rejects(read2.run(db), /The database changed after read2\.sql was built: users\.email was TEXT not null and no longer exists\. Build it again/);
