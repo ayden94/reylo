@@ -1958,6 +1958,53 @@ mod tests {
     }
 
     #[test]
+    fn a_cast_parameter_is_as_nullable_as_the_bare_one() {
+        // A server with one table, `users (id int primary key, name text not null, email text,
+        // score numeric, n int, doc jsonb, meta json not null)`, describing every statement with no
+        // result column and every parameter as text.
+        let columns = [("id", true), ("name", true), ("email", false), ("score", false), ("n", false), ("doc", false), ("meta", true)];
+        let nullable = |sql: &str| {
+            let mut answers: HashMap<String, Answer> = HashMap::new();
+            for _ in 0..64 {
+                let host = Host::new(&answers);
+                if let Some(a) = analyze(sql, &host) {
+                    assert!(a.diagnostics.is_empty(), "{sql}: {:?}", a.diagnostics);
+                    return a.params.iter().map(|p| format!("{}{}", p.name, if p.nullable { "?" } else { "" })).collect::<Vec<_>>().join(" ");
+                }
+                for need in host.needs() {
+                    match need {
+                        crate::api::Need::Describe { id, sql } => {
+                            let count = lex::lex(&sql, Dialect::Postgres).map(|l| l.placeholders.len()).unwrap_or(0);
+                            answers.insert(id, Answer::Describe { describe: RawDescribe { params: vec![25; count], columns: vec![] } });
+                        }
+                        crate::api::Need::Query { id, sql, .. } => {
+                            let rows = match sql.as_str() {
+                                RELATION_COLUMNS_QUERY => columns.iter().enumerate().map(|(i, (name, not_null))| vec![json!(16400), json!("users"), json!(i + 1), json!(not_null), Value::Null, json!(name), json!(not_null)]).collect(),
+                                cardinality::UNIQUE_KEYS_QUERY => vec![vec![json!("users"), json!(["id"]), json!([null]), Value::Null], vec![json!("users"), json!(["email"]), json!([null]), Value::Null]],
+                                _ => vec![],
+                            };
+                            answers.insert(id, Answer::Rows { rows });
+                        }
+                    }
+                }
+            }
+            panic!("the replay did not converge");
+        };
+        // Written whole to a column, under any cast: as nullable as the column, in an INSERT's
+        // rows, an UPDATE's SET and an upsert's, a row value's elements included.
+        assert_eq!(nullable("INSERT INTO users (name, email) VALUES (:name::text, :email::text) ON CONFLICT (email) DO UPDATE SET name = excluded.name RETURNING id"), "name email?");
+        assert_eq!(nullable("INSERT INTO users (name, email, score, n, doc, meta) VALUES (:name::text, :email::text, :score::numeric, :n::int, :doc::jsonb, :meta::json), (:a, :b, :c, :d, :e, :f)"), "name email? score? n? doc? meta a b? c? d? e? f");
+        assert_eq!(nullable("UPDATE users SET email = :email::text, name = :name::text, n = :n::int, doc = :doc::json::jsonb, meta = :meta::json WHERE id = :id::int"), "email? name n? doc? meta id");
+        assert_eq!(nullable("UPDATE users SET (name, email) = (:name::text, :email::text) WHERE id = :id::int"), "name email? id");
+        assert_eq!(nullable("UPDATE users SET (name, email) = (:name, :email) WHERE id = :id"), "name email? id");
+        assert_eq!(nullable("INSERT INTO users (name) VALUES ('a') ON CONFLICT (id) DO UPDATE SET email = :email::text, name = :name::text"), "email? name");
+        // Coalesced or tested for NULL, under a cast; a SELECT's column is no value written whole.
+        assert_eq!(nullable("UPDATE users SET n = coalesce(:n::int, n), doc = coalesce(:doc::jsonb, doc) WHERE id = :id::int"), "n? doc? id");
+        assert_eq!(nullable("SELECT id FROM users WHERE (:doc::json IS NULL OR n = :x::int)"), "doc? x");
+        assert_eq!(nullable("INSERT INTO users (name, email) SELECT :name::text, :email::text"), "name email");
+    }
+
+    #[test]
     fn returning_with_names_for_the_old_and_the_new_row_is_typed_as_old_and_new_are() {
         let nullable = |a: &Analysis| a.columns.iter().map(|c| c.nullable).collect::<Vec<_>>();
         // PostgreSQL 18's clause parses, so the write by key is at most one row, and both rows of

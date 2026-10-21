@@ -289,7 +289,8 @@ fn table_name(name: &ast::ObjectName) -> Option<String> {
     }
 }
 
-/// The parameter an expression is, whole: under casts and parentheses, which leave a NULL as it is.
+/// The parameter an expression is, whole: under casts, parentheses and the `JSON_COMPACT()` a
+/// `::json` cast compiles to on MariaDB, which leave a NULL as it is.
 fn direct(e: &Expr, names: &Names) -> Option<String> {
     match e {
         Expr::Value(v) => match &v.value {
@@ -297,6 +298,17 @@ fn direct(e: &Expr, names: &Names) -> Option<String> {
             _ => None,
         },
         Expr::Nested(inner) | Expr::Cast { expr: inner, .. } | Expr::Convert { expr: inner, .. } => direct(inner, names),
+        _ => json_compact(e).and_then(|inner| direct(inner, names)),
+    }
+}
+
+/// The argument of `JSON_COMPACT(x)`, which MariaDB writes for a `::json` cast (it has no
+/// `CAST(… AS JSON)`), and which is NULL for NULL.
+fn json_compact(e: &Expr) -> Option<&Expr> {
+    let Expr::Function(f) = e else { return None };
+    let ast::FunctionArguments::List(list) = &f.args else { return None };
+    match list.args.as_slice() {
+        [only] if crate::mysql::builtin(f) == "json_compact" && list.clauses.is_empty() && f.over.is_none() => arg_expr(only),
         _ => None,
     }
 }
@@ -431,6 +443,7 @@ impl Walk<'_> {
     fn param_of(&self, e: &Expr, env: &Env) -> Option<String> {
         match e {
             Expr::Nested(inner) | Expr::Cast { expr: inner, .. } | Expr::Convert { expr: inner, .. } => self.param_of(inner, env),
+            Expr::Function(_) => json_compact(e).and_then(|inner| self.param_of(inner, env)),
             Expr::CompoundIdentifier(parts) if parts.len() == 2 => {
                 let (by, column) = (parts[0].value.to_ascii_lowercase(), parts[1].value.to_ascii_lowercase());
                 let item = env.levels.iter().rev().find_map(|level| level.iter().find(|item| item.name == by))?;
@@ -900,6 +913,23 @@ mod tests {
         assert!(may_be_null("insert into users (name, email) select name, :email from users").is_empty());
         // A read asks for no columns.
         assert_eq!(nullable("select id from users where email = :email"), (vec![("email".into(), false)], false));
+    }
+
+    #[test]
+    fn a_cast_parameter_is_as_nullable_as_the_bare_one() {
+        // What a `:name::type` cast compiles to: the bare placeholder for a text type, `CAST(? AS
+        // SIGNED)`, `CAST(? AS DECIMAL(…))` and `CAST(? AS JSON)`, and on MariaDB `JSON_COMPACT(?)`
+        // for `::json`. Each keeps NULL: written whole to a nullable column the parameter may be
+        // null, to a NOT NULL one it is a value, and coalesced or tested it may be null.
+        let lists = |a: Vec<String>| a.join(" ");
+        let q = |sql: &str| lists(may_be_null(sql));
+        assert_eq!(q("insert into users (name, email, bio) values (:name, CAST(:email AS JSON), JSON_COMPACT(:bio))"), "email bio");
+        assert_eq!(q("insert into users (name, email, bio) values (CAST(:name AS SIGNED), CAST(:email AS DECIMAL(10,2)), CAST(:bio AS UNSIGNED)), (JSON_COMPACT(:n2), :e2, CAST(:b2 AS DATETIME(6)))"), "email bio e2 b2");
+        assert_eq!(q("update users set email = CAST(:email AS SIGNED), name = JSON_COMPACT(:name), bio = JSON_COMPACT(:bio) where id = CAST(:id AS SIGNED)"), "email bio");
+        assert_eq!(q("insert into users (name, email) values (:name, :email) on duplicate key update bio = CAST(:bio AS JSON), name = CAST(:again AS SIGNED)"), "email bio");
+        assert_eq!(q("update users set email = coalesce(JSON_COMPACT(:e), email), name = coalesce(CAST(:n AS SIGNED), name) where JSON_COMPACT(:j) is null"), "e n j");
+        // A function that is not the cast's, or JSON_COMPACT of more than the parameter, is an expression.
+        assert_eq!(q("update users set email = json_quote(:e), bio = JSON_COMPACT(concat(:b, '')) where id = :id"), "");
     }
 
     #[test]

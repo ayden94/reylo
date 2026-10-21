@@ -223,7 +223,7 @@ fn run(sql: &str, lexed: &Lexed, ddl: &[String], extras: &Extras) -> SqliteAnaly
         }
         return failed(bare(sql, lexed, Dialect::Sqlite, diagnostics));
     }
-    let a = Analyzer { tree: &t, extras, skipping: &skipping, nullable_params: guarded_params(&t), level: std::cell::RefCell::new(Level::default()) };
+    let a = Analyzer { tree: &t, extras, skipping: &skipping, nullable_params: guarded_params(&t, extras), level: std::cell::RefCell::new(Level::default()) };
     let (mut columns, kind) = a.columns();
     let booleans = a.booleans();
     // A truth value, and a column declared BOOLEAN, are booleans to the loader's run time, which
@@ -427,7 +427,7 @@ struct Level {
 /// a WITH query or a subquery that selects the parameter (`with input as (select :p as p) … where
 /// input.p is null`), since each parameter appears once in a statement and a value tested and read
 /// again is selected once in a WITH.
-fn guarded_params(t: &Tree) -> HashSet<String> {
+fn guarded_params(t: &Tree, extras: &Extras) -> HashSet<String> {
     /// Every FROM item's subquery, a WITH query's too, by the item's cursor: SQLite numbers the
     /// cursors of one statement apart.
     fn subqueries<'a>(sel: &'a Sel, out: &mut HashMap<i64, &'a Sel>) {
@@ -452,53 +452,55 @@ fn guarded_params(t: &Tree) -> HashSet<String> {
             nested(child, out);
         }
     }
-    /// The parameter an operand is, under any casts, or that the column of a subquery selects. A
-    /// compound subquery's column is any of its arms', so it selects no one parameter.
-    fn variable(x: Option<&Node>, subs: &HashMap<i64, &Sel>, depth: usize) -> Option<String> {
+    /// The parameter an operand is, under any casts and the `json()` or `jsonb()` a `::json` cast
+    /// compiles to, or that the column of a subquery selects. A compound subquery's column is any
+    /// of its arms', so it selects no one parameter.
+    fn variable(x: Option<&Node>, subs: &HashMap<i64, &Sel>, extras: &Extras, depth: usize) -> Option<String> {
         let x = x?;
         match x.op.as_str() {
             "variable" => x.name.clone(),
-            "cast" => variable(x.left.as_deref(), subs, depth),
+            "cast" => variable(x.left.as_deref(), subs, extras, depth),
+            "function" if matches!(x.name.as_deref(), Some("json" | "jsonb")) && x.args.len() == 1 && extras.function(x.name.as_deref().unwrap_or(""), 1).is_none() => variable(x.args.first(), subs, extras, depth),
             "column" if depth < 32 => {
                 let sel = subs.get(&x.cursor).filter(|sel| sel.prior.is_none() && sel.rows.is_empty())?;
-                variable(sel.columns.get(usize::try_from(x.index).ok()?).map(|c| &c.expr), subs, depth + 1)
+                variable(sel.columns.get(usize::try_from(x.index).ok()?).map(|c| &c.expr), subs, extras, depth + 1)
             }
             _ => None,
         }
     }
-    fn walk(n: &Node, subs: &HashMap<i64, &Sel>, out: &mut HashSet<String>) {
+    fn walk(n: &Node, subs: &HashMap<i64, &Sel>, extras: &Extras, out: &mut HashSet<String>) {
         match n.op.as_str() {
             "isnull" | "notnull" | "is" | "is not" => {
-                out.extend(variable(n.left.as_deref(), subs, 0));
-                out.extend(variable(n.right.as_deref(), subs, 0));
+                out.extend(variable(n.left.as_deref(), subs, extras, 0));
+                out.extend(variable(n.right.as_deref(), subs, extras, 0));
             }
-            "function" if matches!(n.name.as_deref(), Some("coalesce" | "ifnull")) => out.extend(variable(n.args.first(), subs, 0)),
+            "function" if matches!(n.name.as_deref(), Some("coalesce" | "ifnull")) => out.extend(variable(n.args.first(), subs, extras, 0)),
             _ => {}
         }
         for child in n.left.iter().chain(n.right.iter()).map(|b| b.as_ref()).chain(n.list.iter()).chain(n.args.iter()) {
-            walk(child, subs, out);
+            walk(child, subs, extras, out);
         }
         if let Some(sel) = &n.select {
-            walk_select(sel, subs, out);
+            walk_select(sel, subs, extras, out);
         }
     }
-    fn walk_select(sel: &Sel, subs: &HashMap<i64, &Sel>, out: &mut HashSet<String>) {
+    fn walk_select(sel: &Sel, subs: &HashMap<i64, &Sel>, extras: &Extras, out: &mut HashSet<String>) {
         for n in sel.columns.iter().map(|c| &c.expr).chain(sel.rows.iter().flatten()) {
-            walk(n, subs, out);
+            walk(n, subs, extras, out);
         }
         for n in sel.where_.iter().chain(sel.having.iter()).chain(sel.group_by.iter()).chain(sel.order_by.iter()).chain(sel.limit.iter()).chain(sel.offset.iter()) {
-            walk(n, subs, out);
+            walk(n, subs, extras, out);
         }
         for f in &sel.from {
             if let Some(sub) = &f.subquery {
-                walk_select(sub, subs, out);
+                walk_select(sub, subs, extras, out);
             }
             for a in &f.args {
-                walk(a, subs, out);
+                walk(a, subs, extras, out);
             }
         }
         if let Some(prior) = &sel.prior {
-            walk_select(prior, subs, out);
+            walk_select(prior, subs, extras, out);
         }
     }
     let mut subs = HashMap::new();
@@ -512,20 +514,20 @@ fn guarded_params(t: &Tree) -> HashSet<String> {
     }
     let mut out = HashSet::new();
     if let Some(sel) = &t.statement {
-        walk_select(sel, &subs, &mut out);
+        walk_select(sel, &subs, extras, &mut out);
     }
     if let Some(dml) = &t.dml {
         for n in dml.values.iter().flatten().chain(dml.set.iter().map(|s| &s.expr)).chain(dml.where_.iter()) {
-            walk(n, &subs, &mut out);
+            walk(n, &subs, extras, &mut out);
         }
         if let Some(u) = &dml.upsert {
             for n in u.set.iter().map(|s| &s.expr).chain(u.where_.iter()) {
-                walk(n, &subs, &mut out);
+                walk(n, &subs, extras, &mut out);
             }
         }
     }
     for c in t.returning.iter().flatten() {
-        walk(&c.expr, &subs, &mut out);
+        walk(&c.expr, &subs, extras, &mut out);
     }
     out
 }
@@ -1110,10 +1112,22 @@ impl Analyzer<'_> {
     fn params(&self, lexed: &Lexed) -> Vec<Param> {
         let mut found: Vec<(String, Fact)> = Vec::new();
         let t = self.tree;
-        // A parameter that is the whole value written to a column may be null when that column
-        // may, and no NOT NULL column it also fills forbids it.
+        // A parameter that is the whole value written to a column, bare or under the conversions
+        // a `:name::type` cast compiles to (`CAST(? AS type)`, and `json(?)` or `jsonb(?)` for
+        // `::json`), each of which keeps NULL, may be null when that column may, and no NOT NULL
+        // column it also fills forbids it.
         let mut fills: HashMap<String, bool> = HashMap::new();
         let mut fill = |v: &Node, target: &Option<Fact>| {
+            let mut v = v;
+            loop {
+                let inner = match v.op.as_str() {
+                    "cast" => v.left.as_deref(),
+                    "function" if matches!(v.name.as_deref(), Some("json" | "jsonb")) && v.args.len() == 1 && self.extras.function(v.name.as_deref().unwrap_or(""), 1).is_none() => v.args.first(),
+                    _ => break,
+                };
+                let Some(inner) = inner else { return };
+                v = inner;
+            }
             if let (true, Some(name), Some(target)) = (v.op == "variable", v.name.as_ref(), target) {
                 *fills.entry(name.clone()).or_insert(true) &= !target.non_null;
             }
@@ -2320,6 +2334,40 @@ mod tests {
         // `concat` skips NULLs; `concat_ws` is NULL only for a NULL separator.
         let concat = analysis("select concat(email, 'x') as c, concat_ws(',', email) as w, concat_ws(email, 'a') as n from users");
         assert_eq!((col(&concat, "c").1, col(&concat, "w").1, col(&concat, "n").1), (false, false, true));
+    }
+
+    #[test]
+    fn a_cast_parameter_is_as_nullable_as_the_bare_one() {
+        // A `:name::type` cast compiles to `CAST(? AS type)`, and `::json` to `json(?)`: each keeps
+        // NULL, so the parameter takes NULL wherever the bare one does: written whole to a nullable
+        // column (an INSERT's values, every row of a VALUES list, an UPDATE's or an upsert's SET, a
+        // row value's elements), tested for NULL, or coalesced. Into a NOT NULL column it is a value.
+        let ddl = vec!["create table users (id integer primary key, name text not null, email text unique, score real, n integer, doc text, meta text not null default '{}') strict".to_string()];
+        let types = |sql: &str| {
+            let a = analyze_ddl(sql, &ddl, &Extras::default()).analysis;
+            assert!(a.diagnostics.is_empty(), "{sql}: {:?}", a.diagnostics);
+            a.params.iter().map(|p| format!("{}{}", p.name, if p.nullable { "?" } else { "" })).collect::<Vec<_>>().join(" ")
+        };
+        for (bare, cast) in [
+            ("insert into users (name, email) values (:name, :email) on conflict (email) do update set name = excluded.name returning id", "insert into users (name, email) values (CAST(:name AS TEXT), CAST(:email AS TEXT)) on conflict (email) do update set name = excluded.name returning id"),
+            ("insert into users (name, email, score, n, doc, meta) values (:name, :email, :score, :n, :doc, :meta)", "insert into users (name, email, score, n, doc, meta) values (CAST(:name AS TEXT), CAST(:email AS TEXT), CAST(:score AS NUMERIC), CAST(:n AS INTEGER), json(:doc), jsonb(:meta))"),
+            ("insert into users (name, email) values (:a, :b), (:c, :d)", "insert into users (name, email) values (CAST(:a AS TEXT), CAST(:b AS TEXT)), (CAST(:c AS TEXT), CAST(:d AS TEXT))"),
+            ("update users set email = :email, name = :name, score = :score, n = :n, doc = :doc, meta = :meta where id = :id", "update users set email = CAST(:email AS TEXT), name = CAST(:name AS TEXT), score = CAST(:score AS REAL), n = CAST(:n AS INTEGER), doc = json(:doc), meta = json(:meta) where id = CAST(:id AS INTEGER)"),
+            ("update users set (name, email) = (:name, :email) where id = :id", "update users set (name, email) = (CAST(:name AS TEXT), CAST(:email AS TEXT)) where id = CAST(:id AS INTEGER)"),
+            ("insert into users (name, email) values ('a', 'b') on conflict (email) do update set email = :e, n = :n, name = :name", "insert into users (name, email) values ('a', 'b') on conflict (email) do update set email = CAST(:e AS TEXT), n = CAST(:n AS INTEGER), name = CAST(:name AS TEXT)"),
+            ("update users set n = coalesce(:n, n), doc = coalesce(:doc, doc) where id = :id", "update users set n = coalesce(CAST(:n AS INTEGER), n), doc = coalesce(json(:doc), doc) where id = CAST(:id AS INTEGER)"),
+            ("select id from users where (:doc is null or doc = :d)", "select id from users where (json(:doc) is null or doc = json(:d))"),
+        ] {
+            assert_eq!(types(cast), types(bare), "{cast}");
+        }
+        assert_eq!(types("insert into users (name, email) values (CAST(:name AS TEXT), CAST(:email AS TEXT)) on conflict (email) do update set name = excluded.name returning id"), "name email?");
+        assert_eq!(types("update users set email = CAST(CAST(:e AS INTEGER) AS TEXT), meta = json(:m) where id = 1"), "e? m");
+        // A SELECT's column is no value written whole, cast or not, as on Postgres.
+        assert_eq!(types("insert into users (name, email) select CAST(:name AS TEXT), CAST(:email AS TEXT)"), "name email");
+        // A host function registered over `json` may answer anything for NULL.
+        let host = Extras { total: vec![TotalFunction { name: "json".into(), arity: 1, returns: Affinity::Text }], host: None };
+        let a = analyze_ddl("insert into users (name, doc) values ('a', json(:doc))", &ddl, &host).analysis;
+        assert_eq!(a.params.iter().map(|p| p.nullable).collect::<Vec<_>>(), [false]);
     }
 
     #[test]

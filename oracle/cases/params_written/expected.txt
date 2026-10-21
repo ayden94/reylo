@@ -1,0 +1,4 @@
+insert_cast.sql: one (id: int4, name: text, email: text?, score: numeric?, n: int4?) -> { id: int4 }
+row_value.sql: maybeOne (name: text, email: text?, id: int4) -> { name: text, email: text? }
+row_value_cast.sql: maybeOne (name: text, email: text?, n: int4?, id: int4) -> { name: text, email: text?, n: int4? }
+upsert_row_value.sql: one (id: int4, email: text?, score: numeric?) -> { email: text?, score: numeric? }
