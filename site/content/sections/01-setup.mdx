@@ -336,9 +336,7 @@ Zed doesn't send `.sql` files to the language server, so an error inside one sho
 
 ### Database
 
-**Reylo requires a connection to a live dev database.** It retrieves the types of each compiled query, its parameters and its columns, from the database itself.
-
-Reylo finds your dev database through the `DATABASE_URL` environment variable.
+**Reylo requires a connection to a live dev database.** It retrieves the types of each compiled query, its parameters and its columns, from the database itself. Reylo finds your dev database through the `DATABASE_URL` environment variable.
 
 To override this, create a `.reylo.yaml` file in your project root and set the `direct_url` field:
 

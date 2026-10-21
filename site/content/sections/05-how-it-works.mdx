@@ -19,9 +19,7 @@ To type a query, Reylo has your live database prepare it, without running it, an
 
 At run time, the [preload](#setup-node) or a bundler [plugin](#plugins) turns the same file into a module that runs the query through your driver.
 
-Reylo caches each answer in `.reylo/`, keyed by a fingerprint of the schema.
-
-After a migration, the next type check sees the new schema: a dropped column fails in the `.sql` file that names it, and in the code that reads it.
+Reylo caches each answer in `.reylo/`, keyed by a fingerprint of the schema, so after a migration the next type check sees the new schema: a dropped column fails in the `.sql` file that names it, and in the code that reads it.
 
 <Details summary="What an error looks like" id="errors">
 

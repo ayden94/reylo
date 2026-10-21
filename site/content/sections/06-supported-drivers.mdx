@@ -8,7 +8,7 @@ Pass `.run()` a client from any of these drivers. Transactions and connections t
 
 The type check reads your schema through `pg` or postgres.js on Postgres, and `mysql2` on MySQL. If your app uses another driver, add one of these as a dev dependency.
 
-**Postgres**
+### Postgres
 
 ```ts twoslash tab="pg" dialect="postgres"
 import pg from "pg";
@@ -64,7 +64,7 @@ import getUser from "./get_user.sql";
 const user = await getUser.run(sql, { id: 1 });
 ```
 
-**MySQL**
+### MySQL
 
 ```ts twoslash tab="mysql2" dialect="mysql"
 import mysql from "mysql2/promise";
@@ -85,7 +85,7 @@ const db = connect({ url: process.env.DATABASE_URL });
 const user = await getUser.run(db, { id: 1 });
 ```
 
-**SQLite**
+### SQLite
 
 ```ts twoslash tab="better-sqlite3" dialect="sqlite"
 import Database from "better-sqlite3";
