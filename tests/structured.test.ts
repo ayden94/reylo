@@ -445,3 +445,155 @@ test("binary data in a column list travels as hexadecimal text, which each reade
     await admin.end();
   }
 });
+
+// A database of its own on a throwaway MySQL-family server, and a mysql2 connection to it as the
+// driver connects by default (collation utf8mb4_unicode_ci).
+async function mysqlDatabase(server: string, prefix: string) {
+  const require = createRequire(join(DRIVERS, "mysql2", "package.json"));
+  const mysql = require("mysql2/promise");
+  const u = new URL(server);
+  const connect = (database?: string) => mysql.createConnection({ host: u.hostname, port: Number(u.port), user: decodeURIComponent(u.username) || "root", password: decodeURIComponent(u.password), database });
+  const admin = await connect();
+  const name = `${prefix}_${process.pid}`;
+  await admin.query(`drop database if exists ${name}`);
+  await admin.query(`create database ${name}`);
+  const url = new URL(server);
+  url.pathname = `/${name}`;
+  const db = await connect(name);
+  return {
+    url: url.href,
+    db,
+    rows: async (sql: string) => plain((await db.query(sql))[0]),
+    drop: async () => {
+      await db.end();
+      await admin.query(`drop database if exists ${name}`);
+      await admin.end();
+    },
+  };
+}
+
+test("MySQL: a rows table's text compares with a column of any collation, a literal and a parameter, and FOR UPDATE and LATERAL take it", { skip: mysqlLive }, async () => {
+  const my = await mysqlDatabase(MYSQL!, "reylo_positions");
+  const root = project("mysql2");
+  try {
+    // t has the database's collation, u another one; mysql2 connects with utf8mb4_unicode_ci,
+    // which a JSON_TABLE's own text column takes (docs/structured-params.md, Positions).
+    await my.db.query("create table t (id bigint primary key, x varchar(32) not null)");
+    await my.db.query("create table u (id bigint primary key, x varchar(32) collate utf8mb4_general_ci not null)");
+    await my.db.query("insert into t values (1, 'a'), (2, 'b'), (3, 'c')");
+    await my.db.query("insert into u values (1, 'a'), (2, 'b')");
+    const rows = "id bigint not null, x varchar(32) not null";
+    const p = [{ id: 9, x: "b" }, { id: 8, x: "c" }];
+    const cases: [string, Record<string, unknown>, object[]][] = [
+      [`select t.id from t join :p::rows(${rows}) r on r.x = t.x order by t.id`, { p }, [{ id: 2n }, { id: 3n }]],
+      [`select u.id from u join :p::rows(${rows}) r on r.x = u.x order by u.id`, { p }, [{ id: 2n }]],
+      [`select t.id from t where t.x in (select x from :p::rows(x varchar(32) not null)) order by t.id`, { p: [{ x: "c" }] }, [{ id: 3n }]],
+      [`select r.id from :p::rows(${rows}) r where r.x = 'b'`, { p }, [{ id: 9n }]],
+      [`select r.id from :p::rows(${rows}) r where r.x = :q`, { p, q: "b" }, [{ id: 9n }]],
+      [`select x from t union select x from :p::rows(x varchar(32) not null) order by x`, { p: [{ x: "z" }] }, [{ x: "a" }, { x: "b" }, { x: "c" }, { x: "z" }]],
+      [`with r as (select * from :p::rows(${rows})) select t.id from r a join r b on b.x = a.x join t on t.x = a.x order by t.id`, { p }, [{ id: 2n }, { id: 3n }]],
+      [`select t.id from t join :p::rows(id bigint not null) r on r.id = t.id order by t.id for update`, { p: [{ id: 2 }] }, [{ id: 2n }]],
+      [`select t.id, r.x from t cross join lateral :p::rows(${rows}) r where r.id = t.id order by t.id`, { p: [{ id: 3, x: "C" }] }, [{ id: 3n, x: "C" }]],
+    ];
+    let n = 0;
+    for (const [sql, params, want] of cases) {
+      const q = await built(root, my.url, `text_${n++}`, sql);
+      assert.deepEqual(plain(await q.run(my.db, params)), want, sql);
+    }
+  } finally {
+    await closeAll();
+    await my.drop();
+  }
+});
+
+test("MySQL: an insert's rows take the row alias written after the column list, which ON DUPLICATE KEY UPDATE reads", { skip: mysqlLive }, async () => {
+  const my = await mysqlDatabase(MYSQL!, "reylo_row_alias");
+  const root = project("mysql2");
+  try {
+    await my.db.query("create table events (id bigint primary key, x varchar(32) not null, n int)");
+    await my.db.query("insert into events values (1, 'a', 10), (2, 'b', 20)");
+    const upsert = await built(root, my.url, "upsert", "insert into events :events::rows(id bigint not null, x varchar(32) not null) as e on duplicate key update x = e.x");
+    await upsert.run(my.db, { events: [{ id: 2, x: "B" }, { id: 4, x: "d" }] });
+    const one = await built(root, my.url, "upsert_one", "insert into events :e::row(id bigint not null, x varchar(32) not null) as new on duplicate key update x = new.x");
+    await one.run(my.db, { e: { id: 1, x: "A" } });
+    assert.deepEqual(await my.rows("select id, x, n from events order by id"), [{ id: 1, x: "A", n: 10 }, { id: 2, x: "B", n: 20 }, { id: 4, x: "d", n: null }]);
+  } finally {
+    await closeAll();
+    await my.drop();
+  }
+});
+
+// MariaDB runs on a throwaway server named by REYLO_TEST_MARIADB; without one the test passes
+// having checked nothing, as the binary test does for MySQL.
+const MARIADB = process.env.REYLO_TEST_MARIADB;
+
+test("MariaDB: a JSON member reads and writes a JSON null as SQL NULL, goes into a JSON column, and a JSON cast is JSON_COMPACT()", async () => {
+  if (!MARIADB || mysqlLive === "lab/drivers is not installed") return;
+  const my = await mysqlDatabase(MARIADB, "reylo_mariadb");
+  const root = project("mysql2");
+  try {
+    // MariaDB's JSON is LONGTEXT with a json_valid CHECK.
+    await my.db.query("create table docs (id bigint primary key, meta json)");
+    const insert = await built(root, my.url, "insert_docs", `insert into docs :docs::rows(id bigint not null, meta json('{"type": "object"}'))`);
+    await insert.run(my.db, { docs: [{ id: 1, meta: null }, { id: 2, meta: { a: 1 } }] });
+    assert.deepEqual(await my.rows("select id, meta is null as n from docs order by id"), [{ id: 1, n: 1 }, { id: 2, n: 0 }]);
+    const read = await built(root, my.url, "read_docs", `select r.id from :p::rows(id bigint not null, meta json('{"type": "object"}')) r where r.meta is null`);
+    assert.deepEqual(plain(await read.run(my.db, { p: [{ id: 1, meta: null }, { id: 2, meta: { a: 1 } }] })), [{ id: 1n }]);
+    const doc = await built(root, my.url, "doc", `select json_value(:d::json, '$.a') as a, json_length(:t::json('{"type": "array"}')) as n`);
+    assert.equal(doc.sql, "select json_value(JSON_COMPACT(?), '$.a') as a, json_length(JSON_COMPACT(?)) as n");
+    assert.deepEqual({ ...(await doc.run(my.db, { d: { a: "v" }, t: [1, 2] })) }, { a: "v", n: 2n });
+    // NTILE's argument is the bare placeholder; a frame's bound takes no parameter on MariaDB.
+    const tile = await built(root, my.url, "tile", "select id, ntile(:k::int) over (order by id) as b from docs order by id");
+    assert.equal(tile.sql, "select id, ntile(?) over (order by id) as b from docs order by id");
+    assert.deepEqual(plain(await tile.run(my.db, { k: 2 })), [{ id: 1n, b: 1n }, { id: 2n, b: 2n }]);
+    await assert.rejects(built(root, my.url, "frame", "select sum(id) over (order by id rows between :k::int preceding and current row) as s from docs"), /MariaDB takes only a literal as a window frame's bound/);
+  } finally {
+    await closeAll();
+    await my.drop();
+  }
+});
+
+test("an insert takes the table's alias before its rows, and refuses a column list of its own at the author's text", async () => {
+  const root = project();
+  const db = new DatabaseSync(join(root, "app.db"));
+  db.exec("create table t (id integer primary key, x text not null)");
+  db.exec("insert into t values (1, 'a'), (2, 'b')");
+  const url = "file:./app.db";
+  try {
+    const upsert = await built(root, url, "aliased", "insert into t as tt :p::rows(id integer not null, x text not null) on conflict (id) do update set x = excluded.x where tt.x <> excluded.x returning id, x");
+    assert.deepEqual(plain(await upsert.run(db, { p: [{ id: 2, x: "B" }, { id: 3, x: "c" }] })), [{ id: 2, x: "B" }, { id: 3, x: "c" }]);
+    const own = "insert into t (id, x) :p::rows(id integer not null, x text not null)";
+    const d = (await analysis(root, url, own)).diagnostics.find((x) => x.code === 20);
+    assert.ok(d);
+    assert.match(d.message, /writes the insert's column list itself/);
+    assert.equal(own.slice(d.start, d.start + d.length), "(id, x)");
+    writeFileSync(join(root, "own.sql"), own);
+    await assert.rejects(sqlModule(join(root, "own.sql"), own), /writes the insert's column list itself/);
+  } finally {
+    db.close();
+    await closeAll();
+  }
+});
+
+test("Postgres: an insert takes the table's alias before its rows", { skip: pgLive }, async () => {
+  const require = createRequire(join(DRIVERS, "postgres", "package.json"));
+  const postgres = require("postgres");
+  const admin = postgres(PG, { max: 1, onnotice: () => {} });
+  const name = `reylo_insert_alias_${process.pid}`;
+  await admin.unsafe(`drop database if exists ${name}`);
+  await admin.unsafe(`create database ${name}`);
+  const url = new URL(PG!);
+  url.pathname = `/${name}`;
+  const sql = postgres(url.href, { max: 1, onnotice: () => {} });
+  const root = project("postgres");
+  try {
+    await sql.unsafe("create table t (id int8 primary key, x text not null); insert into t values (1, 'a'), (2, 'b')");
+    const upsert = await built(root, url.href, "aliased", "insert into t as tt :p::rows(id int8 not null, x text not null) on conflict (id) do update set x = excluded.x where tt.x <> excluded.x returning id, x");
+    assert.deepEqual(plain(await upsert.run(sql, { p: [{ id: 2, x: "B" }, { id: 3, x: "c" }] })), [{ id: 2n, x: "B" }, { id: 3n, x: "c" }]);
+  } finally {
+    await closeAll();
+    await sql.end();
+    await admin.unsafe(`drop database if exists ${name}`);
+    await admin.end();
+  }
+});

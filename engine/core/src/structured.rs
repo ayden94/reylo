@@ -35,14 +35,15 @@
 //! takes its own spelling of one: MySQL's `CAST` takes `SIGNED` for an integer, and SQLite's
 //! reads a type by its affinity, which for a date or a boolean is NUMERIC and turns `'2026-10-12'`
 //! into 2026, so a date is cast to TEXT, as SQLite keeps one. MySQL refuses an expression in
-//! `LIMIT` and `OFFSET`, which type a placeholder as an integer themselves, so a cast there is the
-//! bare placeholder. A text cast on MySQL (`::text`, `::varchar(n)`, `::char(n)`, `::uuid`) is the
-//! bare placeholder too, since 2026-10-20: a CAST to CHAR takes the connection's collation, which
-//! a column of another collation refuses to compare with ("Illegal mix of collations"), while a
-//! bare placeholder takes the column's; the parameter is typed as text all the same, which MySQL
-//! does for a bare placeholder and MariaDB does not. Both databases' casts turn a value they
-//! cannot read into 0 or NULL instead of failing, so the run time checks such a parameter against
-//! its type before the statement runs, a text cast's included.
+//! `LIMIT` and `OFFSET`, a window frame's bound, NTILE's argument and the offset of LAG and LEAD,
+//! which take only a literal or a bare `?`, so a cast there is the bare placeholder. A text cast
+//! on MySQL (`::text`, `::varchar(n)`, `::char(n)`, `::uuid`) is the bare placeholder too, since
+//! 2026-10-20: a CAST to CHAR takes the connection's collation, which a column of another
+//! collation refuses to compare with ("Illegal mix of collations"), while a bare placeholder takes
+//! the column's; the parameter is typed as text all the same, which MySQL does for a bare
+//! placeholder and MariaDB does not. Both databases' casts turn a value they cannot read into 0 or
+//! NULL instead of failing, so the run time checks such a parameter against its type before the
+//! statement runs, a text cast's included.
 
 use crate::api::{Analysis, Describe, Diagnostic, Scope};
 use crate::dialect::Dialect;
@@ -133,6 +134,43 @@ fn error<T>(message: impl Into<String>, start: usize, end: usize) -> Result<T, D
     Err(DescriptorError { message: message.into(), start, end: end.max(start + 1) })
 }
 
+/// What the expansion writes differently for the MySQL-family server it is written for, read by
+/// [`MYSQL_SERVER_QUERY`] in a round of its own, before the statement is expanded, since what is
+/// described depends on it (docs/structured-params.md, Positions, 2026-10-20). Postgres and SQLite
+/// need nothing, and a server that does not answer is taken as MySQL with no collation known.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Server {
+    /// MariaDB, whose JSON is LONGTEXT: it has no `CAST(… AS JSON)`, keeps a JSON null as the
+    /// text `null` in a JSON_TABLE column, takes no placeholder as a window frame's bound, and
+    /// reports a JSON column as `longtext` with a `json_valid` CHECK.
+    pub mariadb: bool,
+    /// The database's default character set and collation, which a MySQL JSON_TABLE's text
+    /// columns are given explicitly: such a column otherwise takes the connection's collation
+    /// (`utf8mb4_unicode_ci` under mysql2), and a comparison with a table's column of another
+    /// one fails with "Illegal mix of collations".
+    pub collation: Option<(String, String)>,
+}
+
+/// The server's version, which names MariaDB, and the database's character set and collation.
+pub const MYSQL_SERVER_QUERY: &str = "select version(), @@character_set_database, @@collation_database";
+
+impl Server {
+    /// The facts in the rows [`MYSQL_SERVER_QUERY`] answered with.
+    pub fn of(rows: &[Vec<Value>]) -> Server {
+        let Some(row) = rows.first() else { return Server::default() };
+        let text = |k: usize| row.get(k).and_then(as_str).map(str::to_string);
+        // A name the expansion writes bare must be a plain collation name.
+        let plain = |s: &String| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        Server {
+            mariadb: text(0).is_some_and(|v| v.to_ascii_lowercase().contains("mariadb")),
+            collation: match (text(1), text(2)) {
+                (Some(cs), Some(co)) if plain(&cs) && plain(&co) => Some((cs, co)),
+                _ => None,
+            },
+        }
+    }
+}
+
 /// Whether the statement has a structured parameter at all, without reading one: a cheap test for
 /// a caller that treats such statements apart.
 pub fn present(sql: &str, dialect: Dialect) -> bool {
@@ -217,6 +255,76 @@ fn plain_cast_at(sql: &str, end: usize) -> Option<(String, usize)> {
     Some((written, j))
 }
 
+/// Where a cast parameter stands, for the places MySQL takes only a literal or a bare `?`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Spot {
+    /// Anywhere an expression is taken.
+    Expression,
+    /// A `LIMIT` or `OFFSET` value.
+    Limit,
+    /// A window frame's bound, `ROWS BETWEEN ? PRECEDING`.
+    Frame,
+    /// `NTILE(?)`, or the offset of `LAG(x, ?)` and `LEAD(x, ?)`.
+    WindowArgument,
+}
+
+/// Where the placeholder from `start` to `end`, followed by its cast ending at `cast_end`, stands.
+fn spot(sql: &str, start: usize, cast_end: usize, opaque: &[(usize, usize)]) -> Spot {
+    if in_limit(sql, start) {
+        return Spot::Limit;
+    }
+    let b = sql.as_bytes();
+    let after = skip_space(b, cast_end);
+    let word = &sql[after..after + b[after..].iter().take_while(|c| c.is_ascii_alphabetic()).count()];
+    if word.eq_ignore_ascii_case("preceding") || word.eq_ignore_ascii_case("following") {
+        return Spot::Frame;
+    }
+    // Back past spaces to `(` (NTILE's one argument) or to `,` after LAG's or LEAD's first one.
+    let mut i = start;
+    while i > 0 && b[i - 1].is_ascii_whitespace() {
+        i -= 1;
+    }
+    let function_before = |open: usize| {
+        let mut e = open;
+        while e > 0 && b[e - 1].is_ascii_whitespace() {
+            e -= 1;
+        }
+        let mut s = e;
+        while s > 0 && (b[s - 1].is_ascii_alphanumeric() || b[s - 1] == b'_') {
+            s -= 1;
+        }
+        sql[s..e].to_ascii_lowercase()
+    };
+    if i > 0 && b[i - 1] == b'(' {
+        return if function_before(i - 1) == "ntile" { Spot::WindowArgument } else { Spot::Expression };
+    }
+    if i > 0 && b[i - 1] == b',' {
+        // The first argument: back to the parenthesis that opens the call, past nested ones and
+        // strings, with no other comma at its depth.
+        let mut depth = 0usize;
+        let mut k = i - 1;
+        while k > 0 {
+            let c = b[k - 1];
+            if let Some(&(s, _)) = opaque.iter().find(|&&(_, e)| e == k) {
+                k = s;
+                continue;
+            }
+            match c {
+                b')' => depth += 1,
+                b'(' if depth == 0 => {
+                    let f = function_before(k - 1);
+                    return if f == "lag" || f == "lead" { Spot::WindowArgument } else { Spot::Expression };
+                }
+                b'(' => depth -= 1,
+                b',' if depth == 0 => return Spot::Expression,
+                _ => {}
+            }
+            k -= 1;
+        }
+    }
+    Spot::Expression
+}
+
 /// Whether the placeholder at `start` is a MySQL `LIMIT` or `OFFSET` value, `LIMIT a, b`'s
 /// first included.
 fn in_limit(sql: &str, start: usize) -> bool {
@@ -260,13 +368,22 @@ fn mysql_text(base: &str) -> bool {
 
 /// What a `::type` cast after a parameter is written as on MySQL or SQLite: the text before and
 /// after the placeholder, none for the bare placeholder, or why the dialect cannot cast to it.
-fn cast_around(written: &str, dialect: Dialect, limit: bool) -> Result<Option<(String, String)>, String> {
-    let db = if dialect == Dialect::Mysql { "MySQL" } else { "SQLite" };
+fn cast_around(written: &str, dialect: Dialect, spot: Spot, server: &Server) -> Result<Option<(String, String)>, String> {
+    let db = if dialect == Dialect::Sqlite { "SQLite" } else if server.mariadb { "MariaDB" } else { "MySQL" };
     if written.ends_with("[]") {
         return Err(format!("{db} has no arrays: `::{written}` cannot be written as its cast."));
     }
-    if dialect == Dialect::Mysql && limit {
-        return if integer_type(written) { Ok(None) } else { Err(format!("`LIMIT` and `OFFSET` take an integer, as in `::int`, not `::{written}`.")) };
+    // Where MySQL takes only a literal or a bare `?`, the cast is the bare placeholder, and the
+    // run time checks the value against the type written.
+    if dialect == Dialect::Mysql {
+        let numeric = |t: &str| integer_type(t) || matches!(t.split('(').next().unwrap_or(t), "numeric" | "decimal" | "dec" | "real" | "float" | "float4" | "float8" | "double" | "double precision");
+        match spot {
+            Spot::Limit => return if integer_type(written) { Ok(None) } else { Err(format!("`LIMIT` and `OFFSET` take an integer, as in `::int`, not `::{written}`.")) },
+            Spot::WindowArgument => return if integer_type(written) { Ok(None) } else { Err(format!("NTILE's argument and the offset of LAG and LEAD take an integer, as in `::int`, not `::{written}`.")) },
+            Spot::Frame if server.mariadb => return Err("MariaDB takes only a literal as a window frame's bound, never a parameter: write the number in the frame.".to_string()),
+            Spot::Frame => return if numeric(written) { Ok(None) } else { Err(format!("A window frame's bound takes a number, as in `::int`, not `::{written}`.")) },
+            Spot::Expression => {}
+        }
     }
     let cast = |t: &str| Ok(Some(("CAST(".to_string(), format!(" AS {t})"))));
     let (base, modifiers) = match written.find('(') {
@@ -308,6 +425,8 @@ fn cast_around(written: &str, dialect: Dialect, limit: bool) -> Result<Option<(S
         "date" => cast("DATE"),
         "time" => cast(&format!("TIME{modifiers}")),
         "timestamp" | "datetime" => cast(&if modifiers.is_empty() { "DATETIME(6)".to_string() } else { format!("DATETIME{modifiers}") }),
+        // MariaDB has no `CAST(… AS JSON)`; JSON_COMPACT() reads the text as JSON.
+        "json" | "jsonb" if server.mariadb => Ok(Some(("JSON_COMPACT(".to_string(), ")".to_string()))),
         "json" | "jsonb" => cast("JSON"),
         "bytea" | "binary" | "varbinary" | "blob" => cast(&format!("BINARY{modifiers}")),
         "timestamptz" => Err("MySQL has no type for an instant with its zone: DATETIME keeps the wall-clock time and drops the zone. Write `::datetime` for a wall-clock time.".to_string()),
@@ -324,8 +443,9 @@ fn skip_space(b: &[u8], mut i: usize) -> usize {
 }
 
 /// Every structured parameter of the statement, in text order, or the first error in one's
-/// column list. A statement the lexer cannot read has none: the analysis reports why.
-pub fn find(sql: &str, dialect: Dialect) -> Result<Vec<Found>, DescriptorError> {
+/// column list. A statement the lexer cannot read has none: the analysis reports why. `server`
+/// matters on MySQL alone ([`Server`]).
+pub fn find(sql: &str, dialect: Dialect, server: &Server) -> Result<Vec<Found>, DescriptorError> {
     let Ok(lexed) = lex::lex(sql, dialect) else { return Ok(Vec::new()) };
     let mut found: Vec<Found> = Vec::new();
     for p in &lexed.placeholders {
@@ -357,7 +477,7 @@ pub fn find(sql: &str, dialect: Dialect) -> Result<Vec<Found>, DescriptorError> 
             // Any other `::type` on a dialect that has no `::`.
             if dialect != Dialect::Postgres {
                 if let Some((written, end)) = plain_cast_at(sql, p.end) {
-                    let around = cast_around(&written, dialect, in_limit(sql, p.start)).map_err(|message| DescriptorError { message, start: p.end, end })?;
+                    let around = cast_around(&written, dialect, spot(sql, p.start, end, &lexed.opaque), server).map_err(|message| DescriptorError { message, start: p.end, end })?;
                     found.push(Found { name: p.name.clone(), placeholder: (p.start, p.end), one: false, members: Vec::new(), region: (p.start, end), head: (p.start, end), alias: None, insert: false, table: None, json: None, plain: Some(PlainCast { written, around }) });
                 }
             }
@@ -369,13 +489,36 @@ pub fn find(sql: &str, dialect: Dialect) -> Result<Vec<Found>, DescriptorError> 
         let (content, close) = descriptor_text(sql, paren)?;
         let members = members(&content, (paren, close + 1))?;
         let mut region = (p.start, close + 1);
-        let table = after_into(sql, p.start, &lexed.opaque);
+        // `INTO <table>`, or on Postgres and SQLite `INTO <table> AS <alias>`.
+        let table = after_into(sql, p.start, &lexed.opaque).or_else(|| if dialect == Dialect::Mysql { None } else { after_into_aliased(sql, p.start, &lexed.opaque) });
         let insert = table.is_some();
+        if !insert {
+            if let Some(list) = own_column_list(sql, p.start, &lexed.opaque) {
+                let (s, e) = list;
+                return error(
+                    format!("A {} cast right after INSERT INTO <table> writes the insert's column list itself, one column per member: drop `{}` and write the parameter right after the table.", if one { "row" } else { "rows" }, &sql[s..e]),
+                    s,
+                    e,
+                );
+            }
+        }
         let mut alias = None;
         if !insert {
             if let Some((name, end)) = alias_after(sql, close + 1) {
                 alias = Some(name);
                 region.1 = end;
+            }
+        } else if dialect == Dialect::Mysql {
+            // MySQL's row alias, `… AS new ON DUPLICATE KEY UPDATE x = new.x`, which MySQL takes
+            // only after VALUES: here it names the JSON_TABLE the rows are read from.
+            let b = sql.as_bytes();
+            let i = skip_space(b, close + 1);
+            let w = i + b[i..].iter().take_while(|c| c.is_ascii_alphanumeric() || **c == b'_').count();
+            if w > i && sql[i..w].eq_ignore_ascii_case("as") {
+                if let Some((name, end)) = alias_after(sql, close + 1) {
+                    alias = Some(name);
+                    region.1 = end;
+                }
             }
         }
         if !insert {
@@ -708,6 +851,71 @@ fn after_into(sql: &str, start: usize, opaque: &[(usize, usize)]) -> Option<(usi
     into.then_some((name_start, name_end))
 }
 
+/// The table's name when the text before `start` is `INTO <table> AS <alias>`, which Postgres and
+/// SQLite (since 3.24) take: the rows are inserted after the alias, as after the table.
+fn after_into_aliased(sql: &str, start: usize, opaque: &[(usize, usize)]) -> Option<(usize, usize)> {
+    let b = sql.as_bytes();
+    let mut i = start;
+    while i > 0 && b[i - 1].is_ascii_whitespace() {
+        i -= 1;
+    }
+    // The alias, bare or quoted.
+    if i > 0 && (b[i - 1] == b'"' || b[i - 1] == b'`') {
+        i = opaque.iter().find(|&&(_, e)| e == i)?.0;
+    } else {
+        let end = i;
+        while i > 0 && (b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_' || b[i - 1] == b'$') {
+            i -= 1;
+        }
+        if i == end || NOT_ALIAS.iter().any(|k| sql[i..end].eq_ignore_ascii_case(k)) {
+            return None;
+        }
+    }
+    while i > 0 && b[i - 1].is_ascii_whitespace() {
+        i -= 1;
+    }
+    let as_word = i >= 2 && sql[i - 2..i].eq_ignore_ascii_case("as") && (i == 2 || !(b[i - 3].is_ascii_alphanumeric() || b[i - 3] == b'_'));
+    if !as_word {
+        return None;
+    }
+    after_into(sql, i - 2, opaque)
+}
+
+/// The parenthesized list right before `start` when it follows `INTO <table>`: the author's own
+/// column list before a rows cast, as `(start, end)`.
+fn own_column_list(sql: &str, start: usize, opaque: &[(usize, usize)]) -> Option<(usize, usize)> {
+    let b = sql.as_bytes();
+    let mut i = start;
+    while i > 0 && b[i - 1].is_ascii_whitespace() {
+        i -= 1;
+    }
+    if i == 0 || b[i - 1] != b')' {
+        return None;
+    }
+    let end = i;
+    let mut depth = 0usize;
+    let mut k = i;
+    while k > 0 {
+        if let Some(&(s, _)) = opaque.iter().find(|&&(_, e)| e == k) {
+            k = s;
+            continue;
+        }
+        match b[k - 1] {
+            b')' => depth += 1,
+            b'(' => {
+                depth -= 1;
+                if depth == 0 {
+                    let open = k - 1;
+                    return (after_into(sql, open, opaque).is_some() || after_into_aliased(sql, open, opaque).is_some()).then_some((open, end));
+                }
+            }
+            _ => {}
+        }
+        k -= 1;
+    }
+    None
+}
+
 /// The words that may follow a table without being its alias.
 const NOT_ALIAS: &[&str] = &[
     "where", "join", "inner", "left", "right", "full", "cross", "natural", "on", "using", "group", "order", "having", "limit", "offset", "fetch", "for", "union", "except", "intersect", "window", "returning", "set", "lateral", "tablesample", "with", "into", "values", "select", "straight_join", "use", "force", "ignore", "partition",
@@ -857,8 +1065,15 @@ fn not_null_filter(ms: &[Member], table: &str, dialect: Dialect) -> String {
     }
 }
 
+/// Whether a MySQL member is text, whose JSON_TABLE column takes the connection's collation.
+fn text_member(m: &Member) -> bool {
+    let t = mysql_type(&m.ty);
+    let base = t.split(|c: char| c == '(' || c == ' ').next().unwrap_or("");
+    m.schema.is_none() && matches!(base, "char" | "varchar" | "tinytext" | "text" | "mediumtext" | "longtext" | "enum" | "set")
+}
+
 /// What the expansion writes for `found`, standing where the author put it.
-pub fn lower(found: &Found, dialect: Dialect, placeholder: &str) -> Lowered {
+pub fn lower(found: &Found, dialect: Dialect, placeholder: &str, server: &Server) -> Lowered {
     // A typed JSON parameter is the dialect's JSON parameter, its schema left out: Postgres
     // receives `$1::jsonb`, MySQL `cast(? as json)` and SQLite `?` (wiki/typed-json-params.md).
     if let Some(cast) = &found.plain {
@@ -868,6 +1083,8 @@ pub fn lower(found: &Found, dialect: Dialect, placeholder: &str) -> Lowered {
     if let Some(cast) = &found.json {
         let (before, after) = match dialect {
             Dialect::Postgres => ("", if cast.jsonb { "::jsonb" } else { "::json" }),
+            // MariaDB has no `CAST(… AS JSON)`.
+            Dialect::Mysql if server.mariadb => ("JSON_COMPACT(", ")"),
             Dialect::Mysql => ("cast(", " as json)"),
             Dialect::Sqlite => ("", ""),
         };
@@ -1005,7 +1222,19 @@ pub fn lower(found: &Found, dialect: Dialect, placeholder: &str) -> Lowered {
                 }
                 w.push(&format!(")) AS {alias}"));
             };
-            let value = |m: &Member, alias: &str| if binary(m, dialect) { format!("UNHEX({alias}.{})", q(&m.name)) } else { format!("{alias}.{}", q(&m.name)) };
+            // What the query reads of a member: binary data decoded, and on MariaDB, whose JSON
+            // is text, a JSON null as SQL NULL rather than the text `null` (a JSON string "null"
+            // is the text `"null"`, so nothing else reads as it).
+            let value = |m: &Member, alias: &str| {
+                let column = format!("{alias}.{}", q(&m.name));
+                if binary(m, dialect) {
+                    format!("UNHEX({column})")
+                } else if m.schema.is_some() && server.mariadb {
+                    format!("NULLIF({column}, 'null')")
+                } else {
+                    column
+                }
+            };
             if found.insert {
                 w.push("(");
                 w.list(ms.iter().map(|m| q(&m.name)).collect(), &mut lists);
@@ -1016,19 +1245,27 @@ pub fn lower(found: &Found, dialect: Dialect, placeholder: &str) -> Lowered {
                 if !found.one {
                     w.push(&format!(" ORDER BY {alias}.`reylo.n`"));
                 }
-            } else if ms.iter().any(|m| binary(m, dialect)) {
+            } else {
+                // A derived table over the JSON_TABLE, never the JSON_TABLE alone: MySQL refuses
+                // a locking clause over a query that reads a table function ("Table r appears in
+                // multiple locking clauses") and LATERAL before one. A text member is given the
+                // database's collation explicitly, so that it compares with a column of any
+                // collation, a literal and a parameter; the JSON_TABLE's own column has the
+                // connection's (docs/structured-params.md, Positions).
                 w.push("(SELECT ");
                 for (k, m) in ms.iter().enumerate() {
                     if k > 0 {
                         w.push(", ");
                     }
-                    w.member(k, &format!("{} AS {}", value(m, "`reylo.j`"), q(&m.name)));
+                    let read = match &server.collation {
+                        Some((charset, collation)) if text_member(m) && !server.mariadb => format!("CONVERT(`reylo.j`.{} USING {charset}) COLLATE {collation}", q(&m.name)),
+                        _ => value(m, "`reylo.j`"),
+                    };
+                    w.member(k, &format!("{read} AS {}", q(&m.name)));
                 }
                 w.push(" FROM ");
                 table(&mut w, false, "`reylo.j`");
                 w.push(&format!(") AS {alias}"));
-            } else {
-                table(&mut w, false, &alias);
             }
         }
     }
@@ -1044,13 +1281,13 @@ pub struct Expanded {
     pub lowered: Vec<(Lowered, usize)>,
 }
 
-pub fn expand(sql: &str, found: Vec<Found>, dialect: Dialect) -> Expanded {
+pub fn expand(sql: &str, found: Vec<Found>, dialect: Dialect, server: &Server) -> Expanded {
     let mut out = String::new();
     let mut last = 0;
     let mut lowered = Vec::new();
     for f in &found {
         out.push_str(&sql[last..f.region.0]);
-        let l = lower(f, dialect, &sql[f.placeholder.0..f.placeholder.1]);
+        let l = lower(f, dialect, &sql[f.placeholder.0..f.placeholder.1], server);
         let at = out.len();
         out.push_str(&l.text);
         lowered.push((l, at));
@@ -1096,7 +1333,7 @@ impl Expanded {
 /// The FROM-position expansion of `found` as a statement of its own, which the analysis
 /// describes to learn each member's type as the database names it, and the expansion inside it,
 /// which starts after `PROBE`.
-pub fn probe(found: &Found, dialect: Dialect, placeholder: &str) -> (String, Lowered) {
+pub fn probe(found: &Found, dialect: Dialect, placeholder: &str, server: &Server) -> (String, Lowered) {
     let mut f = found.clone();
     f.insert = false;
     f.table = None;
@@ -1105,7 +1342,7 @@ pub fn probe(found: &Found, dialect: Dialect, placeholder: &str) -> (String, Low
     for m in &mut f.members {
         m.optional = false;
     }
-    let lowered = lower(&f, dialect, placeholder);
+    let lowered = lower(&f, dialect, placeholder, server);
     (format!("{PROBE}{}", lowered.text), lowered)
 }
 
@@ -1129,14 +1366,32 @@ pub const CODE: u32 = 20;
 /// its column list. `inner` analyzes a statement that has none; `bare` is the analysis of the
 /// author's statement that only reports the diagnostics it is given.
 pub fn analyze<D: Describe>(sql: &str, dialect: Dialect, host: &Host<'_, D>, inner: &dyn Fn(&str) -> Lazy<Analysis>, bare: &dyn Fn(Vec<Diagnostic>) -> Analysis) -> Lazy<Analysis> {
-    let found = match find(sql, dialect) {
+    let refused = |e: DescriptorError| Some(bare(vec![Diagnostic { message: e.message, start: e.start, length: e.end - e.start, code: CODE }]));
+    let found = match find(sql, dialect, &Server::default()) {
         Ok(found) => found,
-        Err(e) => return Some(bare(vec![Diagnostic { message: e.message, start: e.start, length: e.end - e.start, code: CODE }])),
+        Err(e) => return refused(e),
     };
     if found.is_empty() {
         return inner(sql);
     }
-    let expanded = expand(sql, found, dialect);
+    // On MySQL the expansion depends on the server, asked once a session.
+    let server = if dialect == Dialect::Mysql {
+        match host.query(MYSQL_SERVER_QUERY, Vec::new(), Scope::Session)? {
+            Ok(rows) => Server::of(&rows),
+            Err(_) => Server::default(),
+        }
+    } else {
+        Server::default()
+    };
+    let found = if server == Server::default() {
+        found
+    } else {
+        match find(sql, dialect, &server) {
+            Ok(found) => found,
+            Err(e) => return refused(e),
+        }
+    };
+    let expanded = expand(sql, found, dialect, &server);
     // Each member's type as the database names it, and the statement itself, asked in one round.
     let probes: Vec<(Lowered, Lazy<Analysis>)> = expanded
         .found
@@ -1145,12 +1400,12 @@ pub fn analyze<D: Describe>(sql: &str, dialect: Dialect, host: &Host<'_, D>, inn
             if f.json.is_some() || f.plain.is_some() {
                 return (Lowered { text: String::new(), placeholder: (0, 0), members: Vec::new(), lists: Vec::new() }, Some(crate::analysis::bare_of("", dialect, Vec::new())));
             }
-            let (text, lowered) = probe(f, dialect, &sql[f.placeholder.0..f.placeholder.1]);
+            let (text, lowered) = probe(f, dialect, &sql[f.placeholder.0..f.placeholder.1], &server);
             (lowered, inner(&text))
         })
         .collect();
     // The columns of each table an insert writes, for the checks below, asked in the same round.
-    let tables: Vec<Lazy<Vec<TableColumn>>> = expanded.found.iter().map(|f| table_columns(f, sql, dialect, host)).collect();
+    let tables: Vec<Lazy<Vec<TableColumn>>> = expanded.found.iter().map(|f| table_columns(f, sql, dialect, &server, host)).collect();
     let mut analysis = inner(&expanded.sql)?;
     let mut probed = Vec::with_capacity(probes.len());
     for (lowered, a) in probes {
@@ -1183,7 +1438,8 @@ pub fn analyze<D: Describe>(sql: &str, dialect: Dialect, host: &Host<'_, D>, inn
                 }
                 // SQLite's `json(?)` takes JSON text, and the parameter is a JSON value, written
                 // as its text as every MySQL and SQLite JSON parameter is.
-                if dialect == Dialect::Sqlite && matches!(cast.written.as_str(), "json" | "jsonb") {
+                // MariaDB's JSON_COMPACT(?) takes it as text too.
+                if (dialect == Dialect::Sqlite || server.mariadb) && matches!(cast.written.as_str(), "json" | "jsonb") {
                     p.ty = Type::Json { schema: None };
                     p.type_name = cast.written.clone();
                 }
@@ -1441,6 +1697,15 @@ pub const MYSQL_TABLE_QUERY: &str = "select column_name, data_type, column_type,
     column_default is not null or extra like '%auto_increment%', extra like '%VIRTUAL GENERATED%' or extra like '%STORED GENERATED%' \
     from information_schema.columns where table_schema = coalesce(?, database()) and table_name = ? order by ordinal_position";
 
+/// The same on MariaDB, where a JSON column is LONGTEXT with a `json_valid` CHECK MariaDB adds
+/// itself: such a column reads as `json`, the type it was declared with.
+pub const MARIADB_TABLE_QUERY: &str = "select column_name, if(is_json, 'json', data_type), if(is_json, 'json', column_type), not_null, has_default, generated \
+    from (select c.column_name, c.data_type, c.column_type, c.ordinal_position, c.is_nullable = 'NO' as not_null, \
+    c.column_default is not null or c.extra like '%auto_increment%' as has_default, c.extra like '%VIRTUAL GENERATED%' or c.extra like '%STORED GENERATED%' as generated, \
+    c.data_type = 'longtext' and exists (select 1 from information_schema.check_constraints k where k.constraint_schema = c.table_schema \
+    and k.table_name = c.table_name and lower(k.check_clause) = concat('json_valid(`', lower(c.column_name), '`)')) as is_json \
+    from information_schema.columns c where c.table_schema = coalesce(?, database()) and c.table_name = ?) x order by ordinal_position";
+
 /// A table name as written, its quotes taken off: `(schema, name)`.
 fn split_name(written: &str) -> (Option<String>, String) {
     let parts: Vec<String> = written
@@ -1461,7 +1726,7 @@ fn split_name(written: &str) -> (Option<String>, String) {
 
 /// The columns of the table `f` inserts into, or none for a parameter elsewhere or a table the
 /// catalog does not answer for (the statement's own errors say what is wrong then).
-fn table_columns<D: Describe>(f: &Found, sql: &str, dialect: Dialect, host: &Host<'_, D>) -> Lazy<Vec<TableColumn>> {
+fn table_columns<D: Describe>(f: &Found, sql: &str, dialect: Dialect, server: &Server, host: &Host<'_, D>) -> Lazy<Vec<TableColumn>> {
     let Some((start, end)) = f.table else { return Some(Vec::new()) };
     let written = &sql[start..end];
     let rows = match dialect {
@@ -1472,7 +1737,7 @@ fn table_columns<D: Describe>(f: &Found, sql: &str, dialect: Dialect, host: &Hos
         }
         Dialect::Mysql => {
             let (schema, name) = split_name(written);
-            host.query(MYSQL_TABLE_QUERY, vec![schema.map_or(Value::Null, Value::String), serde_json::json!(name)], Scope::Statement)?
+            host.query(if server.mariadb { MARIADB_TABLE_QUERY } else { MYSQL_TABLE_QUERY }, vec![schema.map_or(Value::Null, Value::String), serde_json::json!(name)], Scope::Statement)?
         }
     };
     let Ok(rows) = rows else { return Some(Vec::new()) };
@@ -1644,13 +1909,13 @@ mod tests {
     use super::*;
 
     fn one(sql: &str, dialect: Dialect) -> Found {
-        let mut found = find(sql, dialect).expect("reads");
+        let mut found = find(sql, dialect, &Server::default()).expect("reads");
         assert_eq!(found.len(), 1, "{found:?}");
         found.remove(0)
     }
 
     fn err(sql: &str, dialect: Dialect) -> String {
-        find(sql, dialect).expect_err("refused").message
+        find(sql, dialect, &Server::default()).expect_err("refused").message
     }
 
     #[test]
@@ -1681,7 +1946,7 @@ mod tests {
 
     #[test]
     fn a_cast_on_mysql_and_sqlite_is_the_dialects_own() {
-        let my = |sql: &str| expand(sql, find(sql, Dialect::Mysql).unwrap(), Dialect::Mysql).sql;
+        let my = |sql: &str| expand(sql, find(sql, Dialect::Mysql, &Server::default()).unwrap(), Dialect::Mysql, &Server::default()).sql;
         assert_eq!(
             my("select id from events where amount > :min::numeric(10, 2) and id = :id :: int8 order by id limit :n::int"),
             "select id from events where amount > CAST(:min AS DECIMAL(10,2)) and id = CAST(:id AS SIGNED) order by id limit :n"
@@ -1694,7 +1959,7 @@ mod tests {
         // parameter keeps its cast, which the run time checks.
         let sql = "select name from users where name like concat(:prefix::text, '%') and code = :c::char(3) and nick = ? :: character varying and id = :u::uuid";
         assert_eq!(my(sql), "select name from users where name like concat(:prefix, '%') and code = :c and nick = ? and id = :u");
-        let casts: Vec<_> = find(sql, Dialect::Mysql).unwrap().into_iter().map(|f| f.plain.map(|c| (c.written, c.around))).collect();
+        let casts: Vec<_> = find(sql, Dialect::Mysql, &Server::default()).unwrap().into_iter().map(|f| f.plain.map(|c| (c.written, c.around))).collect();
         assert_eq!(casts, [Some(("text".to_string(), None)), Some(("char(3)".to_string(), None)), Some(("character varying".to_string(), None)), Some(("uuid".to_string(), None))]);
         assert!(err("select :p::bool", Dialect::Mysql).contains("no boolean type"));
         assert!(err("select :p::timestamptz", Dialect::Mysql).contains("drops the zone"));
@@ -1702,7 +1967,7 @@ mod tests {
         assert!(err("select :p::int[]", Dialect::Mysql).contains("no arrays"));
         assert!(err("select 1 from t limit :n::text", Dialect::Mysql).contains("take an integer"));
         assert_eq!(my("select 1 from t where a = ?::int or b = ? :: smallint"), "select 1 from t where a = CAST(? AS SIGNED) or b = CAST(? AS SIGNED)");
-        let lite = |sql: &str| expand(sql, find(sql, Dialect::Sqlite).unwrap(), Dialect::Sqlite).sql;
+        let lite = |sql: &str| expand(sql, find(sql, Dialect::Sqlite, &Server::default()).unwrap(), Dialect::Sqlite, &Server::default()).sql;
         assert_eq!(lite("select * from t where n > :n::int8 limit :k::int"), "select * from t where n > CAST(:n AS INTEGER) limit CAST(:k AS INTEGER)");
         assert_eq!(lite("select json_extract(:doc::json, '$.a'), :s::varchar(3), :f::double precision, :m::decimal(10, 2), :b::blob"), "select json_extract(json(:doc), '$.a'), CAST(:s AS TEXT), CAST(:f AS REAL), CAST(:m AS NUMERIC), CAST(:b AS BLOB)");
         // SQLite's CAST to `date` would read '2026-10-12' as 2026; it keeps a date as text.
@@ -1711,9 +1976,9 @@ mod tests {
         assert!(err("select :p::money", Dialect::Sqlite).contains("no type `money`"));
         assert!(err("select ?1::text[]", Dialect::Sqlite).contains("no arrays"));
         // Postgres reads `::` itself.
-        assert!(find("select :p::int8 limit :n::int", Dialect::Postgres).unwrap().is_empty());
+        assert!(find("select :p::int8 limit :n::int", Dialect::Postgres, &Server::default()).unwrap().is_empty());
         // A `::` inside a string or after something other than a parameter is no cast of one.
-        assert!(find("select ':p::int', col from t", Dialect::Mysql).unwrap().is_empty());
+        assert!(find("select ':p::int', col from t", Dialect::Mysql, &Server::default()).unwrap().is_empty());
     }
 
     #[test]
@@ -1758,40 +2023,144 @@ mod tests {
     #[test]
     fn postgres_lowers_by_position_in_the_arrays_order() {
         let sql = "insert into events :events::rows(id int8 not null, status? text not null) on conflict (id) do nothing returning id";
-        let found = find(sql, Dialect::Postgres).unwrap();
-        let e = expand(sql, found, Dialect::Postgres);
+        let found = find(sql, Dialect::Postgres, &Server::default()).unwrap();
+        let e = expand(sql, found, Dialect::Postgres, &Server::default());
         assert_eq!(
             e.sql,
             "insert into events (\"id\", \"status\") SELECT \"events\".\"id\", \"events\".\"status\" FROM jsonb_array_elements(:events::jsonb) WITH ORDINALITY AS \"reylo.e\"(\"reylo.v\", \"reylo.n\"), jsonb_to_record(\"reylo.e\".\"reylo.v\") AS \"events\"(\"id\" int8, \"status\" text) ORDER BY \"reylo.e\".\"reylo.n\" on conflict (id) do nothing returning id"
         );
         let sql = "select e.id from :events::rows(id int8 not null, note text) e";
-        let e = expand(sql, find(sql, Dialect::Postgres).unwrap(), Dialect::Postgres);
+        let e = expand(sql, find(sql, Dialect::Postgres, &Server::default()).unwrap(), Dialect::Postgres, &Server::default());
         assert_eq!(e.sql, "select e.id from (SELECT \"reylo.r\".\"id\", \"reylo.r\".\"note\" FROM jsonb_to_recordset(:events::jsonb) AS \"reylo.r\"(\"id\" int8, \"note\" text) WHERE \"reylo.r\".\"id\" IS NOT NULL) AS e");
         let sql = "select * from :events::rows(note text)";
-        let e = expand(sql, find(sql, Dialect::Postgres).unwrap(), Dialect::Postgres);
+        let e = expand(sql, find(sql, Dialect::Postgres, &Server::default()).unwrap(), Dialect::Postgres, &Server::default());
         assert_eq!(e.sql, "select * from jsonb_to_recordset(:events::jsonb) AS \"events\"(\"note\" text)");
         let sql = "insert into users :user::row(email text not null)";
-        let e = expand(sql, find(sql, Dialect::Postgres).unwrap(), Dialect::Postgres);
+        let e = expand(sql, find(sql, Dialect::Postgres, &Server::default()).unwrap(), Dialect::Postgres, &Server::default());
         assert_eq!(e.sql, "insert into users (\"email\") SELECT \"user\".\"email\" FROM jsonb_to_record(:user::jsonb) AS \"user\"(\"email\" text)");
     }
 
     #[test]
     fn sqlite_and_mysql_lower_with_their_readers() {
         let sql = "insert into events :events::rows(id integer not null, meta json('{}'))";
-        let e = expand(sql, find(sql, Dialect::Sqlite).unwrap(), Dialect::Sqlite);
+        let e = expand(sql, find(sql, Dialect::Sqlite, &Server::default()).unwrap(), Dialect::Sqlite, &Server::default());
         assert_eq!(
             e.sql,
             "insert into events (\"id\", \"meta\") SELECT \"reylo.e\".value ->> '$.\"id\"', nullif(\"reylo.e\".value -> '$.\"meta\"', 'null') FROM json_each(:events) AS \"reylo.e\" WHERE true ORDER BY \"reylo.e\".key"
         );
         let sql = "insert into events :events::rows(id bigint not null, ts datetime(6))";
-        let e = expand(sql, find(sql, Dialect::Mysql).unwrap(), Dialect::Mysql);
+        let e = expand(sql, find(sql, Dialect::Mysql, &Server::default()).unwrap(), Dialect::Mysql, &Server::default());
         assert_eq!(
             e.sql,
             "insert into events (`id`, `ts`) SELECT `events`.`id`, `events`.`ts` FROM JSON_TABLE(:events, '$[*]' COLUMNS (`reylo.n` FOR ORDINALITY, `id` bigint PATH '$.\"id\"' ERROR ON ERROR, `ts` datetime(6) PATH '$.\"ts\"' ERROR ON ERROR)) AS `events` ORDER BY `events`.`reylo.n`"
         );
         let sql = "select * from :p::rows(n integer) as x";
-        let e = expand(sql, find(sql, Dialect::Sqlite).unwrap(), Dialect::Sqlite);
+        let e = expand(sql, find(sql, Dialect::Sqlite, &Server::default()).unwrap(), Dialect::Sqlite, &Server::default());
         assert_eq!(e.sql, "select * from (SELECT CAST(\"reylo.e\".value ->> '$.\"n\"' AS integer) AS \"n\" FROM json_each(:p) AS \"reylo.e\") AS x");
+    }
+
+    fn mysql_8() -> Server {
+        Server::of(&[vec![serde_json::json!("8.4.11"), serde_json::json!("utf8mb4"), serde_json::json!("utf8mb4_0900_ai_ci")]])
+    }
+
+    fn mariadb() -> Server {
+        Server::of(&[vec![serde_json::json!("11.8.9-MariaDB"), serde_json::json!("utf8mb4"), serde_json::json!("utf8mb4_general_ci")]])
+    }
+
+    #[test]
+    fn the_server_is_read_from_its_version_and_the_databases_collation() {
+        assert_eq!(mysql_8(), Server { mariadb: false, collation: Some(("utf8mb4".into(), "utf8mb4_0900_ai_ci".into())) });
+        assert!(mariadb().mariadb);
+        // A name that is not a plain collation name is never written into the statement.
+        assert_eq!(Server::of(&[vec![serde_json::json!("8.4.11"), serde_json::json!("utf8mb4"), serde_json::json!("x) or (1")]]).collation, None);
+        assert_eq!(Server::of(&[]), Server::default());
+    }
+
+    #[test]
+    fn a_mysql_rows_table_is_a_derived_table_whose_text_has_the_databases_collation() {
+        let sql = "select t.id from t join :p::rows(id bigint not null, x varchar(32) not null, data varbinary(8)) r on r.x = t.x for update";
+        let my = |server: &Server| expand(sql, find(sql, Dialect::Mysql, server).unwrap(), Dialect::Mysql, server).sql;
+        assert_eq!(
+            my(&mysql_8()),
+            "select t.id from t join (SELECT `reylo.j`.`id` AS `id`, CONVERT(`reylo.j`.`x` USING utf8mb4) COLLATE utf8mb4_0900_ai_ci AS `x`, UNHEX(`reylo.j`.`data`) AS `data` FROM JSON_TABLE(:p, '$[*]' COLUMNS (`id` bigint PATH '$.\"id\"' ERROR ON ERROR, `x` varchar(32) PATH '$.\"x\"' ERROR ON ERROR, `data` longtext PATH '$.\"data\"' ERROR ON ERROR)) AS `reylo.j`) AS r on r.x = t.x for update"
+        );
+        // Without the collation (a server that did not say), the column as it is.
+        assert!(my(&Server::default()).contains("(SELECT `reylo.j`.`id` AS `id`, `reylo.j`.`x` AS `x`, "));
+        // MariaDB compares its JSON_TABLE's text with any column already, and reads a JSON null as SQL NULL.
+        let sql = "select r.meta from :p::rows(x text, meta json('{}')) r";
+        assert_eq!(
+            expand(sql, find(sql, Dialect::Mysql, &mariadb()).unwrap(), Dialect::Mysql, &mariadb()).sql,
+            "select r.meta from (SELECT `reylo.j`.`x` AS `x`, NULLIF(`reylo.j`.`meta`, 'null') AS `meta` FROM JSON_TABLE(:p, '$[*]' COLUMNS (`x` text PATH '$.\"x\"' ERROR ON ERROR, `meta` json PATH '$.\"meta\"' ERROR ON ERROR)) AS `reylo.j`) AS r"
+        );
+        // The table is named by the parameter when no alias is written, and LATERAL takes it.
+        let sql = "select t.id from t cross join lateral :p::rows(id bigint) where p.id = t.id";
+        assert!(expand(sql, find(sql, Dialect::Mysql, &mysql_8()).unwrap(), Dialect::Mysql, &mysql_8()).sql.starts_with("select t.id from t cross join lateral (SELECT `reylo.j`.`id` AS `id` FROM JSON_TABLE(:p, '$[*]' COLUMNS (`id` bigint PATH '$.\"id\"' ERROR ON ERROR)) AS `reylo.j`) AS `p` where"));
+    }
+
+    #[test]
+    fn a_mysql_insert_takes_the_row_alias_written_after_its_column_list() {
+        let sql = "insert into t :p::rows(id bigint not null, x varchar(32) not null) as new on duplicate key update x = new.x";
+        let f = one(sql, Dialect::Mysql);
+        assert!(f.insert);
+        assert_eq!(f.alias.as_deref(), Some("new"));
+        assert_eq!(
+            expand(sql, vec![f], Dialect::Mysql, &mysql_8()).sql,
+            "insert into t (`id`, `x`) SELECT new.`id`, new.`x` FROM JSON_TABLE(:p, '$[*]' COLUMNS (`reylo.n` FOR ORDINALITY, `id` bigint PATH '$.\"id\"' ERROR ON ERROR, `x` varchar(32) PATH '$.\"x\"' ERROR ON ERROR)) AS new ORDER BY new.`reylo.n` on duplicate key update x = new.x"
+        );
+        // Without AS the next word is the statement's, and without an alias the parameter names the table.
+        let f = one("insert into t :p::rows(id bigint) on duplicate key update id = p.id", Dialect::Mysql);
+        assert_eq!(f.alias, None);
+        // On MariaDB a JSON member is written as SQL NULL for a JSON null.
+        let sql = "insert into t :p::row(meta json('{}'))";
+        assert!(expand(sql, find(sql, Dialect::Mysql, &mariadb()).unwrap(), Dialect::Mysql, &mariadb()).sql.contains("SELECT NULLIF(`p`.`meta`, 'null') FROM JSON_TABLE"));
+    }
+
+    #[test]
+    fn a_cast_where_mysql_takes_only_a_placeholder_is_the_bare_placeholder() {
+        let my = |sql: &str, server: &Server| expand(sql, find(sql, Dialect::Mysql, server).unwrap(), Dialect::Mysql, server).sql;
+        let m8 = mysql_8();
+        assert_eq!(
+            my("select sum(n) over (order by id rows between :a::int preceding and :b :: int following), ntile(:c::int) over w, lag(n, :d::int) over w, lead(coalesce(n, (1)), :e::bigint) over w from t", &m8),
+            "select sum(n) over (order by id rows between :a preceding and :b following), ntile(:c) over w, lag(n, :d) over w, lead(coalesce(n, (1)), :e) over w from t"
+        );
+        assert_eq!(my("select sum(n) over (order by x range between :a::numeric(4,1) preceding and current row) from t", &m8), "select sum(n) over (order by x range between :a preceding and current row) from t");
+        // A call that is not a window function keeps its cast, as does LAG's first argument.
+        assert_eq!(my("select round(x, :a::int), concat(lag, :b::int), lag(:c::int, 1) over w from t", &m8), "select round(x, CAST(:a AS SIGNED)), concat(lag, CAST(:b AS SIGNED)), lag(CAST(:c AS SIGNED), 1) over w from t");
+        let err = |sql: &str, server: &Server| find(sql, Dialect::Mysql, server).expect_err("refused").message;
+        assert!(err("select ntile(:k::text) over w from t", &m8).contains("take an integer"));
+        assert!(err("select sum(n) over (rows between :k::date preceding and current row) from t", &m8).contains("takes a number"));
+        // MariaDB takes NTILE's and LAG's argument bare too, but no parameter as a frame's bound.
+        assert_eq!(my("select ntile(:k::int) over w from t", &mariadb()), "select ntile(:k) over w from t");
+        assert!(err("select sum(n) over (rows between :k::int preceding and current row) from t", &mariadb()).contains("only a literal"));
+        // SQLite takes an expression in each.
+        let sql = "select ntile(:k::int) over w from t";
+        assert_eq!(expand(sql, find(sql, Dialect::Sqlite, &Server::default()).unwrap(), Dialect::Sqlite, &Server::default()).sql, "select ntile(CAST(:k AS INTEGER)) over w from t");
+    }
+
+    #[test]
+    fn json_on_mariadb_is_read_by_json_compact() {
+        let sql = "select json_extract(:d::json, '$.a'), :t::json('{\"type\": \"object\"}')";
+        assert_eq!(expand(sql, find(sql, Dialect::Mysql, &mariadb()).unwrap(), Dialect::Mysql, &mariadb()).sql, "select json_extract(JSON_COMPACT(:d), '$.a'), JSON_COMPACT(:t)");
+        assert_eq!(expand(sql, find(sql, Dialect::Mysql, &mysql_8()).unwrap(), Dialect::Mysql, &mysql_8()).sql, "select json_extract(CAST(:d AS JSON), '$.a'), cast(:t as json)");
+    }
+
+    #[test]
+    fn an_insert_takes_the_tables_alias_and_refuses_a_column_list_of_its_own() {
+        for dialect in [Dialect::Postgres, Dialect::Sqlite] {
+            let sql = "insert into t as tt :p::rows(id int8 not null, x text not null) on conflict (id) do update set x = excluded.x where tt.x <> excluded.x";
+            let f = one(sql, dialect);
+            assert!(f.insert);
+            assert_eq!(f.table.map(|(s, e)| &sql[s..e]), Some("t"));
+            assert!(expand(sql, vec![f], dialect, &Server::default()).sql.starts_with("insert into t as tt (\"id\", \"x\") SELECT "));
+        }
+        for dialect in [Dialect::Postgres, Dialect::Mysql, Dialect::Sqlite] {
+            let sql = "insert into t (id, x) :p::rows(id int8 not null, x text not null)";
+            let e = find(sql, dialect, &Server::default()).expect_err("refused");
+            assert!(e.message.contains("writes the insert's column list itself"), "{}", e.message);
+            assert_eq!(&sql[e.start..e.end], "(id, x)");
+        }
+        // A subquery's parenthesis before a rows table is no column list.
+        assert!(!one("select * from (select 1) a join :p::rows(id int8) r on true", Dialect::Postgres).insert);
     }
 
     #[test]
@@ -1799,13 +2168,13 @@ mod tests {
         let sql = "insert into t select * from json_each(:p::json('{\"type\": \"array\"}'))";
         let f = one(sql, Dialect::Sqlite);
         assert_eq!(f.json.as_ref().map(|c| c.schema.clone()), Some(serde_json::json!({"type": "array"})));
-        assert_eq!(expand(sql, vec![f], Dialect::Sqlite).sql, "insert into t select * from json_each(:p)");
+        assert_eq!(expand(sql, vec![f], Dialect::Sqlite, &Server::default()).sql, "insert into t select * from json_each(:p)");
         let sql = "select * from jsonb_to_recordset(:p::jsonb('{\"type\": \"array\"}')) as x(a int)";
-        assert_eq!(expand(sql, find(sql, Dialect::Postgres).unwrap(), Dialect::Postgres).sql, "select * from jsonb_to_recordset(:p::jsonb) as x(a int)");
+        assert_eq!(expand(sql, find(sql, Dialect::Postgres, &Server::default()).unwrap(), Dialect::Postgres, &Server::default()).sql, "select * from jsonb_to_recordset(:p::jsonb) as x(a int)");
         let sql = "select * from json_table(:p::json('{}'), '$[*]' columns (a int path '$.a')) as x";
-        assert_eq!(expand(sql, find(sql, Dialect::Mysql).unwrap(), Dialect::Mysql).sql, "select * from json_table(cast(:p as json), '$[*]' columns (a int path '$.a')) as x");
+        assert_eq!(expand(sql, find(sql, Dialect::Mysql, &Server::default()).unwrap(), Dialect::Mysql, &Server::default()).sql, "select * from json_table(cast(:p as json), '$[*]' columns (a int path '$.a')) as x");
         // A cast without a schema is an ordinary cast.
-        assert!(find("select :p::jsonb", Dialect::Postgres).unwrap().is_empty());
+        assert!(find("select :p::jsonb", Dialect::Postgres, &Server::default()).unwrap().is_empty());
     }
 
     #[test]
@@ -1859,7 +2228,7 @@ mod tests {
     #[test]
     fn an_offset_in_the_expansion_maps_to_the_member_it_stands_for() {
         let sql = "insert into events :events::rows(id int8 not null, status? text not null) returning id";
-        let e = expand(sql, find(sql, Dialect::Postgres).unwrap(), Dialect::Postgres);
+        let e = expand(sql, find(sql, Dialect::Postgres, &Server::default()).unwrap(), Dialect::Postgres, &Server::default());
         let status = e.sql.find("\"status\"").unwrap();
         let (s, t) = e.to_author(status);
         assert_eq!(&sql[s..t], "status? text not null");
