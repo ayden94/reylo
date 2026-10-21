@@ -254,11 +254,7 @@ The editor needs the TypeScript 7.1 language server, with content mappers on.
 
 3. Trust the workspace, and click **Allow** when the extension asks to use the workspace's TypeScript. Content mappers run in a trusted workspace only.
 
-The editor's environment is not your shell's, so keep `DATABASE_URL` in `.env` or `.env.local`, where Reylo finds it. To suggest the extension to everyone who opens the project:
-
-```json title=".vscode/extensions.json"
-{ "recommendations": ["TypeScriptTeam.native-preview"] }
-```
+The editor's environment is not your shell's, so keep `DATABASE_URL` in `.env` or `.env.local`, where Reylo finds it.
 
 </Accordion>
 <Accordion title="Cursor" id="editor-cursor">
@@ -275,11 +271,7 @@ The editor's environment is not your shell's, so keep `DATABASE_URL` in `.env` o
 
 3. Trust the workspace, and click **Allow** when the extension asks to use the workspace's TypeScript. Content mappers run in a trusted workspace only.
 
-The editor's environment is not your shell's, so keep `DATABASE_URL` in `.env` or `.env.local`, where Reylo finds it. To suggest the extension to everyone who opens the project:
-
-```json title=".vscode/extensions.json"
-{ "recommendations": ["TypeScriptTeam.native-preview"] }
-```
+The editor's environment is not your shell's, so keep `DATABASE_URL` in `.env` or `.env.local`, where Reylo finds it.
 
 </Accordion>
 <Accordion title="Zed" id="editor-zed">
@@ -322,12 +314,7 @@ The editor's environment is not your shell's, so keep `DATABASE_URL` in `.env` o
 
 3. Trust the folder. In restricted mode, Zed starts no language server.
 
-Zed differs from VS Code in a few ways:
-
-- Zed does not send `.sql` files to the language server, so an error inside one shows nowhere in Zed. The query's types become `unknown`, and the type check shows the error.
-- The types follow a `.sql` file each time it is saved.
-- After a change to `binary.path`, close the window and open it again.
-- In a monorepo whose TypeScript is installed at the root, `binary.path` points at that copy.
+Zed does not send `.sql` files to the language server, so an error inside one shows nowhere in Zed: the query's types become `unknown`, and the type check shows the error.
 
 </Accordion>
 </Accordions>
@@ -368,8 +355,6 @@ await Bun.build({
   outdir: "dist",
 });
 ```
-
-Without the preload, Bun imports a `.sql` file as its path.
 
 </Accordion>
 <Accordion title="nub" id="setup-nub">
@@ -444,7 +429,6 @@ The type check that `next build` runs cannot run content mappers, so the scripts
 }
 ```
 
-A client component that imports a `.sql` file fails the build, so the statement stays on the server. With Cache Components on, as `create-next-app` sets them up, a component that runs a query renders inside `<Suspense>`, at request time. On the edge runtime, use a driver that connects over HTTP or WebSockets.
 
 </Accordion>
 <Accordion title="esbuild" id="setup-esbuild">
@@ -462,8 +446,6 @@ await esbuild.build({
   outfile: "dist/main.mjs",
 });
 ```
-
-Use `build`: esbuild runs plugins in `build` only, and `buildSync` throws.
 
 </Accordion>
 <Accordion title="webpack" id="setup-webpack">
@@ -508,29 +490,25 @@ export default {
 NODE_OPTIONS=--experimental-vm-modules npx jest
 ```
 
-In a CommonJS run, babel-jest must also compile Reylo itself, an ES module, wherever the package manager puts it:
-
-```js title="jest.config.js"
-module.exports = {
-  transform: {
-    "\\.sql$": "reylo/jest",
-    "\\.[jt]s$": [
-      "babel-jest",
-      {
-        presets: [
-          ["@babel/preset-env", { targets: { node: "current" } }],
-        ],
-      },
-    ],
-  },
-  transformIgnorePatterns: ["/node_modules/(?!(\\.[^/]+/)?reylo[@/])"],
-};
-```
-
-A CommonJS test reads the query as `require("./get_user.sql").default`. In an ES module run, Jest strips the types of tests written in TypeScript once `extensionsToTreatAsEsm` lists `".ts"` too; ts-jest does not run with TypeScript 7.
 
 </Accordion>
 </Accordions>
+
+## Integration
+
+A complete, working project for each setup. Each one's README, under "How Reylo is wired in", names every line Reylo needs:
+
+| Setup | Example | Database and driver |
+| --- | --- | --- |
+| Node | [examples/node](https://github.com/colinhacks/reylo/tree/main/examples/node) | Postgres, postgres.js |
+| nub | [examples/nub](https://github.com/colinhacks/reylo/tree/main/examples/nub) | SQLite, `node:sqlite` |
+| Bun | [examples/bun](https://github.com/colinhacks/reylo/tree/main/examples/bun) | SQLite, `bun:sqlite` |
+| Vite, in a React Router app | [examples/vite](https://github.com/colinhacks/reylo/tree/main/examples/vite) | Postgres, `pg` |
+| Next.js | [examples/nextjs](https://github.com/colinhacks/reylo/tree/main/examples/nextjs) | Postgres, postgres.js |
+| esbuild | [examples/esbuild](https://github.com/colinhacks/reylo/tree/main/examples/esbuild) | Postgres, postgres.js |
+| webpack | [examples/webpack](https://github.com/colinhacks/reylo/tree/main/examples/webpack) | MySQL, mysql2 |
+| Rspack | [examples/rspack](https://github.com/colinhacks/reylo/tree/main/examples/rspack) | Postgres, `pg` |
+| Jest | [examples/jest](https://github.com/colinhacks/reylo/tree/main/examples/jest) | SQLite, better-sqlite3 |
 
 ## Usage
 
@@ -663,14 +641,14 @@ import getUser, { type Params, type Row } from "./get_user.sql";
 
 Pass `.run()` a client and the parameters: it runs the statement and resolves to its result, shaped by how many rows Reylo proves the statement can return:
 
-| The statement | `cardinality` | Resolves to |
-| --- | --- | --- |
-| A match on a primary or unique key, or `limit 1` | `maybeOne` | `Row \| null` |
-| An aggregate without `group by`, a one-row `insert … returning` | `one` | `Row` |
-| An `insert`, `update` or `delete` without `returning` | `none` | `void` |
-| Anything else | `many` | `Row[]` |
+| The statement | Resolves to |
+| --- | --- |
+| A match on a primary or unique key, or `limit 1` | `Row \| null` |
+| An aggregate without `group by`, a one-row `insert … returning` | `Row` |
+| An `insert`, `update` or `delete` without `returning` | `void` |
+| Anything else | `Row[]` |
 
-At run time, a `one` query throws unless it gets exactly one row, and a `maybeOne` query throws when it gets more than one. The client is one from any of the [supported drivers](#supported-drivers), or a transaction, savepoint or connection taken from it. The method always returns a promise, which rejects with the driver's own error.
+At run time, a statement that resolves to `Row` throws unless it gets exactly one row, and one that resolves to `Row | null` throws when it gets more than one. The client is one from any of the [supported drivers](#supported-drivers), or a transaction, savepoint or connection taken from it. The method always returns a promise, which rejects with the driver's own error.
 
 ### `.runSync()`
 
@@ -726,7 +704,7 @@ getUser.raw;
 
 ### `.inputSchema`
 
-The JSON Schema (2020-12) of the parameters, as a plain object, for anything that takes JSON Schema: an OpenAPI document, a form, an agent's tool definition.
+The JSON Schema (2020-12) of the parameters, as a plain object, for anything that takes JSON Schema: an OpenAPI document, a form, an agent's tool definition, or a library that reads [Standard Schema](https://standardschema.dev).
 
 ```ts twoslash
 import getUser from "./get_user.sql";
@@ -747,8 +725,6 @@ getUser.outputSchema;
 // { anyOf: [{ type: "object", properties: { id, name, email }, … },
 //   { type: "null" }] }
 ```
-
-A query is also a [Standard JSON Schema](https://standardschema.dev), so a library that reads one gets both schemas from `getUser["~standard"].jsonSchema`.
 
 ## Parameters
 
@@ -835,13 +811,8 @@ await addUsers.run(db, { names: ["Ada", "Grace"] });
 
 - The schema is JSON Schema 2020-12: `string`, `number`, `integer`, `boolean`, `null`, `object` and `array`, a key optional unless `required` lists it, and `{ "type": ["string", "null"] }` for a value that may be `null`.
 - Its checks, such as `format`, `pattern`, `minimum`, `maxItems` and `enum`, run before the statement does, and a value that fails makes `.run()` reject with every issue listed. The `enum` and `const` keywords also narrow the type, and `oneOf`, `anyOf` and `allOf` make a union.
-- The schema stays in Reylo: the database receives the value as JSON text, `$1::jsonb` on Postgres, `cast(? as json)` on MySQL and `?` on SQLite.
 
 The examples use JSON parameters to [insert many rows](#insert-many-rows), [insert related rows](#insert-related-rows) and [record events of several kinds](#record-events-of-several-kinds).
-
-### Positional parameters
-
-A statement may use its database's own positional form instead of `:name`: `$1` on Postgres, `?` on MySQL, `?1` on SQLite. The key is then the number, as in `{ 1: 42 }`.
 
 ## Configuration
 
@@ -854,7 +825,7 @@ env: [.env.local, .env]
 strict_params: true
 ```
 
-Every key is optional: a project without the file behaves as if it held `url: ${DATABASE_URL}`. A key Reylo does not know is an error at its line and column, reported on every `.sql` import. The `REYLO_CONFIG` variable names another file.
+Every key is optional: a project without the file behaves as if it held `url: ${DATABASE_URL}`.
 
 ### `url`
 

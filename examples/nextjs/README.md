@@ -57,6 +57,8 @@ On their own, `next dev` and `next build` report the same error from the loader,
 
 ## Notes
 
+- **Client components.** A client component that imports a `.sql` file fails the build, so a statement never reaches the browser.
+- **The edge runtime.** On the edge runtime, use a driver that connects over HTTP or WebSockets, such as Neon's.
 - **Cache Components.** Version 16.4 of `create-next-app` turns on `cacheComponents` (and `partialPrefetching`), and this example keeps them. Under Cache Components, a component that queries the database at request time must sit inside `<Suspense>`, as `Posts` does in `app/page.tsx`: without it, `next build` stops with "Next.js encountered uncached or runtime data during prerendering". The page then prerenders its shell and streams the list (`◐ /` in the build output). To prerender the list instead, mark the component `"use cache"`; the build then queries the database.
 - **A query in client code.** A `"use client"` component that imports a `.sql` file fails `next build` and the page in `next dev`: Turbopack says `queries/get_user.sql` is an "Unknown module type", webpack that it needs "an appropriate loader". The type check does not catch it, since types know nothing of the client boundary; keep queries behind server code, as `lib/db.ts`'s `server-only` keeps the client.
 - **The server action from curl.** A form whose `action` is a server action works without JavaScript: the page carries a hidden `$ACTION_ID_<id>` field, and a multipart POST of it with the form's fields runs the action. Running `curl -H 'Origin: http://localhost:3000' -F '$ACTION_ID_<id>=' -F user_id=2 -F title=Hi -F body= localhost:3000/`, with the id read from the page, adds a post.

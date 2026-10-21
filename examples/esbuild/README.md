@@ -74,6 +74,7 @@ The type check and the plugin both read `.reylo/`, so both pass without the data
 
 ## Notes
 
+- Use `esbuild.build`: esbuild runs plugins in `build` only, and `buildSync` throws.
 - esbuild's default format on `platform: "node"` is CommonJS, which fails here twice over: esbuild refuses a top-level `await` in CommonJS, and Node reads a `.js` file in a `"type": "module"` project as an ES module, where `require` is not defined. So the build sets `format: "esm"` and writes `.mjs`.
 - postgres.js is an ES module and its bundle needs no `require`. A driver written in CommonJS, such as `pg`, does: bundled into ES module output it fails at run time with `Dynamic require of "events" is not supported` unless the build adds `banner: { js: 'import { createRequire } from "node:module"; const require = createRequire(import.meta.url);' }`.
 - The bundle holds none of Reylo's analysis: no engine, no WebAssembly. That stays in the build.
