@@ -886,44 +886,21 @@ code {
   color: var(--color-fd-muted-foreground);
 }
 
-#nd-page .dk-agent-copy {
-  flex: none;
-  padding: 0.5rem 0.875rem;
-  border-radius: 8px;
-  border: 1px solid var(--color-fd-border);
-  font-size: 0.875rem;
-  font-weight: 500;
-  background: var(--color-fd-background);
-  color: var(--color-fd-headings);
-}
-
-#nd-page .dk-agent-copy:hover {
-  background: var(--color-fd-accent);
-}
-
-/* Its two labels share one grid cell, the one not shown hidden, so the button keeps the width of
-   the longer and "Copied" moves nothing (components/agent-prompt.tsx). */
-#nd-page .dk-agent-copy {
-  display: inline-grid;
-}
-
-#nd-page .dk-agent-copy > span {
-  grid-area: 1 / 1;
-}
-
-#nd-page .dk-agent-copy > span:not([data-shown]) {
-  visibility: hidden;
-}
-
-/* The instructions are an ordinary code block under the head, which scrolls where it is taller than
-   Fumadocs lets a code block be; no fold, no fade and no control to open it (the maintainer,
-   2026-10-20: "it should just be a regular scrollable code block"). */
+/* The instructions are an ordinary code block under the head, copied with its own copy icon; no
+   fold, no fade and no control to open it (the maintainer, 2026-10-20: "it should just be a regular
+   scrollable code block"). It shows six lines and scrolls (the maintainer, 2026-10-21: "set a max
+   height of 6 lines on that big agent prompt"): Fumadocs' scroll box, the code block's one
+   `overflow-auto` child, sets each line at 1.7em of its 13px and pads 14px above and below. */
 #nd-page .dk-agent-body {
   padding: 0 1.25rem 1.25rem;
 }
 
 #nd-page .dk-agent-body figure {
   margin: 0;
+}
+
+#nd-page .dk-agent-body figure > .overflow-auto {
+  max-height: calc(6 * 1.7em + 1.75rem);
 }
 
 /* ── "Copy agent prompt" on the title's row (components/copy-agent-prompt.tsx) ──
@@ -1137,12 +1114,15 @@ html #nd-page .prose > h3 {
   letter-spacing: -0.01em;
 }
 
-/* Code at 13px with room between lines (it was 13px at 1.43), in the blocks and the type popups. */
+/* Code at 13px with room between lines (it was 13px at 1.43), in the blocks and the type popups.
+   The size is `--dk-code-size`, so a page that sets its code larger sets its popups' to match:
+   Motherload's screenshot page draws its code at 17px, and its popups' types stayed at 13px (the
+   maintainer, 2026-10-21: "the popovers in the showcase page are the same size as the code"). */
 #nd-page figure.shiki pre,
 #nd-page figure.shiki pre code,
 .fd-twoslash-popover pre,
 .fd-twoslash-popover code {
-  font-size: 13px;
+  font-size: var(--dk-code-size, 13px);
   line-height: 1.7;
 }
 

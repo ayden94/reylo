@@ -1,10 +1,10 @@
 {
   "from": "/Users/colin/Documents/docs-kit",
-  "commit": "3491f1d",
+  "commit": "b97431a",
   "files": {
     "package.json": "76f8d44da08785898565422d0d53c698acf23b84357ecf9cc814befd7f910905",
-    "README.md": "8b0a26d35a5c3794b9fec412d00be598819f0b3c5d7294dd30a2c5e10ea67d46",
-    "src/components/agent-prompt.tsx": "d2ff449d1623faad0ac7e96a41d5d8285f81d235b5acd0643ca1417de1db55bf",
+    "README.md": "351f07130d1475a694365f9f8cad4b655bd60fcb31bf9d9a2fd801c1a52951d2",
+    "src/components/agent-prompt.tsx": "742210664acc0786994b1640d96bb2430a99aa69b82c89157d312c641bf66422",
     "src/components/chrome.tsx": "2406305d9db24be97199d4cc774425e596e7ea56b4c6f4664d59ffa9c73b2c26",
     "src/components/code-tabs.tsx": "392de2165f31253907c82c010f44cfe29ed5aac179e5577314a71d373e60d4d9",
     "src/components/copy-agent-prompt.tsx": "909074a5c6c70e3c098dab57ff502d9261dfda3baa7c89caad6f18205de2fef8",
@@ -23,7 +23,7 @@
     "src/mdx/recma-shared-popups.ts": "b12d67312b9875a469adba9ed4ca77b788f8f7958c0119451a9b4e16638ae427",
     "src/mdx/remark-sections.ts": "d1bf51eb2a1d2cab1edbc12591681c3219d8557e92241ef1b85218795d0a54d9",
     "src/mdx/twoslash.ts": "35833951145c3614c7ac1df72f9379b5f77ce5a4a8a85afb86d69f5dd729a532",
-    "src/style.css": "a39961f1484060c3cbcd6ea8cf1bc4cd72cb65dd651aecf4f86abec79c57ad09",
+    "src/style.css": "4cdbe3b7345c8dbc63f6c39bf6b32555417f0257340d60300f98c93bc7a766f6",
     "src/sync.mjs": "2a1cf5fe7ac181004dcb2859b46003dc55808054cc2711567ee3928304812626",
     "src/vite.ts": "e8f8a6a49951ec991b24872d664efdd46cbb2121802d14279e0ea917f3f6763e"
   }
