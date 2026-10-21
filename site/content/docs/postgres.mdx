@@ -210,7 +210,12 @@ select to_jsonb(u) as "user" from users u where u.id = :id::int
 ```
 
 - The `CHECK` may call pg_jsonschema's `jsonb_matches_schema` or `json_matches_schema`, or the validator of four other extensions (`jsonschema`, `postgres-json-schema`, `is_jsonb_valid`, `json_schema_validate`). Reylo knows each by the extension that defines it, never by its name, and reads only the keywords that validator enforces, under the draft it applies.
-- The schema's type reaches a bare read of the column, through a view or a subquery too, the column inside JSON the statement builds, a whole stored row (`jsonb_agg(e)` over `from events e`), and a parameter written whole to the column. An expression over the column (`payload -> 'x'`) is `unknown`, and so is a column under a `union`, and one whose `CHECK` was added `NOT VALID`.
+- The schema's type reaches:
+  - a bare read of the column, through a view or a subquery too;
+  - the column inside JSON the statement builds;
+  - a whole stored row (`jsonb_agg(e)` over `from events e`);
+  - a parameter written whole to the column.
+- An expression over the column (`payload -> 'x'`) is `unknown`, and so is a column under a `union`, and one whose `CHECK` was added `NOT VALID`.
 - Built with `to_jsonb`, one value is `unknown`, and a whole row is the row's object.
 - Inside a document a value is what JSON writes: integers and `numeric` are numbers, which `JSON.parse` rounds past 2^53 on every driver; a date is its text in the session's time zone; a `bytea` is its hex text, `"\\x0102ff"`; a `boolean` is `true` or `false`.
 - Over no rows, `jsonb_agg` is `null`, and its type says so: `coalesce(jsonb_agg(…), '[]')` is the array alone.
@@ -279,8 +284,16 @@ A column is `| null` unless Reylo proves it never is. On Postgres, Reylo reads t
 - **A table's column** is non-null where its `NOT NULL` is valid and holds in every table that inherits from it. A `NOT NULL` added `NOT VALID` proves nothing, since rows written before it may hold `NULL`.
 - **An outer join** makes the joined table's columns nullable: the right side of a `left join`, the left side of a `right join`, both sides of a `full join`.
 - **A test in the `where`** that fails on `NULL` proves the column, and a later inner join's `on` proves the joined row exists: `where o.total > 0`, `where email is not null`, `where lower(email) = :email`.
-- **An expression** is non-null when Reylo's rules prove it: a literal, a cast, `||`, a comparison and arithmetic over non-null operands, a built-in function that returns `NULL` only for a `NULL` argument (`length`, `lower`, `round`, …), a `coalesce` with a non-null argument, a `case` whose branches and `else` are all non-null, `count`, `exists` and `is null`.
-- **An aggregate** other than `count` is `NULL` over no rows, so it is nullable without a `group by`. With one, every group has a row: `array_agg`, `json_agg`, `jsonb_agg` and `jsonb_object_agg`, which write a `NULL` into what they build, are non-null, and `sum`, `max`, `string_agg` and the others, which skip a `NULL`, are non-null where their argument is. A `filter` can leave a group no rows, so an aggregate with one stays nullable.
+- **An expression** is non-null when Reylo's rules prove it:
+  - a literal, a cast, `count`, `exists` and `is null`;
+  - concatenation with `||`, a comparison and arithmetic over non-null operands;
+  - a built-in function that returns `NULL` only for a `NULL` argument (`length`, `lower`, `round`, …);
+  - a `coalesce` with a non-null argument;
+  - a `case` whose branches and `else` are all non-null.
+- **An aggregate** other than `count` is `NULL` over no rows, so it is nullable without a `group by`. With one, every group has a row:
+  - the aggregates that write a `NULL` into what they build, `array_agg`, `json_agg`, `jsonb_agg` and `jsonb_object_agg`, are non-null;
+  - those that skip a `NULL`, `sum`, `max`, `string_agg` and the others, are non-null where their argument is;
+  - an aggregate with a `filter` stays nullable, since the filter can leave a group no rows.
 - **A table's whole row** (`select e`, `jsonb_agg(e)`) is never `NULL` unless an outer join nulls it, and keeps its columns' `NOT NULL` and their `CHECK` lists.
 - **A scalar subquery** is non-null only when it is an aggregate without a `group by` over a non-null value, as `(select count(*) …)` is.
 - **A column of a `union`** is non-null when it is in every arm.
@@ -387,7 +400,8 @@ Every value `.run()` returns goes back in as a parameter of its type, on every d
 | An enum | the union of its labels |
 
 - The parameters of `limit :n` and `offset :n` are `bigint`, so they take a `number` too.
-- A `timestamptz` parameter takes the text of an instant that names its zone, as `.run()` returns it: `"2026-10-12T19:06:48Z"`, `"2026-10-12 19:06:48+09"`, `"2026-10-12 19:06:48 Asia/Tokyo"`, or `infinity`, `-infinity`, `epoch` and `now`. Without a zone the server would read it in the session's time zone, so `.run()` refuses it before the statement runs. Pass a `Date` as `date.toISOString()`.
+- A `timestamptz` parameter takes the text of an instant that names its zone, as `.run()` returns it: `"2026-10-12T19:06:48Z"`, `"2026-10-12 19:06:48+09"`, `"2026-10-12 19:06:48 Asia/Tokyo"`, or `infinity`, `-infinity`, `epoch` and `now`. Pass a `Date` as `date.toISOString()`.
+- Text without a zone is refused by `.run()` before the statement runs, since the server would read it in the session's time zone.
 - A `timestamp` or a `date` parameter refuses a `Date`: drivers write a `Date`'s time in different zones, the app's, the server's or UTC.
 - Postgres refuses the extended years a `timestamptz` comes back with, `+010000-…` and `0000`, so Reylo writes them as `10000-…` and `… BC`, and the value goes back in.
 - A JSON parameter reaches the database as its JSON text on every driver, so a string is a JSON string: `'{"a":1}'` is stored as the string `"{\"a\":1}"`. To pass JSON text you already hold, cast it from text: `:data::text::jsonb`.
@@ -396,11 +410,20 @@ Every value `.run()` returns goes back in as a parameter of its type, on every d
 
 ### Parameters without a type
 
-Postgres types every parameter from where the statement uses it: the column it is compared with or written to, the function it is passed to, the cast around it. A bare `select :x` is `text`, so a `string`. Where nothing types it, as in `select :x is null` or `concat(:x, '!')`, Postgres refuses the statement, "could not determine data type of parameter" (42P18), until a cast types it: `:x::text`.
+Postgres types every parameter from where the statement uses it:
+
+- the column it is compared with or written to;
+- the function it is passed to;
+- the cast around it.
+
+A bare `select :x` is `text`, so a `string`. Where nothing types it, as in `select :x is null` or `concat(:x, '!')`, Postgres refuses the statement, "could not determine data type of parameter" (42P18), until a cast types it: `:x::text`.
 
 ### Parameters that may be null
 
-A parameter is `| null` where the statement lets it be: where it tests it for null or coalesces it, and where it writes it whole to a column that may hold `NULL`. Any other parameter is typed without `null`.
+A parameter is `| null` only where the statement lets it be:
+
+- where it tests it for null or coalesces it;
+- where it writes it whole to a column that may hold `NULL`.
 
 A test for null needs a cast, since `:role is null` alone gives Postgres nothing to type, and the parameter appears once, so select it in a `with`:
 

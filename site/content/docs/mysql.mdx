@@ -199,7 +199,8 @@ from events
 group by kind
 ```
 
-- The schema's type reaches a plain `select` of the column over tables named without a schema, and the column inside `json_object` or `json_arrayagg`. Through a derived table or a `with` query, under a `union`, or in an expression (`json_extract(payload, '$.x')`), the column is `unknown`, and so is a parameter written to it.
+- The schema's type reaches a plain `select` of the column over tables named without a schema, and the column inside `json_object` or `json_arrayagg`.
+- Through a derived table or a `with` query, under a `union`, or in an expression (`json_extract(payload, '$.x')`), the column is `unknown`, and so is a parameter written to it.
 - MySQL's validator reads every schema as draft 4, whatever its `$schema` says, so `const`, `if`, `prefixItems` and `contains` narrow nothing.
 - Inside a document a value is what JSON writes: integers and `DECIMAL` are numbers, which `JSON.parse` rounds past 2^53 on every driver; a date is MySQL's text.
 - MySQL stores a document with its keys sorted, and a key given twice holds its last value.
@@ -231,9 +232,10 @@ A column is `| null` unless Reylo proves it never is. On MySQL the proof is the 
 
 - **A table's column** is non-null where the table says `NOT NULL`, exactly.
 - **An outer join** makes the joined table's columns nullable, unless a test in the `where` that fails on `NULL` proves the joined row exists, as `where p.published_at is not null` or `where p.id > 0` does, or a later inner join's `on` does.
-- **An expression** is non-null where the server says so: `coalesce` and `ifnull` with a non-null argument, `count`, `length`, arithmetic over non-null integers, comparisons. The server is cautious with string and date functions, most casts and division: `upper(name)`, `concat(name, '!')`, `date(created_at)`, `cast(id as char)` and `id / 2` are `| null` even when their input is `NOT NULL`.
+- **An expression** is non-null where the server says so: `coalesce` and `ifnull` with a non-null argument, `count`, `length`, arithmetic over non-null integers, comparisons.
+  - The server is cautious with string and date functions, most casts and division: `upper(name)`, `concat(name, '!')`, `date(created_at)`, `cast(id as char)` and `id / 2` are `| null` even when their input is `NOT NULL`.
 - **A test in the `where`** that fails on `NULL` proves the column it tests: `where email is not null`, `where email like '%@%'`, `where lower(email) = :email`. A test under an `or` whose other arm tests another column proves nothing, nor do `coalesce`, `ifnull` and `<=>`.
-- **`json_arrayagg`** is `NULL` over no rows, and never under a `group by`, where every group has a row.
+- **The `json_arrayagg` aggregate** is `NULL` over no rows, and never under a `group by`, where every group has a row.
 - **A `WITH ROLLUP`** adds a row per level whose grouped columns are `NULL`, and the type says so.
 - **A correlated subquery** in the select list makes the server clear `NOT NULL` on the outer table's columns. Reylo asks again without the subquery and restores it.
 
@@ -330,7 +332,10 @@ Every value `.run()` returns goes back in as a parameter of its type, on every d
 | `JSON` | any JSON value |
 | `BINARY`, `VARBINARY`, `BLOB` | `Uint8Array` |
 
-- MySQL describes every integer parameter as a `BIGINT` and every `BIT` one alike, so Reylo types a parameter by the column it is compared with or written to, where the statement names the column: `col = :p` and the other comparisons, `in`, `between`, an `insert`'s values and an `update`'s `set`. Elsewhere it takes what MySQL says: `where id = :id` on an `INT` column, and `limit :n`, take a `number`.
+- MySQL describes every integer parameter as a `BIGINT`, and every `BIT` one alike. So where the statement names the column, Reylo types a parameter by the column it is compared with or written to:
+  - in a comparison such as `col = :p`, an `in` or a `between`;
+  - in an `insert`'s values and an `update`'s `set`.
+- Elsewhere Reylo takes what MySQL says: `where id = :id` on an `INT` column, and `limit :n`, take a `number`.
 - Reylo's MySQL drivers bind a `true` as 1.
 - A `DATE`, `DATETIME` or `TIMESTAMP` parameter takes the wall-clock text, `"2026-10-12 19:06:48"`, and refuses a `Date`: drivers write a `Date`'s time in different zones, the app's, the server's or UTC.
 - A JSON parameter reaches the database as its JSON text on every driver, so a string is a JSON string: `'{"a":1}'` is stored as the string `"{\"a\":1}"`.
@@ -342,7 +347,11 @@ MySQL types every parameter from where the statement uses it, since 8.0.22. One 
 
 ### Parameters that may be null
 
-A parameter is `| null` where the statement lets it be: where it tests it for null (`:p is null`, `:p is not null`, `isnull(:p)`, `:p <=> col`) or passes it first to `coalesce` or `ifnull`, and where it writes it whole to a column that may hold `NULL` (`values`, `insert … set`, `update … set`, `on duplicate key update`, `replace`), unless it also fills a `NOT NULL` column. Any other parameter is typed without `null`.
+A parameter is `| null` only where the statement lets it be:
+
+- where it tests it for null (`:p is null`, `:p is not null`, `isnull(:p)`, `:p <=> col`);
+- where it passes it first to `coalesce` or `ifnull`;
+- where it writes it whole to a column that may hold `NULL` (`values`, `insert … set`, `update … set`, `on duplicate key update`, `replace`), unless it also fills a `NOT NULL` column.
 
 ```ts twoslash tab="main.ts"
 import usersByRole from "./my_users_by_role.sql";
