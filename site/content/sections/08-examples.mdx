@@ -155,7 +155,7 @@ import nextPage from "./next_page.sql";
 
 // the first page: a cursor after every row
 const page = await nextPage.run(db, {
-  created_at: "3000-01-01 00:00:00+00:00",
+  created_at: "3000-01-01T00:00:00Z",
   id: 0,
 });
 const next = await nextPage.run(db, page.at(-1)!);
@@ -180,7 +180,7 @@ import nextPage from "./next_page.sql";
 
 // the first page: a cursor after every row
 const page = await nextPage.run(db, {
-  created_at: "3000-01-01 00:00:00+00:00",
+  created_at: "3000-01-01 00:00:00",
   id: 0,
 });
 const next = await nextPage.run(db, page.at(-1)!);
