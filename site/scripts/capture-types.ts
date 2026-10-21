@@ -105,7 +105,7 @@ function compile(sql: string, dialect: Dialect): string {
  * One change: a typed JSON parameter takes the type computed from its schema (`json`), where the
  * loader says `unknown`.
  */
-async function render(session: Session, written: string, sql: string, json: Map<string, string>): Promise<{ text: string; analysis: Analysis } | { error: string }> {
+async function render(session: Session, written: string, sql: string, json: Map<string, string>, strict = session.project.strictParams): Promise<{ text: string; analysis: Analysis } | { error: string }> {
   const project = session.project;
   const paramType = (q: Analysis['params'][number], rendered: string): string => {
     if (json.has(q.name)) return json.get(q.name)!;
@@ -135,7 +135,7 @@ async function render(session: Session, written: string, sql: string, json: Map<
   if (dialect === 'mysql') names = analysis.params.map((q) => q.name);
   // The mapper places these in the file as errors; a statement on the page must have none.
   if (analysis.diagnostics.length) return { error: analysis.diagnostics.map((d) => d.message).join('; ') };
-  if (project.strictParams) {
+  if (strict) {
     const untyped = analysis.params.filter((q) => q.type.kind === 'unknown' && !json.has(q.name));
     if (untyped.length) return { error: `strict_params: nothing types ${untyped.map((q) => `:${q.name}`).join(', ')}` };
   }
@@ -278,7 +278,10 @@ try {
             report(block, (e as Error).message);
             continue;
           }
-          const result = await render(session, `${written}\n`, `${sql}\n`, json);
+          // A block that shows what `strict_params: false` gives says so with `strict="false"`, and is
+          // analyzed as such a project would be; every other block must type each parameter.
+          const strict = !/(?:^|\s)strict="false"(?:\s|$)/.test(block.node.meta ?? '') && session.project.strictParams;
+          const result = await render(session, `${written}\n`, `${sql}\n`, json, strict);
           if ('error' in result) {
             report(block, result.error);
             continue;

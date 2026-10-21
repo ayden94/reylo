@@ -29,6 +29,8 @@ group by u.id
 <Details summary="View the schema" id="schema">
 
 ```sql file="schema.sql" tab="Postgres" tab-group="dialect"
+create extension if not exists pg_jsonschema;
+
 create type user_role as enum ('admin', 'member');
 
 create table users (
@@ -51,8 +53,17 @@ create table posts (
 
 create table events (
   id serial primary key,
-  kind text not null,
-  payload jsonb not null
+  kind text not null
+    check (kind in ('click', 'key')),        -- kind: "click" | "key"
+  payload jsonb not null                     -- payload: what the schema admits
+    check (jsonb_matches_schema('{
+      "type": "object",
+      "properties": {
+        "x": { "type": "integer" },
+        "y": { "type": "integer" },
+        "code": { "type": "string" }
+      }
+    }', payload))
 );
 ```
 
@@ -80,7 +91,15 @@ create table posts (
 create table events (
   id int auto_increment primary key,
   kind text not null,
-  payload json not null
+  payload json not null                       -- payload: what the schema admits
+    check (json_schema_valid('{
+      "type": "object",
+      "properties": {
+        "x": { "type": "integer" },
+        "y": { "type": "integer" },
+        "code": { "type": "string" }
+      }
+    }', payload))
 );
 ```
 

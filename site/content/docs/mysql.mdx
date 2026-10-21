@@ -11,8 +11,8 @@ This page is the reference behind [the main docs](/) for MySQL: the place to loo
 | --- | --- |
 | Versions | MySQL 8.0.22 or later, which types a parameter from its context; checked on MySQL 8.0, 8.4, 9.7 and 26.7 |
 | URL | A `mysql://` URL, in `DATABASE_URL` or [`url`](/#url) |
-| Type check | Reads the schema through mysql2 |
-| Drivers | mysql2, PlanetScale and Bun.sql ([Drivers](#drivers)) |
+| Type check | Reads the schema through `mysql2` |
+| Drivers | `mysql2`, PlanetScale and `Bun.sql` ([Drivers](#drivers)) |
 
 <Details summary="View the schema behind the examples" id="schema">
 
@@ -84,16 +84,16 @@ Reylo decodes every value of its own queries itself, on every driver, so each SQ
 
 A `BIGINT`, signed or unsigned, is a JavaScript `bigint`, and so is `COUNT(*)`. MySQL computes most integer expressions as a `BIGINT` too, so `id + 1`, `length(name)`, `coalesce(n, 0)` and `lag(n) over (…)` are `bigint`. MySQL's `CAST` has no 32-bit integer, so cast to `double` where you want a `number`:
 
-```sql file="my_count_orders.sql" dialect="mysql"
-select count(*) as total, cast(count(*) as double) as total_number
-from orders
-```
-
-```ts twoslash
+```ts twoslash tab="main.ts"
 import countOrders from "./my_count_orders.sql";
 
 const counts = await countOrders.run(db);
 //    ^?
+```
+
+```sql tab="my_count_orders.sql" dialect="mysql"
+select count(*) as total, cast(count(*) as double) as total_number
+from orders
 ```
 
 - An expression whose type the bound value decides is either: `:n + 1` is `bigint | number | string`, a `BIGINT`, a `DOUBLE` or a `DECIMAL` by what you pass.
@@ -105,7 +105,7 @@ const counts = await countOrders.run(db);
 
 A `DECIMAL` is its exact text, `"12.50"`, with the column's scale. So are `SUM(…)` of any column, `AVG(…)` and a division, which MySQL computes as `DECIMAL`: `sum(total)` is `"19.75"`, and `id / 2` is `"0.5000"`.
 
-- A `FLOAT` is a 32-bit float: mysql2 and Bun.sql, which read the binary protocol, give its exact value, `1.100000023841858`, and a driver that reads MySQL's text protocol the shorter text's, `1.1`. A `DOUBLE` is the same on every driver.
+- A `FLOAT` is a 32-bit float: `mysql2` and `Bun.sql`, which read the binary protocol, give its exact value, `1.100000023841858`, and a driver that reads MySQL's text protocol the shorter text's, `1.1`. A `DOUBLE` is the same on every driver.
 - Inside JSON the statement builds, a `DECIMAL` is a JSON number, which `JSON.parse` reads as a double: `12345678901234.123456` becomes `12345678901234.123`.
 - A `DECIMAL` parameter takes the text, `"12.50"` ([What a parameter takes](#what-a-parameter-takes)).
 
@@ -113,15 +113,15 @@ A `DECIMAL` is its exact text, `"12.50"`, with the column's scale. So are `SUM(�
 
 No value is a `Date`. Each is the text MySQL writes, with a `T` between the date and the time of a `DATETIME` or a `TIMESTAMP`, and as many fraction digits as the column keeps:
 
-```sql file="my_order_dates.sql" dialect="mysql"
-select placed_at, ships_on from orders where id = :id
-```
-
-```ts twoslash
+```ts twoslash tab="main.ts"
 import orderDates from "./my_order_dates.sql";
 
 const order = await orderDates.run(db, { id: 1 });
 //    ^?
+```
+
+```sql tab="my_order_dates.sql" dialect="mysql"
+select placed_at, ships_on from orders where id = :id
 ```
 
 Where your runtime has `Temporal`, `Temporal.PlainDateTime.from()` reads the time.
@@ -130,21 +130,21 @@ Where your runtime has `Temporal`, `Temporal.PlainDateTime.from()` reads the tim
 - A `TIMESTAMP` stores an instant, and MySQL writes it in the session's `time_zone`, the server's own unless the connection sets another. Reylo cannot know that zone, so the text has none. Run `set time_zone = '+00:00'` on the connection to read UTC, or keep UTC in a `DATETIME`.
 - A `TIME` is its text, `"10:00:00"`.
 - Inside JSON the statement builds, a `DATETIME` is MySQL's text with a space and six fraction digits, `"2026-10-20 10:00:00.000000"`.
-- Bun.sql keeps a `DATETIME`'s milliseconds, not its microseconds, writes no fraction digits that are all zero, and drops a `TIME`'s fraction ([Drivers](#drivers)).
+- On `Bun.sql`, a `DATETIME` keeps its milliseconds, not its microseconds, and drops a fraction that is all zeros, and a `TIME` drops its fraction ([Drivers](#drivers)).
 
 ### Truth values
 
 MySQL has no boolean type: `BOOLEAN` is a `TINYINT(1)`, and a comparison is the integer 1 or 0. Reylo makes a table's `TINYINT(1)` and `BIT(1)` columns booleans, and every truth value the statement computes:
 
-```sql file="my_user_flags.sql" dialect="mysql"
-select id, active, role = 'admin' as is_admin from users
-```
-
-```ts twoslash
+```ts twoslash tab="main.ts"
 import userFlags from "./my_user_flags.sql";
 
 const rows = await userFlags.run(db);
 //    ^?
+```
+
+```sql tab="my_user_flags.sql" dialect="mysql"
+select id, active, role = 'admin' as is_admin from users
 ```
 
 - A table's column is a boolean read straight from the table, or through a derived table or a `with` query, which MySQL traces to the table.
@@ -157,31 +157,46 @@ const rows = await userFlags.run(db);
 
 A `JSON` value is parsed, and typed `unknown`, unless a `JSON_SCHEMA_VALID` `CHECK` holds the column and the statement reads it straight from its table, or the statement builds the JSON:
 
-```sql file="my_events.sql" dialect="mysql"
-select kind, payload from events
-```
-
-```ts twoslash
+```ts twoslash tab="main.ts"
 import events from "./my_events.sql";
 
 const rows = await events.run(db);
 //    ^?
 ```
 
+```sql tab="my_events.sql" dialect="mysql"
+select kind, payload from events
+```
+
 JSON the statement builds with `json_object` and `json_arrayagg` is typed from their arguments, each value as MySQL writes it in JSON:
 
-```sql file="my_order_summaries.sql" dialect="mysql"
+```ts twoslash tab="main.ts"
+import orderSummaries from "./my_order_summaries.sql";
+
+const rows = await orderSummaries.run(db);
+//    ^?
+```
+
+```sql tab="my_order_summaries.sql" dialect="mysql"
 select u.name,
   json_object('total', o.total, 'placed_at', o.placed_at) as summary
 from orders o
 join users u on u.id = o.user_id
 ```
 
-```ts twoslash
-import orderSummaries from "./my_order_summaries.sql";
+Through `json_arrayagg` the schema's type holds:
 
-const rows = await orderSummaries.run(db);
+```ts twoslash tab="main.ts"
+import eventsByKind from "./my_events_by_kind.sql";
+
+const groups = await eventsByKind.run(db);
 //    ^?
+```
+
+```sql tab="my_events_by_kind.sql" dialect="mysql"
+select kind, json_arrayagg(payload) as payloads
+from events
+group by kind
 ```
 
 - The schema's type reaches a plain `select` of the column over tables named without a schema, and the column inside `json_object` or `json_arrayagg`. Through a derived table or a `with` query, under a `union`, or in an expression (`json_extract(payload, '$.x')`), the column is `unknown`, and so is a parameter written to it.
@@ -193,7 +208,7 @@ const rows = await orderSummaries.run(db);
 
 ### Binary
 
-A `BINARY`, a `VARBINARY`, every `BLOB` and a `BIT` wider than 1 are a `Uint8Array`. mysql2 gives Reylo a `Buffer`, which is one, so `.run()` returns it as it is.
+A `BINARY`, a `VARBINARY`, every `BLOB` and a `BIT` wider than 1 are a `Uint8Array`. The `mysql2` driver gives Reylo a `Buffer`, which is one, so `.run()` returns it as it is.
 
 - A `GEOMETRY` is `unknown`, and its value is MySQL's bytes, the SRID and the WKB, as a `Uint8Array`.
 - A binary parameter takes a `Uint8Array`, a `Buffer` or not, on every driver.
@@ -223,16 +238,16 @@ A column is `| null` unless Reylo proves it never is. On MySQL the proof is the 
 
 Where the server cannot see what you know, `coalesce` and `ifnull` give a default, and the column is non-null:
 
-```sql file="my_shouts.sql" dialect="mysql"
-select upper(name) as shout, coalesce(upper(name), '') as shout_or_empty
-from users
-```
-
-```ts twoslash
+```ts twoslash tab="main.ts"
 import shouts from "./my_shouts.sql";
 
 const rows = await shouts.run(db);
 //    ^?
+```
+
+```sql tab="my_shouts.sql" dialect="mysql"
+select upper(name) as shout, coalesce(upper(name), '') as shout_or_empty
+from users
 ```
 
 ## Row counts
@@ -248,11 +263,7 @@ How many rows `.run()` resolves to comes from what Reylo proves the statement ca
 
 MySQL has no `returning`, so a write resolves to nothing. Read a new id with `last_insert_id()`, on the same connection, since it is that connection's:
 
-```sql file="my_last_insert_id.sql" dialect="mysql"
-select last_insert_id() as id
-```
-
-```ts twoslash
+```ts twoslash tab="main.ts"
 import mysql from "mysql2/promise";
 import lastInsertId from "./my_last_insert_id.sql";
 
@@ -262,6 +273,10 @@ const conn = await db.getConnection();
 const { id } = await lastInsertId.run(conn);
 //      ^?
 conn.release();
+```
+
+```sql tab="my_last_insert_id.sql" dialect="mysql"
+select last_insert_id() as id
 ```
 
 - A joined table's key proves nothing: `posts join users on users.id = posts.user_id where posts.id = :id` is `Row[]`.
@@ -312,17 +327,17 @@ MySQL types every parameter from where the statement uses it, since 8.0.22. One 
 
 A parameter is `| null` where the statement lets it be: where it tests it for null (`:p is null`, `:p is not null`, `isnull(:p)`, `:p <=> col`) or passes it first to `coalesce` or `ifnull`, and where it writes it whole to a column that may hold `NULL` (`values`, `insert … set`, `update … set`, `on duplicate key update`, `replace`), unless it also fills a `NOT NULL` column. Any other parameter is typed without `null`.
 
-```sql file="my_users_by_role.sql" dialect="mysql"
-with input as (select :role as role)
-select users.id, users.name from users, input
-where input.role is null or users.role = input.role
-```
-
-```ts twoslash
+```ts twoslash tab="main.ts"
 import usersByRole from "./my_users_by_role.sql";
 
 const users = await usersByRole.run(db, { role: null });
 //                                        ^?
+```
+
+```sql tab="my_users_by_role.sql" dialect="mysql"
+with input as (select :role as role)
+select users.id, users.name from users, input
+where input.role is null or users.role = input.role
 ```
 
 The one-line form is `where role = coalesce(:role, role)`.
@@ -354,7 +369,7 @@ MySQL reads its text its own way, and Reylo reads it the same way:
 - A `#` starts a comment to the end of the line, and so does `-- ` with a space after it: `:a --:b` is `:a - (-:b)`. A block comment ends at its first `*/`.
 - Where `NO_BACKSLASH_ESCAPES` or `ANSI_QUOTES` would read a statement otherwise, Reylo asks for the session's `sql_mode` and reads the statement by it.
 - A `||` is `OR` unless the session sets `PIPES_AS_CONCAT`: `name || 'x'` is a number. Write `concat(name, 'x')`.
-- A built-in's name with a space before its parenthesis, `count (x)`, is a stored function's unless the session sets `IGNORE_SPACE`, as mysql2 does.
+- A built-in's name with a space before its parenthesis, `count (x)`, is a stored function's unless the session sets `IGNORE_SPACE`, as `mysql2` does.
 - Where the session reads the statement otherwise than its text, Reylo keeps the server's types and proves no row count and no JSON shape.
 - A `/*! … */` comment is SQL MySQL runs, so a statement with one is an error: write it as plain SQL.
 
@@ -364,15 +379,15 @@ Each driver reads MySQL's protocol as it always does, and Reylo makes only the c
 
 | Driver | How Reylo reads its values | Refused | Lost before Reylo sees it |
 | --- | --- | --- | --- |
-| mysql2 | Its `.execute()`, with Reylo's options with each query, so a `BIGINT` and a date come as their exact text | | |
+| `mysql2` | Its `.execute()`, with Reylo's options with each query, so a `BIGINT` and a date come as their exact text | | |
 | PlanetScale | Reylo's `cast` with each query | 2.0, which binds no parameters | |
-| Bun.sql | Bun's own values, converted | | A `DATETIME`'s microseconds, an all-zero fraction, and a `TIME`'s fraction |
+| `Bun.sql` | Bun's own values, converted | | A `DATETIME`'s microseconds, an all-zero fraction, and a `TIME`'s fraction |
 
-- mysql2 runs on `.execute()`, the binary protocol, and its callback API through `.promise()`, both on the app's own pool or connection.
-- On Bun.sql, an expression that may be a `BIGINT` or a `DECIMAL` by what is bound (`round(:x)`) reads digits without a point as a `BIGINT`, since Bun gives both as text.
-- Each driver takes its transactions and connections too: mysql2's promise or callback API, PlanetScale's `.transaction()`, and Bun.sql's `.begin()`, `.savepoint()` and `.reserve()`.
+- The `mysql2` driver runs on `.execute()`, the binary protocol, and its callback API through `.promise()`, both on the app's own pool or connection.
+- On `Bun.sql`, an expression that may be a `BIGINT` or a `DECIMAL` by what is bound (`round(:x)`) reads digits without a point as a `BIGINT`, since Bun gives both as text.
+- Each driver takes its transactions and connections too: `mysql2`'s promise or callback API, PlanetScale's `.transaction()`, and `Bun.sql`'s `.begin()`, `.savepoint()` and `.reserve()`.
 
-The type check reads the schema through mysql2, so an app on PlanetScale or Bun.sql adds mysql2 as a dev dependency.
+The type check reads the schema through `mysql2`, so an app on PlanetScale or `Bun.sql` adds `mysql2` as a dev dependency.
 
 ## Limits
 

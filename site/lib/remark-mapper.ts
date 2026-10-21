@@ -34,7 +34,10 @@ export { pageFiles };
 //   resolves across all of them: to the nearest block above with that file name and the importing
 //   block's dialect, else to the first one below, as if the files were one.
 // - A `ts twoslash` block with no dialect of its own whose import resolves to a code-tab group of
-//   dialects becomes <DialectTabs follow> with a <Dialect value> panel per dialect of that group.
+//   dialects becomes <DialectTabs follow> with a <Dialect value> panel per dialect of that group. A
+//   group of dialects is code tabs named for their dialect (`tab="MySQL"`), or file tabs that each say
+//   theirs (`tab="users.sql (MySQL)" file="users.sql" dialect="mysql"`), the way every example shows a
+//   statement that differs per dialect beside its `main.ts` tab.
 // - `db` is declared unless the block declares or imports it; a block that names `Bun.` or imports
 //   `bun` or `bun:sqlite` gets Bun's types, and one that names `D1Database` without importing it
 //   gets Cloudflare's Workers types.
@@ -131,7 +134,8 @@ export function collect(tree: MdNode): Block[] {
             order: blocks.length,
             dialect,
             from: tabDialect ? 'tab' : panelDialect ? 'panel' : metaDialect ? 'meta' : 'default',
-            group: tabDialect ? ancestors.concat(node).findLast((a) => a.type === 'mdxJsxFlowElement' && a.name === 'CodeBlockTabs') : undefined,
+            // A tab named for its dialect, or a file's tab that says its dialect (`tab="users.sql (MySQL)" file="users.sql" dialect="mysql"`).
+            group: tabDialect || (tab && dialectOf(metaDialect)) ? ancestors.concat(node).findLast((a) => a.type === 'mdxJsxFlowElement' && a.name === 'CodeBlockTabs') : undefined,
           });
       } else walk(child, ancestors.concat(node));
     }
@@ -196,7 +200,8 @@ export function plan(blocks: Block[], targets?: Set<Block>): Plan[] {
     if (grouped.length) {
       const dialects = new Set(grouped.flatMap((b) => statements.filter((s) => s.group === b.group && s.name === b.name).map((s) => s.dialect)));
       const variants = (Object.keys(DIALECT_NAME) as Dialect[]).filter((d) => dialects.has(d)).map((dialect) => ({ dialect, needs: needs(dialect) }));
-      plans.push({ block, variants, expand: true });
+      // A group of one dialect, such as a dialect page's `main.ts | pg_events.sql`, needs no panel to follow.
+      plans.push({ block, variants, expand: variants.length > 1 });
       continue;
     }
     const dialect = nearest.length && nearest.every((b) => b.dialect === nearest[0]!.dialect) ? nearest[0]!.dialect : block.dialect;
@@ -377,6 +382,6 @@ export function remarkMapper() {
       block.parent.children!.splice(index, 1, jsx('DialectTabs', [['follow', null]], panels));
     }
     // The dialect and the file name are read; Shiki and Twoslash do not know the attributes.
-    for (const { node } of blocks) if (node.meta) node.meta = node.meta.replace(/(?:^|\s)(?:dialect|file)=(?:"[^"]*"|'[^']*'|\S+)/g, '').trim();
+    for (const { node } of blocks) if (node.meta) node.meta = node.meta.replace(/(?:^|\s)(?:dialect|file|strict)=(?:"[^"]*"|'[^']*'|\S+)/g, '').trim();
   };
 }

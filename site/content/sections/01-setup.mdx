@@ -7,41 +7,24 @@ title: "Setup"
 <AgentPrompt>
 
 ```text
-Set up Reylo in this project. Reylo lets TypeScript import .sql
-files, with types inferred from the live database. Its docs are one
-page, https://reylo.dev: follow the section linked at each step.
-Each setup also has a complete, working example project to copy:
-https://github.com/colinhacks/reylo/tree/main/examples
-In each, the README's "How Reylo is wired in" lists every line
-Reylo needs. Install from npm: the examples link local builds.
+Set up Reylo in this project. Reylo lets TypeScript import .sql files, with types inferred from the live database. Its docs are one page, https://reylo.dev, and each step below links its section.
 
-1. Check the requirements and install Reylo, the engine of the
-   project's database (@reylosql/postgres, @reylosql/mysql or
-   @reylosql/sqlite) and TypeScript 7.1 (currently in beta):
-   https://reylo.dev/#install
-2. Point Reylo at the development database with DATABASE_URL,
-   or with url in .reylo.yaml: https://reylo.dev/#reyloyaml
-3. Add Reylo to tsconfig.json as a content mapper, and add a
-   typecheck script that runs tsc --noEmit --runExternalCode:
-   https://reylo.dev/#typescript
-4. Make .sql imports load wherever the project runs code, with
-   Node's --import (https://reylo.dev/#node) or the plugin for its
-   runtime, bundler or framework (https://reylo.dev/#plugins).
-   The example for that setup shows it end to end:
-   https://github.com/colinhacks/reylo/tree/main/examples/<name>
-   (node, nub, bun, vite, nextjs, esbuild, webpack, rspack, jest)
-5. Set up the editor the project uses: https://reylo.dev/#editors
-6. Write a first query and run it with the project's own driver:
-   https://reylo.dev/#usage and https://reylo.dev/#supported-drivers
-   For more queries, from a list to nested rows, follow the
-   examples: https://reylo.dev/#examples
-7. Run the typecheck script. The query's types come from the
-   database; an error in a .sql file shows at its line and column.
+Each setup has a complete, working example project to copy, whose README's "How Reylo is wired in" lists every line Reylo needs. Install from npm, since the examples link local builds: https://github.com/colinhacks/reylo/tree/main/examples
+
+1. Check the requirements and install Reylo, the engine of the project's database (@reylosql/postgres, @reylosql/mysql or @reylosql/sqlite) and TypeScript 7.1 (currently in beta): https://reylo.dev/#install
+2. Add Reylo to tsconfig.json as a content mapper, and add a typecheck script that runs tsc --noEmit --runExternalCode: https://reylo.dev/#typescript
+3. Make .sql imports load wherever the project runs code, with Node's --import or the plugin for its runtime, bundler or framework: https://reylo.dev/#plugins
+   The example for that setup shows it end to end (node, nub, bun, vite, nextjs, esbuild, webpack, rspack, jest or cloudflare-workers): https://github.com/colinhacks/reylo/tree/main/examples/<name>
+4. Set up the editor the project uses: https://reylo.dev/#editors
+5. Point Reylo at the development database with DATABASE_URL, or with url in .reylo.yaml: https://reylo.dev/#reyloyaml
+6. Write a first query and run it with the project's own driver: https://reylo.dev/#usage and https://reylo.dev/#supported-drivers
+   For more queries, from a list to nested rows, follow the examples: https://reylo.dev/#examples
+7. Run the typecheck script. The query's types come from the database; an error in a .sql file shows at its line and column.
 ```
 
 </AgentPrompt>
 
-Install Reylo and point it at your database, then add it to each tool that loads your code.
+Install Reylo, add it to TypeScript and to each tool that loads your code, then point it at your database.
 
 ### Install
 
@@ -55,29 +38,6 @@ Reylo needs:
 npm install reylo
 npm install -D @reylosql/postgres  # or mysql, sqlite
 npm install -D typescript@beta
-```
-
-### `.reylo.yaml`
-
-Reylo finds your dev database through the `DATABASE_URL` environment variable.
-
-To override this, create a `.reylo.yaml` file in your project root and set the `url` field:
-
-```yaml title=".reylo.yaml"
-url: postgres://localhost:5432/app
-```
-
-You can also reference other environment variables via string interpolation:
-
-```yaml title=".reylo.yaml"
-url: ${APP_DATABASE_URL}
-```
-
-Or specify a set of `.env` files to load:
-
-```yaml title=".reylo.yaml"
-# the default is [.env.local, .env]
-env: [.env.development, .env]
 ```
 
 ### TypeScript
@@ -103,91 +63,12 @@ Then type-check with `--runExternalCode`, which lets `tsc` run content mappers:
 }
 ```
 
-### Editors
+### Plugins
 
-The editor needs the TypeScript 7.1 language server, with content mappers on.
+Node, Bun and Nub load Reylo's preload, and a bundler takes Reylo's plugin:
 
-<Accordions type="multiple">
-<Accordion title="VS Code" id="editor-vscode">
-
-1. Install the **TypeScript 7** extension (`TypeScriptTeam.native-preview`).
-2. Point it at the project's TypeScript: the extension's own copy is TypeScript 7.0, which has no content mappers.
-
-   ```json title=".vscode/settings.json"
-   {
-     "js/ts.experimental.useTsgo": true,
-     "js/ts.tsdk.path": "./node_modules/typescript"
-   }
-   ```
-
-3. Trust the workspace, and click **Allow** when the extension asks to use the workspace's TypeScript. Content mappers run in a trusted workspace only.
-
-Keep `DATABASE_URL` in `.env`: the editor doesn't see your shell's environment.
-
-</Accordion>
-<Accordion title="Cursor" id="editor-cursor">
-
-1. Install the **TypeScript 7** extension (`TypeScriptTeam.native-preview`).
-2. Point it at the project's TypeScript: the extension's own copy is TypeScript 7.0, which has no content mappers.
-
-   ```json title=".vscode/settings.json"
-   {
-     "js/ts.experimental.useTsgo": true,
-     "js/ts.tsdk.path": "./node_modules/typescript"
-   }
-   ```
-
-3. Trust the workspace, and click **Allow** when the extension asks to use the workspace's TypeScript. Content mappers run in a trusted workspace only.
-
-Keep `DATABASE_URL` in `.env`: the editor doesn't see your shell's environment.
-
-</Accordion>
-<Accordion title="Zed" id="editor-zed">
-
-1. Install the **TypeScript Language Server** extension by Zed Industries (search for "tsgo").
-2. Point it at the project's TypeScript, with content mappers on:
-
-   ```jsonc title=".zed/settings.json"
-   {
-     "languages": {
-       "TypeScript": {
-         "language_servers": [
-           "typescript-ls",
-           "!vtsls",
-           "!typescript-language-server",
-           "..."
-         ]
-       },
-       "TSX": {
-         "language_servers": [
-           "typescript-ls",
-           "!vtsls",
-           "!typescript-language-server",
-           "..."
-         ]
-       }
-     },
-     "lsp": {
-       "typescript-ls": {
-         // the extension's own download is TypeScript 7.0, which has no content mappers
-         "binary": {
-           "path": "node_modules/typescript/bin/tsc",
-           "arguments": ["--lsp", "--stdio"]
-         },
-         "initialization_options": { "runExternalCode": true }
-       }
-     }
-   }
-   ```
-
-3. Trust the folder. In restricted mode, Zed starts no language server.
-
-Zed doesn't send `.sql` files to the language server, so an error inside one shows only in the type check.
-
-</Accordion>
-</Accordions>
-
-### Node
+<Tabs items={["Node", "Bun", "Nub", "Vite", "Next.js", "esbuild", "webpack", "Rspack", "Cloudflare", "Jest"]}>
+<Tab value="Node" id="setup-node">
 
 Load Reylo's preload with `--import`:
 
@@ -195,12 +76,8 @@ Load Reylo's preload with `--import`:
 node --env-file=.env --import reylo/register main.ts
 ```
 
-### Plugins
-
-Bun and Nub load the preload from their config files, and a bundler takes Reylo's plugin:
-
-<Accordions type="multiple">
-<Accordion title="Bun" id="setup-bun">
+</Tab>
+<Tab value="Bun" id="setup-bun">
 
 Add the preload to `bunfig.toml`, and under `[test]` for `bun test`:
 
@@ -224,8 +101,8 @@ await Bun.build({
 });
 ```
 
-</Accordion>
-<Accordion title="Nub" id="setup-nub">
+</Tab>
+<Tab value="Nub" id="setup-nub">
 
 Add the preload to `nub.jsonc`:
 
@@ -235,8 +112,8 @@ Add the preload to `nub.jsonc`:
 }
 ```
 
-</Accordion>
-<Accordion title="Vite" id="setup-vite">
+</Tab>
+<Tab value="Vite" id="setup-vite">
 
 ```ts title="vite.config.ts"
 import { defineConfig } from "vite";
@@ -249,8 +126,8 @@ export default defineConfig({
 
 Import `.sql` files from server code only, such as a `.server/` directory: Vite bundles a query wherever it is imported, the browser included. Vitest needs only this plugin.
 
-</Accordion>
-<Accordion title="Next.js" id="setup-nextjs">
+</Tab>
+<Tab value="Next.js" id="setup-nextjs">
 
 ```ts title="next.config.ts"
 import type { NextConfig } from "next";
@@ -293,8 +170,8 @@ Next.js's own type check can't run content mappers, so run `tsc` before `next bu
 }
 ```
 
-</Accordion>
-<Accordion title="esbuild" id="setup-esbuild">
+</Tab>
+<Tab value="esbuild" id="setup-esbuild">
 
 ```js title="build.mjs"
 import * as esbuild from "esbuild";
@@ -310,8 +187,8 @@ await esbuild.build({
 });
 ```
 
-</Accordion>
-<Accordion title="webpack" id="setup-webpack">
+</Tab>
+<Tab value="webpack" id="setup-webpack">
 
 ```js title="webpack.config.mjs"
 export default {
@@ -322,10 +199,10 @@ export default {
 };
 ```
 
-Compile TypeScript with `swc-loader` or `babel-loader`: `ts-loader` needs TypeScript's JavaScript API, which TypeScript 7 does not have.
+Compile TypeScript with `swc-loader` or `babel-loader`, since TypeScript 7 has no JavaScript API for `ts-loader`.
 
-</Accordion>
-<Accordion title="Rspack" id="setup-rspack">
+</Tab>
+<Tab value="Rspack" id="setup-rspack">
 
 ```js title="rspack.config.mjs"
 export default {
@@ -336,8 +213,25 @@ export default {
 };
 ```
 
-</Accordion>
-<Accordion title="Jest" id="setup-jest">
+</Tab>
+<Tab value="Cloudflare" id="setup-cloudflare-workers">
+
+Add Reylo's Vite plugin beside Cloudflare's:
+
+```ts title="vite.config.ts"
+import { cloudflare } from "@cloudflare/vite-plugin";
+import { defineConfig } from "vite";
+import reylo from "reylo/vite";
+
+export default defineConfig({
+  plugins: [reylo(), cloudflare()],
+});
+```
+
+A D1 binding is a client, as in `getUser.run(env.DB, { id: 1 })`, and Reylo needs no `nodejs_compat`. For the type check, set `url` in `.reylo.yaml` to the local D1 file that `wrangler d1 migrations apply --local` creates, not in `.env`, which Wrangler loads into the Worker as secrets.
+
+</Tab>
+<Tab value="Jest" id="setup-jest">
 
 Jest takes Reylo's transformer:
 
@@ -353,5 +247,113 @@ export default {
 NODE_OPTIONS=--experimental-vm-modules npx jest
 ```
 
-</Accordion>
-</Accordions>
+</Tab>
+</Tabs>
+
+### Editors
+
+The editor needs the TypeScript 7.1 language server, with content mappers on.
+
+<Tabs items={["VS Code", "Cursor", "Zed"]}>
+<Tab value="VS Code" id="editor-vscode">
+
+1. Install the **TypeScript 7** extension (`TypeScriptTeam.native-preview`).
+2. Point it at the project's TypeScript: the extension's own copy is TypeScript 7.0, which has no content mappers.
+
+   ```json title=".vscode/settings.json"
+   {
+     "js/ts.experimental.useTsgo": true,
+     "js/ts.tsdk.path": "./node_modules/typescript"
+   }
+   ```
+
+3. Trust the workspace, and click **Allow** when the extension asks to use the workspace's TypeScript. Content mappers run in a trusted workspace only.
+
+Keep `DATABASE_URL` in `.env`: the editor doesn't see your shell's environment.
+
+</Tab>
+<Tab value="Cursor" id="editor-cursor">
+
+1. Install the **TypeScript 7** extension (`TypeScriptTeam.native-preview`).
+2. Point it at the project's TypeScript: the extension's own copy is TypeScript 7.0, which has no content mappers.
+
+   ```json title=".vscode/settings.json"
+   {
+     "js/ts.experimental.useTsgo": true,
+     "js/ts.tsdk.path": "./node_modules/typescript"
+   }
+   ```
+
+3. Trust the workspace, and click **Allow** when the extension asks to use the workspace's TypeScript. Content mappers run in a trusted workspace only.
+
+Keep `DATABASE_URL` in `.env`: the editor doesn't see your shell's environment.
+
+</Tab>
+<Tab value="Zed" id="editor-zed">
+
+1. Install the **TypeScript Language Server** extension by Zed Industries (search for "tsgo").
+2. Point it at the project's TypeScript, with content mappers on:
+
+   ```jsonc title=".zed/settings.json"
+   {
+     "languages": {
+       "TypeScript": {
+         "language_servers": [
+           "typescript-ls",
+           "!vtsls",
+           "!typescript-language-server",
+           "..."
+         ]
+       },
+       "TSX": {
+         "language_servers": [
+           "typescript-ls",
+           "!vtsls",
+           "!typescript-language-server",
+           "..."
+         ]
+       }
+     },
+     "lsp": {
+       "typescript-ls": {
+         // the extension's own download is TypeScript 7.0, which has no content mappers
+         "binary": {
+           "path": "node_modules/typescript/bin/tsc",
+           "arguments": ["--lsp", "--stdio"]
+         },
+         "initialization_options": { "runExternalCode": true }
+       }
+     }
+   }
+   ```
+
+3. Trust the folder. In restricted mode, Zed starts no language server.
+
+Zed doesn't send `.sql` files to the language server, so an error inside one shows only in the type check.
+
+</Tab>
+</Tabs>
+
+### `.reylo.yaml`
+
+Reylo finds your dev database through the `DATABASE_URL` environment variable.
+
+To override this, create a `.reylo.yaml` file in your project root and set the `url` field:
+
+```yaml title=".reylo.yaml"
+url: postgres://localhost:5432/app
+```
+
+You can also reference other environment variables via string interpolation:
+
+```yaml title=".reylo.yaml"
+url: ${APP_DATABASE_URL}
+```
+
+Or specify a set of `.env` files to load:
+
+```yaml title=".reylo.yaml"
+# the default is [.env.local, .env]
+env: [.env.development, .env]
+```
+

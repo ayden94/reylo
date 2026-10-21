@@ -13,7 +13,7 @@ url: ${DATABASE_URL}
 direct_url: ${DIRECT_URL}
 # the .env files Reylo reads (the default)
 env: [.env.local, .env]
-# make a parameter whose type cannot be inferred an error
+# an error for a parameter whose type cannot be inferred (the default)
 strict_params: true
 ```
 
@@ -64,9 +64,9 @@ env: [.env.development, .env]
 
 ### `strict_params`
 
-With `strict_params: true`, a [parameter whose type cannot be inferred](#a-parameter-nothing-types) is an error that says to [cast it](#casts), instead of `unknown`.
+A [parameter whose type cannot be inferred](#a-parameter-nothing-types) is an error that says to [cast it](#casts). Set `strict_params: false` to type it `unknown` instead.
 
 ```yaml title=".reylo.yaml"
-# the default is false
-strict_params: true
+# the default is true
+strict_params: false
 ```

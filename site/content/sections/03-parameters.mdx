@@ -43,23 +43,24 @@ findPosts.sql;
 
 When casting to `json` or `jsonb`, you can define a JSON Schema annotation:
 
-```sql tab="record_signup.sql" dialect="all"
+```sql tab="record_click.sql" dialect="all"
 insert into events (kind, payload)
-values ('signup', :payload::json('{
+values ('click', :payload::json('{
   "type": "object",
   "properties": {
-    "plan": { "type": "string", "enum": ["free", "pro"] },
-    "referrer": { "type": "string" }
+    "x": { "type": "integer" },
+    "y": { "type": "integer" },
+    "button": { "type": "string", "enum": ["left", "right"] }
   },
-  "required": ["plan"]
+  "required": ["x", "y"]
 }'))
 ```
 
 ```ts twoslash tab="main.ts"
-import recordSignup from "./record_signup.sql";
+import recordClick from "./record_click.sql";
 
-await recordSignup.run(db, { payload: { plan: "pro" } });
-//                           ^?
+await recordClick.run(db, { payload: { x: 10, y: 20 } });
+//                          ^?
 ```
 
 Reylo uses it to infer the parameter's type, and validates your input against the schema when you call `.run()`.

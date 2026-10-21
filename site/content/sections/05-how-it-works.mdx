@@ -17,7 +17,7 @@ To type a query, Reylo has your live database prepare it, without running it, an
 - nullability, from `NOT NULL` and outer joins
 - the row count, from keys, aggregates, `limit 1` and `returning`
 
-At run time, the [preload](#node) or a bundler [plugin](#plugins) turns the same file into a module that runs the query through your driver.
+At run time, the [preload](#setup-node) or a bundler [plugin](#plugins) turns the same file into a module that runs the query through your driver.
 
 Reylo caches each answer in `.reylo/`, keyed by a fingerprint of the schema.
 
@@ -108,7 +108,7 @@ Reylo reads the schema from the database file and [prepares](https://sqlite.org/
 
 <Details summary="When a parameter's type cannot be inferred" id="a-parameter-nothing-types">
 
-It's `unknown` until a [cast](#casts) types it, and an error with [`strict_params: true`](#strict_params).
+It's an error that says to [cast it](#casts), unless [`strict_params: false`](#strict_params) types it `unknown`.
 
 <DialectTabs>
 <Dialect value="Postgres">
