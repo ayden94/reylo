@@ -1,10 +1,11 @@
-// The link preview reylo.dev shows on X, Slack, Discord, LinkedIn and the rest: Next.js links this
-// image from every page as og:image, and as X's image too, with a hash of this file's text in its
-// URL. The card is drawn here rather than in a module this file imports, so that a change to the
-// card changes the URL and the caches of X and Slack fetch the new card.
+// The link preview reylo.dev shows on X, Slack, Discord, LinkedIn and the rest, written to
+// build/client/opengraph-image.png at build time: the page links it as og:image, and as X's image
+// too, with a hash of this file's text in its URL (app/routes/home.tsx). The card is drawn here
+// rather than in a module this file imports, so that a change to the card changes the URL and the
+// caches of X and Slack fetch the new card.
 //
 // The wordmark, the subheader's claim, and the opening example with the type of `author` in a
-// popup, as the page shows it on hover. Drawn by Next.js's ImageResponse (Satori), in the site's
+// popup, as the page shows it on hover. Drawn by @vercel/og's ImageResponse (Satori), in the site's
 // dark theme: Geist and Geist Mono (assets/fonts, SIL Open Font License) on the dark page's
 // colours, with the code in the page's GitHub Dark colours. Satori lays out flex boxes only, so
 // every element with more than one child is a flex box. A card drawn entirely as a code block, with
@@ -12,15 +13,10 @@
 // maintainer preferred this one ("that's worse than the old card. I liked the old card").
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { ImageResponse } from 'next/og';
 import type { CSSProperties, ReactNode } from 'react';
 import { wordmark } from '@/components/wordmark';
 
-export const size = { width: 1200, height: 630 };
-export const contentType = 'image/png';
-
-export const alt =
-  'Reylo: import .sql files into TypeScript, fully typed. Code imports getAuthor from "./get_author.sql" and runs it, and the result is typed { id: number; name: string; post_count: number } | null.';
+import { ogSize } from '@/lib/og';
 
 // The dark theme of app/global.css, and Shiki's GitHub Dark for the code.
 const color = {
@@ -135,8 +131,9 @@ const font = async (file: string, name: string, weight: 400 | 500 | 600) => ({
   data: await readFile(join(process.cwd(), 'assets/fonts', file)),
 });
 
-/** The preview as a PNG, built once, with the site. */
-export default async function Image() {
+/** The preview as a PNG, built once, with the site. Its description is the page's og:image:alt (lib/og.ts). */
+export async function loader() {
+  const { ImageResponse } = await import('@vercel/og');
   const fonts = await Promise.all([font('Geist-600.ttf', 'Geist', 600), font('GeistMono-400.ttf', 'Geist Mono', 400), font('GeistMono-500.ttf', 'Geist Mono', 500)]);
-  return new ImageResponse(<Card />, { ...size, fonts });
+  return new ImageResponse(<Card />, { ...ogSize, fonts });
 }

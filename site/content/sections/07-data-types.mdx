@@ -1,0 +1,76 @@
+---
+title: "Data types"
+---
+
+## Data types
+
+Reylo decodes its own queries' values itself, so every driver gives the same types. A 64-bit integer is a `bigint`, a decimal its exact text, and an instant its ISO 8601 text in UTC: no value is a `Date`.
+
+<DialectTabs>
+<Dialect value="Postgres">
+
+| SQL type | TypeScript |
+| --- | --- |
+| `smallint`, `integer`, `oid` | `number` |
+| `bigint` | `bigint` |
+| `real`, `double precision` | `number` |
+| `numeric`, `money` | `string` |
+| `text`, `varchar`, `char` | `string` |
+| `boolean` | `boolean` |
+| `uuid` | `string` |
+| `date` | `string`, as `2026-10-20` |
+| `timestamp` | `string`, as `2026-10-20T10:00:00.123456` |
+| `timestamptz` | `string`, the instant in UTC, as `2026-10-20T08:00:00.123456Z` |
+| `time`, `timetz`, `interval` | `string` |
+| `json`, `jsonb` | `unknown` |
+| `json`, `jsonb` a JSON Schema `CHECK` holds (`jsonb_matches_schema(…)`) | what the schema admits |
+| `jsonb_build_object(…)`, `jsonb_agg(…)` | the object or array it builds |
+| `bytea` | `Uint8Array` |
+| An array | an array of its element type, a `NULL` element `null` |
+| An enum | the union of its labels |
+| A domain | its base type |
+| A row value | `string` |
+| Every other type (`inet`, `cidr`, ranges, `point`, `tsvector`, `xml`, …) | a `string`, as the database writes it |
+
+</Dialect>
+<Dialect value="MySQL">
+
+| SQL type | TypeScript |
+| --- | --- |
+| `TINYINT`, `SMALLINT`, `MEDIUMINT`, `INT`, `YEAR` | `number` |
+| `BOOLEAN` (a `TINYINT(1)`), `BIT(1)` | `boolean` |
+| A comparison, `IS NULL`, `IN`, `BETWEEN`, `LIKE`, `EXISTS`, `NOT`, `AND`, `OR` | `boolean` |
+| `BIGINT`, `count(*)` | `bigint` |
+| `DECIMAL` | `string` |
+| `FLOAT`, `DOUBLE` | `number` |
+| `CHAR`, `VARCHAR`, `TEXT` | `string` |
+| `ENUM` | `string` |
+| `SET` | `string`, as `a,b` |
+| `DATE` | `string`, as `2026-10-20` |
+| `DATETIME`, `TIMESTAMP` | `string`, as `2026-10-20T10:00:00.123` |
+| `TIME` | `string` |
+| `JSON` | `unknown` |
+| `JSON` a JSON Schema `CHECK` holds (`json_schema_valid(…)`) | what the schema admits |
+| `json_object(…)`, `json_arrayagg(…)` | the object or array it builds |
+| `BINARY`, `VARBINARY`, `BLOB`, `BIT` wider than 1 | `Uint8Array` |
+
+</Dialect>
+<Dialect value="SQLite">
+
+| Declared type | TypeScript |
+| --- | --- |
+| `INTEGER`, `INT`, `count(*)` | `number` |
+| `BIGINT`, `INT8`, `UNSIGNED BIG INT` | `bigint` |
+| `REAL` | `number` |
+| `TEXT` | `string` |
+| `BLOB` | `Uint8Array` |
+| `BOOLEAN`, `BOOL` | `boolean` |
+| A comparison, `IS NULL`, `IN`, `BETWEEN`, `LIKE`, `EXISTS`, `NOT`, `AND`, `OR` | `boolean` |
+| `NUMERIC`, `DATE`, `DATETIME` | `number \| string` |
+| No type, or `ANY` in a `STRICT` table | `unknown` |
+| `json_object(…)`, `json_group_array(…)` | `string` |
+
+</Dialect>
+</DialectTabs>
+
+Every rule and edge case of each database, from 64-bit integers to time zones, nulls, row counts and parameters, is on its own page: [Postgres](/postgres#data-types), [MySQL](/mysql#data-types) and [SQLite](/sqlite#data-types).

@@ -1,0 +1,184 @@
+---
+title: "How it works"
+---
+
+## How it works
+
+Reylo is a [content mapper](https://devblogs.microsoft.com/typescript/announcing-typescript-7-1-beta/#content-mappers), the kind of plugin [TypeScript 7.1](https://devblogs.microsoft.com/typescript/announcing-typescript-7-1-beta/) introduced for files that aren't TypeScript.
+
+Whenever the type checker meets a `.sql` import, in `tsc` or in your editor, it hands Reylo the file and takes back the module's types.
+
+<HowItWorksDiagram />
+
+To type a query, Reylo has your live database prepare it, without running it, and reads the catalog. From the answer, it learns:
+
+- the parameter types
+- the column types
+- nullability, from `NOT NULL` and outer joins
+- the row count, from keys, aggregates, `limit 1` and `returning`
+
+At run time, the [preload](#node) or a bundler [plugin](#plugins) turns the same file into a module that runs the query through your driver.
+
+Reylo caches each answer in `.reylo/`, keyed by a fingerprint of the schema.
+
+After a migration, the next type check sees the new schema: a dropped column fails in the `.sql` file that names it, and in the code that reads it.
+
+<Details summary="What an error looks like" id="errors">
+
+An error in a `.sql` file is a type error at its line and column, in the type check and in the editor:
+
+```ansi title="Terminal"
+$ tsc --noEmit --runExternalCode
+[96mget_user.sql[0m:[93m1[0m:[93m12[0m - [91merror[0m[90m reylo6: [0mcolumn "nmae" does not exist (42703)
+
+[7m1[0m select id, nmae, email
+[7m [0m [91m           ~~~~[0m
+
+Found 1 error in get_user.sql[90m:1[0m
+```
+
+A wrong argument is an error at the call site:
+
+```ts twoslash
+// @errors: 2322
+import getUser from "./get_user.sql";
+
+const user = await getUser.run(db, { id: "1" });
+```
+
+While a `.sql` file has an error, `tsc` holds back the TypeScript errors, so fix the SQL first.
+
+<DialectTabs follow>
+<Dialect value="MySQL">
+
+A MySQL prepare error has no position, so the error covers the whole statement.
+
+</Dialect>
+</DialectTabs>
+
+</Details>
+
+<Details summary="Where each type comes from, in each dialect" id="sources">
+
+<DialectTabs>
+<Dialect value="Postgres">
+
+Reylo sends the query to the live database [prepared](https://www.postgresql.org/docs/current/sql-prepare.html) and reads back the database's own type information on its parameters and return type. This information is cross-referenced against the schema catalog, enabling high-fidelity type inference for any query.
+
+| What | Where it comes from |
+| --- | --- |
+| Parameter types | the server's description of the prepared statement |
+| Column types | the server's description; an enum as its labels, a domain as its base type, a JSON column as what its JSON Schema `CHECK` admits |
+| Nullability | the catalog's `NOT NULL`, outer joins, the expressions |
+| Row count | primary and unique keys, aggregates, `limit 1`, `returning` |
+| Nested JSON | built with `jsonb_build_object`, `jsonb_agg` or `to_jsonb` of a row, typed from their arguments |
+
+</Dialect>
+<Dialect value="MySQL">
+
+Reylo sends the query to the live database [prepared](https://dev.mysql.com/doc/refman/8.4/en/sql-prepared-statements.html) and reads back the database's own type information on its parameters and return type.
+
+Reylo adds which parameters may be null, the row count, and the shape of JSON the query builds.
+
+| What | Where it comes from |
+| --- | --- |
+| Parameter types | the prepared statement's metadata; whether one may be null, from the statement, as on Postgres |
+| Column types | the prepared statement's metadata; a JSON column read from its table as what its JSON Schema `CHECK` admits |
+| Nullability | the server's `NOT NULL` flag |
+| Row count | primary and unique keys, aggregates; a write is `void` |
+| Nested JSON | built with `json_object` and `json_arrayagg`, typed from their arguments |
+
+</Dialect>
+<Dialect value="SQLite">
+
+Reylo reads the schema from the database file and [prepares](https://sqlite.org/c3ref/prepare.html) the query in its own copy of SQLite, which reports where each column and parameter comes from.
+
+| What | Where it comes from |
+| --- | --- |
+| Parameter types | where SQLite places the parameter: a comparison with a column, an element of a row value, an `insert` or `update` column, a `cast`, `limit` and `offset` |
+| Column types | the declared type's affinity |
+| Nullability | the table's `NOT NULL`, outer joins, Reylo's table of SQLite's built-in functions |
+| Row count | unique indexes and `integer primary key` |
+| Nested JSON | `string` |
+
+</Dialect>
+</DialectTabs>
+
+</Details>
+
+<Details summary="When a parameter's type cannot be inferred" id="a-parameter-nothing-types">
+
+It's `unknown` until a [cast](#casts) types it, and an error with [`strict_params: true`](#strict_params).
+
+<DialectTabs>
+<Dialect value="Postgres">
+
+Postgres types a parameter from its context: a bare `select :x` is a `string`, and `select :x is null` is an error until a cast types it.
+
+</Dialect>
+<Dialect value="MySQL">
+
+MySQL types every parameter: one that nothing else types, such as a bare `select :x`, is a `string`.
+
+</Dialect>
+<Dialect value="SQLite">
+
+A bare `select :x`, or an argument of a function your application registers or of a table-valued function other than `json_each` and `json_tree`, has no type until a cast gives it one:
+
+```sql
+select length(:text::text) as n
+```
+
+</Dialect>
+</DialectTabs>
+
+</Details>
+
+<Details summary="Which matches count as a key, in each dialect" id="key-matches">
+
+<DialectTabs>
+<Dialect value="Postgres">
+
+Also a key match:
+
+- a join on the joined table's key
+- a unique index on an expression or with a `where`
+- a `distinct` or `group by` over values the `where` pins
+
+</Dialect>
+<Dialect value="MySQL">
+
+Only a match on one table's own primary or unique key counts, with or without a `distinct` or `group by`. These give `many`:
+
+- a joined table's key
+- a unique index on an expression
+- a `distinct` or `group by` over pinned values that are not a key
+
+</Dialect>
+<Dialect value="SQLite">
+
+Also a key match:
+
+- a join on the joined table's key
+- a `distinct` or `group by` over values the `where` pins
+
+A unique index on an expression or with a `where` gives `many`.
+
+</Dialect>
+</DialectTabs>
+
+</Details>
+
+<Details summary="In CI, and in builds without a database" id="in-ci">
+
+A CI job that type-checks starts the database, applies the migrations, and runs `tsc --noEmit --runExternalCode` with `DATABASE_URL` set. Tests need the database too, or a filled `.reylo/`.
+
+Every step that loads a `.sql` file (the type check, a plugin, the preload) keeps its analysis in `.reylo/`, and a later step reads it from there:
+
+- The `.reylo/` directory is a cache with its own `.gitignore`, so git skips it.
+- When the database answers, an entry made against another schema is analyzed again. An editor or a dev server checks the schema again at most every 5 seconds.
+- When the database is out of reach, the entries are used as they are, and a statement that `.reylo/` lacks is an error.
+
+A build that can't reach the database, such as a container build, uses the `.reylo/` a type check filled. Its entries are keyed by the database's URL, so the build sets the same URL, even though it can't connect.
+
+</Details>

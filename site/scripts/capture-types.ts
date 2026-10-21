@@ -2,7 +2,7 @@
 // `ts twoslash` block of the docs imports, written to lib/sql-modules.json, which
 // lib/remark-mapper.ts hides above each block's `// ---cut---` at build time.
 //
-//   nub run capture                          every page under content/docs
+//   nub run capture                          every page: content/docs, with content/sections
 //   nub run capture -- content/drafts/x.mdx  those pages too
 //   nub run capture -- --schema mysql=f.sql  a dialect's schema, for a page that shows none
 //
@@ -15,18 +15,17 @@
 // renders the module exactly as src/mapper.ts does, with each typed JSON parameter's type computed
 // from its schema (scripts/schema-type.ts) where the loader still says `unknown`. An error in a
 // statement a block imports fails the run; one in a statement nothing imports is a warning.
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { createProcessor } from '@mdx-js/mdx';
-import { remarkCodeTab } from 'fumadocs-core/mdx-plugins';
 import postgres from 'postgres';
 import mysql from 'mysql2/promise';
 import { Session } from '../../src/analyze.ts';
 import { ident, renderParamType, renderType } from '../../src/render.ts';
 import type { Analysis } from '../../src/engine.ts';
-import { collect, plan, isStatement, DIALECT_NAME, SCHEMA_FILE, type Block, type Dialect, type MdNode, type Modules } from '../lib/remark-mapper.ts';
+import { collectFiles, plan, isStatement, DIALECT_NAME, SCHEMA_FILE, type Block, type Dialect, type Modules } from '../lib/remark-mapper.ts';
+import { sitePages } from '../lib/page-files.ts';
 import { schemaType } from './schema-type.ts';
 
 const site = path.resolve(import.meta.dirname, '..');
@@ -56,28 +55,16 @@ for (let i = 0; i < args.length; i++) {
   } else if (arg.startsWith('-')) fail(`unknown option ${arg}`);
   else files.push(path.resolve(arg));
 }
-const docs = path.join(site, 'content', 'docs');
-const pages = [...new Set([...mdxFiles(docs), ...files])];
-
-function mdxFiles(dir: string): string[] {
-  return readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? mdxFiles(path.join(dir, e.name)) : e.name.endsWith('.mdx') ? [path.join(dir, e.name)] : []));
-}
+// The site's pages (lib/page-files.ts): the main page is its files together, the opening with the
+// schema and then a file per section, whose imports resolve across all of them; every other file
+// of content/docs, and each file named on the command line, is a page by itself.
+const ownPages = sitePages(site);
+const known = new Set(ownPages.flat());
+const pages: string[][] = [...ownPages, ...files.filter((file) => !known.has(file)).map((file) => [file])];
 
 function fail(message: string): never {
   console.error(`capture: ${message}`);
   process.exit(1);
-}
-
-// ---- The page, as the build reads it ----
-
-/** The page's tree as Fumadocs has it when lib/remark-mapper.ts runs: MDX parsed, then code tabs grouped. */
-function parse(file: string): MdNode {
-  // fumadocs-mdx takes the frontmatter off before it parses; blank lines keep the line numbers.
-  const text = readFileSync(file, 'utf8').replace(/^---\n[\s\S]*?\n---\n/, (m) => '\n'.repeat(m.split('\n').length - 1));
-  const processor = createProcessor();
-  const tree = processor.parse(text) as unknown as MdNode;
-  (remarkCodeTab as unknown as (this: unknown) => (tree: MdNode) => void).call(processor)(tree);
-  return tree;
 }
 
 // ---- The syntax the engine does not build yet ----
@@ -240,11 +227,11 @@ let analyzed = 0;
 
 try {
   for (const page of pages) {
-    const shown = path.relative(site, page).startsWith('..') ? page : path.relative(site, page);
+    const shown = path.relative(site, page[0]!).startsWith('..') ? page[0]! : path.relative(site, page[0]!);
     let blocks: Block[];
     let needed: Set<Block>;
     try {
-      blocks = collect(parse(page));
+      blocks = collectFiles(page, site);
       needed = new Set(plan(blocks).flatMap((p) => p.variants.flatMap((v) => v.needs.map((n) => n.block))));
     } catch (e) {
       errors.push(`${shown}: ${(e as Error).message}`);
@@ -260,7 +247,7 @@ try {
     for (const dialect of ORDER) {
       const mine = statements.filter((b) => b.dialect === dialect);
       if (!mine.length) continue;
-      const report = (block: Block, message: string) => (needed.has(block) ? errors : warnings).push(`${shown}:${block.line}: ${DIALECT_NAME[dialect]} ${block.name}: ${message}\n${indent(block.node.value)}`);
+      const report = (block: Block, message: string) => (needed.has(block) ? errors : warnings).push(`${block.file ?? shown}:${block.line}: ${DIALECT_NAME[dialect]} ${block.name}: ${message}\n${indent(block.node.value)}`);
       const schema = schemas[dialect];
       if (schema === undefined) {
         for (const block of mine) report(block, `the page has no ${DIALECT_NAME[dialect]} ${SCHEMA_FILE} block to build its schema from; add one, or pass --schema ${dialect}=<file>`);
@@ -304,7 +291,7 @@ try {
           const slot = ((modules[dialect] ??= {})[block.name!] ??= {});
           if (slot[block.hash] === result.text) continue;
           if (slot[block.hash] !== undefined) {
-            errors.push(`${shown}:${block.line}: ${DIALECT_NAME[dialect]} ${block.name}: another page has the same statement with other types (another schema); give one of them another file name`);
+            errors.push(`${block.file ?? shown}:${block.line}: ${DIALECT_NAME[dialect]} ${block.name}: another page has the same statement with other types (another schema); give one of them another file name`);
             continue;
           }
           slot[block.hash] = result.text;

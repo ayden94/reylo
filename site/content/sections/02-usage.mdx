@@ -1,0 +1,239 @@
+---
+title: "Usage"
+---
+
+## Usage
+
+Write a query in a `.sql` file, import it, and run it with your database driver. Reylo uses your live dev database to compile the query and retrieve its types.
+
+```ts twoslash tab="main.ts" dialect="postgres"
+import postgres from "postgres";
+import getUser from "./get_user.sql";
+
+const db = postgres(process.env.DATABASE_URL!);
+const user = await getUser.run(db, { id: 1 });
+```
+
+```sql tab="get_user.sql" dialect="all"
+select id, name, email from users where id = :id::int
+```
+
+### `.sql`
+
+The compiled query, as Reylo sends it to your database:
+
+```ts twoslash
+import getUser from "./get_user.sql";
+
+getUser.sql;
+//      ^?
+```
+
+### `.raw`
+
+The file's contents, before Reylo compiles its [parameters](#parameters):
+
+```ts twoslash
+import getUser from "./get_user.sql";
+
+getUser.raw;
+//      ^?
+```
+
+### `.run()`
+
+Runs the query with your driver's client:
+
+```ts twoslash
+import getUser from "./get_user.sql";
+
+const user = await getUser.run(db, { id: 1 });
+//    ^?
+```
+
+It resolves to the rows, shaped by how many the query can return:
+
+| The query | Resolves to |
+| --- | --- |
+| A match on a primary or unique key, or `limit 1` | `Row \| null` |
+| An aggregate without `group by`, a one-row `insert … returning` | `Row` |
+| An `insert`, `update` or `delete` without `returning` | `void` |
+| Anything else | `Row[]` |
+
+It throws when the rows don't fit the shape, such as a second row for `Row | null`. The client can also be a transaction or a connection ([Supported drivers](#supported-drivers)).
+
+### `.runSync()`
+
+Runs the query synchronously, on `better-sqlite3`, `node:sqlite`, `bun:sqlite` and the `Database` of `@tursodatabase/database/compat`:
+
+```ts twoslash dialect="sqlite"
+import Database from "better-sqlite3";
+import getUser from "./get_user.sql";
+
+const db = new Database("app.db");
+const user = getUser.runSync(db, { id: 1 });
+//    ^?
+```
+
+### `.with()`
+
+Binds the query to a client, and returns a function that takes the parameters:
+
+```ts twoslash
+import getUser from "./get_user.sql";
+
+const get = getUser.with(db);
+const user = await get({ id: 1 });
+```
+
+### `.inputSchema`
+
+The parameters' JSON Schema, for an OpenAPI document, a form, an agent's tool or a library that reads [Standard Schema](https://standardschema.dev):
+
+<DialectTabs follow>
+<Dialect value="Postgres">
+
+```ts twoslash
+import getUser from "./get_user.sql";
+
+getUser.inputSchema;
+/**
+ * {
+ *   "$schema": "https://json-schema.org/draft/2020-12/schema",
+ *   "type": "object",
+ *   "properties": {
+ *     "id": { "type": "integer", "format": "int32" }
+ *   },
+ *   "required": ["id"],
+ *   "additionalProperties": false
+ * }
+ */
+```
+
+</Dialect>
+<Dialect value="MySQL">
+
+```ts twoslash
+import getUser from "./get_user.sql";
+
+getUser.inputSchema;
+/**
+ * {
+ *   "$schema": "https://json-schema.org/draft/2020-12/schema",
+ *   "type": "object",
+ *   "properties": {
+ *     "id": { "type": "integer", "format": "int32" }
+ *   },
+ *   "required": ["id"],
+ *   "additionalProperties": false
+ * }
+ */
+```
+
+</Dialect>
+<Dialect value="SQLite">
+
+```ts twoslash
+import getUser from "./get_user.sql";
+
+getUser.inputSchema;
+/**
+ * {
+ *   "$schema": "https://json-schema.org/draft/2020-12/schema",
+ *   "type": "object",
+ *   "properties": {
+ *     "id": { "type": "integer", "format": "int64" }
+ *   },
+ *   "required": ["id"],
+ *   "additionalProperties": false
+ * }
+ */
+```
+
+</Dialect>
+</DialectTabs>
+
+### `.outputSchema`
+
+The result's JSON Schema, as `JSON.stringify` writes it:
+
+<DialectTabs follow>
+<Dialect value="Postgres">
+
+```ts twoslash
+import getUser from "./get_user.sql";
+
+getUser.outputSchema;
+/**
+ * {
+ *   "$schema": "https://json-schema.org/draft/2020-12/schema",
+ *   "anyOf": [
+ *     {
+ *       "type": "object",
+ *       "properties": {
+ *         "id": { "type": "integer", "format": "int32" },
+ *         "name": { "type": "string" },
+ *         "email": { "type": ["string", "null"] }
+ *       },
+ *       "required": ["id", "name", "email"]
+ *     },
+ *     { "type": "null" }
+ *   ]
+ * }
+ */
+```
+
+</Dialect>
+<Dialect value="MySQL">
+
+```ts twoslash
+import getUser from "./get_user.sql";
+
+getUser.outputSchema;
+/**
+ * {
+ *   "$schema": "https://json-schema.org/draft/2020-12/schema",
+ *   "anyOf": [
+ *     {
+ *       "type": "object",
+ *       "properties": {
+ *         "id": { "type": "integer", "format": "int32" },
+ *         "name": { "type": "string" },
+ *         "email": { "type": ["string", "null"] }
+ *       },
+ *       "required": ["id", "name", "email"]
+ *     },
+ *     { "type": "null" }
+ *   ]
+ * }
+ */
+```
+
+</Dialect>
+<Dialect value="SQLite">
+
+```ts twoslash
+import getUser from "./get_user.sql";
+
+getUser.outputSchema;
+/**
+ * {
+ *   "$schema": "https://json-schema.org/draft/2020-12/schema",
+ *   "anyOf": [
+ *     {
+ *       "type": "object",
+ *       "properties": {
+ *         "id": { "type": "integer", "format": "int64" },
+ *         "name": { "type": "string" },
+ *         "email": { "type": ["string", "null"] }
+ *       },
+ *       "required": ["id", "name", "email"]
+ *     },
+ *     { "type": "null" }
+ *   ]
+ * }
+ */
+```
+
+</Dialect>
+</DialectTabs>

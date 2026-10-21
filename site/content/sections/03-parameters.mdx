@@ -1,0 +1,67 @@
+---
+title: "Parameters"
+---
+
+## Parameters
+
+Reylo's own syntax works the same on Postgres, MySQL and SQLite, and Reylo compiles it for your database.
+
+### Named parameters
+
+Name a parameter with a colon, and cast it with `::`:
+
+```sql tab="find_posts.sql" dialect="all"
+select id, title from posts
+where user_id = :user_id::int
+  and title like :pattern::text
+order by id
+limit :limit::int
+```
+
+```ts twoslash tab="main.ts"
+import findPosts from "./find_posts.sql";
+
+const posts = await findPosts.run(db, {
+  user_id: 1,
+  pattern: "%SQL%",
+  limit: 10,
+});
+```
+
+### Casts
+
+Give each parameter its type with `::type`, on any database. Reylo compiles it to MySQL's and SQLite's own `cast`, and checks each value when you call `.run()`:
+
+```ts twoslash
+import findPosts from "./find_posts.sql";
+
+findPosts.sql;
+//        ^?
+```
+
+### JSON parameters
+
+When casting to `json` or `jsonb`, you can define a JSON Schema annotation:
+
+```sql tab="record_signup.sql" dialect="all"
+insert into events (kind, payload)
+values ('signup', :payload::json('{
+  "type": "object",
+  "properties": {
+    "plan": { "type": "string", "enum": ["free", "pro"] },
+    "referrer": { "type": "string" }
+  },
+  "required": ["plan"]
+}'))
+```
+
+```ts twoslash tab="main.ts"
+import recordSignup from "./record_signup.sql";
+
+await recordSignup.run(db, { payload: { plan: "pro" } });
+//                           ^?
+```
+
+Reylo uses it to infer the parameter's type, and validates your input against the schema when you call `.run()`.
+
+The examples use JSON parameters to [insert many rows](#insert-many-rows), [insert related rows](#insert-related-rows) and [record events of several kinds](#record-events-of-several-kinds).

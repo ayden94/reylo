@@ -1,6 +1,12 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { createProcessor } from '@mdx-js/mdx';
+import { remarkCodeTab } from 'fumadocs-core/mdx-plugins';
+import type { Plugin } from 'vite';
+import { pageFiles } from './page-files.ts';
+
+export { pageFiles };
 
 // Twoslash runs TypeScript's JavaScript API (6.0, from fumadocs-twoslash), which cannot run a
 // content mapper, and Reylo's mapper needs a database. So `nub run capture` (scripts/
@@ -23,8 +29,10 @@ import path from 'node:path';
 //   <Dialect value> (or <Tab value>) panel's; else its `dialect="postgres|mysql|sqlite"` meta
 //   attribute's, which this plugin removes; else, for a `ts twoslash` block, the dialect of the
 //   `.sql` blocks it imports; else Postgres.
-// - An import resolves to the nearest block above with that file name and the importing block's
-//   dialect, else to the first one below.
+// - The page is several files, shown in order: content/docs/index.mdx (the title, the opening and the
+//   schema), then one file per h2 section, content/sections/*.mdx, by name (`pageFiles`). An import
+//   resolves across all of them: to the nearest block above with that file name and the importing
+//   block's dialect, else to the first one below, as if the files were one.
 // - A `ts twoslash` block with no dialect of its own whose import resolves to a code-tab group of
 //   dialects becomes <DialectTabs follow> with a <Dialect value> panel per dialect of that group.
 // - `db` is declared unless the block declares or imports it; a block that names `Bun.` or imports
@@ -66,6 +74,8 @@ const dialectOf = (value: unknown): Dialect | undefined => (typeof value === 'st
 export const SCHEMA_FILE = 'schema.sql';
 
 export type Block = {
+  /** The page file the block is in, relative to the site, when the page is several files. */
+  file?: string;
   node: Code;
   /** The node's parent, where an expansion replaces it. */
   parent: MdNode;
@@ -153,7 +163,7 @@ export type Plan = { block: Block; variants: Variant[]; expand: boolean };
  * imports resolves to. A block that writes `// @filename: get_user.d.sql.ts` itself supplies that
  * module, and needs nothing for it.
  */
-export function plan(blocks: Block[]): Plan[] {
+export function plan(blocks: Block[], targets?: Set<Block>): Plan[] {
   const statements = blocks.filter(isStatement);
   const resolve = (name: string, at: Block, dialect: Dialect | undefined) => {
     const matches = (b: Block) => b.name === name && (dialect === undefined || b.dialect === dialect);
@@ -161,6 +171,7 @@ export function plan(blocks: Block[]): Plan[] {
   };
   const plans: Plan[] = [];
   for (const block of blocks) {
+    if (targets && !targets.has(block)) continue;
     if (!isTwoslash(block.node)) continue;
     const code = block.node.value;
     const names = [...new Set([...code.matchAll(IMPORT)].map((m) => m[1]!))].filter((name) => !code.includes(`@filename: ${declarationName(name)}`));
@@ -209,7 +220,7 @@ export function withSetup(block: Block, variant: Variant, modules: Modules, file
   for (const { name, block: sql } of variant.needs) {
     const module = modules[variant.dialect]?.[name]?.[sql.hash];
     if (module === undefined) {
-      throw new Error(`${file}:${block.line}: the ts twoslash block imports ./${name}, and lib/sql-modules.json holds no module for the ${DIALECT_NAME[variant.dialect]} statement at line ${sql.line}; run \`nub run capture\` in site/ (with the scratch databases running), then build again.`);
+      throw new Error(`${file}:${block.line}: the ts twoslash block imports ./${name}, and lib/sql-modules.json holds no module for the ${DIALECT_NAME[variant.dialect]} statement at ${sql.file ? `${sql.file}:` : 'line '}${sql.line}; run \`nub run capture\` in site/ (with the scratch databases running), then build again.`);
     }
     files.push(`// @filename: ${declarationName(name)}\n${module}`);
   }
@@ -232,6 +243,106 @@ const jsx = (name: string, attributes: [string, string | null][], children: MdNo
   children,
 });
 
+/** A file's tree as Fumadocs has it when this plugin runs: MDX parsed, then code tabs grouped. */
+export function parsePage(file: string): MdNode {
+  // fumadocs-mdx takes the frontmatter off before it parses; blank lines keep the line numbers.
+  const text = readFileSync(file, 'utf8').replace(/^---\n[\s\S]*?\n---\n/, (m) => '\n'.repeat(m.split('\n').length - 1));
+  const processor = createProcessor();
+  const tree = processor.parse(text) as unknown as MdNode;
+  (remarkCodeTab as unknown as (this: unknown) => (tree: MdNode) => void).call(processor)(tree);
+  return tree;
+}
+
+const parsed = new Map<string, { stamp: string; blocks: Block[] }>();
+
+/** The blocks of one of the page's other files, parsed again only when the file changes. */
+function blocksOf(file: string, site: string): Block[] {
+  const stat = statSync(file);
+  const stamp = `${stat.mtimeMs}:${stat.size}`;
+  const hit = parsed.get(file);
+  if (hit?.stamp === stamp) return hit.blocks;
+  const shown = path.relative(site, file);
+  const blocks = collect(parsePage(file)).map((block) => ({ ...block, file: shown }));
+  parsed.set(file, { stamp, blocks });
+  return blocks;
+}
+
+/** Every code block of the given files, in their order and numbered across them, each marked with its file. */
+export function collectFiles(files: string[], site = process.cwd()): Block[] {
+  const blocks = files.flatMap((file) => collect(parsePage(file)).map((block) => ({ ...block, file: path.relative(site, file) })));
+  blocks.forEach((block, i) => (block.order = i));
+  return blocks;
+}
+
+/**
+ * A file's own blocks among those of the page's other files, in page order and numbered across
+ * them, so that an import resolves to a statement another section shows. A file that is not one of
+ * the main page's (a dialect page) is a page by itself.
+ */
+function inPage(file: string | undefined, own: Block[], site = process.cwd()): Block[] {
+  const files = pageFiles(site);
+  const at = file ? files.indexOf(path.resolve(file)) : -1;
+  const all = at < 0 ? own : [...files.slice(0, at).flatMap((f) => blocksOf(f, site)), ...own, ...files.slice(at + 1).flatMap((f) => blocksOf(f, site))];
+  all.forEach((block, i) => (block.order = i));
+  return all;
+}
+
+/** The statements a file's blocks import from the page's other files, by dialect, name, file and text: what its output depends on beyond its own text and lib/sql-modules.json. */
+function imports(plans: Plan[]): string {
+  const needs = plans.flatMap((p) => p.variants.flatMap((v) => v.needs.filter((n) => n.block.file).map((n) => `${v.dialect} ${n.name} ${n.block.file} ${n.block.hash}`)));
+  return [...new Set(needs)].sort().join('\n');
+}
+
+/**
+ * What each of the page's files imported from the others when it last compiled. On `globalThis`,
+ * since the dev server's plugin (`mapperDependents`) and the compile may load this module apart.
+ */
+const compiled = ((globalThis as { __reyloMapperImports?: Map<string, string> }).__reyloMapperImports ??= new Map());
+
+/** The page's files whose output an edit to `changed` made stale: each whose imports from the others now resolve to another statement or another text. */
+function staleAfter(changed: string, site: string): string[] {
+  const stale: string[] = [];
+  for (const [file, before] of compiled) {
+    if (file === changed || !existsSync(file)) continue;
+    try {
+      const own = blocksOf(file, site).map((block) => ({ ...block, file: undefined }));
+      if (imports(plan(inPage(file, own, site), new Set(own))) !== before) stale.push(file);
+    } catch {
+      stale.push(file);
+    }
+  }
+  return stale;
+}
+
+/**
+ * The dev server's half of the page's imports across files: when a file of the page changes, each
+ * other file whose imports it changed is compiled again with it, and no other. A section that
+ * imports a statement another section shows used to depend on that whole file, so every edit to
+ * Usage compiled How it works, Supported drivers and Examples again (3–5 s for an edit to show,
+ * measured 2026-10-20), though none of them changes unless the statement does.
+ */
+export function mapperDependents(): Plugin {
+  const decided = new Map<string, string[]>();
+  return {
+    name: 'reylo:mapper-dependents',
+    apply: 'serve',
+    hotUpdate({ file, modules, timestamp }) {
+      if (!file.endsWith('.mdx')) return;
+      // Decided once per edit, for the browser's environment and the server's alike.
+      const key = `${file}\0${timestamp}`;
+      let stale = decided.get(key);
+      if (!stale) {
+        stale = staleAfter(path.resolve(file), process.cwd());
+        decided.clear();
+        decided.set(key, stale);
+      }
+      const graph = this.environment.moduleGraph;
+      const extra = stale.flatMap((other) => [...(graph.getModulesByFile(other) ?? [])]);
+      return extra.length ? [...modules, ...extra] : undefined;
+    },
+  };
+}
+
 /** lib/sql-modules.json as the build reads it: the site's own copy, read again for every page so a new capture shows on the next render. */
 export function readModules(site = process.cwd()): Modules {
   const file = path.join(site, 'lib', 'sql-modules.json');
@@ -241,7 +352,7 @@ export function readModules(site = process.cwd()): Modules {
 export function remarkMapper() {
   return (tree: MdNode, file: { path?: string; data?: Record<string, unknown> }) => {
     // fumadocs-mdx hands remark plugins the loader's compiler (its own remark-include uses it):
-    // with the captured modules as a dependency of the page, `next dev` compiles the page again
+    // with the captured modules as a dependency of the page, the dev server compiles the page again
     // after a capture, instead of keeping the error it showed while the capture was missing.
     const compiler = file.data?._compiler as { addDependency(file: string): void } | undefined;
     compiler?.addDependency(path.join(process.cwd(), 'lib', 'sql-modules.json'));
@@ -250,7 +361,8 @@ export function remarkMapper() {
     let plans: Plan[];
     try {
       blocks = collect(tree);
-      plans = plan(blocks);
+      plans = plan(inPage(file.path, blocks), new Set(blocks));
+      if (file.path) compiled.set(path.resolve(file.path), imports(plans));
     } catch (e) {
       throw new Error(`${page}: ${(e as Error).message}`);
     }
