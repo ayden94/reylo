@@ -23,7 +23,7 @@ create table users (
   email varchar(255) unique,
   role enum('admin', 'member') not null default 'member',
   active boolean not null default true,
-  created_at datetime(3) not null default current_timestamp(3)
+  created_at datetime(3) not null default (utc_timestamp(3))
 );
 ```
 
@@ -32,7 +32,7 @@ create table orders (
   id bigint auto_increment primary key,
   user_id int not null,
   total decimal(12, 2) not null,
-  placed_at datetime(6) not null default current_timestamp(6),
+  placed_at datetime(6) not null default (utc_timestamp(6)),
   ships_on date,
   receipt blob,
   foreign key (user_id) references users (id)
@@ -128,6 +128,7 @@ Where your runtime has `Temporal`, `Temporal.PlainDateTime.from()` reads the tim
 
 - A `DATETIME(3)` keeps three digits even when they are zero, `"2026-10-20T10:00:00.000"`, and a `DATETIME` none, `"2026-10-20T10:00:00"`.
 - A `TIMESTAMP` stores an instant, and MySQL writes it in the session's `time_zone`, the server's own unless the connection sets another. Reylo cannot know that zone, so the text has none. Run `set time_zone = '+00:00'` on the connection to read UTC, or keep UTC in a `DATETIME`.
+- MySQL keeps no zone in a `DATETIME` or a `TIMESTAMP`: it drops a `Z` from the text it reads, with a warning, and moves a `+00:00` into the session's zone. Keep UTC in a `DATETIME` written by `utc_timestamp()`, as the schema above does.
 - A `TIME` is its text, `"10:00:00"`.
 - Inside JSON the statement builds, a `DATETIME` is MySQL's text with a space and six fraction digits, `"2026-10-20 10:00:00.000000"`.
 - On `Bun.sql`, a `DATETIME` keeps its milliseconds, not its microseconds, and drops a fraction that is all zeros, and a `TIME` drops its fraction ([Drivers](#drivers)).

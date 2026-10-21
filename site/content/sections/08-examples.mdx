@@ -165,9 +165,10 @@ const next = await nextPage.run(db, page.at(-1)!);
 ```ts twoslash tab="main.ts (MySQL)" dialect="mysql"
 import nextPage from "./next_page.sql";
 
-// the first page: a cursor after every row
+// the first page: a cursor after every row (a DATETIME has no
+// zone, so the schema keeps UTC in it)
 const page = await nextPage.run(db, {
-  created_at: "3000-01-01 00:00:00",
+  created_at: "3000-01-01T00:00:00",
   id: 0,
 });
 // a DATETIME is its text, which the parameter takes back
@@ -180,7 +181,7 @@ import nextPage from "./next_page.sql";
 
 // the first page: a cursor after every row
 const page = await nextPage.run(db, {
-  created_at: "3000-01-01 00:00:00",
+  created_at: "3000-01-01T00:00:00.000Z",
   id: 0,
 });
 const next = await nextPage.run(db, page.at(-1)!);

@@ -75,8 +75,8 @@ create table users (
   role enum('admin', 'member')                -- role: string
     not null default 'member',
   tags json not null default (json_array()),  -- tags: unknown
-  created_at datetime                         -- created_at: string
-    not null default current_timestamp
+  created_at datetime                         -- created_at: string, UTC
+    not null default (utc_timestamp())
 );
 
 create table posts (
@@ -111,8 +111,8 @@ create table users (
   role text not null default 'member'   -- role: string
     check (role in ('admin', 'member')),
   tags text not null default '[]',      -- tags: string, JSON text
-  created_at text                       -- created_at: string
-    not null default current_timestamp
+  created_at text                       -- created_at: string, UTC
+    not null default (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 ) strict;
 
 create table posts (

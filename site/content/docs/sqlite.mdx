@@ -25,7 +25,8 @@ create table users (
   nick text,
   github_id bigint,
   active boolean not null default 1,
-  created_at text not null default current_timestamp
+  created_at text not null
+    default (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 ```
 
@@ -34,7 +35,8 @@ create table orders (
   id integer primary key,
   user_id integer not null references users (id),
   total_cents integer not null,
-  placed_at text not null default current_timestamp,
+  placed_at text not null
+    default (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   ships_on text,
   receipt blob
 ) strict;
@@ -118,7 +120,8 @@ const order = await orderDates.run(db, { id: 1 });
 select placed_at, ships_on from orders where id = :id
 ```
 
-- SQLite's `current_timestamp` and `datetime()` write UTC as `"2026-10-20 10:00:00"`, with a space and no zone, which `Temporal.PlainDateTime.from(…)` reads where your runtime has `Temporal`.
+- Store an instant as ISO 8601 text in UTC with `Z`, as `strftime('%Y-%m-%dT%H:%M:%fZ', 'now')` writes it: `"2026-10-20T10:00:00.000Z"`, which `Temporal.Instant.from(…)` and `new Date(…)` read. SQLite's date functions read it too, and since every value has the same width, text order is time order.
+- SQLite's `current_timestamp` and `datetime()` write UTC with no zone, `"2026-10-20 10:00:00"`, which a reader can't tell from local time.
 - A column declared `DATE` or `DATETIME` has `NUMERIC` affinity, so it holds a number or a text, `number | string`. Declare it `TEXT`, or `INTEGER` for Unix time.
 - SQLite's date functions, `date()`, `datetime()`, `unixepoch()` and the rest, answer `NULL` for text they cannot read as a date, so keep every date in one form they read: ISO 8601 text, or Unix time in an `INTEGER`.
 - A `::date` or `::timestamp` cast is SQLite's `CAST(… AS TEXT)`, since SQLite's `CAST` to a date reads `'2026-10-12'` as 2026.
