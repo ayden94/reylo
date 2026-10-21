@@ -124,7 +124,7 @@ In VS Code or Cursor, install the **TypeScript 7** extension (`TypeScriptTeam.na
 }
 ```
 
-Then trust the workspace, and click **Allow** when the extension asks to use the workspace's TypeScript. The editor does not see your shell's environment, so keep `DATABASE_URL` in `.env`. Zed takes a few more settings: see [Editors](https://reylo.dev/#editors).
+Then trust the workspace, and click **Allow** when the extension asks to use the workspace's TypeScript. Missed it? It waits under the bell in the status bar, or **Developer: Reload Window** asks again. The editor does not see your shell's environment, so keep `DATABASE_URL` in `.env`. Zed takes a few more settings: see [Editors](https://reylo.dev/#editors).
 
 ## Usage
 
