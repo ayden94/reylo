@@ -26,6 +26,26 @@ function paramType(q: Analysis["params"][number], rendered: string): string {
   return q.nullable ? `${rendered} | null` : rendered;
 }
 
+/**
+ * The span map TypeScript reads as `mappings`: `[virtualStart, virtualLength, originalStart,
+ * originalLength, kind, features]`, in UTF-8 bytes, the encoding `initialize` chose. One atom takes the
+ * whole module to the statement, so go-to-definition on anything the module declares (the import's
+ * path, the query, a column, a parameter) opens the `.sql` file at its statement. TypeScript maps a
+ * definition only when its whole range lies in one segment, and the import's path goes to the range
+ * of the module from its first token to its end, which a map by name would cut into pieces. No hover,
+ * references or rename, which would land on the whole statement or write the TypeScript into it.
+ */
+function mapToStatement(text: string, sql: string): number[][] {
+  const bytes = Buffer.from(sql, "utf8");
+  let start = 0;
+  let end = bytes.length;
+  while (start < end && /\s/.test(String.fromCharCode(bytes[start]!))) start++;
+  while (end > start && /\s/.test(String.fromCharCode(bytes[end - 1]!))) end--;
+  const ATOM = 1;
+  const DEFINITION = 8, TYPE_DEFINITION = 16, IMPLEMENTATION = 32;
+  return [[0, Buffer.byteLength(text), start, end - start, ATOM, DEFINITION | TYPE_DEFINITION | IMPLEMENTATION]];
+}
+
 serve({
   initialize(params) {
     // Builds from 2026-09-18 on send `protocolVersion: 1` and refuse a mapper that does not
@@ -52,14 +72,13 @@ serve({
       // A transform for a project this process never opened: answer, never throw, so the file
       // keeps its default export instead of becoming an empty module.
       diagnostics.push(diag(`The content mapper has no project for this file; restart the TypeScript server.`, 0, 1, 9));
-      return { extension: ".ts" as const, diagnostics, text: `import type { Query } from "reylo";\nexport type Params = unknown;\nexport type Row = unknown;\ndeclare const query: Query<unknown, unknown, "many", "postgres">;\nexport default query;\n` };
+      const text = `import type { Query } from "reylo";\nexport type Params = unknown;\nexport type Row = unknown;\ndeclare const query: Query<unknown, unknown, "many", "postgres">;\nexport default query;\n`;
+      return { extension: ".ts" as const, diagnostics, text, mappings: mapToStatement(text, sql) };
     }
     // `compiled` is the statement as Reylo sends it to the database (the engine's rewritten text),
     // which an analysis that failed has not given: then `sql` is any string.
-    const emit = (compiled: string | undefined, paramsType: string, rowType: string, cardinality: string, names: string[]) => ({
-      extension: ".ts" as const,
-      diagnostics,
-      text: [
+    const emit = (compiled: string | undefined, paramsType: string, rowType: string, cardinality: string, names: string[]) => {
+      const text = [
         `import type { Query } from "reylo";`,
         `export type Params = ${paramsType};`,
         `export type Row = ${rowType};`,
@@ -73,8 +92,9 @@ serve({
         `declare const query: Query<${paramsType}, ${rowType}, ${JSON.stringify(cardinality)}, ${JSON.stringify(project.dialect)}> & { readonly sql: typeof sql; readonly raw: typeof raw };`,
         `export default query;`,
         ``,
-      ].join("\n"),
-    });
+      ].join("\n");
+      return { extension: ".ts" as const, diagnostics, text, mappings: mapToStatement(text, sql) };
+    };
 
     // The engine's lexer names the parameters. A statement it cannot read (a placeholder form the
     // dialect would misread, named and positional mixed) comes back from the analysis as an error

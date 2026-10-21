@@ -1,0 +1,114 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+
+// Go-to-definition from what a `.sql` module declares opens the `.sql` file at its statement, through
+// the span map the content mapper returns (src/mapper.ts). The language server runs as an editor runs
+// it, `tsc --lsp --stdio` with runExternalCode on, over a SQLite project, so no server is needed.
+const ROOT = join(import.meta.dirname, "..");
+const TSC = join(ROOT, "node_modules", ".bin", "tsc");
+
+type Position = { line: number; character: number };
+type Range = { start: Position; end: Position };
+
+function project(): string {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "reylo-definition-")));
+  writeFileSync(join(root, "package.json"), `{ "type": "module" }`);
+  writeFileSync(join(root, ".env"), "DATABASE_URL=file:./app.db\n");
+  const db = new DatabaseSync(join(root, "app.db"));
+  db.exec("create table posts (id integer primary key, title text not null, body text)");
+  db.close();
+  mkdirSync(join(root, "node_modules", "@reylosql"), { recursive: true });
+  symlinkSync(ROOT, join(root, "node_modules", "reylo"));
+  symlinkSync(join(ROOT, "packages", "sqlite"), join(root, "node_modules", "@reylosql", "sqlite"));
+  const compilerOptions = { target: "esnext", module: "nodenext", lib: ["esnext"], types: [], strict: true, noEmit: true, skipLibCheck: true, allowImportingTsExtensions: true, paths: { "@/*": ["./*"] } };
+  writeFileSync(join(root, "tsconfig.json"), JSON.stringify({ compilerOptions, contentMappers: [{ package: "reylo", extensions: [".sql"] }], include: ["main.ts"] }));
+  mkdirSync(join(root, "queries"));
+  writeFileSync(join(root, "queries", "posts.sql"), "\n-- every post after one\nselect id, title, body\nfrom posts\nwhere id > :after\n");
+  writeFileSync(join(root, "main.ts"), `import posts from "@/queries/posts.sql";\nimport type { Row } from "@/queries/posts.sql";\nexport const query = posts;\nexport type Title = Row["title"];\n`);
+  return root;
+}
+
+/** A language server over stdio with LSP framing, as an editor talks to it. */
+function server(root: string) {
+  const child = spawn(TSC, ["--lsp", "--stdio"], { cwd: root, stdio: ["pipe", "pipe", "ignore"] });
+  const pending = new Map<number, (result: any) => void>();
+  let buffer = Buffer.alloc(0);
+  const write = (message: object) => {
+    const body = Buffer.from(JSON.stringify({ jsonrpc: "2.0", ...message }), "utf8");
+    child.stdin.write(`Content-Length: ${body.length}\r\n\r\n`);
+    child.stdin.write(body);
+  };
+  child.stdout.on("data", (chunk: Buffer) => {
+    buffer = Buffer.concat([buffer, chunk]);
+    for (;;) {
+      const end = buffer.indexOf("\r\n\r\n");
+      if (end === -1) return;
+      const length = Number(/Content-Length:\s*(\d+)/i.exec(buffer.subarray(0, end).toString("ascii"))![1]);
+      if (buffer.length < end + 4 + length) return;
+      const message = JSON.parse(buffer.subarray(end + 4, end + 4 + length).toString("utf8"));
+      buffer = buffer.subarray(end + 4 + length);
+      // A request from the server (registerCapability, workspace/configuration) is answered as a
+      // client that has nothing to add.
+      if (message.method && message.id !== undefined) write({ id: message.id, result: message.method === "workspace/configuration" ? message.params.items.map(() => null) : null });
+      else if (message.id !== undefined) pending.get(message.id)?.(message.result);
+    }
+  });
+  let id = 0;
+  const request = (method: string, params: unknown) =>
+    new Promise<any>((resolve) => {
+      pending.set(++id, resolve);
+      write({ id, method, params });
+    });
+  const notify = (method: string, params: unknown) => write({ method, params });
+  const close = async () => {
+    await request("shutdown", undefined);
+    notify("exit", undefined);
+    await new Promise((resolve) => child.once("exit", resolve));
+  };
+  return { request, notify, close };
+}
+
+test("go-to-definition on a query, its import's path, its Row and a column opens the .sql file at its statement", async () => {
+  const root = project();
+  const main = join(root, "main.ts");
+  const text = readFileSync(main, "utf8");
+  const at = (needle: string, offset: number): Position => {
+    const before = text.slice(0, text.indexOf(needle) + offset).split("\n");
+    return { line: before.length - 1, character: before.at(-1)!.length };
+  };
+  const lsp = server(root);
+  try {
+    await lsp.request("initialize", { processId: process.pid, rootUri: pathToFileURL(root).href, capabilities: { textDocument: { definition: { linkSupport: true } } }, initializationOptions: { runExternalCode: true } });
+    lsp.notify("initialized", {});
+    const uri = pathToFileURL(main).href;
+    lsp.notify("textDocument/didOpen", { textDocument: { uri, languageId: "typescript", version: 1, text } });
+    // The mapper analyzed the statement: the query's hover carries the row's columns.
+    let hover = "";
+    for (let i = 0; i < 100 && !hover.includes("title: string"); i++) {
+      if (i) await new Promise((resolve) => setTimeout(resolve, 200));
+      hover = (await lsp.request("textDocument/hover", { textDocument: { uri }, position: at("query = posts", 0) }))?.contents?.value ?? "";
+    }
+    assert.match(hover, /title: string;\s+body: string \| null;/);
+
+    const sql = pathToFileURL(join(root, "queries", "posts.sql")).href;
+    // Lines 2 to 5 of the file: the comment above the statement, through `:after`.
+    const statement: Range = { start: { line: 1, character: 0 }, end: { line: 4, character: 17 } };
+    for (const [what, position] of [
+      ["the import's path", at(`"@/queries/posts.sql"`, 3)],
+      ["the query", at("= posts", 3)],
+      ["Row", at(`Row["title"]`, 1)],
+      ["a column", at(`"title"]`, 2)],
+    ] as const) {
+      const links: { targetUri: string; targetSelectionRange: Range }[] = await lsp.request("textDocument/definition", { textDocument: { uri }, position });
+      assert.deepEqual(links.map((l) => [l.targetUri, l.targetSelectionRange]), [[sql, statement]], what);
+    }
+  } finally {
+    await lsp.close();
+  }
+});
