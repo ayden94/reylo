@@ -84,8 +84,6 @@ function parse(file: string): MdNode {
 
 const NAME = String.raw`:[A-Za-z_]\w*`;
 const SCHEMA_STRING = String.raw`'((?:[^']|'')*)'`;
-/** A cast's target type on MySQL and SQLite: `int`, `unsigned`, `char(10)`, `decimal(10, 2)`. */
-const TARGET = String.raw`[A-Za-z_]\w*(?:\s*\(\s*\d+(?:\s*,\s*\d+)?\s*\))?`;
 
 /** Each typed JSON parameter of the statement as written: its name and its schema. */
 function jsonParams(sql: string): { name: string; schema: unknown }[] {
@@ -101,16 +99,14 @@ function jsonParams(sql: string): { name: string; schema: unknown }[] {
 
 /**
  * The statement the engine reads: Postgres `:x::jsonb('…')` → `:x::jsonb`; MySQL `(:x)::json('…')`
- * → `cast(:x as json)` and `(:x)::type` → `cast(:x as type)`; SQLite `:x::json('…')` → `:x` and
- * `(:x)::type` → `cast(:x as type)` (each with or without the parentheses).
+ * → `cast(:x as json)`; SQLite `:x::json('…')` → `:x` (each with or without the parentheses). A
+ * plain `::type` stays as written: since 2026-10-20 the engine writes it as MySQL's or SQLite's own
+ * cast, `CAST(? AS CHAR)` for `::text` on MySQL, which a rewrite to `cast(:x as text)` here broke.
  */
 function compile(sql: string, dialect: Dialect): string {
   if (dialect === 'postgres') return sql.replace(new RegExp(String.raw`::(jsonb?)\(${SCHEMA_STRING}\)`, 'g'), '::$1');
   const json = new RegExp(String.raw`\(?(${NAME})\)?::json\(${SCHEMA_STRING}\)`, 'g');
-  const cast = new RegExp(String.raw`\((${NAME})\)::(${TARGET})|(${NAME})::(${TARGET})(?![\w(])`, 'g');
-  return sql
-    .replace(json, dialect === 'mysql' ? 'cast($1 as json)' : '$1')
-    .replace(cast, (_, a: string | undefined, at: string | undefined, b: string, bt: string) => `cast(${a ?? b} as ${at ?? bt})`);
+  return sql.replace(json, dialect === 'mysql' ? 'cast($1 as json)' : '$1');
 }
 
 // ---- The module, as src/mapper.ts renders it ----

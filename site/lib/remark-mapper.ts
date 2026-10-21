@@ -13,8 +13,12 @@ import path from 'node:path';
 // build never needs a database, and fails when a block's module was not captured.
 //
 // The conventions (the contract between the page and this file):
-// - A `sql` block's file name is its `title`, else its `tab` when that is not a dialect name; a
-//   block whose name ends in `.sql` is a statement, except `schema.sql`, the page's schema.
+// - A `sql` block's file name is its `title`, else its `file` meta attribute, which names the file
+//   without showing it and which this plugin removes, else its `tab` when that is not a dialect
+//   name; a block whose name ends in `.sql` is a statement, except `schema.sql`, the page's schema.
+// - A `sql` block with `dialect="all"` is the same statement in every dialect: it is shown once,
+//   analyzed in each, and a `ts twoslash` block that imports it follows the page's dialect choice,
+//   as under a code-tab group of dialects.
 // - A block's dialect is its `tab` when that is Postgres, MySQL or SQLite; else the enclosing
 //   <Dialect value> (or <Tab value>) panel's; else its `dialect="postgres|mysql|sqlite"` meta
 //   attribute's, which this plugin removes; else, for a `ts twoslash` block, the dialect of the
@@ -103,19 +107,22 @@ export function collect(tree: MdNode): Block[] {
           .findLast((a) => a.type === 'mdxJsxFlowElement' && (a.name === 'Dialect' || a.name === 'Tab') && dialectOf(attr(a, 'value')));
         const panelDialect = panel && dialectOf(attr(panel, 'value'));
         const metaDialect = attribute(code.meta, 'dialect');
-        if (metaDialect !== undefined && !dialectOf(metaDialect)) throw new Error(`${where(code)}: dialect="${metaDialect}" names no dialect; write postgres, mysql or sqlite.`);
+        const every = metaDialect === 'all';
+        if (metaDialect !== undefined && !every && !dialectOf(metaDialect)) throw new Error(`${where(code)}: dialect="${metaDialect}" names no dialect; write postgres, mysql, sqlite or all.`);
         const dialect = tabDialect ?? panelDialect ?? dialectOf(metaDialect) ?? 'postgres';
-        blocks.push({
-          node: code,
-          parent: node,
-          order: blocks.length,
-          name: attribute(code.meta, 'title') ?? (tab && !tabDialect ? tab : undefined),
-          dialect,
-          from: tabDialect ? 'tab' : panelDialect ? 'panel' : metaDialect ? 'meta' : 'default',
-          group: tabDialect ? ancestors.concat(node).findLast((a) => a.type === 'mdxJsxFlowElement' && a.name === 'CodeBlockTabs') : undefined,
-          line: code.position?.start.line ?? 0,
-          hash: hashOf(code.value),
-        });
+        const name = attribute(code.meta, 'title') ?? attribute(code.meta, 'file') ?? (tab && !tabDialect ? tab : undefined);
+        const shared = { node: code, parent: node, name, line: code.position?.start.line ?? 0, hash: hashOf(code.value) };
+        // The same statement in every dialect: one block per dialect, grouped as a code-tab group
+        // of dialects is, so that an import of it expands into a panel per dialect.
+        if (every) for (const each of DIALECTS) blocks.push({ ...shared, order: blocks.length, dialect: DIALECT_OF[each.toLowerCase()]!, from: 'meta', group: code });
+        else
+          blocks.push({
+            ...shared,
+            order: blocks.length,
+            dialect,
+            from: tabDialect ? 'tab' : panelDialect ? 'panel' : metaDialect ? 'meta' : 'default',
+            group: tabDialect ? ancestors.concat(node).findLast((a) => a.type === 'mdxJsxFlowElement' && a.name === 'CodeBlockTabs') : undefined,
+          });
       } else walk(child, ancestors.concat(node));
     }
   };
@@ -257,7 +264,7 @@ export function remarkMapper() {
       const index = block.parent.children!.indexOf(block.node);
       block.parent.children!.splice(index, 1, jsx('DialectTabs', [['follow', null]], panels));
     }
-    // The dialect is read; Shiki and Twoslash do not know the attribute.
-    for (const { node } of blocks) if (node.meta) node.meta = node.meta.replace(/(?:^|\s)dialect=(?:"[^"]*"|'[^']*'|\S+)/, '').trim();
+    // The dialect and the file name are read; Shiki and Twoslash do not know the attributes.
+    for (const { node } of blocks) if (node.meta) node.meta = node.meta.replace(/(?:^|\s)(?:dialect|file)=(?:"[^"]*"|'[^']*'|\S+)/g, '').trim();
   };
 }

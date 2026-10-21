@@ -9,11 +9,12 @@ import { notFound } from 'next/navigation';
 type Props = { params: Promise<{ slug?: string[] }> };
 
 /**
- * The h2s whose h3s stay out of the table of contents: the parameters, the keys of `.reylo.yaml`
- * and the examples. The maintainer wants the whole table to fit on one screen (a window 900px tall,
- * at Fumadocs' spacing); the headings stay on the page, with their anchors.
+ * The h2s whose h3s stay out of the table of contents: the query's members under Usage, the
+ * parameters, the keys of `.reylo.yaml` and the examples. The maintainer wants the whole table to
+ * fit on one screen (a window 900px tall, at Fumadocs' spacing); the headings stay on the page,
+ * with their anchors.
  */
-const FOLD = ['#parameters', '#configuration', '#examples'];
+const FOLD = ['#usage', '#parameters', '#configuration', '#examples'];
 
 export default async function Page({ params }: Props) {
   const page = source.getPage((await params).slug ?? []);
