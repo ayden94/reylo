@@ -22,7 +22,7 @@ const author = await getAuthor.run(db, { id: 1 });
 select u.id, u.name, count(p.id)::int as post_count
 from users u
 left join posts p on p.user_id = u.id
-where u.id = :id
+where u.id = :id::int
 group by u.id
 ```
 
@@ -119,7 +119,7 @@ create table events (
 - 🌵 **DRY.** The types come from the SQL itself: no hand-written row types, no schema file to keep in sync.
 - 🎯 **Checked against your database.** A misspelled column, a wrong parameter or a dropped table is a type error, in `tsc` and in your editor.
 - 🤖 **Agent-friendly.** Each fact lives in one place, so an agent cannot leave a stale type behind, and the type check finds every caller it missed.
-- 🧩 **Postgres, MySQL and SQLite.** Bring your own driver: `pg`, postgres.js, mysql2, better-sqlite3, Bun, Cloudflare D1 and [more](#supported-drivers).
+- 🧩 **Postgres, MySQL and SQLite.** Bring your own driver: `pg`, postgres.js, `mysql2`, `better-sqlite3`, Bun, Cloudflare D1 and [more](#supported-drivers).
 - ⚡ **No codegen.** The type checker asks Reylo directly: no generated files, no watcher.
 
 </div>
@@ -139,13 +139,13 @@ Reylo needs. Install from npm: the examples link local builds.
 
 1. Check the requirements and install Reylo, the engine of the
    project's database (@reylosql/postgres, @reylosql/mysql or
-   @reylosql/sqlite) and TypeScript 7.1 beta or later:
+   @reylosql/sqlite) and TypeScript 7.1 (currently in beta):
    https://reylo.dev/#install
-2. Add Reylo to tsconfig.json as a content mapper, and add a
+2. Point Reylo at the development database with DATABASE_URL,
+   or with url in .reylo.yaml: https://reylo.dev/#reyloyaml
+3. Add Reylo to tsconfig.json as a content mapper, and add a
    typecheck script that runs tsc --noEmit --runExternalCode:
    https://reylo.dev/#typescript
-3. Point Reylo at the development database with DATABASE_URL:
-   https://reylo.dev/#url
 4. Make .sql imports load wherever the project runs code, with
    Node's --import (https://reylo.dev/#node) or the plugin for its
    runtime, bundler or framework (https://reylo.dev/#plugins).
@@ -169,9 +169,9 @@ Install Reylo and point it at your database, then add it to each tool that loads
 
 Reylo needs:
 
-- **TypeScript 7.1 beta or later.** The first release with content mappers.
-- **Node 24 or later, Bun or nub.**
-- **A running dev database.** Reylo's type inference engine needs to know your current database schema. It does this by introspecting your live database: Postgres, MySQL 8.0.22 or later, or a SQLite file.
+- **TypeScript 7.1 (currently in beta).** The first release with content mappers.
+- **Node 24 or later.**
+- **A running dev database.** Postgres, MySQL 8.0.22 or later, or a SQLite file: Reylo reads your current schema from it. See [`.reylo.yaml`](#reyloyaml) to point Reylo at it.
 
 ```sh
 npm install reylo
@@ -179,7 +179,28 @@ npm install -D @reylosql/postgres  # or mysql, sqlite
 npm install -D typescript@beta
 ```
 
-Then set `DATABASE_URL` to your database, in the environment or in `.env`: see [`url`](#url).
+### `.reylo.yaml`
+
+Reylo finds your dev database through the `DATABASE_URL` environment variable.
+
+To override this, create a `.reylo.yaml` file in your project root and set the `url` field:
+
+```yaml title=".reylo.yaml"
+url: postgres://localhost:5432/app
+```
+
+You can also reference other environment variables via string interpolation:
+
+```yaml title=".reylo.yaml"
+url: ${APP_DATABASE_URL}
+```
+
+Or specify a set of `.env` files to load:
+
+```yaml title=".reylo.yaml"
+# the default is [.env.local, .env]
+env: [.env.development, .env]
+```
 
 ### TypeScript
 
@@ -204,37 +225,6 @@ Then type-check with `--runExternalCode`, which lets `tsc` run content mappers:
 }
 ```
 
-<Details summary="Starting from an empty project" id="a-new-project">
-
-A new project also needs Node's types and ES modules:
-
-```sh
-npm install -D @types/node
-```
-
-```jsonc title="tsconfig.json"
-{
-  "compilerOptions": {
-    "module": "nodenext",
-    "strict": true,
-    "types": ["node"]
-  },
-  "contentMappers": [
-    { "package": "reylo", "extensions": [".sql"] }
-  ]
-}
-```
-
-```json title="package.json"
-{
-  "type": "module"
-}
-```
-
-TypeScript 7 loads `@types/node` only when `types` names it, and `"type": "module"` lets `main.ts` use a top-level `await`.
-
-</Details>
-
 ### Editors
 
 The editor needs the TypeScript 7.1 language server, with content mappers on.
@@ -254,7 +244,7 @@ The editor needs the TypeScript 7.1 language server, with content mappers on.
 
 3. Trust the workspace, and click **Allow** when the extension asks to use the workspace's TypeScript. Content mappers run in a trusted workspace only.
 
-The editor's environment is not your shell's, so keep `DATABASE_URL` in `.env` or `.env.local`, where Reylo finds it.
+Keep `DATABASE_URL` in `.env`: the editor doesn't see your shell's environment.
 
 </Accordion>
 <Accordion title="Cursor" id="editor-cursor">
@@ -271,7 +261,7 @@ The editor's environment is not your shell's, so keep `DATABASE_URL` in `.env` o
 
 3. Trust the workspace, and click **Allow** when the extension asks to use the workspace's TypeScript. Content mappers run in a trusted workspace only.
 
-The editor's environment is not your shell's, so keep `DATABASE_URL` in `.env` or `.env.local`, where Reylo finds it.
+Keep `DATABASE_URL` in `.env`: the editor doesn't see your shell's environment.
 
 </Accordion>
 <Accordion title="Zed" id="editor-zed">
@@ -314,14 +304,14 @@ The editor's environment is not your shell's, so keep `DATABASE_URL` in `.env` o
 
 3. Trust the folder. In restricted mode, Zed starts no language server.
 
-Zed does not send `.sql` files to the language server, so an error inside one shows nowhere in Zed: the query's types become `unknown`, and the type check shows the error.
+Zed doesn't send `.sql` files to the language server, so an error inside one shows only in the type check.
 
 </Accordion>
 </Accordions>
 
 ### Node
 
-Node loads Reylo with `--import`, which turns each `.sql` import into a module as it loads, and `--env-file` loads your `.env` for the app:
+Load Reylo's preload with `--import`:
 
 ```sh
 node --env-file=.env --import reylo/register main.ts
@@ -329,12 +319,12 @@ node --env-file=.env --import reylo/register main.ts
 
 ### Plugins
 
-Everywhere else, a plugin turns each `.sql` import into a module: Bun and nub load Reylo's preload from their config files, and a bundler builds each module at build time, so a bundled app needs no `--import` and no preload.
+Bun and Nub load the preload from their config files, and a bundler takes Reylo's plugin:
 
 <Accordions type="multiple">
 <Accordion title="Bun" id="setup-bun">
 
-Bun takes the preload in `bunfig.toml`, so `bun main.ts` needs no flag, and loads `.env` itself. Its test runner, `bun test`, reads its own preload, under `[test]`:
+Add the preload to `bunfig.toml`, and under `[test]` for `bun test`:
 
 ```toml title="bunfig.toml"
 preload = ["reylo/register"]
@@ -357,17 +347,15 @@ await Bun.build({
 ```
 
 </Accordion>
-<Accordion title="nub" id="setup-nub">
+<Accordion title="Nub" id="setup-nub">
 
-nub takes the preload in `nub.jsonc`, so `nub main.ts` needs no flag, and loads `.env` itself:
+Add the preload to `nub.jsonc`:
 
 ```jsonc title="nub.jsonc"
 {
   "preload": ["reylo/register"]
 }
 ```
-
-Node's test runner, `nub --test`, takes the same preload.
 
 </Accordion>
 <Accordion title="Vite" id="setup-vite">
@@ -381,12 +369,10 @@ export default defineConfig({
 });
 ```
 
-Import `.sql` files from server code: the module carries the statement's text, and Vite bundles it wherever it is imported, the browser included, so keep queries where your framework allows server code only, such as a `.server/` directory. Vitest needs only this plugin.
+Import `.sql` files from server code only, such as a `.server/` directory: Vite bundles a query wherever it is imported, the browser included. Vitest needs only this plugin.
 
 </Accordion>
 <Accordion title="Next.js" id="setup-nextjs">
-
-Reylo runs in both of Next.js's bundlers, Turbopack and webpack, on the server.
 
 ```ts title="next.config.ts"
 import type { NextConfig } from "next";
@@ -417,7 +403,7 @@ const nextConfig: NextConfig = {
 export default nextConfig;
 ```
 
-The type check that `next build` runs cannot run content mappers, so the scripts run the real check first:
+Next.js's own type check can't run content mappers, so run `tsc` before `next build`:
 
 ```json title="package.json"
 {
@@ -428,7 +414,6 @@ The type check that `next build` runs cannot run content mappers, so the scripts
   }
 }
 ```
-
 
 </Accordion>
 <Accordion title="esbuild" id="setup-esbuild">
@@ -476,7 +461,7 @@ export default {
 </Accordion>
 <Accordion title="Jest" id="setup-jest">
 
-Jest loads test code through its own runtime, which a preload never reaches, so it takes a transformer:
+Jest takes Reylo's transformer:
 
 ```js title="jest.config.js"
 export default {
@@ -490,199 +475,28 @@ export default {
 NODE_OPTIONS=--experimental-vm-modules npx jest
 ```
 
-
 </Accordion>
 </Accordions>
 
-## Integration
-
-A complete, working project for each setup. Each one's README, under "How Reylo is wired in", names every line Reylo needs:
-
-| Setup | Example | Database and driver |
-| --- | --- | --- |
-| Node | [examples/node](https://github.com/colinhacks/reylo/tree/main/examples/node) | Postgres, postgres.js |
-| nub | [examples/nub](https://github.com/colinhacks/reylo/tree/main/examples/nub) | SQLite, `node:sqlite` |
-| Bun | [examples/bun](https://github.com/colinhacks/reylo/tree/main/examples/bun) | SQLite, `bun:sqlite` |
-| Vite, in a React Router app | [examples/vite](https://github.com/colinhacks/reylo/tree/main/examples/vite) | Postgres, `pg` |
-| Next.js | [examples/nextjs](https://github.com/colinhacks/reylo/tree/main/examples/nextjs) | Postgres, postgres.js |
-| esbuild | [examples/esbuild](https://github.com/colinhacks/reylo/tree/main/examples/esbuild) | Postgres, postgres.js |
-| webpack | [examples/webpack](https://github.com/colinhacks/reylo/tree/main/examples/webpack) | MySQL, mysql2 |
-| Rspack | [examples/rspack](https://github.com/colinhacks/reylo/tree/main/examples/rspack) | Postgres, `pg` |
-| Jest | [examples/jest](https://github.com/colinhacks/reylo/tree/main/examples/jest) | SQLite, better-sqlite3 |
-
 ## Usage
 
-Write a statement in a `.sql` file, with a `:name` for each parameter, and import it. A select by primary key resolves to the row or `null`:
+Write a query in a `.sql` file, import it, and run it with your database driver. Reylo uses your live dev database to compile the query and retrieve its types.
 
-```sql file="get_user.sql" dialect="all"
-select id, name, email from users where id = :id
-```
-
-<DialectTabs follow>
-<Dialect value="Postgres">
-
-```ts twoslash
+```ts twoslash tab="main.ts" dialect="postgres"
 import postgres from "postgres";
 import getUser from "./get_user.sql";
 
 const db = postgres(process.env.DATABASE_URL!);
-
 const user = await getUser.run(db, { id: 1 });
-//    ^?
 ```
 
-</Dialect>
-<Dialect value="MySQL">
-
-```ts twoslash
-import mysql from "mysql2/promise";
-import getUser from "./get_user.sql";
-
-const db = mysql.createPool(process.env.DATABASE_URL!);
-
-const user = await getUser.run(db, { id: 1 });
-//    ^?
-```
-
-</Dialect>
-<Dialect value="SQLite">
-
-```ts twoslash
-import Database from "better-sqlite3";
-import getUser from "./get_user.sql";
-
-const db = new Database("app.db");
-
-const user = await getUser.run(db, { id: 1 });
-//    ^?
-```
-
-</Dialect>
-</DialectTabs>
-
-An insert with `returning` resolves to the row it wrote:
-
-```sql file="create_user.sql" tab="Postgres" tab-group="dialect"
-insert into users (name, email) values (:name, :email)
-returning id
-```
-
-```sql file="create_user.sql" tab="MySQL" tab-group="dialect"
-insert into users (name, email) values (:name, :email)
-```
-
-```sql file="create_user.sql" tab="SQLite" tab-group="dialect"
-insert into users (name, email) values (:name, :email)
-returning id
-```
-
-```ts twoslash
-import createUser from "./create_user.sql";
-
-const ada = { name: "Ada", email: "ada@example.com" };
-const created = await createUser.run(db, ada);
-//    ^?
-```
-
-<DialectTabs follow>
-<Dialect value="MySQL">
-
-MySQL has no `returning`, so a write resolves to `void`. Read a new id with `last_insert_id()`, on the same connection:
-
-```sql file="last_insert_id.sql"
-select last_insert_id() as id
-```
-
-```ts twoslash
-import createUser from "./create_user.sql";
-import lastInsertId from "./last_insert_id.sql";
-
-const conn = await db.getConnection();
-await createUser.run(conn, { name: "Ada", email: "ada@example.com" });
-const { id } = await lastInsertId.run(conn);
-//      ^?
-conn.release();
-```
-
-</Dialect>
-</DialectTabs>
-
-An update by primary key with `returning` resolves to the row or `null`:
-
-```sql file="rename_user.sql" tab="Postgres" tab-group="dialect"
-update users set name = :name where id = :id
-returning id, name
-```
-
-```sql file="rename_user.sql" tab="MySQL" tab-group="dialect"
-update users set name = :name where id = :id
-```
-
-```sql file="rename_user.sql" tab="SQLite" tab-group="dialect"
-update users set name = :name where id = :id
-returning id, name
-```
-
-```ts twoslash
-import renameUser from "./rename_user.sql";
-
-const renamed = await renameUser.run(db, { id: 1, name: "Ada Lovelace" });
-//    ^?
-```
-
-The module also exports the statement's types:
-
-```ts twoslash
-import getUser, { type Params, type Row } from "./get_user.sql";
-//                                  ^?
-```
-
-### `.run()`
-
-Pass `.run()` a client and the parameters: it runs the statement and resolves to its result, shaped by how many rows Reylo proves the statement can return:
-
-| The statement | Resolves to |
-| --- | --- |
-| A match on a primary or unique key, or `limit 1` | `Row \| null` |
-| An aggregate without `group by`, a one-row `insert … returning` | `Row` |
-| An `insert`, `update` or `delete` without `returning` | `void` |
-| Anything else | `Row[]` |
-
-At run time, a statement that resolves to `Row` throws unless it gets exactly one row, and one that resolves to `Row | null` throws when it gets more than one. The client is one from any of the [supported drivers](#supported-drivers), or a transaction, savepoint or connection taken from it. The method always returns a promise, which rejects with the driver's own error.
-
-### `.runSync()`
-
-On better-sqlite3, `node:sqlite` and `bun:sqlite`, `.runSync()` runs the statement synchronously and returns the result itself, so it works inside better-sqlite3's and bun:sqlite's `db.transaction(fn)`, whose function cannot await:
-
-```ts twoslash dialect="sqlite"
-import Database from "better-sqlite3";
-import createUser from "./create_user.sql";
-import renameUser from "./rename_user.sql";
-
-const db = new Database("app.db");
-
-db.transaction(() => {
-  const { id } = createUser.runSync(db, { name: "Ada", email: null });
-  renameUser.runSync(db, { id, name: "Ada Lovelace" });
-})();
-```
-
-With `node:sqlite`, which has no `db.transaction()`, run the statements between `db.exec("begin")` and `db.exec("commit")`.
-
-### `.with()`
-
-Calling `.with(client)` binds the statement to a client once, such as a transaction, and returns a function that takes the parameters:
-
-```ts twoslash
-import getUser from "./get_user.sql";
-
-const get = getUser.with(db);
-const user = await get({ id: 1 });
+```sql tab="get_user.sql" dialect="all"
+select id, name, email from users where id = :id::int
 ```
 
 ### `.sql`
 
-The statement as Reylo sends it to the database, typed as its string literal:
+The compiled query, as Reylo sends it to your database:
 
 ```ts twoslash
 import getUser from "./get_user.sql";
@@ -693,7 +507,7 @@ getUser.sql;
 
 ### `.raw`
 
-The file's contents, as written. It is the same as `.sql` except where the file uses Reylo's own syntax, which Reylo compiles for your database ([Parameters](#parameters)): a `:name` parameter becomes `$1` or `?`, a `::` cast becomes MySQL's or SQLite's own, and a JSON parameter's schema stays in Reylo.
+The file's contents, before Reylo compiles its [parameters](#parameters):
 
 ```ts twoslash
 import getUser from "./get_user.sql";
@@ -702,134 +516,286 @@ getUser.raw;
 //      ^?
 ```
 
+### `.run()`
+
+Runs the query with your driver's client:
+
+```ts twoslash
+import getUser from "./get_user.sql";
+
+const user = await getUser.run(db, { id: 1 });
+//    ^?
+```
+
+It resolves to the rows, shaped by how many the query can return:
+
+| The query | Resolves to |
+| --- | --- |
+| A match on a primary or unique key, or `limit 1` | `Row \| null` |
+| An aggregate without `group by`, a one-row `insert … returning` | `Row` |
+| An `insert`, `update` or `delete` without `returning` | `void` |
+| Anything else | `Row[]` |
+
+It throws when the rows don't fit the shape, such as a second row for `Row | null`. The client can also be a transaction or a connection ([Supported drivers](#supported-drivers)).
+
+### `.runSync()`
+
+Runs the query synchronously, on `better-sqlite3`, `node:sqlite`, `bun:sqlite` and the `Database` of `@tursodatabase/database/compat`:
+
+```ts twoslash dialect="sqlite"
+import Database from "better-sqlite3";
+import getUser from "./get_user.sql";
+
+const db = new Database("app.db");
+const user = getUser.runSync(db, { id: 1 });
+//    ^?
+```
+
+### `.with()`
+
+Binds the query to a client, and returns a function that takes the parameters:
+
+```ts twoslash
+import getUser from "./get_user.sql";
+
+const get = getUser.with(db);
+const user = await get({ id: 1 });
+```
+
 ### `.inputSchema`
 
-The JSON Schema (2020-12) of the parameters, as a plain object, for anything that takes JSON Schema: an OpenAPI document, a form, an agent's tool definition, or a library that reads [Standard Schema](https://standardschema.dev).
+The parameters' JSON Schema, for an OpenAPI document, a form, an agent's tool or a library that reads [Standard Schema](https://standardschema.dev):
+
+<DialectTabs follow>
+<Dialect value="Postgres">
 
 ```ts twoslash
 import getUser from "./get_user.sql";
 
 getUser.inputSchema;
-// { type: "object", properties: { id: { type: "integer", … } },
-//   required: ["id"], … }
+/**
+ * {
+ *   "$schema": "https://json-schema.org/draft/2020-12/schema",
+ *   "type": "object",
+ *   "properties": {
+ *     "id": { "type": "integer", "format": "int32" }
+ *   },
+ *   "required": ["id"],
+ *   "additionalProperties": false
+ * }
+ */
 ```
+
+</Dialect>
+<Dialect value="MySQL">
+
+```ts twoslash
+import getUser from "./get_user.sql";
+
+getUser.inputSchema;
+/**
+ * {
+ *   "$schema": "https://json-schema.org/draft/2020-12/schema",
+ *   "type": "object",
+ *   "properties": {
+ *     "id": { "type": "integer", "format": "int32" }
+ *   },
+ *   "required": ["id"],
+ *   "additionalProperties": false
+ * }
+ */
+```
+
+</Dialect>
+<Dialect value="SQLite">
+
+```ts twoslash
+import getUser from "./get_user.sql";
+
+getUser.inputSchema;
+/**
+ * {
+ *   "$schema": "https://json-schema.org/draft/2020-12/schema",
+ *   "type": "object",
+ *   "properties": {
+ *     "id": { "type": "integer", "format": "int64" }
+ *   },
+ *   "required": ["id"],
+ *   "additionalProperties": false
+ * }
+ */
+```
+
+</Dialect>
+</DialectTabs>
 
 ### `.outputSchema`
 
-The JSON Schema of the result, as `JSON.stringify` writes it:
+The result's JSON Schema, as `JSON.stringify` writes it:
+
+<DialectTabs follow>
+<Dialect value="Postgres">
 
 ```ts twoslash
 import getUser from "./get_user.sql";
 
 getUser.outputSchema;
-// { anyOf: [{ type: "object", properties: { id, name, email }, … },
-//   { type: "null" }] }
+/**
+ * {
+ *   "$schema": "https://json-schema.org/draft/2020-12/schema",
+ *   "anyOf": [
+ *     {
+ *       "type": "object",
+ *       "properties": {
+ *         "id": { "type": "integer", "format": "int32" },
+ *         "name": { "type": "string" },
+ *         "email": { "type": ["string", "null"] }
+ *       },
+ *       "required": ["id", "name", "email"]
+ *     },
+ *     { "type": "null" }
+ *   ]
+ * }
+ */
 ```
+
+</Dialect>
+<Dialect value="MySQL">
+
+```ts twoslash
+import getUser from "./get_user.sql";
+
+getUser.outputSchema;
+/**
+ * {
+ *   "$schema": "https://json-schema.org/draft/2020-12/schema",
+ *   "anyOf": [
+ *     {
+ *       "type": "object",
+ *       "properties": {
+ *         "id": { "type": "integer", "format": "int32" },
+ *         "name": { "type": "string" },
+ *         "email": { "type": ["string", "null"] }
+ *       },
+ *       "required": ["id", "name", "email"]
+ *     },
+ *     { "type": "null" }
+ *   ]
+ * }
+ */
+```
+
+</Dialect>
+<Dialect value="SQLite">
+
+```ts twoslash
+import getUser from "./get_user.sql";
+
+getUser.outputSchema;
+/**
+ * {
+ *   "$schema": "https://json-schema.org/draft/2020-12/schema",
+ *   "anyOf": [
+ *     {
+ *       "type": "object",
+ *       "properties": {
+ *         "id": { "type": "integer", "format": "int64" },
+ *         "name": { "type": "string" },
+ *         "email": { "type": ["string", "null"] }
+ *       },
+ *       "required": ["id", "name", "email"]
+ *     },
+ *     { "type": "null" }
+ *   ]
+ * }
+ */
+```
+
+</Dialect>
+</DialectTabs>
 
 ## Parameters
 
-Reylo adds a little syntax of its own to SQL, the same on Postgres, MySQL and SQLite, and compiles it to what your database runs: named parameters, `::` casts and typed JSON parameters.
+Reylo's own syntax works the same on Postgres, MySQL and SQLite, and Reylo compiles it for your database.
 
 ### Named parameters
 
-Write each parameter as `:name`, on every database, and `.run()` takes the values as an object. Reylo sends the statement with your database's own placeholders, `$1` on Postgres and `?` on MySQL and SQLite, and types each parameter from where the statement uses it: the column it is compared with or written to, or the function it is passed to.
+Name a parameter with a colon, and cast it with `::`:
+
+```sql tab="find_posts.sql" dialect="all"
+select id, title from posts
+where user_id = :user_id::int
+  and title like :pattern::text
+order by id
+limit :limit::int
+```
+
+```ts twoslash tab="main.ts"
+import findPosts from "./find_posts.sql";
+
+const posts = await findPosts.run(db, {
+  user_id: 1,
+  pattern: "%SQL%",
+  limit: 10,
+});
+```
 
 ### Casts
 
-Most parameters need no cast. Where nothing in the statement types one, cast it with `::type`, which works on every database. Here only Postgres needs one:
-
-```sql file="users_named.sql" tab="Postgres" tab-group="dialect"
-select id, name from users
-where name like concat(:prefix::text, '%')
-```
-
-```sql file="users_named.sql" tab="MySQL" tab-group="dialect"
-select id, name from users
-where name like concat(:prefix, '%')
-```
-
-```sql file="users_named.sql" tab="SQLite" tab-group="dialect"
-select id, name from users
-where name like :prefix || '%'
-```
+Give each parameter its type with `::type`, on any database. Reylo compiles it to MySQL's and SQLite's own `cast`, and checks each value when you call `.run()`:
 
 ```ts twoslash
-import usersNamed from "./users_named.sql";
+import findPosts from "./find_posts.sql";
 
-const users = await usersNamed.run(db, { prefix: "Ad" });
-//                                        ^?
+findPosts.sql;
+//        ^?
 ```
-
-Postgres's `concat` takes any type, so the cast is what types `:prefix` there; MySQL and SQLite type it from `concat` and `||`. Postgres reads `::` itself, and on MySQL and SQLite, Reylo writes it as their own cast: `:n::int` is `cast(? as signed)` on MySQL and `cast(? as integer)` on SQLite. Those casts turn a value they cannot read into 0 or `null`, so Reylo checks the value against the type before the statement runs. Each database's own `cast(… as …)` works too.
 
 ### JSON parameters
 
-A JSON parameter carries a JSON Schema in its cast. The schema types it in TypeScript, and Reylo checks every value against it before the statement runs, so a list, a batch of rows or a nested object is one parameter:
+When casting to `json` or `jsonb`, you can define a JSON Schema annotation:
 
-```sql file="add_users.sql" tab="Postgres" tab-group="dialect"
-with input as (
-  select :names::jsonb('{
-    "type": "array",
-    "items": { "type": "string" }
-  }') as names
-)
-insert into users (name)
-select jsonb_array_elements_text(input.names) from input
+```sql tab="record_signup.sql" dialect="all"
+insert into events (kind, payload)
+values ('signup', :payload::json('{
+  "type": "object",
+  "properties": {
+    "plan": { "type": "string", "enum": ["free", "pro"] },
+    "referrer": { "type": "string" }
+  },
+  "required": ["plan"]
+}'))
 ```
 
-```sql file="add_users.sql" tab="MySQL" tab-group="dialect"
-insert into users (name)
-with input as (
-  select :names::json('{
-    "type": "array",
-    "items": { "type": "string" }
-  }') as names
-)
-select j.name
-from input, json_table(input.names, '$[*]' columns (
-  name text path '$'
-)) as j
+```ts twoslash tab="main.ts"
+import recordSignup from "./record_signup.sql";
+
+await recordSignup.run(db, { payload: { plan: "pro" } });
+//                           ^?
 ```
 
-```sql file="add_users.sql" tab="SQLite" tab-group="dialect"
-with input as (
-  select :names::json('{
-    "type": "array",
-    "items": { "type": "string" }
-  }') as names
-)
-insert into users (name)
-select j.value from input, json_each(input.names) as j
-```
-
-```ts twoslash
-import addUsers from "./add_users.sql";
-
-await addUsers.run(db, { names: ["Ada", "Grace"] });
-//                       ^?
-```
-
-- The schema is JSON Schema 2020-12: `string`, `number`, `integer`, `boolean`, `null`, `object` and `array`, a key optional unless `required` lists it, and `{ "type": ["string", "null"] }` for a value that may be `null`.
-- Its checks, such as `format`, `pattern`, `minimum`, `maxItems` and `enum`, run before the statement does, and a value that fails makes `.run()` reject with every issue listed. The `enum` and `const` keywords also narrow the type, and `oneOf`, `anyOf` and `allOf` make a union.
+Reylo uses it to infer the parameter's type, and validates your input against the schema when you call `.run()`.
 
 The examples use JSON parameters to [insert many rows](#insert-many-rows), [insert related rows](#insert-related-rows) and [record events of several kinds](#record-events-of-several-kinds).
 
 ## Configuration
 
-Reylo reads its settings from `.reylo.yaml`, beside `package.json`:
+Reylo reads its settings from `.reylo.yaml`, beside `package.json`. Every key is optional:
 
 ```yaml title=".reylo.yaml"
+# the dev database Reylo reads your schema from (the default)
 url: ${DATABASE_URL}
+# a direct connection for Reylo's analysis, past a pooler
 direct_url: ${DIRECT_URL}
+# the .env files Reylo reads (the default)
 env: [.env.local, .env]
+# make a parameter whose type cannot be inferred an error
 strict_params: true
 ```
 
-Every key is optional: a project without the file behaves as if it held `url: ${DATABASE_URL}`.
-
 ### `url`
 
-The database Reylo analyzes each statement against. The default is `${DATABASE_URL}`, and the scheme names the dialect:
+The dev database Reylo reads your schema from. The scheme names the dialect:
 
 ```sh title=".env" tab="Postgres" tab-group="dialect"
 # or postgresql://; the type check uses your pg or postgres.js
@@ -846,55 +812,61 @@ DATABASE_URL=mysql://root@localhost:3306/app
 DATABASE_URL=file:./app.db
 ```
 
-A `${VAR}` comes from the environment, then from the [`env`](#env) files. One that nothing sets is an error, which every `.sql` import reports. Write the URL itself, or another variable:
+A `${VAR}` comes from the environment, then from the [`env`](#env) files:
 
 ```yaml title=".reylo.yaml"
+# the default is ${DATABASE_URL}
 url: ${APP_DATABASE_URL}
 ```
 
 ### `direct_url`
 
-A URL that reaches the database past a pooler. Describing a statement through a pooler in transaction mode, such as PgBouncer's, can fail, so when `direct_url` is set, Reylo's analysis (the type check and the editor) connects through it instead of `url`. It has no default, and your app's client is not affected.
+A direct connection for Reylo's analysis, past a pooler: describing a query through a pooler in transaction mode, such as PgBouncer's, can fail. Your app's client is not affected.
 
 ```yaml title=".reylo.yaml"
 url: ${DATABASE_URL}
+# no default
 direct_url: ${DIRECT_URL}
 ```
 
 ### `env`
 
-The `.env` files Reylo reads, relative to `.reylo.yaml`. The default is `[.env.local, .env]`: the first file that sets a variable wins, and the environment wins over every file.
+The `.env` files Reylo reads, relative to `.reylo.yaml`. The first file that sets a variable wins, and the environment wins over every file.
 
 ```yaml title=".reylo.yaml"
+# the default is [.env.local, .env]
 env: [.env.development, .env]
 ```
 
-Reylo reads them for its own analysis only. Your app loads `.env` itself: Node takes `--env-file` ([Node](#node)), and Bun and nub read `.env` on their own.
-
 ### `strict_params`
 
-With `strict_params: true`, a [parameter that nothing types](#a-parameter-nothing-types) is an error instead of `unknown`. The default is `false`.
+With `strict_params: true`, a [parameter whose type cannot be inferred](#a-parameter-nothing-types) is an error that says to [cast it](#casts), instead of `unknown`.
 
 ```yaml title=".reylo.yaml"
+# the default is false
 strict_params: true
 ```
 
 ## How it works
 
-Reylo is a content mapper, the kind of plugin TypeScript 7.1 introduced for files that are not TypeScript. Your `tsconfig.json` names Reylo for `.sql` files, so whenever the type checker meets a `.sql` import, in `tsc` or in your editor, it hands Reylo the file and takes back the module's types. It is TypeScript's own mechanism, so the types are the same in CI and as you type.
+Reylo is a [content mapper](https://devblogs.microsoft.com/typescript/announcing-typescript-7-1-beta/#content-mappers), the kind of plugin [TypeScript 7.1](https://devblogs.microsoft.com/typescript/announcing-typescript-7-1-beta/) introduced for files that aren't TypeScript.
+
+Whenever the type checker meets a `.sql` import, in `tsc` or in your editor, it hands Reylo the file and takes back the module's types.
 
 <HowItWorksDiagram />
 
-To type a statement, Reylo asks your live database. It has the database prepare the statement, without running it (Postgres and MySQL on the server, SQLite in Reylo's own copy of SQLite, from the database file's schema), and reads the catalog. From the answer, Reylo learns:
+To type a query, Reylo has your live database prepare it, without running it, and reads the catalog. From the answer, it learns:
 
 - the parameter types
 - the column types
 - nullability, from `NOT NULL` and outer joins
 - the row count, from keys, aggregates, `limit 1` and `returning`
 
-At run time, Node's [`--import`](#node), Bun's or nub's preload, or a bundler [plugin](#plugins) turns the same file into a module that runs the statement through your driver.
+At run time, the [preload](#node) or a bundler [plugin](#plugins) turns the same file into a module that runs the query through your driver.
 
-Reylo keeps each answer in `.reylo/`, keyed by a fingerprint of the schema, so it asks the database again only for a schema it has not seen. After a migration, from any migration tool, the next type check sees the new schema: a statement that names a dropped or renamed column fails in its `.sql` file, and a caller that reads a column the statement no longer returns fails in TypeScript.
+Reylo caches each answer in `.reylo/`, keyed by a fingerprint of the schema.
+
+After a migration, the next type check sees the new schema: a dropped column fails in the `.sql` file that names it, and in the code that reads it.
 
 <Details summary="What an error looks like" id="errors">
 
@@ -919,7 +891,7 @@ import getUser from "./get_user.sql";
 const user = await getUser.run(db, { id: "1" });
 ```
 
-While a `.sql` file has an error, `tsc` holds back the TypeScript errors, so fix the SQL first. A build stops at the same error, and so does the preload. At run time, `.run()` rejects with the driver's own error, and with Reylo's when the rows do not fit the row count ([`.run()`](#run)).
+While a `.sql` file has an error, `tsc` holds back the TypeScript errors, so fix the SQL first.
 
 <DialectTabs follow>
 <Dialect value="MySQL">
@@ -936,7 +908,7 @@ A MySQL prepare error has no position, so the error covers the whole statement.
 <DialectTabs>
 <Dialect value="Postgres">
 
-Reylo prepares the statement on the server and reads the description of its parameters and columns, then reads the catalog for `NOT NULL`, keys and enum labels.
+Reylo sends the query to the live database [prepared](https://www.postgresql.org/docs/current/sql-prepare.html) and reads back the database's own type information on its parameters and return type. This information is cross-referenced against the schema catalog, enabling high-fidelity type inference for any query.
 
 | What | Where it comes from |
 | --- | --- |
@@ -949,7 +921,9 @@ Reylo prepares the statement on the server and reads the description of its para
 </Dialect>
 <Dialect value="MySQL">
 
-Reylo prepares the statement on the server, which reports the column types, `NOT NULL`, and a type for each parameter from its context. Reylo adds which parameters may be null, the row count and the shape of JSON built in the statement. Reylo is tested on MySQL 8.0, 8.4, 9.7 and 26.7.
+Reylo sends the query to the live database [prepared](https://dev.mysql.com/doc/refman/8.4/en/sql-prepared-statements.html) and reads back the database's own type information on its parameters and return type.
+
+Reylo adds which parameters may be null, the row count, and the shape of JSON the query builds.
 
 | What | Where it comes from |
 | --- | --- |
@@ -962,7 +936,7 @@ Reylo prepares the statement on the server, which reports the column types, `NOT
 </Dialect>
 <Dialect value="SQLite">
 
-Reylo reads the schema from the database file and prepares the statement against its own copy of SQLite, which reports where every column and parameter comes from.
+Reylo reads the schema from the database file and [prepares](https://sqlite.org/c3ref/prepare.html) the query in its own copy of SQLite, which reports where each column and parameter comes from.
 
 | What | Where it comes from |
 | --- | --- |
@@ -977,12 +951,14 @@ Reylo reads the schema from the database file and prepares the statement against
 
 </Details>
 
-<Details summary="When nothing in the statement types a parameter" id="a-parameter-nothing-types">
+<Details summary="When a parameter's type cannot be inferred" id="a-parameter-nothing-types">
+
+It's `unknown` until a [cast](#casts) types it, and an error with [`strict_params: true`](#strict_params).
 
 <DialectTabs>
 <Dialect value="Postgres">
 
-Postgres types each parameter from its context. A bare `select :x` is `text`, a `string`, and `select :x is null` is an error (42P18) until a cast types it.
+Postgres types a parameter from its context: a bare `select :x` is a `string`, and `select :x is null` is an error until a cast types it.
 
 </Dialect>
 <Dialect value="MySQL">
@@ -992,10 +968,10 @@ MySQL types every parameter: one that nothing else types, such as a bare `select
 </Dialect>
 <Dialect value="SQLite">
 
-A parameter that nothing types is `unknown`: a bare `select :x`, or an argument of a function your application registers or of a table-valued function other than `json_each` and `json_tree`. A cast types it, and [`strict_params: true`](#strict_params) in `.reylo.yaml` makes an untyped parameter an error:
+A bare `select :x`, or an argument of a function your application registers or of a table-valued function other than `json_each` and `json_tree`, has no type until a cast gives it one:
 
 ```sql
-select length(cast(:text as text)) as n
+select length(:text::text) as n
 ```
 
 </Dialect>
@@ -1008,17 +984,30 @@ select length(cast(:text as text)) as n
 <DialectTabs>
 <Dialect value="Postgres">
 
-A key match also counts through a join on the joined table's key, a unique index on an expression or with a `where`, and a `distinct` or `group by` over values the `where` pins.
+Also a key match:
+
+- a join on the joined table's key
+- a unique index on an expression or with a `where`
+- a `distinct` or `group by` over values the `where` pins
 
 </Dialect>
 <Dialect value="MySQL">
 
-A match on one table's own primary or unique key counts, with or without a `distinct` or `group by`. A joined table's key, a unique index on an expression, and a `distinct` or `group by` over pinned values that are not a key give `many`.
+Only a match on one table's own primary or unique key counts, with or without a `distinct` or `group by`. These give `many`:
+
+- a joined table's key
+- a unique index on an expression
+- a `distinct` or `group by` over pinned values that are not a key
 
 </Dialect>
 <Dialect value="SQLite">
 
-A key match also counts through a join on the joined table's key, and a `distinct` or `group by` over values the `where` pins. A unique index on an expression or with a `where` gives `many`.
+Also a key match:
+
+- a join on the joined table's key
+- a `distinct` or `group by` over values the `where` pins
+
+A unique index on an expression or with a `where` gives `many`.
 
 </Dialect>
 </DialectTabs>
@@ -1027,7 +1016,7 @@ A key match also counts through a join on the joined table's key, and a `distinc
 
 <Details summary="In CI, and in builds without a database" id="in-ci">
 
-A CI job that type-checks starts the database, applies the migrations, and runs `tsc --noEmit --runExternalCode` with `DATABASE_URL` set. Tests need the database too, or a filled `.reylo/`: Vitest's [Vite plugin](#setup-vite) and Jest's [transformer](#setup-jest) analyze each `.sql` file as a build does.
+A CI job that type-checks starts the database, applies the migrations, and runs `tsc --noEmit --runExternalCode` with `DATABASE_URL` set. Tests need the database too, or a filled `.reylo/`.
 
 Every step that loads a `.sql` file (the type check, a plugin, the preload) keeps its analysis in `.reylo/`, and a later step reads it from there:
 
@@ -1035,13 +1024,15 @@ Every step that loads a `.sql` file (the type check, a plugin, the preload) keep
 - When the database answers, an entry made against another schema is analyzed again. An editor or a dev server checks the schema again at most every 5 seconds.
 - When the database is out of reach, the entries are used as they are, and a statement that `.reylo/` lacks is an error.
 
-So a build that cannot reach the database, such as a container build, takes the `.reylo/` that a type check filled where the database answers. Reylo keys each entry by the server it came from (scheme, user, host, port and database), or by the SQLite file's absolute path, so the build sets the same URL as the type check (`DATABASE_URL`, or [`direct_url`](#direct_url) when it is set), even though it cannot connect, and a SQLite project keeps its path.
+A build that can't reach the database, such as a container build, uses the `.reylo/` a type check filled. Its entries are keyed by the database's URL, so the build sets the same URL, even though it can't connect.
 
 </Details>
 
 ## Supported drivers
 
-Reylo is bring-your-own-driver: pass `.run()` a client from any of these, or a transaction, savepoint or connection taken from one (see [Run statements in a transaction](#run-statements-in-a-transaction)). The type check reads the schema through `pg` or postgres.js on Postgres and through mysql2 on MySQL, so an app on another driver adds one of those as a dev dependency. Every driver gives Reylo's queries the same values, whatever it is set up to return for yours ([Data types](#data-types)). How Reylo reads each driver's values, the settings it refuses and what a driver loses before Reylo sees a value are on each database's page: [Postgres](/postgres#drivers), [MySQL](/mysql#drivers) and [SQLite](/sqlite#drivers).
+Pass `.run()` a client from any of these drivers, or a transaction or connection taken from one.
+
+The type check reads your schema through `pg` or postgres.js on Postgres, and `mysql2` on MySQL. An app on another driver adds one as a dev dependency.
 
 **Postgres**
 
@@ -1108,7 +1099,7 @@ import getUser from "./get_user.sql";
 const user = await getUser.run(sql, { id: 1 });
 ```
 
-Each takes its transactions and connections too: `pg`'s Pool, Client and PoolClient; postgres.js's and Bun.sql's `.begin()`, `.savepoint()` and `.reserve()`; PGlite's `.transaction()`; Neon's Pool and Client; and pg-promise's `.task()` and `.tx()`.
+Each takes its transactions and connections too: `pg`'s `Pool`, `Client` and `PoolClient`; postgres.js's and `Bun.sql`'s `.begin()`, `.savepoint()` and `.reserve()`; PGlite's `.transaction()`; Neon's `Pool` and `Client`; and `pg-promise`'s `.task()` and `.tx()`.
 
 **MySQL**
 
@@ -1150,7 +1141,7 @@ const db = new SQL(process.env.DATABASE_URL!);
 const user = await getUser.run(db, { id: 1 });
 ```
 
-Each takes its transactions and connections too: mysql2's and mariadb's promise or callback API, PlanetScale's `.transaction()`, and Bun.sql's `.begin()`, `.savepoint()` and `.reserve()`. Use PlanetScale's driver 1.x: 2.0 binds no parameters.
+Each takes its transactions and connections too: `mysql2`'s and `mariadb`'s promise or callback API, PlanetScale's `.transaction()`, and `Bun.sql`'s `.begin()`, `.savepoint()` and `.reserve()`.
 
 **SQLite**
 
@@ -1239,11 +1230,11 @@ const db = new SQL({ adapter: "sqlite", filename: "app.db" });
 const user = await getUser.run(db, { id: 1 });
 ```
 
-Each takes its transactions too: libSQL's `.transaction()`, the handle Turso's `.transactionAsync()` passes its function, Bun.sql's `.begin()` and `.savepoint()`, and D1's `.withSession()` sessions. better-sqlite3, `node:sqlite`, `bun:sqlite` and the Database of `@tursodatabase/database/compat` take `.runSync()` as well ([Run statements in a transaction](#run-statements-in-a-transaction)).
+Each takes its transactions too: libSQL's `.transaction()`, the handle Turso's `.transactionAsync()` passes its function, `Bun.sql`'s `.begin()` and `.savepoint()`, and D1's `.withSession()` sessions. On `better-sqlite3`, `node:sqlite`, `bun:sqlite` and the `Database` of `@tursodatabase/database/compat`, [`.runSync()`](#runsync) works too.
 
 ## Data types
 
-Reylo gives every value one type, the same on every driver, whatever the driver is set up to return: it decodes each value of its own queries itself, on your client, and leaves your other queries as your driver decodes them. A 64-bit integer is a `bigint`, a decimal its exact text, an instant the ISO 8601 text of the instant in UTC, which `Temporal.Instant.from` reads, a date or a time without a zone the text the database wrote, a truth value a `boolean`, JSON is parsed and binary data is a `Uint8Array`. No value is a `Date`.
+Reylo decodes its own queries' values itself, so every driver gives the same types. A 64-bit integer is a `bigint`, a decimal its exact text, and an instant its ISO 8601 text in UTC: no value is a `Date`.
 
 <DialectTabs>
 <Dialect value="Postgres">
@@ -1315,23 +1306,22 @@ Every rule and edge case of each database, from 64-bit integers to time zones, n
 
 ## Examples
 
-Each example runs against [the schema at the top of the page](#schema), and calls the client `db`. A statement that differs between databases has a tab for each: pick a dialect once and every example follows it.
+Each example runs against [the schema at the top of the page](#schema), and calls the client `db`. Pick a dialect once, and every example follows it.
 
 ### List rows
 
-A statement that can match more than one row resolves to an array.
+A query that can match more than one row resolves to an array.
 
-```sql file="list_users.sql" dialect="all"
+```sql tab="list_users.sql" dialect="all"
 select id, name, role, tags, created_at from users
-where role = :role
 order by created_at desc
-limit :limit
+limit :limit::int
 ```
 
-```ts twoslash
+```ts twoslash tab="main.ts"
 import listUsers from "./list_users.sql";
 
-const users = await listUsers.run(db, { role: "member", limit: 20 });
+const users = await listUsers.run(db, { limit: 20 });
 //    ^?
 ```
 
@@ -1339,45 +1329,45 @@ const users = await listUsers.run(db, { role: "member", limit: 20 });
 
 An aggregate without `group by` is exactly one row.
 
-```sql file="count_users.sql" dialect="all"
-select count(*) as total from users where role = :role
+```sql tab="count_posts.sql" dialect="all"
+select count(*) as total from posts where user_id = :user_id::int
 ```
 
-```ts twoslash
-import countUsers from "./count_users.sql";
+```ts twoslash tab="main.ts"
+import countPosts from "./count_posts.sql";
 
-const { total } = await countUsers.run(db, { role: "admin" });
+const { total } = await countPosts.run(db, { user_id: 1 });
 //      ^?
 ```
 
 ### Filter on an optional value
 
-A `coalesce` lets a parameter be `null`: here `null` matches every role. A parameter takes `null` only where the statement allows it, such as a `coalesce` or a nullable column it is written to.
+A `coalesce` lets a parameter be `null`: here `null` matches every user. A parameter takes `null` only where the query allows it, such as a `coalesce` or a nullable column it is written to.
 
-```sql file="users_by_role.sql" dialect="all"
-select id, name from users
-where role = coalesce(:role, role)
+```sql tab="posts_by_user.sql" dialect="all"
+select id, title from posts
+where user_id = coalesce(:user_id::int, user_id)
 ```
 
-```ts twoslash
-import usersByRole from "./users_by_role.sql";
+```ts twoslash tab="main.ts"
+import postsByUser from "./posts_by_user.sql";
 
-const users = await usersByRole.run(db, { role: "admin" });
+const posts = await postsByUser.run(db, { user_id: null });
 //                                        ^?
 ```
 
 ### Sort by a chosen column
 
-A parameter is a value, never a name: `order by :column` sorts by a constant, and `select * from :table` is a syntax error. Choose the column with `case`:
+A parameter is a value, never a column name, so choose the column with `case`:
 
-```sql file="sorted_users.sql" dialect="all"
+```sql tab="sorted_users.sql" dialect="all"
 select id, name, created_at from users
 order by
-  case :sort when 'name' then name end,
+  case :sort::text when 'name' then name end,
   created_at desc
 ```
 
-```ts twoslash
+```ts twoslash tab="main.ts"
 import sortedUsers from "./sorted_users.sql";
 
 const users = await sortedUsers.run(db, { sort: "name" });
@@ -1386,9 +1376,9 @@ const users = await sortedUsers.run(db, { sort: "name" });
 
 ### Search several columns
 
-Each parameter appears once in a statement, so that one place types it, and a second use is an error. To use a value twice, select it once in a `with`:
+Each parameter appears once in a query. To use a value twice, select it once in a `with`:
 
-```sql file="search_users.sql" tab="Postgres" tab-group="dialect"
+```sql tab="search_users.sql" dialect="all"
 with input as (
   select concat('%', :q::text, '%') as pattern
 )
@@ -1396,23 +1386,7 @@ select id, name from users, input
 where name like input.pattern or email like input.pattern
 ```
 
-```sql file="search_users.sql" tab="MySQL" tab-group="dialect"
-with input as (
-  select concat('%', :q, '%') as pattern
-)
-select id, name from users, input
-where name like input.pattern or email like input.pattern
-```
-
-```sql file="search_users.sql" tab="SQLite" tab-group="dialect"
-with input as (
-  select concat('%', :q, '%') as pattern
-)
-select id, name from users, input
-where name like input.pattern or email like input.pattern
-```
-
-```ts twoslash
+```ts twoslash tab="main.ts"
 import searchUsers from "./search_users.sql";
 
 const users = await searchUsers.run(db, { q: "ada" });
@@ -1423,13 +1397,13 @@ const users = await searchUsers.run(db, { q: "ada" });
 
 A column of the table a `left join` adds can be `null`, and a `coalesce` gives it a default.
 
-```sql file="user_posts.sql" dialect="all"
+```sql tab="user_posts.sql" dialect="all"
 select u.name, p.title, coalesce(p.title, '') as label
 from users u
 left join posts p on p.user_id = u.id
 ```
 
-```ts twoslash
+```ts twoslash tab="main.ts"
 import userPosts from "./user_posts.sql";
 
 const rows = await userPosts.run(db);
@@ -1501,7 +1475,7 @@ const next = await nextPage.run(db, page.at(-1)!);
 Pass the list as one parameter.
 
 ```sql file="users_by_ids.sql" tab="Postgres" tab-group="dialect"
-select id, name from users where id = any(:ids)
+select id, name from users where id = any(:ids::int[])
 ```
 
 ```sql file="users_by_ids.sql" tab="MySQL" tab-group="dialect"
@@ -1615,7 +1589,7 @@ select u.id, u.name,
     from posts p where p.user_id = u.id
   ), '[]') as posts
 from users u
-where u.id = :id
+where u.id = :id::int
 ```
 
 ```sql file="user_with_posts.sql" tab="MySQL" tab-group="dialect"
@@ -1629,7 +1603,7 @@ select u.id, u.name,
     from posts p where p.user_id = u.id
   ), json_array()) as posts
 from users u
-where u.id = :id
+where u.id = :id::int
 ```
 
 ```sql file="user_with_posts.sql" tab="SQLite" tab-group="dialect"
@@ -1643,7 +1617,7 @@ select u.id, u.name,
     from posts p where p.user_id = u.id
   ) as posts
 from users u
-where u.id = :id
+where u.id = :id::int
 ```
 
 ```ts twoslash
@@ -1887,7 +1861,7 @@ try {
 }
 ```
 
-A `JSON_TABLE` column takes the connection's collation, `utf8mb4_unicode_ci` under mysql2. Comparing it with a column of another collation is an error, so the `email` column names the collation of `users.email`.
+A `JSON_TABLE` column takes the connection's collation, `utf8mb4_unicode_ci` under `mysql2`. Comparing it with a column of another collation is an error, so the `email` column names the collation of `users.email`.
 
 </Dialect>
 <Dialect value="SQLite">
@@ -1970,6 +1944,10 @@ db.transaction(() => {
 
 A transaction, a savepoint or a connection taken from a client is a client too:
 
+```sql file="rename_user.sql" dialect="all"
+update users set name = :name::text where id = :id::int
+```
+
 <DialectTabs>
 <Dialect value="Postgres">
 
@@ -2013,18 +1991,18 @@ try {
 </Dialect>
 <Dialect value="SQLite">
 
-On better-sqlite3, `node:sqlite` and `bun:sqlite`, `.runSync()` runs the statement synchronously, so it works inside better-sqlite3's and bun:sqlite's `db.transaction(fn)`, whose function cannot await. With `node:sqlite`, which has no `db.transaction()`, run the statements between `db.exec("begin")` and `db.exec("commit")`.
+With `better-sqlite3` or `bun:sqlite`, [`.runSync()`](#runsync) works inside `db.transaction()`:
 
 ```ts twoslash
 import Database from "better-sqlite3";
-import createUser from "./create_user.sql";
+import getUser from "./get_user.sql";
 import renameUser from "./rename_user.sql";
 
 const db = new Database("app.db");
 
 db.transaction(() => {
-  const { id } = createUser.runSync(db, { name: "Ada", email: null });
-  renameUser.runSync(db, { id, name: "Ada Lovelace" });
+  const user = getUser.runSync(db, { id: 1 });
+  renameUser.runSync(db, { id: user!.id, name: "Ada Lovelace" });
 })();
 ```
 
@@ -2033,21 +2011,21 @@ db.transaction(() => {
 
 ### Insert or update
 
-When the email already exists, the insert updates that row instead. With `returning`, it resolves to the id of the row it wrote.
+When the email already exists, the insert updates that row instead. With `returning`, it resolves to the row's id.
 
 ```sql file="upsert_user.sql" tab="Postgres" tab-group="dialect"
-insert into users (name, email) values (:name, :email)
+insert into users (name, email) values (:name::text, :email::text)
 on conflict (email) do update set name = excluded.name
 returning id
 ```
 
 ```sql file="upsert_user.sql" tab="MySQL" tab-group="dialect"
-insert into users (name, email) values (:name, :email) as new
+insert into users (name, email) values (:name::text, :email::text) as new
 on duplicate key update name = new.name
 ```
 
 ```sql file="upsert_user.sql" tab="SQLite" tab-group="dialect"
-insert into users (name, email) values (:name, :email)
+insert into users (name, email) values (:name::text, :email::text)
 on conflict (email) do update set name = excluded.name
 returning id
 ```
@@ -2064,11 +2042,11 @@ const result = await upsertUser.run(db, ada);
 
 A write without `returning` resolves to `void`.
 
-```sql file="delete_user.sql" dialect="all"
-delete from users where id = :id
+```sql tab="delete_user.sql" dialect="all"
+delete from users where id = :id::int
 ```
 
-```ts twoslash
+```ts twoslash tab="main.ts"
 import deleteUser from "./delete_user.sql";
 
 const result = await deleteUser.run(db, { id: 1 });
@@ -2189,3 +2167,19 @@ await recordEvents.run(db, {
   ],
 });
 ```
+
+## Integration
+
+A complete, working project for each setup. Each one's README, under "How Reylo is wired in", names every line Reylo needs:
+
+| Setup | Example | Database and driver |
+| --- | --- | --- |
+| Node | [examples/node](https://github.com/colinhacks/reylo/tree/main/examples/node) | Postgres, postgres.js |
+| Nub | [examples/nub](https://github.com/colinhacks/reylo/tree/main/examples/nub) | SQLite, `node:sqlite` |
+| Bun | [examples/bun](https://github.com/colinhacks/reylo/tree/main/examples/bun) | SQLite, `bun:sqlite` |
+| Vite, in a React Router app | [examples/vite](https://github.com/colinhacks/reylo/tree/main/examples/vite) | Postgres, `pg` |
+| Next.js | [examples/nextjs](https://github.com/colinhacks/reylo/tree/main/examples/nextjs) | Postgres, postgres.js |
+| esbuild | [examples/esbuild](https://github.com/colinhacks/reylo/tree/main/examples/esbuild) | Postgres, postgres.js |
+| webpack | [examples/webpack](https://github.com/colinhacks/reylo/tree/main/examples/webpack) | MySQL, `mysql2` |
+| Rspack | [examples/rspack](https://github.com/colinhacks/reylo/tree/main/examples/rspack) | Postgres, `pg` |
+| Jest | [examples/jest](https://github.com/colinhacks/reylo/tree/main/examples/jest) | SQLite, `better-sqlite3` |

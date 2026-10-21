@@ -12,13 +12,14 @@ type Props = { params: Promise<{ slug?: string[] }> };
 /**
  * The h2s whose h3s stay out of each page's table of contents. The maintainer wants the whole table
  * to fit on one screen (a window 900px tall, at Fumadocs' spacing); the headings stay on the page,
- * with their anchors. On the main page: the query's members under Usage, the parameters, the keys
- * of `.reylo.yaml` and the examples. On each dialect page (content/docs/<dialect>.mdx, one skeleton
+ * with their anchors. On the main page: the parameters and the examples; the query's members
+ * under Usage and the keys of `.reylo.yaml` show, as the maintainer asked on 2026-10-20 ("All the h3s
+ * underneath the usage section should show up in the sidebar"; "Same for configuration"). On each dialect page (content/docs/<dialect>.mdx, one skeleton
  * for all three): the h3s of Parameters, which leaves Data types' h3s, the reason a reader lands
  * there, in the table.
  */
 const FOLD: Record<string, readonly string[]> = {
-  '': ['#usage', '#parameters', '#configuration', '#examples'],
+  '': ['#parameters', '#examples'],
   postgres: ['#parameters'],
   mysql: ['#parameters'],
   sqlite: ['#parameters'],
