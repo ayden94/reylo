@@ -411,6 +411,17 @@ test("sqlite: @libsql/client and its transactions take execute({ sql, args }) â†
   assert.deepEqual(calls, [{ sql: "select ? as id, ? as name, ? as again", args: [1, "ada", 1] }]);
 });
 
+test("sqlite: sqlite3 and the sqlite package, which bind a BigInt as NULL, get one a number holds as that number, and a larger one is refused", async () => {
+  const seen: unknown[][] = [];
+  const sqlite3 = { all: (_: string, v: unknown[], cb: (e: Error | null, rows: unknown[]) => void) => (seen.push(v), cb(null, [])), exec: () => {} };
+  const sqlite = { all: async (_: string, v?: unknown[]) => (seen.push(v!), []), getDatabaseInstance: () => ({}) };
+  await execute(sqlite3, lite, { id: BigInt(7), name: "ada" });
+  await execute(sqlite, lite, { id: BigInt(-7), name: "ada" });
+  assert.deepEqual([...seen], [[7, "ada", 7], [-7, "ada", -7]]);
+  for (const client of [sqlite3, sqlite]) await assert.rejects(Promise.resolve().then(() => execute(client, lite, { id: BigInt("9007199254740993"), name: "ada" })), /^TypeError: sqlite3 binds a BigInt as NULL, and 9007199254740993 is past 2\^53 - 1/);
+  assert.equal(seen.length, 2);
+});
+
 test("sqlite: sqlite3's callback all(), its errors, and the sqlite package's promise all()", async () => {
   const failure = Object.assign(new Error("SQLITE_ERROR: near \"selec\": syntax error"), { code: "SQLITE_ERROR" });
   const sqlite3 = {

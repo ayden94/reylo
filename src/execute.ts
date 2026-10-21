@@ -272,10 +272,12 @@ async function executeAsync(c: AnyClient | null | undefined, query: QueryModule,
       const columns = query.columns;
       if (typeof c.unsafe === "function") return normalize(await c.unsafe(text, values), columns);
       if (typeof c.execute === "function") return normalize((await c.execute({ sql: text, args: values })).rows, columns);
-      if (typeof c.getDatabaseInstance === "function") return normalize(await c.all(text, values), columns);
+      // The sqlite package wraps sqlite3, and sqlite3 binds a BigInt as NULL.
+      if (typeof c.getDatabaseInstance === "function") return normalize(await c.all(text, values.map(sqlite3Value)), columns);
       if (typeof c.all === "function" && typeof c.exec === "function") {
+        const bound = values.map(sqlite3Value);
         return normalize(
-          await new Promise<unknown[]>((resolve, reject) => c.all(text, values, (error: Error | null, rows: unknown[]) => (error ? reject(error) : resolve(rows)))),
+          await new Promise<unknown[]>((resolve, reject) => c.all(text, bound, (error: Error | null, rows: unknown[]) => (error ? reject(error) : resolve(rows)))),
           columns,
         );
       }
@@ -411,6 +413,15 @@ function encode(type: EngineType | undefined, v: unknown, dialect: Dialect): unk
   if (dialect !== "postgres") return v;
   if (type.kind === "array") return Array.isArray(v) ? v.map((e) => encode(Array.isArray(e) ? type : type.of, e, dialect)) : v;
   return typeof v === "string" && isTime(type) ? postgresYear(v) : v;
+}
+
+// sqlite3 6.0.1 binds a BigInt as NULL, with no error (`select cast(? as text)` with
+// 9007199254740993n gave null), where every other SQLite driver binds it exactly. A BigInt a
+// number holds exactly goes as that number; a larger one is refused, since sqlite3 cannot bind it.
+function sqlite3Value(v: unknown): unknown {
+  if (typeof v !== "bigint") return v;
+  if (v >= BigInt(Number.MIN_SAFE_INTEGER) && v <= BigInt(Number.MAX_SAFE_INTEGER)) return Number(v);
+  throw new TypeError(`sqlite3 binds a BigInt as NULL, and ${v} is past 2^53 - 1, where a number stops being exact: pass it as a string of digits, which SQLite stores as that integer in an INTEGER column, or run the statement on better-sqlite3, node:sqlite or libSQL, which bind a BigInt.`);
 }
 
 function asByteaHex(v: unknown) {

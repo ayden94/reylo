@@ -177,9 +177,9 @@ export function declaredType(t: EngineType, declared: unknown): string | undefin
  * (`src/execute.ts`). A `timestamp` or a `date` (MySQL's DATETIME and TIMESTAMP are the engine's
  * `timestamp`) is a wall-clock reading with no zone, and the drivers write a `Date`'s in different
  * zones, the app's (pg, mysql2), the server's (postgres.js) or UTC (PGlite, Bun.sql), so it takes
- * the text alone (the maintainer, 2026-10-12). An array's elements take no NULL in their type,
- * though the run time binds one, since only a statement that builds an array returns a NULL
- * element and the type of `= any(:ids)` reads plainly as `number[]`.
+ * the text alone (the maintainer, 2026-10-12). An array's elements take NULL, which the run time
+ * binds, since an array a statement builds comes back with NULL elements (`array_agg` over a
+ * left join is `(string | null)[]`).
  */
 export function renderParamType(t: EngineType, dialect: Dialect = "postgres"): string {
   if (t.kind === "scalar" && dialect !== "sqlite") {
@@ -210,8 +210,7 @@ export function renderParamType(t: EngineType, dialect: Dialect = "postgres"): s
     // An array of row values comes back as the text Postgres prints, which the parameter takes back
     // beside an array of each row's own text.
     if ((t.of.kind === "scalar" && t.of.name === "record") || t.of.kind === "composite") return "string | string[]";
-    const inner = renderParamType(t.of, dialect);
-    return /[|&]/.test(inner) ? `(${inner})[]` : `${inner}[]`;
+    return `(${renderParamType(t.of, dialect)} | null)[]`;
   }
   return renderType(t, false, dialect);
 }

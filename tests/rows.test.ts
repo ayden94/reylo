@@ -23,7 +23,7 @@ const events: RowsType = {
 test("the caller's type is the column list's: each key as its parameter type takes it, ? where it may be left out, | null where it may be null", () => {
   assert.equal(
     renderParamType(events, "postgres"),
-    "readonly { id: number | bigint | string; ts: Date | string; status?: string; amount?: string | null; tags?: string[] | null; meta?: { source: string } | null }[]",
+    "readonly { id: number | bigint | string; ts: Date | string; status?: string; amount?: string | null; tags?: (string | null)[] | null; meta?: { source: string } | null }[]",
   );
   assert.equal(renderParamType({ ...events, one: true, fields: events.fields.slice(0, 1) }, "postgres"), "{ id: number | bigint | string }");
 });

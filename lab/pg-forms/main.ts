@@ -278,9 +278,10 @@ import paramAny from "./param_any.sql";
 import type { Params as ParamAnyParams } from "./param_any.sql";
 const paramAny1: { id: number; name: string }[] = null! as Awaited<ReturnType<typeof paramAny.run>>;
 const paramAny2: Awaited<ReturnType<typeof paramAny.run>> = null! as { id: number; name: string }[];
-const paramAny3: { names: string[] } = null! as ParamAnyParams;
-const paramAny4: ParamAnyParams = null! as { names: string[] };
-// Right: `= any(:names)` types the parameter as the array of the column's type.
+const paramAny3: { names: (string | null)[] } = null! as ParamAnyParams;
+const paramAny4: ParamAnyParams = null! as { names: (string | null)[] };
+// Right: `= any(:names)` types the parameter as the array of the column's type, whose elements
+// take NULL, as an array a statement builds comes back with.
 
 import paramLimit from "./param_limit.sql";
 import type { Params as ParamLimitParams } from "./param_limit.sql";
