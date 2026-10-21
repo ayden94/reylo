@@ -17,12 +17,13 @@ This page is the reference behind [the main docs](/) for SQLite: the place to lo
 <Details summary="View the schema behind the examples" id="schema">
 
 ```sql file="schema.sql" dialect="sqlite"
--- not strict, since a STRICT table takes no BOOLEAN column
+-- not strict, since a STRICT table takes no BOOLEAN or BIGINT column
 create table users (
   id integer primary key,
   name text not null,
   email text unique,
   nick text,
+  github_id bigint,
   active boolean not null default 1,
   created_at text not null default current_timestamp
 );
@@ -55,7 +56,8 @@ SQLite types values, not columns: a declared type gives a column an affinity, wh
 
 | Declared type, or expression | TypeScript | The value `.run()` returns |
 | --- | --- | --- |
-| `INTEGER`, and any type with `INT` in its name | `number` | `42` |
+| `INTEGER`, `INT`, and any other type with `INT` in its name | `number` | `42` |
+| `BIGINT`, `INT8`, `UNSIGNED BIG INT` | `bigint` | `9007199254740993n` |
 | `REAL`, `FLOAT`, `DOUBLE` | `number` | `1.5` |
 | `TEXT`, `VARCHAR`, and any type with `CHAR`, `CLOB` or `TEXT` | `string` | `"Ada"` |
 | `BLOB` | `Uint8Array` | `Uint8Array.of(1, 2, 255)` |
@@ -69,21 +71,26 @@ SQLite types values, not columns: a declared type gives a column an affinity, wh
 
 ### Integers
 
-An `INTEGER` is a JavaScript `number`, and so is `count(*)`. One past ±(2^53 − 1), which a `number` cannot hold, is an error that names its column, never a rounded number. Cast it to text in the statement to read it exactly:
+The declared width decides, as on Postgres and MySQL: a column declared `BIGINT`, `INT8` or `UNSIGNED BIG INT` is a JavaScript `bigint`, exact to SQLite's 64 bits, and every other integer is a `number`, `INTEGER`, `INT`, the rowid and `count(*)` included:
 
-```sql file="lite_order_counts.sql" dialect="sqlite"
-select count(*) as total, cast(max(id) as text) as last_id
-from orders
+```sql file="lite_user_orders.sql" dialect="sqlite"
+select u.id, u.github_id, count(o.id) as orders
+from users u
+left join orders o on o.user_id = u.id
+group by u.id
 ```
 
 ```ts twoslash
-import orderCounts from "./lite_order_counts.sql";
+import userOrders from "./lite_user_orders.sql";
 
-const counts = await orderCounts.run(db);
+const rows = await userOrders.run(db);
 //    ^?
 ```
 
-- better-sqlite3, `node:sqlite`, `bun:sqlite` and Turso's engine read the exact integer, and Reylo refuses one past 2^53. The drivers sqlite3 and sqlite, Cloudflare D1, and Bun.sql without `safeIntegers` round it before Reylo sees it, and Reylo refuses the rounded number. libSQL at its default `intMode` refuses it itself, with a `RangeError` that names no column.
+- A `bigint` column stays one through a subquery, a view, `min()`, `max()`, `coalesce()` and `CASE`. What SQLite computes from it, such as `github_id + 1`, `abs(github_id)` or `sum(github_id)`, is an integer like `count(*)`, a `number`.
+- A `number` past ±(2^53 − 1), which it cannot hold, is an error that names its column, never a rounded number. Declare the column `BIGINT`, or cast the value to text in the statement: `cast(max(id) as text)`.
+- better-sqlite3, `node:sqlite`, `bun:sqlite` and Turso's engine read the exact integer, so a `BIGINT` past 2^53 comes back exact on them. The drivers sqlite3 and sqlite, Cloudflare D1, and Bun.sql without `safeIntegers` round it before Reylo sees it, and Reylo refuses the rounded number, in a `BIGINT` column too. libSQL at its default `intMode` refuses it itself, with a `RangeError` that names no column, and with `intMode: "bigint"` or `"string"` a `BIGINT` is exact.
+- A `STRICT` table takes no `BIGINT` column, so SQLite does not hold one to integers ([Declared types and STRICT tables](#declared-types-and-strict-tables)).
 - An `INTEGER` parameter takes a `number`.
 
 ### Decimals
@@ -166,7 +173,7 @@ A `BLOB` is a `Uint8Array` on every driver: better-sqlite3, Turso's engine, sqli
 
 ### Declared types and STRICT tables
 
-Reylo types a column by its declared type's affinity, by the rule SQLite applies: a type with `INT` in its name is `INTEGER`; with `CHAR`, `CLOB` or `TEXT`, `TEXT`; with `BLOB`, `BLOB`; with `REAL`, `FLOA` or `DOUB`, `REAL`; any other, `NUMERIC`. Outside a `STRICT` table, SQLite stores a value of any class in any column:
+Reylo types a column by its declared type's affinity, by the rule SQLite applies: a type with `INT` in its name is `INTEGER`; with `CHAR`, `CLOB` or `TEXT`, `TEXT`; with `BLOB`, `BLOB`; with `REAL`, `FLOA` or `DOUB`, `REAL`; any other, `NUMERIC`. A column declared `BIGINT`, `INT8` or `UNSIGNED BIG INT` is `INTEGER` too, and a `bigint` by its width ([Integers](#integers)). Outside a `STRICT` table, SQLite stores a value of any class in any column:
 
 ```sql file="lite_loose.sql" dialect="sqlite"
 -- users is not strict: name may hold 42, and nick a BLOB
@@ -181,7 +188,7 @@ const rows = await loose.run(db);
 ```
 
 - In a `STRICT` table the declared type is a promise: SQLite refuses a value of another class, and the types above are exact. Declare tables `strict` wherever you can.
-- A `STRICT` table takes only `INT`, `INTEGER`, `REAL`, `TEXT`, `BLOB` and `ANY`, so no `BOOLEAN`, `DATE` or `NUMERIC` column.
+- A `STRICT` table takes only `INT`, `INTEGER`, `REAL`, `TEXT`, `BLOB` and `ANY`, so no `BOOLEAN`, `BIGINT`, `DATE` or `NUMERIC` column.
 - A column declared with no type, or `ANY` in a `STRICT` table, holds any class, so it is `unknown`.
 - A `BOOLEAN` column, which has `NUMERIC` affinity, is a `boolean` by its declared name ([Truth values](#truth-values)).
 - A `CHECK` narrows no type, since `pragma ignore_check_constraints` lets a connection write past it: `check (role in ('admin', 'member'))` leaves `role` a `string`.
@@ -200,7 +207,7 @@ SQLite says nothing of a function's result, so Reylo keeps a table of SQLite's b
 
 Every SQLite driver hands Reylo the stored value, so two values are refused, each with an error that names its column:
 
-- **An integer past ±(2^53 − 1)**, which a `number` cannot hold, or which the driver already rounded. Read it with `cast(n as text)`.
+- **An integer past ±(2^53 − 1)** in a column typed `number`, which cannot hold it, and one the driver already rounded, in a `BIGINT` column too. Declare the column `BIGINT`, or read it with `cast(n as text)`.
 - **A truth value other than 0 or 1**, in a column declared `BOOLEAN` or `BOOL`, a `BLOB` included. Store 0 or 1 in it, or read the stored number with `active + 0`.
 
 ## Nullability
@@ -210,7 +217,7 @@ A column is `| null` unless Reylo proves it never is. SQLite's own check says "m
 - **A table's column** is non-null where it is declared `NOT NULL`.
 - **An outer join** makes the joined table's columns nullable, by SQLite's own mark on the join.
 - **A test in the `where`** that fails on `NULL` proves the column: `where nick is not null`, `where lower(nick) = :nick`, and a `left join`'s column tested in the `where`.
-- **An expression** is non-null by Reylo's table of SQLite's functions: `length(name)`, `coalesce(nick, name)`, `name || '!'` and `id + 1` over non-null inputs, `count`. A division is `| null`, since SQLite answers `NULL` for a division by zero.
+- **An expression** is non-null by Reylo's table of SQLite's functions: `length(name)`, `coalesce(nick, name)`, `name || '!'` and `id + 1` over non-null inputs, `count`. A division is `| null`, since SQLite answers `NULL` for a division by zero. Arithmetic on a `REAL` with no answer is the one exception ([Limits](#limits)).
 - **An aggregate** other than `count` is `NULL` over no rows.
 
 ```sql file="lite_nicknames.sql" dialect="sqlite"
@@ -356,6 +363,7 @@ The edges of what Reylo types on SQLite, each with what to write instead:
 - **A function your application registers, or an extension's.** Its result is `unknown`: cast it in the statement.
 - **A table in an attached database.** The type check reads one database file, and an `ATTACH` happens on your app's connection at run time, so `select … from other.users` is an error: the database has no schema `other`. A `TEMP` table is the same.
 - **A virtual table's module.** Reylo's SQLite has FTS3, FTS4, FTS5, R-tree, Geopoly and `dbstat`, so a schema that uses one is read, and the type check does not ask whether your driver's SQLite has the module.
+- **Arithmetic on a `REAL` that has no answer.** SQLite answers `NULL` where a real's arithmetic is not a number, and Reylo types `+`, `-` and `*` over non-null values, and `/` and `%` by a literal other than 0, non-null, so the value is `null` where the type says `number`: `1e999 * 0`, `price - price` where `price` holds `1e999`, and `5 % 0.5`, whose divisor `%` reads as the integer 0. Write `coalesce(price * qty, 0)` where a `REAL` may hold an infinity. An overflow is no such case: `9e307 * 9e307` is `Infinity`.
 - **A parameter in place of a name.** A parameter is a value: `select * from :table` is SQLite's syntax error, and `order by :column` sorts by a constant. Choose a column with `case :sort when 'name' then name end`.
 - **A statement nested deeper than 500 expressions**, which is SQLite's error, "Expression tree is too large".
 - **One statement per file.** A file holds one `select`, `insert`, `update`, `delete`, `replace` or `values`. A file of several statements or of DDL, such as a migration, is an error in the type check.

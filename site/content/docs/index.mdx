@@ -1279,7 +1279,8 @@ Reylo decodes its own queries' values itself, so every driver gives the same typ
 
 | Declared type | TypeScript |
 | --- | --- |
-| `INTEGER` | `number` |
+| `INTEGER`, `INT`, `count(*)` | `number` |
+| `BIGINT`, `INT8`, `UNSIGNED BIG INT` | `bigint` |
 | `REAL` | `number` |
 | `TEXT` | `string` |
 | `BLOB` | `Uint8Array` |
