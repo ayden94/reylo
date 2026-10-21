@@ -303,6 +303,7 @@ Every value `.run()` returns goes back in as a parameter of its type, on every d
 - Reylo's MySQL drivers bind a `true` as 1.
 - A `DATE`, `DATETIME` or `TIMESTAMP` parameter takes the wall-clock text, `"2026-10-12 19:06:48"`, and refuses a `Date`: drivers write a `Date`'s time in different zones, the app's, the server's or UTC.
 - A JSON parameter reaches the database as its JSON text on every driver, so a string is a JSON string: `'{"a":1}'` is stored as the string `"{\"a\":1}"`.
+- A typed JSON parameter, `:events::json('…')`, reaches MySQL as `cast(? as json)` holding its JSON text, after `.run()` has filled in its schema's defaults and checked the value against the schema.
 
 ### Parameters without a type
 
