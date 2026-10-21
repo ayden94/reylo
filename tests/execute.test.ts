@@ -414,6 +414,57 @@ test("sqlite: @libsql/client and its transactions take execute({ sql, args }) â†
   assert.deepEqual(calls, [{ sql: "select ? as id, ? as name, ? as again", args: [1, "ada", 1] }]);
 });
 
+test("sqlite: Turso's @tursodatabase/database, its Database in every release and its Transaction, takes prepare(sql).all(...values) â†’ a promise of rows; its compat Database answers at once", async () => {
+  const calls: unknown[] = [];
+  // Its statement, as every release from 0.4 has it: safeIntegers(), a promise from all(), close().
+  const statement = (sql: string) => {
+    const st = {
+      safe: undefined as boolean | undefined,
+      closed: false,
+      safeIntegers: (on: boolean) => ((st.safe = on), st),
+      all: async (...values: unknown[]) => (calls.push({ sql, values, safe: st.safe }), [row]),
+      close: () => void (st.closed = true),
+      get reader(): boolean {
+        throw new Error("not implemented"); // 0.4's
+      },
+    };
+    return st;
+  };
+  const statements: ReturnType<typeof statement>[] = [];
+  const prepare = (sql: string) => (statements.push(statement(sql)), statements.at(-1)!);
+  const common = { connect: async () => {}, maxWriteReplicationIndex: () => {}, exec: async () => {}, prepare };
+  // 0.4: no all() on the database, so it looked synchronous; 0.6 and later: all() and exec(), so it looked like sqlite3's.
+  const v04 = { ...common };
+  const v08 = { ...common, all: async () => [], batch: async () => [], transactionAsync: () => {} };
+  const tx = { prepare, exec: async () => {}, all: async () => [], batch: async () => [], run: async () => ({}) };
+  for (const client of [v04, v08, tx]) {
+    const pending = execute(client as never, lite, { id: 1, name: "ada" });
+    assert.ok(pending instanceof Promise);
+    assert.deepEqual(await pending, [row]);
+  }
+  assert.deepEqual(calls, Array(3).fill({ sql: "select ? as id, ? as name, ? as again", values: [1, "ada", 1], safe: true }), "a statement whose columns are not typed reads integers exact");
+  assert.ok(statements.every((st) => st.closed), "each statement is closed after its run");
+  // A module whose every column is typed reads numbers, as better-sqlite3's statement does.
+  await execute(v08 as never, { ...lite, columns: [["id", "int"], ["name", "text"], ["again", "int"]] }, { id: 1, name: "ada" });
+  assert.equal((calls.at(-1) as { safe: boolean }).safe, false);
+  await assert.rejects(Promise.resolve().then(() => defineQuery<{}, unknown, "many", "sqlite">({ dialect: "sqlite", sql: "select 1", params: [] }).runSync(v08 as never)), /runSync takes a synchronous SQLite client .*answers through a promise/);
+  // The compat Database (@tursodatabase/database/compat) has batch() as D1 does, and answers at once.
+  // It gets a statement per call, closed after it (0.4's, run a second time, lost a subquery's rows).
+  let prepared = 0;
+  let closed = 0;
+  const compat = {
+    prepare: (sql: string) => (prepared++, { reader: true, safeIntegers: () => {}, all: (...values: unknown[]) => (calls.push({ sql, values }), [row]), close: () => void closed++ }),
+    batch: () => [],
+    exec: () => {},
+    maxWriteReplicationIndex: () => {},
+  };
+  const q = defineQuery<{ id: number; name: string }, unknown, "many", "sqlite">({ dialect: "sqlite", sql: lite.sql, params: lite.params });
+  assert.deepEqual(q.runSync(compat, { id: 2, name: "bo" }), [row]);
+  assert.deepEqual(q.runSync(compat, { id: 2, name: "bo" }), [row]);
+  assert.deepEqual(calls.at(-1), { sql: "select ? as id, ? as name, ? as again", values: [2, "bo", 2] });
+  assert.deepEqual([prepared, closed], [2, 2]);
+});
+
 test("sqlite: sqlite3 and the sqlite package, which bind a BigInt as NULL, get one a number holds as that number, and a larger one is refused", async () => {
   const seen: unknown[][] = [];
   const sqlite3 = { all: (_: string, v: unknown[], cb: (e: Error | null, rows: unknown[]) => void) => (seen.push(v), cb(null, [])), exec: () => {} };

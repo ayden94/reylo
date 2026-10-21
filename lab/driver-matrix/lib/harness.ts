@@ -193,7 +193,8 @@ const expected: Record<Dialect, { syntax: ErrorExpectation; dup: ErrorExpectatio
     dup: { codes: ["ER_DUP_ENTRY", 1062, "1062"], message: /errno 1062|Duplicate entry/i },
   },
   sqlite: {
-    syntax: { codes: [/^(ERR_)?SQLITE_ERROR$/, 1], message: /syntax error/i },
+    // Turso's engine 0.4 words its syntax error "unexpected token 'selec' at offset 0".
+    syntax: { codes: [/^(ERR_)?SQLITE_ERROR$/, 1], message: /syntax error|unexpected token/i },
     dup: { codes: [/SQLITE_CONSTRAINT/, 19, 1555, 2067], message: /UNIQUE constraint failed|SQLITE_CONSTRAINT/i },
   },
 };

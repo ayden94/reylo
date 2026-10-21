@@ -54,8 +54,13 @@ const COLUMNS = ["fresh_table", "fresh_column", "fresh_type", "fresh_not_null", 
  * line each; none when the schema still holds what the query relied on, and `undefined` when the
  * rows are not the catalog query's: each is an object with its five columns, or an array of five
  * values where a driver hands rows back as arrays.
+ *
+ * A SQLite type is compared without its case, as SQLite reads a declared type: SQLite's
+ * `pragma_table_xinfo` upper-cases the type names it knows (`integer` is `INTEGER`) and Turso's
+ * engine gives them as declared, so a build on one and a run on the other saw the same schema. A
+ * Postgres or MySQL type is compared exactly: a quoted Postgres type name keeps its case.
  */
-export function differences(fresh: Fresh, rows: readonly unknown[]): string[] | undefined {
+export function differences(fresh: Fresh, rows: readonly unknown[], dialect?: "postgres" | "mysql" | "sqlite"): string[] | undefined {
   const now = new Map<string, string[]>();
   for (const row of rows) {
     if (row === null || typeof row !== "object") return undefined;
@@ -64,6 +69,7 @@ export function differences(fresh: Fresh, rows: readonly unknown[]): string[] | 
     const values = raw.map((v) => (v === null || v === undefined ? "" : String(v)));
     now.set(`${values[0]}\u0000${values[1]}`, values);
   }
+  const sameType = dialect === "sqlite" ? (a: string, b: string) => a === b || asciiLower(a) === asciiLower(b) : (a: string, b: string) => a === b;
   const out: string[] = [];
   const seen = new Set<string>();
   for (const was of fresh.rows) {
@@ -71,7 +77,7 @@ export function differences(fresh: Fresh, rows: readonly unknown[]): string[] | 
     seen.add(key);
     const is = now.get(key);
     if (!is) out.push(`${table(was[0]!)}.${was[1]} was ${describe(was)} and no longer exists`);
-    else if (is[2] !== was[2] || yes(is[3]!) !== yes(was[3]!) || yes(is[4]!) !== yes(was[4]!)) out.push(`${table(was[0]!)}.${was[1]} was ${describe(was)} and is now ${describe(is)}`);
+    else if (!sameType(is[2]!, was[2]!) || yes(is[3]!) !== yes(was[3]!) || yes(is[4]!) !== yes(was[4]!)) out.push(`${table(was[0]!)}.${was[1]} was ${describe(was)} and is now ${describe(is)}`);
   }
   // A column an insert must now fill, which the build did not see.
   for (const [key, is] of now) {
@@ -79,6 +85,9 @@ export function differences(fresh: Fresh, rows: readonly unknown[]): string[] | 
   }
   return out;
 }
+
+/** SQLite folds the case of ASCII letters alone. */
+const asciiLower = (s: string) => s.replace(/[A-Z]+/g, (m) => m.toLowerCase());
 
 /** The error a call fails with when the schema changed under its query. */
 export function staleError(source: string | undefined, lines: readonly string[]): Error {

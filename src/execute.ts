@@ -7,7 +7,7 @@
 
 import { bunRows, neonCallable, postgresJs, queryPostgres } from "./decode.ts";
 import { mariadb, mysql2, planetscale } from "./decode-mysql.ts";
-import { normalize, runSyncSqlite } from "./decode-sqlite.ts";
+import { normalize, runSyncSqlite, runTurso } from "./decode-sqlite.ts";
 import { postgresYear, type Columns } from "./values.ts";
 import type { EngineType } from "./engine-type.ts";
 import { lexPlaceholders } from "./lex.ts";
@@ -65,9 +65,9 @@ export type MariadbCallbackClient = {
   batch(text: string, values: any, callback: (error: Error | null, result?: any) => void): void;
 };
 /**
- * better-sqlite3, node:sqlite's DatabaseSync and bun:sqlite's Database, which answer at once:
- * `runSync` takes them and returns the result itself, so it works inside their
- * `db.transaction(fn)`, whose function must not await.
+ * better-sqlite3, node:sqlite's DatabaseSync, bun:sqlite's Database and the Database of Turso's
+ * `@tursodatabase/database/compat`, which answer at once: `runSync` takes them and returns the
+ * result itself, so it works inside their `db.transaction(fn)`, whose function must not await.
  */
 export type SyncSqliteClient = {
   prepare(sql: string): { all(...params: any[]): unknown[] };
@@ -82,6 +82,18 @@ export type LibsqlClient = {
   /** mariadb's execute() takes an object with sql and resolves to any; executeMultiple() tells libSQL apart. */
   executeMultiple(sql: string): Promise<unknown>;
 };
+/**
+ * Turso's new engine, `@tursodatabase/database`: the Database `connect()` resolves to and the
+ * Transaction `transactionAsync()` hands its callback, whose statements answer through a promise:
+ * prepare(sql).all(...values) → rows. Its types say prepare() returns a promise of the statement
+ * from 0.6, and the statement itself before; it returns the statement itself in every release.
+ */
+export type TursoClient = {
+  prepare(sql: string): TursoStatement | PromiseLike<TursoStatement>;
+  /** postgres.js's transaction has a prepare(name) of any type too; exec() tells Turso's apart. */
+  exec(sql: string): Promise<unknown>;
+};
+type TursoStatement = { all(...params: any[]): Promise<unknown[]> };
 /** The sqlite3 package's callback Database: all(sql, params, callback). */
 export type Sqlite3Client = {
   all(sql: string, params: any[], callback: (error: Error | null, rows: any[]) => void): unknown;
@@ -97,7 +109,7 @@ export type PostgresClient = PgQueryClient | NeonHttpClient | UnsafeClient | Cal
 /** Every MySQL client `run` takes, or a transaction or connection taken from one. */
 export type MysqlClient = MysqlExecuteClient | Mysql2CallbackClient | MariadbClient | MariadbCallbackClient | BunSqlClient;
 /** Every SQLite client `run` takes, or a transaction taken from one. */
-export type SqliteClient = SyncSqliteClient | D1Client | LibsqlClient | Sqlite3Client | SqlitePromiseClient | BunSqlClient;
+export type SqliteClient = SyncSqliteClient | D1Client | LibsqlClient | TursoClient | Sqlite3Client | SqlitePromiseClient | BunSqlClient;
 
 // Each dialect's clients are one named union, so a hover over `run` reads
 // `run(client: PostgresClient, …)` rather than listing every client's shape.
@@ -164,7 +176,7 @@ export function execute<D extends Dialect>(
 /** The synchronous path alone, for `runSync`: any other client is refused before anything runs. */
 export function executeSync<D extends Dialect>(client: SyncClientFor<D>, query: QueryModule<D>, params: ParamsInput = {}): unknown[] {
   const c = client as unknown as AnyClient;
-  const refuse = (why: string) => new TypeError(`runSync takes a synchronous SQLite client (better-sqlite3, node:sqlite or bun:sqlite); ${why}. run takes every client.`);
+  const refuse = (why: string) => new TypeError(`runSync takes a synchronous SQLite client (better-sqlite3, node:sqlite, bun:sqlite or the Database of @tursodatabase/database/compat); ${why}. run takes every client.`);
   if (query.dialect !== "sqlite") throw refuse(`a ${query.dialect} statement has none`);
   if (!isSyncSqlite(c)) throw refuse("this client answers through a promise");
   const rows = executeSyncSqlite(c, query, params);
@@ -180,7 +192,7 @@ function executeSyncSqlite(c: AnyClient, query: QueryModule, params: ParamsInput
     try {
       rows = c.prepare(query.fresh.query).all();
     } catch {}
-    const lines = (rows && differences(query.fresh, rows)) ?? [];
+    const lines = (rows && differences(query.fresh, rows, query.dialect)) ?? [];
     if (lines.length) throw staleError(query.source, lines);
     passed(query);
   }
@@ -189,16 +201,28 @@ function executeSyncSqlite(c: AnyClient, query: QueryModule, params: ParamsInput
 }
 
 // A SQLite client with prepare() whose statements answer at once. D1 (batch()), sqlite3 and
-// sqlite (all() on the database), libSQL (execute()) and Bun.sql (unsafe()) are asynchronous.
+// sqlite (all() on the database), libSQL (execute()), Bun.sql (unsafe()) and Turso's promise API
+// are asynchronous. Turso's compat Database has batch() as D1 does, and answers at once; its
+// maxWriteReplicationIndex(), which every Database of Turso's has, tells it from D1's.
 function isSyncSqlite(c: AnyClient | null | undefined): boolean {
   return (
     c != null &&
     typeof c.prepare === "function" &&
-    typeof c.batch !== "function" &&
+    (typeof c.batch !== "function" || typeof c.maxWriteReplicationIndex === "function") &&
     typeof c.all !== "function" &&
     typeof c.execute !== "function" &&
-    typeof c.unsafe !== "function"
+    typeof c.unsafe !== "function" &&
+    !isTurso(c)
   );
+}
+
+// Turso's promise API (@tursodatabase/database): a Database has connect() and
+// maxWriteReplicationIndex() in every release from 0.4 (0.4 has no all(), so it looked synchronous,
+// and from 0.6 its all() took it for sqlite3's, whose callback it never calls); the Transaction
+// that transactionAsync() hands its callback (0.7 and later) has all() beside batch(), which
+// sqlite3's database lacks. The compat Database has no connect().
+function isTurso(c: AnyClient): boolean {
+  return typeof c.prepare === "function" && ((typeof c.connect === "function" && typeof c.maxWriteReplicationIndex === "function") || (typeof c.all === "function" && typeof c.batch === "function"));
 }
 
 async function executeAsync(c: AnyClient | null | undefined, query: QueryModule, params: ParamsInput): Promise<unknown[]> {
@@ -211,7 +235,7 @@ async function executeAsync(c: AnyClient | null | undefined, query: QueryModule,
     try {
       rows = await executeAsync(c, { dialect: query.dialect, sql: fresh.query, params: [], text: fresh.query, order: [] }, {});
     } catch {}
-    const lines = (rows && differences(fresh, rows)) ?? [];
+    const lines = (rows && differences(fresh, rows, query.dialect)) ?? [];
     if (lines.length) throw staleError(query.source, lines);
     passed(query);
   }
@@ -272,6 +296,7 @@ async function executeAsync(c: AnyClient | null | undefined, query: QueryModule,
       const columns = query.columns;
       if (typeof c.unsafe === "function") return normalize(await c.unsafe(text, values), columns);
       if (typeof c.execute === "function") return normalize((await c.execute({ sql: text, args: values })).rows, columns);
+      if (isTurso(c)) return await runTurso(c, text, values, columns);
       // The sqlite package wraps sqlite3, and sqlite3 binds a BigInt as NULL.
       if (typeof c.getDatabaseInstance === "function") return normalize(await c.all(text, values.map(sqlite3Value)), columns);
       if (typeof c.all === "function" && typeof c.exec === "function") {
@@ -499,7 +524,7 @@ function indexOf(query: QueryModule, p: { name: string; start: number; end: numb
 const accepted: Record<Dialect, string> = {
   postgres: "query(text, values) as on pg, PGlite, Neon and pg-promise; unsafe(text, values) as on postgres.js and Bun.sql; or Neon's neon() function",
   mysql: "execute(text, values) as on mysql2 and PlanetScale; query() and batch() as on mariadb; unsafe(text, values) as on Bun.sql; or a mysql2 callback pool or connection",
-  sqlite: "prepare(sql) as on better-sqlite3, node:sqlite, bun:sqlite and Cloudflare D1; execute({ sql, args }) as on @libsql/client; all(sql, params) as on sqlite3 and sqlite; or unsafe(text, values) as on Bun.sql",
+  sqlite: "prepare(sql) as on better-sqlite3, node:sqlite, bun:sqlite, Turso's @tursodatabase/database and Cloudflare D1; execute({ sql, args }) as on @libsql/client; all(sql, params) as on sqlite3 and sqlite; or unsafe(text, values) as on Bun.sql",
 };
 
 function unsupported(c: unknown, dialect: Dialect): TypeError {

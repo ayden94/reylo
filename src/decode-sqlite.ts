@@ -15,6 +15,11 @@
 //   (a BigInt per integer cost +70% on 10,000 rows), and a number past 2^53 in a column that may hold
 //   an INTEGER can only be a rounded one, which is refused. bun:sqlite's statement comes from
 //   `prepare`, never `query`, whose cache by text would carry Reylo's mode into the app's statement.
+// - Turso's new engine (@tursodatabase/database): Reylo prepares its statement and sets its integer
+//   mode as on better-sqlite3, per call and closed after it, since a Transaction's statements end
+//   with it and a 0.4 statement run twice could lose its rows; the promise API's statement is
+//   awaited, the compat Database's answers at once. Its BLOB is a Buffer and its BOOLEAN 0 or 1, as
+//   on better-sqlite3; at its defaults an INTEGER past 2^53 comes back rounded, with no error.
 // - sqlite3 and the sqlite wrapper, libSQL, D1 and Bun.SQL's SQLite: the rows the driver gives,
 //   normalized. sqlite3 and sqlite are not cached: a statement left open makes the app's close()
 //   fail with SQLITE_BUSY. An INTEGER the driver already rounded (sqlite3, sqlite, D1, Bun.SQL
@@ -24,18 +29,23 @@ import { bigInteger, coerce, exactInteger, refuseTruth, truth, type Columns, typ
 type AnyClient = Record<string, any>;
 type Statement = AnyClient;
 
-/** Reylo's statement, and whether it reads every INTEGER as a BigInt (a driver of the three). */
-type Kept = { st: Statement; exact: boolean };
+/** Reylo's statement, whether it reads every INTEGER as a BigInt, and whether it is kept for the next call. */
+type Kept = { st: Statement; exact: boolean; kept: boolean };
 const statements = new WeakMap<object, Map<string, Kept>>();
 /** How many statements Reylo keeps per database: more distinct texts than that drop the oldest. */
 const KEPT = 500;
 
-/** Reylo's own statement for `text` on the app's database, with integers read as BigInts. */
+/**
+ * Reylo's own statement for `text` on the app's database, with integers read as BigInts. Turso's
+ * compat Database (maxWriteReplicationIndex()) gets a new statement per call, closed after it: on
+ * 0.4 a statement with a subquery run a second time returned no rows.
+ */
 function statementFor(db: AnyClient, text: string, typed: boolean): Kept {
+  const keep = typeof db.maxWriteReplicationIndex !== "function";
   let kept = statements.get(db);
-  if (!kept) statements.set(db, (kept = new Map()));
+  if (!kept && keep) statements.set(db, (kept = new Map()));
   const key = `${typed ? "n" : "b"}${text}`;
-  const found = kept.get(key);
+  const found = kept?.get(key);
   if (found) return found;
   const st = db.prepare(text) as Statement;
   let exact = false;
@@ -48,24 +58,31 @@ function statementFor(db: AnyClient, text: string, typed: boolean): Kept {
     st.safeIntegers(!typed);
     exact = !typed;
   }
+  const entry = { st, exact, kept: keep };
+  if (!kept) return entry;
   if (kept.size >= KEPT) kept.delete(kept.keys().next().value!);
-  const entry = { st, exact };
   kept.set(key, entry);
   return entry;
 }
 
 /**
- * Runs `text` on a synchronous SQLite database (better-sqlite3, node:sqlite, bun:sqlite) and returns
- * its normalized rows; a statement that answers through a promise (no such database) gives the
- * promise, which `runSync` refuses.
+ * Runs `text` on a synchronous SQLite database (better-sqlite3, node:sqlite, bun:sqlite, Turso's
+ * compat Database) and returns its normalized rows; a statement that answers through a promise (no
+ * such database) gives the promise, which `runSync` refuses.
  */
 export function runSyncSqlite(db: AnyClient, text: string, values: unknown[], columns: Columns | undefined): unknown[] | Promise<unknown[]> {
-  // Every column typed: a number past 2^53 in one can be told as rounded (src/values.ts). A column
-  // read as a BigInt (`int8`) needs the statement's integers exact.
-  const typed = columns !== undefined && columns.length > 0 && !columns.some(([, kind]) => kind === "unknown" || kind.split("|").includes("int8"));
-  const { st, exact } = statementFor(db, text, typed);
+  const entry = statementFor(db, text, everyColumnTyped(columns));
+  if (entry.kept) return runStatement(entry, values, columns);
+  try {
+    return runStatement(entry, values, columns);
+  } finally {
+    entry.st.close?.();
+  }
+}
+
+function runStatement({ st, exact }: Kept, values: unknown[], columns: Columns | undefined): unknown[] | Promise<unknown[]> {
   // better-sqlite3 refuses all() on a statement that returns no rows.
-  if (st.reader === false) {
+  if (reader(st) === false) {
     st.run(...values);
     return [];
   }
@@ -78,6 +95,39 @@ export function runSyncSqlite(db: AnyClient, text: string, values: unknown[], co
     rows = (rows as unknown[][]).map((r) => Object.fromEntries(names.map((n, i) => [n, r[i]])));
   }
   return normalize(rows, columns, { exact });
+}
+
+// Whether the statement returns rows: undefined where it cannot say, as Turso 0.4's compat statement,
+// whose `reader` throws "not implemented" and whose all() runs any statement.
+function reader(st: Statement): boolean | undefined {
+  try {
+    return st.reader;
+  } catch {
+    return undefined;
+  }
+}
+
+// Every column typed: a number past 2^53 in one can be told as rounded (src/values.ts). A column
+// read as a BigInt (`int8`) needs the statement's integers exact.
+function everyColumnTyped(columns: Columns | undefined): boolean {
+  return columns !== undefined && columns.length > 0 && !columns.some(([, kind]) => kind === "unknown" || kind.split("|").includes("int8"));
+}
+
+/**
+ * Runs `text` on Turso's promise API (a Database from `connect()`, or the Transaction
+ * `transactionAsync()` hands its callback) and returns its normalized rows. Its prepare() returns
+ * the statement (its types say a promise of it from 0.6, so it is awaited), whose all() runs a
+ * statement that returns no rows as well; the statement is closed after its one run.
+ */
+export async function runTurso(db: AnyClient, text: string, values: unknown[], columns: Columns | undefined): Promise<unknown[]> {
+  const typed = everyColumnTyped(columns);
+  const st = (await db.prepare(text)) as Statement;
+  try {
+    if (typeof st.safeIntegers === "function") st.safeIntegers(!typed);
+    return normalize(await st.all(...values), columns, { exact: !typed });
+  } finally {
+    if (typeof st.close === "function") st.close();
+  }
 }
 
 type Plan = {

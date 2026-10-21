@@ -256,6 +256,26 @@ test("SQLite: one row on every driver, whatever its integer setting; an integer 
     await assert.rejects(odd.run(client), refused);
     client.close();
   }
+  // Turso's new engine on the same file: its promise API through run, in transactionAsync too, and
+  // its compat Database through runSync. At its defaults it rounds an integer past 2^53 silently.
+  const turso = await import(pathToFileURL(require.resolve("@tursodatabase/database")).href);
+  const { Database: TursoCompat } = await import(pathToFileURL(require.resolve("@tursodatabase/database/compat")).href);
+  for (const safe of [false, true]) {
+    const tdb = await turso.connect(file);
+    tdb.defaultSafeIntegers(safe);
+    assert.deepEqual(plain(await q.run(tdb)), rows, `Turso's engine with defaultSafeIntegers(${safe})`);
+    assert.deepEqual(plain(await tdb.transactionAsync((tx: unknown) => q.run(tx))()), rows, "Turso's engine in transactionAsync");
+    await assert.rejects(big.run(tdb), bigError);
+    await assert.rejects(odd.run(tdb), refused);
+    assert.equal((await tdb.prepare("select v from big").get()).v, safe ? 9007199254740993n : 9007199254740992, "the control: the app's own statement");
+    await tdb.close();
+  }
+  const compat = new TursoCompat(file);
+  assert.deepEqual(plain(q.runSync(compat)), rows, "Turso's compat Database");
+  assert.deepEqual(plain(compat.transaction(() => q.runSync(compat))()), rows, "Turso's compat Database in db.transaction");
+  assert.throws(() => big.runSync(compat), bigError);
+  assert.throws(() => odd.runSync(compat), refused);
+  compat.close();
   const s3 = new sqlite3.Database(file);
   assert.deepEqual(plain(await q.run(s3)), rows, "sqlite3");
   await assert.rejects(big.run(s3), /Column "v" holds an integer past .* already rounded to 9007199254740992/);

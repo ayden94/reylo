@@ -27,6 +27,7 @@ Each job runs in its own process: Node 26.7.0 by default, Node 24.19.0 for the s
 | node:sqlite | Node 26.7.0, Node 24.19.0 | SQLite file | DatabaseSync, DatabaseSync inside BEGIN/COMMIT, `db.createTagStore()`, `db.createTagStore().db` |
 | bun:sqlite | Bun 1.3.14 | SQLite file | Database, `db.transaction(fn)` |
 | @libsql/client | 0.17.4, 0.18.0, 0.15.15, 0.14.0 | SQLite file (`file:` URL) | Client, `client.transaction("write")` |
+| @tursodatabase/database | 0.8.3, 0.7.2, 0.6.1, 0.4.4 | SQLite file, opened by Turso's engine | Database from `connect()`, Database inside BEGIN/COMMIT (exec), the Transaction `db.transactionAsync(fn)` hands its callback (0.7 and later); the synchronous Database of `@tursodatabase/database/compat` and its `db.transaction(fn)` |
 | sqlite3 | 5.1.7, 6.0.1 | SQLite file | Database, BEGIN/COMMIT inside `db.serialize()` |
 | sqlite | 5.1.1 over sqlite3 5.1.7 and 6.0.1 | SQLite file | Database from `open()`, Database inside BEGIN/COMMIT |
 | Cloudflare D1 | miniflare 4.20260730.0 | local workerd | D1Database, `db.withSession()` |
@@ -35,7 +36,7 @@ The packages are installed side by side under npm aliases (`"pg-7": "npm:pg@7.18
 
 ## Scenarios
 
-Every scenario asserts its result. Each call also checks Reylo's return contract: `run` returns a promise on every client and never throws synchronously. S0 checks `runSync` as well: it returns the value itself and throws on a synchronous SQLite client (better-sqlite3, node:sqlite, bun:sqlite), and on any other client it throws Reylo's TypeError before it calls the client.
+Every scenario asserts its result. Each call also checks Reylo's return contract: `run` returns a promise on every client and never throws synchronously. S0 checks `runSync` as well: it returns the value itself and throws on a synchronous SQLite client (better-sqlite3, node:sqlite, bun:sqlite, Turso's compat Database), and on any other client it throws Reylo's TypeError before it calls the client.
 
 | Id | Checks |
 | --- | --- |
@@ -180,9 +181,22 @@ On the evening of 2026-10-20 the maintainer settled that a `timestamptz` paramet
 
 `scripts/gates.sh` runs every job and `node compare.ts` after them, the container jobs when Docker or colima is there; `node runner.ts --only <id>` runs one job, and `node compare.ts` compares whatever `.out/` holds.
 
+## Re-run (2026-10-20): Turso's new engine
+
+The Turso jobs are new, after the maintainer decided on 2026-10-20 that Reylo's run time supports Turso's new engine, `@tursodatabase/database`, beside Turso Cloud through `@libsql/client`. [drivers/turso.ts](drivers/turso.ts) runs every scenario on one release of each minor line in use, 0.8.3 (`latest`), 0.7.2, 0.6.1 and 0.4.4 (13,464, 11,054, 5,758 and 559 downloads in the week before), each as two jobs: its promise API (`connect()`) and its compat Database. Before the fix, against main's src/ of 2026-10-20, Reylo could not run a statement on any of them:
+
+| Rows | Result before the fix | Diagnosis |
+| --- | --- | --- |
+| 0.6.1, 0.7.2 and 0.8.3, the Database and the Transaction | `run()` never settled | The Database has `all()` and `exec()`, so Reylo took it for sqlite3's and called `db.all(text, values, callback)`, whose callback Turso never calls ([wiki/structured-params/positions.md](../../wiki/structured-params/positions.md), S1) |
+| 0.4.4, the Database | `run()` rejected with "not implemented" | It has no `all()`, so Reylo took it for a synchronous database and read its statement's `reader`, which 0.4 has not implemented |
+| every release, the compat Database | `runSync` refused it | It has `batch()`, which Reylo took for D1's |
+| every release, any statement that reads a table | "The database changed after …: t.id was INTEGER … and is now integer" | Turso's engine gives a declared type as written, where SQLite's `pragma_table_xinfo` upper-cases the names it knows, and the freshness check compared the text exactly (S2) |
+
+Reylo now tells Turso's Database by its `connect()` beside `maxWriteReplicationIndex()`, which every release has, and its Transaction by `all()` beside `batch()`, which sqlite3's database lacks, prepares a statement per call, sets its integer mode as on better-sqlite3 and awaits it (`runTurso` in [src/decode-sqlite.ts](../../src/decode-sqlite.ts)); it runs the compat Database as better-sqlite3, with a new statement per call, since a 0.4 statement with a subquery returned no rows the second time it ran (S5b, which reuses S5a's text), and a `reader` it cannot read is taken as unknown; and the freshness check compares a SQLite type without its case ([src/fresh.ts](../../src/fresh.ts)). Two scenarios are skipped for Turso's own reasons: S7c on 0.4, which has no SAVEPOINT ("SAVEPOINT not supported yet"), and S7c on every compat `db.transaction(fn)`, whose nested call fails ("cannot start a transaction within a transaction") where better-sqlite3's runs as a savepoint. And the SQLite syntax error S6a expects matches Turso 0.4's wording, "unexpected token 'selec' at offset 0", as well. The run after the fix, on Node 26.11.1 and 24.22.0, Bun 1.4.3 and Miniflare 4.20260730.0, with the containers in colima and a throwaway Postgres 18.6, wrote [RESULTS.md](RESULTS.md): 4210 rows over eight more jobs, with 4145 pass, 2 fail (PlanetScale's simulator, as before), 51 unsupported, 9 skip and 3 not run, and 36 of 104 control rows failing as designed. All 316 Turso rows pass but the five skipped, and every row that was in RESULTS.md before has the result it had ([compare.ts](compare.ts)). The type check takes the ten Turso client types too ([typecheck/RESULTS.md](typecheck/RESULTS.md), 612 cases over 104 client types, all as expected).
+
 ## Type check
 
-[typecheck/check.ts](typecheck/check.ts) generates [typecheck/cases.ts](typecheck/cases.ts), which declares one value of each client type and passes it to `run` on a Postgres, a MySQL and a SQLite query. It also checks the type `run`, `with(...)(...)` and `runSync` return (a promise from `run` and `with` on every client, the value from `runSync` on a synchronous SQLite client) and that `runSync` rejects every other client, then runs the repository's tsc (7.1.0-dev.20260918.1) and maps each diagnostic back to its line. Against the final src (src/execute.ts 332f629f3f63), all 552 cases over 94 client types are as expected: none is wrongly accepted and none is wrongly rejected. [typecheck/RESULTS.md](typecheck/RESULTS.md) lists every case.
+[typecheck/check.ts](typecheck/check.ts) generates [typecheck/cases.ts](typecheck/cases.ts), which declares one value of each client type and passes it to `run` on a Postgres, a MySQL and a SQLite query. It also checks the type `run`, `with(...)(...)` and `runSync` return (a promise from `run` and `with` on every client, the value from `runSync` on a synchronous SQLite client) and that `runSync` rejects every other client, then runs the repository's tsc (7.1.0-dev.20260918.1) and maps each diagnostic back to its line. Against the final src (src/execute.ts 332f629f3f63), all 552 cases over 94 client types are as expected: none is wrongly accepted and none is wrongly rejected; with the ten Turso client types of 2026-10-20, all 612 over 104 are. Turso's shape needs `exec()` beside `prepare()`, because postgres.js's TransactionSql has a `prepare(name)` whose result is of any type, which the first try at the type took for Turso's. [typecheck/RESULTS.md](typecheck/RESULTS.md) lists every case.
 
 Against the re-run's src (c46b8b73fe74), 21 were wrongly accepted. Each was closed with a property that only the right client has, used in the type alone: `PgQueryClient` has `escapeId?: never` (mariadb has `escapeId()`), `LibsqlClient` requires `executeMultiple()` (libSQL 0.14 to 0.18 have it, mariadb does not), and the MySQL and SQLite unions take `BunSqlClient`, which requires Bun's `commitDistributed()` beside `unsafe()` (postgres.js has no such method).
 
@@ -207,7 +221,7 @@ These were checked as expected:
 - **miniflare 5.** The version npm tags `latest` (5.20260926.1-alpha and later, which wrangler 4.144 depends on) rejects the v4 constructor options (`modules`, `script`, `d1Databases`) and wants a new `workers: [{ config }]` format, so the D1 job uses miniflare 4.20260730.0. D1 is reached through Miniflare's Node proxy, not from inside a Worker.
 - **The real Neon and PlanetScale services.** Both are live against local stand-ins: Neon's proxy image (built 2026-03-27) and ps-http-sim. The real services could differ in details such as PlanetScale's session concurrency.
 - **Neon's HTTP `transaction()`** takes an array of queries built by the `sql` function, not a client, so a Reylo query cannot join it. D1 has no interactive transaction either (`batch()` takes prepared statements).
-- **Other server and driver pairs:** mysql2 and Bun.sql against MariaDB, @libsql/client against a sqld server (`http:` or `ws:` URLs), PGlite through `PGliteWorker`, `pg-native`, Neon's `arrayMode`, and better-sqlite3 or the npm drivers under Bun.
+- **Other server and driver pairs:** mysql2 and Bun.sql against MariaDB, @libsql/client against a sqld server (`http:` or `ws:` URLs), Turso's `@tursodatabase/serverless`, `@tursodatabase/sync` and `@tursodatabase/database-wasm`, PGlite through `PGliteWorker`, `pg-native`, Neon's `arrayMode`, and better-sqlite3 or the npm drivers under Bun.
 - **Other runtimes:** Deno, and a Cloudflare Worker's own D1 binding.
 
 ## Layout

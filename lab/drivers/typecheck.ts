@@ -17,6 +17,8 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Database as BunDatabase } from "bun:sqlite";
 import type { SQL as BunSQL, TransactionSQL as BunTransaction, SavepointSQL as BunSavepoint, ReservedSQL as BunReserved } from "bun";
 import type { Client as LibsqlClient, Transaction as LibsqlTransaction } from "@libsql/client";
+import type { Database as TursoDatabase, Transaction as TursoTransaction } from "@tursodatabase/database";
+import type { Database as TursoCompat } from "@tursodatabase/database/compat";
 import type { Database as Sqlite3Database } from "sqlite3";
 import type { Database as SqliteDatabase } from "sqlite";
 import type { D1Database, D1DatabaseSession } from "@cloudflare/workers-types";
@@ -49,7 +51,8 @@ declare const bs3: Database.Database, nodeDb: DatabaseSync, bunDb: BunDatabase;
 declare const libsql: LibsqlClient, libsqlTx: LibsqlTransaction;
 declare const sqlite3: Sqlite3Database, sqlite: SqliteDatabase;
 declare const d1: D1Database, d1Session: D1DatabaseSession;
-for (const c of [bs3, nodeDb, bunDb, libsql, libsqlTx, sqlite3, sqlite, d1, d1Session, bunSql, bunTx]) execute(c, sqq, { id: 1 });
+declare const turso: TursoDatabase, tursoTx: TursoTransaction, tursoCompat: TursoCompat;
+for (const c of [bs3, nodeDb, bunDb, libsql, libsqlTx, turso, tursoTx, tursoCompat, sqlite3, sqlite, d1, d1Session, bunSql, bunTx]) execute(c, sqq, { id: 1 });
 
 // `run` is a promise on every client; `runSync` takes only a synchronous SQLite client and hands back the row.
 declare const pgQuery: Query<{ id: number }, { id: number }, "one", "postgres">;
@@ -63,6 +66,15 @@ const asyncTx: Promise<{ id: number }> = pgQuery.with(sqlTx)({ id: 1 });
 const syncRow: { id: number } = liteQuery.runSync(bs3, { id: 1 });
 const syncNode: { id: number } = liteQuery.runSync(nodeDb, { id: 1 });
 const syncBun: { id: number } = liteQuery.runSync(bunDb, { id: 1 });
+const asyncTurso: Promise<{ id: number }> = liteQuery.run(turso, { id: 1 });
+const asyncTursoTx: Promise<{ id: number }> = liteQuery.run(tursoTx, { id: 1 });
+const syncTursoCompat: { id: number } = liteQuery.runSync(tursoCompat, { id: 1 });
+// @ts-expect-error runSync takes no client that answers through a promise
+liteQuery.runSync(turso, { id: 1 });
+// @ts-expect-error Turso's engine cannot run a postgres query
+execute(turso, pgq, { id: 1 });
+// @ts-expect-error Turso's engine cannot run a mysql query
+execute(tursoTx, myq, { id: 1 });
 // @ts-expect-error run's result is a promise even on a synchronous client
 const notRow: { id: number } = liteQuery.run(bs3, { id: 1 });
 // @ts-expect-error runSync takes no client that answers through a promise

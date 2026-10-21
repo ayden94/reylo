@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
@@ -19,6 +19,7 @@ const DRIVERS = fileURLToPath(new URL("../lab/drivers/node_modules", import.meta
 const INDEX = pathToFileURL(fileURLToPath(new URL("../src/index.ts", import.meta.url))).href;
 const pgLive = !PG ? "REYLO_TEST_PG names no server" : !existsSync(join(DRIVERS, "postgres")) ? "lab/drivers is not installed" : false;
 const mysqlLive = !MYSQL ? "REYLO_TEST_MYSQL names no server" : !existsSync(join(DRIVERS, "mysql2")) ? "lab/drivers is not installed" : false;
+const tursoLive = existsSync(join(DRIVERS, "@tursodatabase", "database")) ? false : "lab/drivers is not installed";
 
 function project(driver?: string): string {
   const root = mkdtempSync(join(tmpdir(), "reylo-fresh-"));
@@ -61,6 +62,44 @@ test("a difference is a change: a column gone, retyped, made nullable or given a
   // A client that answers every query with a row of its own, as lab/nextjs's edge stub does, is no catalog.
   assert.equal(differences(fresh, [{ id: 1, name: "stub", email: null, role: "member", big: "7" }]), undefined);
   assert.equal(differences(fresh, [["users", "id", "integer"]]), undefined);
+});
+
+test("a SQLite type is compared without its case, as SQLite reads one; a Postgres or MySQL type exactly", () => {
+  const fresh: Fresh = { query: "…", rows: [["t", "id", "INTEGER", "0", "1"], ["t", "n", "bigInt", "1", "0"]], inserts: [] };
+  // SQLite's pragma_table_xinfo upper-cases a type name it knows; Turso's engine gives it as declared.
+  const turso = [["t", "id", "integer", "0", "1"], ["t", "n", "bigint", "1", "0"]];
+  assert.deepEqual(differences(fresh, turso, "sqlite"), []);
+  assert.deepEqual(differences(fresh, [["t", "id", "integer", "1", "1"], ["t", "n", "text", "1", "0"]], "sqlite"), ["t.id was INTEGER with a default and is now integer not null with a default", "t.n was bigInt not null and is now text not null"]);
+  assert.deepEqual(differences(fresh, turso, "postgres"), ["t.id was INTEGER with a default and is now integer with a default", "t.n was bigInt not null and is now bigint not null"]);
+  assert.equal(differences(fresh, turso, "mysql")?.length, 2);
+  // SQLite folds ASCII letters alone.
+  assert.deepEqual(differences({ query: "…", rows: [["t", "x", "É", "0", "0"]], inserts: [] }, [["t", "x", "é", "0", "0"]], "sqlite"), ["t.x was É and is now é"]);
+});
+
+test("SQLite on Turso's engine: a query built on node:sqlite runs, whose types Turso spells in lowercase, and a column it names, renamed, fails the call", { skip: tursoLive }, async () => {
+  const require = createRequire(join(DRIVERS, "pg", "package.json"));
+  const { connect } = await import(pathToFileURL(require.resolve("@tursodatabase/database")).href);
+  const root = project();
+  const file = join(root, "app.db");
+  const setup = new DatabaseSync(file);
+  setup.exec("create table users (id integer primary key, email text not null, n bigInt, ok boolean)");
+  setup.exec("insert into users (email, n, ok) values ('a@x', 7, 1)");
+  setup.close();
+  const url = "file:./app.db";
+  const db = await connect(file);
+  try {
+    const read = await built(root, url, "read", "select id, email, n, ok from users order by id");
+    const facts = JSON.parse(/"rows":(\[\[.*?\]\]),"inserts"/.exec(readFileSync(join(root, "read.mjs"), "utf8"))![1]!) as string[][];
+    assert.deepEqual(facts.map((r) => r[2]), ["TEXT", "INTEGER", "bigInt", "boolean"], "the facts node:sqlite gave the build, the names it knows upper-cased");
+    assert.deepEqual((await db.prepare("select type from pragma_table_xinfo('users')").all()).map((r: { type: string }) => r.type), ["integer", "text", "bigInt", "boolean"], "the control: Turso's engine gives each type as declared");
+    assert.deepEqual(await read.run(db), [{ id: 1, email: "a@x", n: 7, ok: true }]);
+    const read2 = await built(root, url, "read2", "select id, email from users order by id");
+    await db.exec("alter table users rename column email to mail");
+    await assert.rejects(read2.run(db), /The database changed after read2\.sql was built: users\.email was TEXT not null and no longer exists\. Build it again/);
+  } finally {
+    await db.close();
+    await closeAll();
+  }
 });
 
 test("SQLite: a query whose columns changed fails, naming them; one whose table gained a column it does not name runs", async () => {
