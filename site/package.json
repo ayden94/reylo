@@ -37,7 +37,6 @@
     "@types/react-dom": "^19.2.0",
     "@vercel/postgres": "0.10.0",
     "better-sqlite3": "12.11.1",
-    "mariadb": "3.5.4",
     "mysql2": "3.24.5",
     "pg": "8.23.0",
     "pg-promise": "12.7.1",

@@ -10,10 +10,9 @@ This page is the reference behind [the main docs](/) for MySQL: the place to loo
 | | |
 | --- | --- |
 | Versions | MySQL 8.0.22 or later, which types a parameter from its context; checked on MySQL 8.0, 8.4, 9.7 and 26.7 |
-| MariaDB | Reylo's queries run on MariaDB 11 through mariadb or mysql2; the type check reads a MySQL server ([Limits](#limits)) |
-| URL | A `mysql://` or `mariadb://` URL, in `DATABASE_URL` or [`url`](/#url) |
+| URL | A `mysql://` URL, in `DATABASE_URL` or [`url`](/#url) |
 | Type check | Reads the schema through mysql2 |
-| Drivers | mysql2, mariadb, PlanetScale and Bun.sql ([Drivers](#drivers)) |
+| Drivers | mysql2, PlanetScale and Bun.sql ([Drivers](#drivers)) |
 
 <Details summary="View the schema behind the examples" id="schema">
 
@@ -106,7 +105,7 @@ const counts = await countOrders.run(db);
 
 A `DECIMAL` is its exact text, `"12.50"`, with the column's scale. So are `SUM(…)` of any column, `AVG(…)` and a division, which MySQL computes as `DECIMAL`: `sum(total)` is `"19.75"`, and `id / 2` is `"0.5000"`.
 
-- A `FLOAT` is a 32-bit float: mysql2 and Bun.sql, which read the binary protocol, give its exact value, `1.100000023841858`, and mariadb the shorter text's, `1.1`. A `DOUBLE` is the same on every driver.
+- A `FLOAT` is a 32-bit float: mysql2 and Bun.sql, which read the binary protocol, give its exact value, `1.100000023841858`, and a driver that reads MySQL's text protocol the shorter text's, `1.1`. A `DOUBLE` is the same on every driver.
 - Inside JSON the statement builds, a `DECIMAL` is a JSON number, which `JSON.parse` reads as a double: `12345678901234.123456` becomes `12345678901234.123`.
 - A `DECIMAL` parameter takes the text, `"12.50"` ([What a parameter takes](#what-a-parameter-takes)).
 
@@ -194,14 +193,14 @@ const rows = await orderSummaries.run(db);
 
 ### Binary
 
-A `BINARY`, a `VARBINARY`, every `BLOB` and a `BIT` wider than 1 are a `Uint8Array`. mysql2 and mariadb give Reylo a `Buffer`, which is one, so `.run()` returns it as it is.
+A `BINARY`, a `VARBINARY`, every `BLOB` and a `BIT` wider than 1 are a `Uint8Array`. mysql2 gives Reylo a `Buffer`, which is one, so `.run()` returns it as it is.
 
 - A `GEOMETRY` is `unknown`, and its value is MySQL's bytes, the SRID and the WKB, as a `Uint8Array`.
-- A binary parameter takes a `Uint8Array`, a `Buffer` or not, on every driver: mariadb, which writes any other value as JSON, gets it from Reylo as a `Buffer`.
+- A binary parameter takes a `Uint8Array`, a `Buffer` or not, on every driver.
 
 ### ENUM and SET
 
-An `ENUM` is a `string`, its label, and a `SET` is a `string` of its members joined by commas, `"a,c"`, on every driver: mariadb's array is joined.
+An `ENUM` is a `string`, its label, and a `SET` is a `string` of its members joined by commas, `"a,c"`, on every driver.
 
 - Compared with a value that is no label, an `ENUM` matches nothing, and an insert of one is MySQL's error in strict mode.
 
@@ -355,7 +354,7 @@ MySQL reads its text its own way, and Reylo reads it the same way:
 - A `#` starts a comment to the end of the line, and so does `-- ` with a space after it: `:a --:b` is `:a - (-:b)`. A block comment ends at its first `*/`.
 - Where `NO_BACKSLASH_ESCAPES` or `ANSI_QUOTES` would read a statement otherwise, Reylo asks for the session's `sql_mode` and reads the statement by it.
 - A `||` is `OR` unless the session sets `PIPES_AS_CONCAT`: `name || 'x'` is a number. Write `concat(name, 'x')`.
-- A built-in's name with a space before its parenthesis, `count (x)`, is a stored function's unless the session sets `IGNORE_SPACE`, as mysql2 and mariadb do.
+- A built-in's name with a space before its parenthesis, `count (x)`, is a stored function's unless the session sets `IGNORE_SPACE`, as mysql2 does.
 - Where the session reads the statement otherwise than its text, Reylo keeps the server's types and proves no row count and no JSON shape.
 - A `/*! … */` comment is SQL MySQL runs, so a statement with one is an error: write it as plain SQL.
 
@@ -366,15 +365,14 @@ Each driver reads MySQL's protocol as it always does, and Reylo makes only the c
 | Driver | How Reylo reads its values | Refused | Lost before Reylo sees it |
 | --- | --- | --- | --- |
 | mysql2 | Its `.execute()`, with Reylo's options with each query, so a `BIGINT` and a date come as their exact text | | |
-| mariadb | Every decoding option with each query | | |
 | PlanetScale | Reylo's `cast` with each query | 2.0, which binds no parameters | |
 | Bun.sql | Bun's own values, converted | | A `DATETIME`'s microseconds, an all-zero fraction, and a `TIME`'s fraction |
 
 - mysql2 runs on `.execute()`, the binary protocol, and its callback API through `.promise()`, both on the app's own pool or connection.
 - On Bun.sql, an expression that may be a `BIGINT` or a `DECIMAL` by what is bound (`round(:x)`) reads digits without a point as a `BIGINT`, since Bun gives both as text.
-- Each driver takes its transactions and connections too: mysql2's and mariadb's promise or callback API, PlanetScale's `.transaction()`, and Bun.sql's `.begin()`, `.savepoint()` and `.reserve()`.
+- Each driver takes its transactions and connections too: mysql2's promise or callback API, PlanetScale's `.transaction()`, and Bun.sql's `.begin()`, `.savepoint()` and `.reserve()`.
 
-The type check reads the schema through mysql2, so an app on mariadb, PlanetScale or Bun.sql adds mysql2 as a dev dependency.
+The type check reads the schema through mysql2, so an app on PlanetScale or Bun.sql adds mysql2 as a dev dependency.
 
 ## Limits
 
@@ -387,5 +385,4 @@ The edges of what Reylo types on MySQL, each with what to write instead:
 - **A `with` before an `insert`.** MySQL 8.4 refuses `with … insert`, so a `with` follows `insert into … (…)`, as in the main docs' [JSON parameters](/#json-parameters).
 - **A parameter in place of a name.** A parameter is a value: `select * from :table` is MySQL's syntax error, and `order by :column` sorts by a constant. Choose a column with `case :sort when 'name' then name end`.
 - **A statement with more than 500 operators** (`a + b + …`, `x = 1 or x = 2 or …`), or nested past 1,000 levels, which Reylo types from the server's description alone: any number of rows.
-- **MariaDB as the type check's database.** Pointed at MariaDB 11.8, the type check types every parameter `unknown`, a `JSON` column `string` though drivers return it parsed, and the `NULL` row of `WITH ROLLUP` as non-null, and JSON parameters, which MySQL reads with `cast(… as json)`, are MariaDB's syntax error. Point the type check at MySQL with the same schema.
 - **One statement per file.** A file holds one `select`, `insert`, `update`, `delete`, `replace`, `values` or `table`. A `call` is an error in the type check, and so is a file of several statements or of DDL, such as a migration.

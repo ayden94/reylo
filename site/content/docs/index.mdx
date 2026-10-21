@@ -803,7 +803,7 @@ DATABASE_URL=postgres://localhost:5432/app
 ```
 
 ```sh title=".env" tab="MySQL" tab-group="dialect"
-# or mariadb://; the type check uses your mysql2
+# the type check uses your mysql2
 DATABASE_URL=mysql://root@localhost:3306/app
 ```
 
@@ -1112,16 +1112,6 @@ const db = mysql.createPool(process.env.DATABASE_URL!);
 const user = await getUser.run(db, { id: 1 });
 ```
 
-```ts twoslash tab="mariadb" dialect="mysql"
-import mariadb from "mariadb";
-import getUser from "./get_user.sql";
-
-// mariadb takes only a mariadb:// URL, which Reylo reads as MySQL
-const db = mariadb.createPool(process.env.DATABASE_URL!);
-
-const user = await getUser.run(db, { id: 1 });
-```
-
 ```ts twoslash tab="PlanetScale" dialect="mysql"
 // @planetscale/database 1.x: a 2.0 client is a type error
 import { connect } from "@planetscale/database";
@@ -1141,7 +1131,7 @@ const db = new SQL(process.env.DATABASE_URL!);
 const user = await getUser.run(db, { id: 1 });
 ```
 
-Each takes its transactions and connections too: `mysql2`'s and `mariadb`'s promise or callback API, PlanetScale's `.transaction()`, and `Bun.sql`'s `.begin()`, `.savepoint()` and `.reserve()`.
+Each takes its transactions and connections too: `mysql2`'s promise or callback API, PlanetScale's `.transaction()`, and `Bun.sql`'s `.begin()`, `.savepoint()` and `.reserve()`.
 
 **SQLite**
 
