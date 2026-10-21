@@ -82,3 +82,21 @@
     width: 10rem;
   }
 }
+
+/* The column is docs-kit's 40rem and a little more, 42rem: prose runs about four characters a line
+   longer, and code blocks, tab groups and tables keep the same one column. */
+:root {
+  --dk-column: 42rem;
+}
+
+/* The main page's title and subheader stand apart from what follows: 12.5rem under the subheader
+   (`<p className="dk-subheader hero">` in content/docs/index.mdx) where docs-kit leaves 2rem, and
+   5rem on a phone, where 12.5rem would be most of a screen. The dialect pages keep docs-kit's. */
+#nd-page .prose .dk-subheader.hero {
+  margin-bottom: 5rem;
+}
+@media (min-width: 768px) {
+  #nd-page .prose .dk-subheader.hero {
+    margin-bottom: 12.5rem;
+  }
+}
