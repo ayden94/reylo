@@ -1,0 +1,514 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { DatabaseSync } from "node:sqlite";
+import { arrayLiteral, execute, type QueryModule } from "../src/execute.ts";
+import { defineQuery } from "../src/index.ts";
+
+// Each fake client records what execute handed it and answers the way its driver does; the
+// driver behaviour each one copies was checked against the real package (lab/driver-matrix).
+type Call = { method: string; args: unknown[] };
+const pg: QueryModule<"postgres"> = { dialect: "postgres", sql: "select :id::int as id, :name as name, :id as again", params: ["id", "name"] };
+const my: QueryModule<"mysql"> = { dialect: "mysql", sql: "select :id as id, :name as name, :id as again", params: ["id", "name"] };
+const lite: QueryModule<"sqlite"> = { dialect: "sqlite", sql: "select :id as id, :name as name, :id as again", params: ["id", "name"] };
+const row = { id: 1, name: "ada", again: 1 };
+
+test("postgres: query(text, values) → { rows }, as on pg, PGlite and Neon's Pool, with $n numbered once per name", async () => {
+  const calls: Call[] = [];
+  const client = { query: async (...args: unknown[]) => (calls.push({ method: "query", args }), { rows: [row], rowCount: 1 }) };
+  assert.deepEqual(await execute(client, pg, { id: 1, name: "ada" }), [row]);
+  assert.deepEqual(calls, [{ method: "query", args: ["select $1::int as id, $2 as name, $1 as again", [1, "ada"]] }]);
+});
+
+test("postgres: a query() that resolves to the rows, as Neon's neon() from 1.0 and pg-promise do", async () => {
+  const neon = Object.assign(() => Promise.reject(new Error("not a template")), {
+    query: async () => [row],
+    // Neon's unsafe() builds a fragment for a template; it must never be taken for a query.
+    unsafe: () => ({ sql: "fragment" }),
+  });
+  assert.deepEqual(await execute(neon as never, pg, { id: 1, name: "ada" }), [row]);
+});
+
+test("postgres: pg-promise gets a { text, values } object, so it binds instead of formatting $1 into the text", async () => {
+  const calls: Call[] = [];
+  // pg-promise types query() as resolving to any.
+  const db = { manyOrNone: async () => [], query: async (...args: unknown[]): Promise<any> => (calls.push({ method: "query", args }), [row]) };
+  const q: QueryModule<"postgres"> = { dialect: "postgres", sql: "select '$2' as literal, :id::int as id", params: ["id"] };
+  assert.deepEqual(await execute(db, q, { id: 1 }), [row]);
+  // With Reylo's decoder table, which answers every oid itself.
+  const { types, ...bound } = calls[0]!.args[0] as { text: string; values: unknown[]; types: { getTypeParser(oid: number): (text: string) => unknown } };
+  assert.deepEqual(bound, { text: "select '$2' as literal, $1::int as id", values: [1] });
+  assert.equal(types.getTypeParser(20)("9007199254740993"), 9007199254740993n);
+});
+
+test("postgres: unsafe(text, values) → rows, as on postgres.js and Bun.sql and their transactions", async () => {
+  const calls: Call[] = [];
+  const tx = { unsafe: (...args: unknown[]) => (calls.push({ method: "unsafe", args }), Promise.resolve([row])) };
+  assert.deepEqual(await execute(tx, pg, { id: 1, name: "ada" }), [row]);
+  assert.deepEqual(calls, [{ method: "unsafe", args: ["select $1::int as id, $2 as name, $1 as again", [1, "ada"]] }]);
+});
+
+// The module's `inputs`: :ids is an int4[] parameter, :data a jsonb one, :name text.
+const typed: QueryModule<"postgres"> = {
+  dialect: "postgres",
+  sql: "select id from users where id = any(:ids) and name = :name and tags @> :data::jsonb",
+  params: ["ids", "name", "data"],
+  text: "select id from users where id = any($1) and name = $2 and tags @> $3::jsonb",
+  order: ["ids", "name", "data"],
+  inputs: { ids: { type: { kind: "array", of: { kind: "scalar", name: "int4" } } }, name: { type: { kind: "scalar", name: "text" } }, data: { type: { kind: "json" } } },
+};
+const typedValues = { ids: [1, 3], name: "ada", data: [1, { a: "b" }] };
+
+test("postgres: every client gets an array for a SQL array parameter as its literal text; postgres.js and Bun.sql get a JSON parameter as an object they serialize to its JSON text", async () => {
+  const seen: unknown[][] = [];
+  const unsafe = async (_: string, values?: unknown[]) => (seen.push(values!), []);
+  const bun = { unsafe, commitDistributed: async () => {} };
+  await execute(bun, typed, typedValues);
+  await execute({ unsafe }, typed, typedValues);
+  assert.equal(seen.length, 2);
+  for (const [ids, name, data] of seen) {
+    assert.deepEqual([ids, name], ['{"1","3"}', "ada"]);
+    // Not a string, which they would store as a JSON string, and not the array, whose type they would take from its first element.
+    assert.equal(typeof data, "object");
+    assert.ok(!Array.isArray(data));
+    assert.equal(JSON.stringify(data), '[1,{"a":"b"}]');
+  }
+});
+
+// Every kind of JSON value, null, and a jsonb[] parameter, whose elements are JSON values.
+const jsonQuery: QueryModule<"postgres"> = {
+  dialect: "postgres",
+  sql: "select :s::jsonb, :n::jsonb, :b::jsonb, :t::jsonb, :z::jsonb, :o::jsonb, :e::jsonb, :l::jsonb[]",
+  params: ["s", "n", "b", "t", "z", "o", "e", "l"],
+  inputs: { ...Object.fromEntries([..."snbtzoe"].map((k) => [k, { type: { kind: "json" as const } }])), l: { type: { kind: "array", of: { kind: "json" } } } },
+};
+const jsonValues = { s: "abc", n: 5, b: true, t: '{"a":1}', z: null, o: { d: new Date("2026-01-02T03:04:05Z") }, e: [], l: ["x", { a: 1 }, null, [true]] };
+const jsonTexts = ['"abc"', "5", "true", '"{\\"a\\":1}"', null, '{"d":"2026-01-02T03:04:05.000Z"}', "[]", '{"\\"x\\"","{\\"a\\":1}",NULL,"[true]"}'];
+
+test("postgres: a JSON parameter's value is a JavaScript value, which every driver gets as its JSON text, a string as a JSON string, null as NULL", async () => {
+  const seen: unknown[][] = [];
+  await execute({ query: async (_: string, values?: unknown[]) => (seen.push(values!), { rows: [] }) }, jsonQuery, jsonValues);
+  const pgp = { manyOrNone: async () => [], query: async (q: any): Promise<any> => (seen.push(q.values), []) };
+  await execute(pgp, jsonQuery, jsonValues);
+  await execute((_: string, values?: unknown[]) => (seen.push(values!), Promise.resolve([])), jsonQuery, jsonValues);
+  const unsafe = async (_: string, values?: unknown[]) => (seen.push(values!.map((v) => (v !== null && typeof v === "object" ? JSON.stringify(v) : v))), []);
+  const bun = { unsafe, commitDistributed: async () => {} };
+  await execute({ unsafe }, jsonQuery, jsonValues);
+  await execute(bun, jsonQuery, jsonValues);
+  assert.equal(seen.length, 5);
+  for (const values of seen) assert.deepEqual(values, jsonTexts);
+});
+
+test("mysql and sqlite: every driver gets a JSON parameter as its JSON text, and null as NULL", async () => {
+  const json = { type: { kind: "json" } } as const;
+  const mq: QueryModule<"mysql"> = { dialect: "mysql", sql: "select cast(:a as json), cast(:b as json), :name, cast(:a as json), cast(:z as json)", params: ["a", "b", "name", "z"], inputs: { a: json, b: json, z: json, name: { type: { kind: "scalar", name: "text" } } } };
+  const values = { a: [1, 2], b: "abc", name: "ada", z: null };
+  const expected = ["[1,2]", '"abc"', "ada", "[1,2]", null];
+  const seen: unknown[][] = [];
+  await execute({ query: async () => [[], []] as [unknown, unknown], execute: async (_: unknown, v?: unknown[]) => (seen.push(v!), [[], []] as [unknown, unknown]) }, mq, values);
+  await execute({ query: async (_: string, v: unknown) => (seen.push(v as unknown[]), []), batch: async () => [] }, mq, values);
+  await execute({ unsafe: async (_: string, v?: unknown[]) => (seen.push(v!), []), commitDistributed: async () => {} }, mq, values);
+  const lq: QueryModule<"sqlite"> = { ...mq, dialect: "sqlite", sql: "select json(:a) as a, json(:b) as b, :name as name, json(:a) as again, json(:z) as z" };
+  await execute({ execute: async (s: { args: unknown[] }) => (seen.push(s.args), { rows: [] }), executeMultiple: async () => {} }, lq, values);
+  assert.equal(seen.length, 4);
+  // node:sqlite would read an array as its named parameters.
+  assert.deepEqual((execute(new DatabaseSync(":memory:"), lq, values) as object[]).map((r) => ({ ...r })), [{ a: "[1,2]", b: '"abc"', name: "ada", again: "[1,2]", z: null }]);
+  for (const v of seen) assert.deepEqual(v, expected);
+});
+
+test("postgres: pg's family, PGlite and Neon, which write any array as an array literal, get an array for a JSON parameter as its JSON text", async () => {
+  const seen: unknown[][] = [];
+  await execute({ query: async (_: string, values?: unknown[]) => (seen.push(values!), { rows: [] }) }, typed, typedValues);
+  const pgp = { manyOrNone: async () => [], query: async (q: any): Promise<any> => (seen.push(q.values), []) };
+  await execute(pgp, typed, typedValues);
+  await execute((_: string, values?: unknown[]) => (seen.push(values!), Promise.resolve([])), typed, typedValues);
+  assert.equal(seen.length, 3);
+  for (const values of seen) assert.deepEqual(values, ['{"1","3"}', "ada", '[1,{"a":"b"}]']);
+});
+
+test("a query without inputs, defined by hand or built before them, binds every array as it is", async () => {
+  const { inputs: _, ...bare } = typed;
+  const seen: unknown[][] = [];
+  const unsafe = async (_: string, values?: unknown[]) => (seen.push(values!), []);
+  const bun = { unsafe, commitDistributed: async () => {} };
+  await execute(bun, bare, typedValues);
+  await execute({ unsafe }, bare, typedValues);
+  await execute({ query: async (_: string, values?: unknown[]) => (seen.push(values!), { rows: [] }) }, bare, typedValues);
+  for (const values of seen) assert.deepEqual(values, [[1, 3], "ada", [1, { a: "b" }]]);
+  // Hand-written inputs work through the runtime's own lexer too, a repeated name included.
+  const hand: QueryModule<"postgres"> = { dialect: "postgres", sql: "select :ids::int[] = :ids::int[]", params: ["ids"], inputs: { ids: { type: { kind: "array", of: { kind: "scalar", name: "int4" } } } } };
+  seen.length = 0;
+  await execute({ unsafe }, hand, { ids: [2] });
+  assert.deepEqual(seen, [['{"2"}']]);
+});
+
+test("a Date for a timestamp or date parameter, and a string without its zone for a timestamptz one, is refused before the statement runs", async () => {
+  const time = (name: string) => ({ type: { kind: "scalar" as const, name } });
+  const q: QueryModule<"postgres"> = {
+    dialect: "postgres",
+    sql: "select :at::timestamp, :day::date, :tz::timestamptz, :tzs::timestamptz[], :days::date[]",
+    params: ["at", "day", "tz", "tzs", "days"],
+    inputs: { at: time("timestamp"), day: time("date"), tz: time("timestamptz"), tzs: { type: { kind: "array", of: time("timestamptz").type } }, days: { type: { kind: "array", of: time("date").type } } },
+  };
+  const seen: unknown[][] = [];
+  const client = { query: async (_: string, values?: unknown[]) => (seen.push(values!), { rows: [] }) };
+  const ok = { at: "2026-10-12 19:06:48.282", day: "2026-10-12", tz: new Date(0), tzs: ["2026-10-12T19:06:48.282Z", "2026-10-12 19:06:48+09", "2026-10-12 19:06:48.5-07:30", "2026-10-12 19:06 America/Los_Angeles", "2026-10-12 19:06:48 UTC", "infinity", "-infinity", "0001-01-01 00:00:00+00 BC", null, new Date(0)], days: [["2026-10-12"]] };
+  await execute(client, q, ok);
+  assert.equal(seen.length, 1);
+  const refused = async (values: Record<string, unknown>, message: RegExp) => assert.rejects(Promise.resolve().then(() => execute(client, q, { ...ok, ...values })), (e: Error) => e instanceof TypeError && message.test(e.message));
+  await refused({ at: new Date() }, /^Parameter "at" is a timestamp without a time zone, so it takes the wall-clock text/);
+  await refused({ day: new Date() }, /^Parameter "day" is a date without a time zone/);
+  await refused({ days: [[new Date()]] }, /^Parameter "days" is a date/);
+  for (const tz of ["2026-10-12 19:06:48", "2026-10-12T19:06:48.282", "2026-10-12"]) await refused({ tz }, /^Parameter "tz" is a timestamptz, an instant, so a string for it names its zone/);
+  await refused({ tzs: ["2026-10-12T00:00:00Z", "2026-10-12 19:06"] }, /^Parameter "tzs" is a timestamptz/);
+  assert.equal(seen.length, 1);
+  // MySQL's DATETIME and TIMESTAMP are the engine's timestamp, and a placeholder compared with both is either.
+  const my: QueryModule<"mysql"> = { dialect: "mysql", sql: "select :at", params: ["at"], inputs: { at: time("date|timestamp") } };
+  await assert.rejects(Promise.resolve().then(() => execute({ query: async () => [[], []] as [unknown, unknown], execute: async () => [[], []] as [unknown, unknown] }, my, { at: new Date() })), /^TypeError: Parameter "at" is a timestamp without a time zone/);
+});
+
+test("postgres: postgres.js, which binds a date or time string through new Date(), gets one declared unknown; Bun.sql gets the string", async () => {
+  const time = (name: string) => ({ type: { kind: "scalar" as const, name } });
+  const q: QueryModule<"postgres"> = { dialect: "postgres", sql: "select :at::timestamp, :day::date, :tz::timestamptz, :d::timestamptz, :name::text", params: ["at", "day", "tz", "d", "name"], inputs: { at: time("timestamp"), day: time("date"), tz: time("timestamptz"), d: time("timestamptz"), name: time("text") } };
+  const values = { at: "2026-01-02 03:04:05.006", day: "infinity", tz: "2026-01-02 03:04:05 America/New_York", d: new Date(0), name: "ada" };
+  const seen: unknown[][] = [];
+  const unsafe = async (_: string, v?: unknown[]) => (seen.push(v!), []);
+  const typed = (value: unknown, type: number) => ({ value, type });
+  const postgresJs = { unsafe, typed };
+  await execute(postgresJs, q, values);
+  const bun = { unsafe, typed, commitDistributed: async () => {} };
+  await execute(bun, q, values);
+  assert.deepEqual(seen, [
+    [{ value: "2026-01-02 03:04:05.006", type: 705 }, { value: "infinity", type: 705 }, { value: "2026-01-02 03:04:05 America/New_York", type: 705 }, new Date(0), "ada"],
+    ["2026-01-02 03:04:05.006", "infinity", "2026-01-02 03:04:05 America/New_York", new Date(0), "ada"],
+  ]);
+});
+
+test("arrayLiteral writes a Postgres array literal as pg does: nesting, NULL, quotes, backslashes, binary, dates, the empty array", () => {
+  assert.equal(arrayLiteral([]), "{}");
+  assert.equal(arrayLiteral([1, 2n, 1.5, true]), '{"1","2","1.5","true"}');
+  assert.equal(arrayLiteral([[1, 2], [3, null], []]), '{{"1","2"},{"3",NULL},{}}');
+  assert.equal(arrayLiteral([null, undefined, "", "NULL"]), '{NULL,NULL,"","NULL"}');
+  assert.equal(arrayLiteral(['say "hi"', "back\\slash", "a,b", "{x}", " pad "]), String.raw`{"say \"hi\"","back\\slash","a,b","{x}"," pad "}`);
+  assert.equal(arrayLiteral([Uint8Array.of(1, 2, 255), Buffer.from([0, 16]), new Uint8Array([9, 171, 9]).subarray(1, 2)]), String.raw`{\\x0102ff,\\x0010,\\xab}`);
+  assert.equal(arrayLiteral([{ a: 'q"' }]), String.raw`{"{\"a\":\"q\\\"\"}"}`);
+  // pg's dateToString: the local time, then the offset.
+  const d = new Date(2026, 0, 2, 3, 4, 5, 6);
+  const offset = -d.getTimezoneOffset();
+  const zone = `${offset < 0 ? "-" : "+"}${String(Math.floor(Math.abs(offset) / 60)).padStart(2, "0")}:${String(Math.abs(offset) % 60).padStart(2, "0")}`;
+  assert.equal(arrayLiteral([d]), `{"2026-01-02T03:04:05.006${zone}"}`);
+});
+
+test("postgres: Neon's neon() before 1.0 is called with (text, values)", async () => {
+  const calls: Call[] = [];
+  const sql = (...args: unknown[]) => (calls.push({ method: "call", args }), Promise.resolve([row]));
+  assert.deepEqual(await execute(sql, pg, { id: 1, name: "ada" }), [row]);
+  assert.deepEqual(calls[0]!.args.slice(0, 2), ["select $1::int as id, $2 as name, $1 as again", [1, "ada"]]);
+  // Its options take a decoder table, 0.9 too, and the fields with fullResults.
+  assert.deepEqual(Object.keys(calls[0]!.args[2] as object), ["fullResults", "arrayMode", "types"]);
+});
+
+test("a parameter left out binds NULL, which postgres.js, mysql2, node:sqlite and libSQL would reject", async () => {
+  const seen: unknown[][] = [];
+  const client = { unsafe: async (_: string, values?: unknown[]) => (seen.push(values!), []) };
+  await execute(client, pg, { id: 1 });
+  await execute(client, { ...pg, text: "select $1, $2", order: ["name", "id"] }, { id: undefined });
+  assert.deepEqual(seen, [[1, null], [null, null]]);
+});
+
+test("mysql: execute() → [rows, fields] on mysql2, a repeated name repeated in the values; a write's OK packet gives no rows", async () => {
+  const calls: Call[] = [];
+  const answers: unknown[] = [[[row], [{ name: "id" }]], [{ affectedRows: 1, insertId: 7 }, undefined]];
+  const pool = { query: async () => [[], []] as [unknown, unknown], execute: async (...args: unknown[]) => (calls.push({ method: "execute", args }), answers.shift() as [unknown, unknown]) };
+  assert.deepEqual(await execute(pool, my, { id: 1, name: "ada" }), [row]);
+  // The statement with Reylo's per-query options and typeCast (src/decode-mysql.ts), never decimalNumbers.
+  const [options, values] = calls[0]!.args as [Record<string, unknown>, unknown[]];
+  assert.deepEqual(values, [1, "ada", 1]);
+  assert.deepEqual({ ...options, typeCast: typeof options.typeCast }, { sql: "select ? as id, ? as name, ? as again", supportBigNumbers: true, bigNumberStrings: true, dateStrings: true, rowsAsArray: false, nestTables: false, typeCast: "function" });
+  assert.deepEqual(await execute(pool, my, { id: 1, name: "ada" }), []);
+});
+
+test("mysql: PlanetScale's execute() → { rows }", async () => {
+  const conn = { execute: async () => ({ rows: [row], statement: "select", headers: ["id"], insertId: "0" }) };
+  assert.deepEqual(await execute(conn, my, { id: 1, name: "ada" }), [row]);
+});
+
+test("mysql: mariadb runs through query(), not its own execute(); a write's OK packet gives no rows", async () => {
+  const calls: string[] = [];
+  const answers: unknown[] = [Object.assign([row], { meta: [] }), { affectedRows: 1, insertId: 7n, warningStatus: 0 }];
+  const conn = {
+    query: async () => (calls.push("query"), answers.shift()),
+    batch: async () => (calls.push("batch"), {}),
+    execute: async () => (calls.push("execute"), [row]),
+  };
+  assert.deepEqual([...((await execute(conn, my, { id: 1, name: "ada" })) as unknown[])], [row]);
+  assert.deepEqual(await execute(conn, my, { id: 1, name: "ada" }), []);
+  assert.deepEqual(calls, ["query", "query"]);
+});
+
+test("mysql: mariadb's callback API answers through the callback, and its errors reject", async () => {
+  const failure = Object.assign(new Error("Duplicate entry 'a' for key 'email'"), { code: "ER_DUP_ENTRY" });
+  const conn = {
+    batch: () => ({}),
+    // The callback query() returns a command object, not a promise.
+    query: (options: { sql: string }, values: unknown[], done: (e: Error | null, rows?: unknown) => void) => (setImmediate(() => (options.sql.startsWith("insert") ? done(failure) : done(null, [{ values }]))), { on() {} }),
+  };
+  assert.deepEqual(await execute(conn as never, my, { id: 1, name: "ada" }), [{ values: [1, "ada", 1] }]);
+  await assert.rejects(() => execute(conn as never, { dialect: "mysql", sql: "insert into t values (:a)", params: ["a"] }, { a: 1 }) as Promise<unknown>, (e) => e === failure);
+});
+
+// A plain Uint8Array (TextEncoder's, getRandomValues') and a view into a larger buffer, neither a Buffer.
+const binary = () => ({ plain: Uint8Array.of(1, 2, 255), view: new Uint8Array([9, 1, 2, 255, 9]).subarray(1, 4) });
+const bin: QueryModule<"mysql"> = { dialect: "mysql", sql: "select hex(:plain), hex(:view), hex(:buf), :n", params: ["plain", "view", "buf", "n"] };
+
+test("mysql: mariadb, which writes a value that is not a Buffer as JSON, gets a binary value as a Buffer over the same memory", async () => {
+  const { plain, view } = binary();
+  const buf = Buffer.from([1, 2, 255]);
+  for (const api of ["promise", "callback"]) {
+    const seen: unknown[][] = [];
+    const conn =
+      api === "promise"
+        ? { batch: async () => ({}), query: async (_: string, values: unknown[]) => (seen.push(values), []) }
+        : { batch: () => ({}), query: (_: string, values: unknown[], done: (e: Error | null, rows?: unknown) => void) => (seen.push(values), setImmediate(() => done(null, [])), { on() {} }) };
+    await execute(conn as never, bin, { plain, view, buf, n: 1 });
+    const [a, b, c, n] = seen[0]!;
+    assert.ok(Buffer.isBuffer(a) && Buffer.isBuffer(b), api);
+    assert.deepEqual([...(a as Buffer)], [1, 2, 255]);
+    assert.deepEqual([...(b as Buffer)], [1, 2, 255]);
+    // Views, not copies: the same memory at the same offset.
+    assert.ok((a as Buffer).buffer === plain.buffer && (b as Buffer).buffer === view.buffer && (b as Buffer).byteOffset === 1);
+    assert.equal(c, buf);
+    assert.equal(n, 1);
+  }
+});
+
+test("postgres: Neon's neon() before 0.10, which sends a Buffer as JSON, gets a binary value in Postgres's hex form", async () => {
+  const { plain, view } = binary();
+  const seen: unknown[][] = [];
+  const sql = (_: string, values?: unknown[]) => (seen.push(values!), Promise.resolve([]));
+  const q: QueryModule<"postgres"> = { dialect: "postgres", sql: "select :plain::bytea, :view::bytea, :buf::bytea, :empty::bytea, :n", params: ["plain", "view", "buf", "empty", "n"] };
+  await execute(sql, q, { plain, view, buf: Buffer.from([0, 16, 171]), empty: new Uint8Array(0), n: 1 });
+  assert.deepEqual(seen[0], ["\\x0102ff", "\\x0102ff", "\\x0010ab", "\\x", 1]);
+});
+
+test("every other driver gets a binary value as it is, pg-promise included, since it binds a { text, values } object", async () => {
+  const { plain } = binary();
+  const seen: unknown[] = [];
+  const pgq: QueryModule<"postgres"> = { dialect: "postgres", sql: "select :b::bytea", params: ["b"] };
+  const liteq: QueryModule<"sqlite"> = { dialect: "sqlite", sql: "select :b", params: ["b"] };
+  const pgp = { manyOrNone: async () => [], query: async (q: any): Promise<any> => (seen.push(q.values[0]), []) };
+  await execute(pgp, pgq, { b: plain });
+  await execute({ query: async (_: string, values?: unknown[]) => (seen.push(values![0]), { rows: [] }) }, pgq, { b: plain });
+  await execute({ unsafe: async (_: string, values?: unknown[]) => (seen.push(values![0]), []) }, pgq, { b: plain });
+  await execute({ query: async () => [[], []] as [unknown, unknown], execute: async (_: unknown, values?: unknown[]) => (seen.push(values![0]), [[], []] as [unknown, unknown]) }, { ...bin, sql: "select hex(:b)", params: ["b"] }, { b: plain });
+  await execute({ prepare: () => ({ all: (...values: unknown[]) => (seen.push(values[0]), []) }) }, liteq, { b: plain });
+  assert.equal(seen.length, 5);
+  for (const v of seen) assert.equal(v, plain);
+});
+
+test("mysql: PlanetScale 2.0, which binds no parameters, runs a statement without any and refuses one with some", async () => {
+  const calls: unknown[][] = [];
+  // 2.0's execute(query, options) refuses anything past them, or a second argument that is not its options.
+  const conn = {
+    execute: async (...args: unknown[]) => {
+      calls.push(args);
+      if (args.length > 2 || (args[1] != null && (typeof args[1] !== "object" || Array.isArray(args[1])))) throw new Error("Query parameters are not supported: pass a complete SQL string and options to execute(query, options)");
+      return { rows: [row], statement: String(args[0]), headers: [] };
+    },
+  };
+  assert.deepEqual(await execute(conn, { dialect: "mysql", sql: "select 1", params: [] }), [row]);
+  await assert.rejects(() => execute(conn, my, { id: 1, name: "ada" }) as Promise<unknown>, (e: TypeError) => e instanceof TypeError && /2\.0 binds no parameters/.test(e.message) && /not supported/.test((e.cause as Error).message));
+  // 1.x's form first, then 2.0's, with Reylo's cast either way.
+  assert.deepEqual(calls[0]!.slice(0, 2), ["select 1", null]);
+  assert.deepEqual([calls[1]![0], Object.keys(calls[1]![1] as object)], ["select 1", ["as", "cast"]]);
+});
+
+test("mysql: a mysql2 callback pool or connection runs through its promise() wrapper", async () => {
+  const callback = {
+    // The callback execute() returns a Query object, not a promise.
+    execute: () => ({ on() {} }),
+    promise: () => ({ query: async () => [[], []] as [unknown, unknown], execute: async () => [[row], []] as [unknown, unknown] }),
+  };
+  assert.deepEqual(await execute(callback, my, { id: 1, name: "ada" }), [row]);
+});
+
+test("mysql: Bun.sql's unsafe()", async () => {
+  assert.deepEqual(await execute({ unsafe: async () => [row], commitDistributed: async () => {} }, my, { id: 1, name: "ada" }), [row]);
+});
+
+test("sqlite: node:sqlite answers at once, with one ? per placeholder; a write gives no rows", () => {
+  const db = new DatabaseSync(":memory:");
+  db.exec("create table t (a int)");
+  const rows = execute(db, lite, { id: 1, name: "ada" });
+  assert.ok(Array.isArray(rows), "a synchronous client's rows are not a promise");
+  assert.deepEqual(rows.map((r) => ({ ...(r as object) })), [row]);
+  assert.deepEqual(execute(db, { dialect: "sqlite", sql: "insert into t values (:a)", params: ["a"] }, { a: 2 }), []);
+  assert.deepEqual(db.prepare("select a from t").all().map((r) => ({ ...r })), [{ a: 2 }]);
+});
+
+test("sqlite: better-sqlite3's statement that returns no rows is run(), since its all() throws", () => {
+  const calls: Call[] = [];
+  const db = {
+    prepare: (sql: string) => ({
+      reader: !sql.startsWith("insert"),
+      all: (...args: unknown[]) => {
+        if (sql.startsWith("insert")) throw new TypeError("This statement does not return data. Use run() instead");
+        return calls.push({ method: "all", args }), [row];
+      },
+      run: (...args: unknown[]) => (calls.push({ method: "run", args }), { changes: 1 }),
+    }),
+  };
+  assert.deepEqual(execute(db, { dialect: "sqlite", sql: "insert into t values (:a)", params: ["a"] }, { a: 2 }), []);
+  assert.deepEqual(execute(db, lite, { id: 1, name: "ada" }), [row]);
+  assert.deepEqual(calls, [{ method: "run", args: [2] }, { method: "all", args: [1, "ada", 1] }]);
+});
+
+test("sqlite: Cloudflare D1's prepare(sql).bind(...values).all() → { results }", async () => {
+  const bound: unknown[][] = [];
+  const d1 = {
+    batch: async () => [],
+    prepare: () => ({ first: async () => null, bind: (...values: unknown[]) => (bound.push(values), { all: async () => ({ results: [row], success: true, meta: {} }) }) }),
+  };
+  const rows = execute(d1, lite, { id: 1, name: "ada" });
+  assert.ok(rows instanceof Promise);
+  assert.deepEqual(await rows, [row]);
+  assert.deepEqual(bound, [[1, "ada", 1]]);
+});
+
+test("sqlite: @libsql/client and its transactions take execute({ sql, args }) → { rows }", async () => {
+  const calls: unknown[] = [];
+  const tx = { execute: async (stmt: { sql: string; args: unknown[] }) => (calls.push(stmt), { rows: [row], columns: ["id"], rowsAffected: 0 }), executeMultiple: async () => {}, commit: async () => {} };
+  assert.deepEqual(await execute(tx, lite, { id: 1, name: "ada" }), [row]);
+  assert.deepEqual(calls, [{ sql: "select ? as id, ? as name, ? as again", args: [1, "ada", 1] }]);
+});
+
+test("sqlite: sqlite3's callback all(), its errors, and the sqlite package's promise all()", async () => {
+  const failure = Object.assign(new Error("SQLITE_ERROR: near \"selec\": syntax error"), { code: "SQLITE_ERROR" });
+  const sqlite3 = {
+    prepare: () => ({}),
+    exec: () => {},
+    all: (sql: string, values: unknown[], done: (e: Error | null, rows: unknown[]) => void) => setImmediate(() => (sql.includes("selec ") ? done(failure, []) : done(null, [{ values }]))),
+  };
+  assert.deepEqual(await execute(sqlite3, lite, { id: 1, name: "ada" }), [{ values: [1, "ada", 1] }]);
+  await assert.rejects(() => execute(sqlite3, { dialect: "sqlite", sql: "selec 1", params: [] }) as Promise<unknown>, (e) => e === failure);
+  const wrapper = { getDatabaseInstance: () => sqlite3, prepare: async () => ({}), all: async (_: string, values: unknown[]) => [{ values }] };
+  assert.deepEqual(await execute(wrapper, lite, { id: 2, name: "bo" }), [{ values: [2, "bo", 2] }]);
+});
+
+test("sqlite: Bun.sql's SQLite adapter, which has unsafe() and no prepare()", async () => {
+  assert.deepEqual(await execute({ unsafe: async () => [row], commitDistributed: async () => {} }, lite, { id: 1, name: "ada" }), [row]);
+});
+
+test("the driver's own error comes through unchanged", async () => {
+  const duplicate = Object.assign(new Error("duplicate key value violates unique constraint"), { code: "23505" });
+  await assert.rejects(() => execute({ query: async () => Promise.reject(duplicate) }, pg, { id: 1 }) as Promise<unknown>, (e) => e === duplicate);
+  const db = new DatabaseSync(":memory:");
+  assert.throws(() => execute(db, { dialect: "sqlite", sql: "selec 1", params: [] }), /syntax error/);
+});
+
+test("an unsupported client rejects, naming what it has and what reylo takes", async () => {
+  await assert.rejects(() => execute({ connect() {}, end() {} } as never, pg) as Promise<unknown>, (e: TypeError) => e instanceof TypeError && /postgres statement on an object with connect, end\. It takes a client with query\(text, values\)/.test(e.message));
+  await assert.rejects(() => execute({ $client: {}, select() {} } as never, pg) as Promise<unknown>, /pass db\.\$client/);
+  // node:sqlite's tag store has all() for templates; it is not sqlite3's database.
+  const store = new DatabaseSync(":memory:").createTagStore();
+  await assert.rejects(() => execute(store as never, lite, { id: 1, name: "ada" }) as Promise<unknown>, /sqlite statement on an object with .*pass its database, store\.db/);
+  await assert.rejects(() => execute(null as never, my) as Promise<unknown>, /mysql statement on null/);
+  // A pg pool handed to a SQLite statement matches no SQLite shape.
+  await assert.rejects(() => execute({ query: async () => ({ rows: [] }) } as never, lite) as Promise<unknown>, /sqlite statement on an object with query/);
+});
+
+test("parameters may be an array: element i binds params[i], for a named and a positional statement on every dialect", async () => {
+  const seen: [string, unknown[]][] = [];
+  const pgClient = { query: async (text: string, values: unknown[]) => (seen.push([text, values]), { rows: [] }) };
+  const mysqlPool = { query: async () => [[], []] as [unknown, unknown], execute: async (options: { sql: string }, values: unknown[]) => (seen.push([options.sql, values]), [[], []] as [unknown, unknown]) };
+  const d1 = { batch: async () => [], prepare: (text: string) => ({ first: async () => null, bind: (...values: unknown[]) => (seen.push([text, values]), { all: async () => ({ results: [] }) }) }) };
+  const positional: Record<string, QueryModule> = {
+    postgres: { dialect: "postgres", sql: "select $2::text as name, $1::int as id", params: ["1", "2"] },
+    mysql: { dialect: "mysql", sql: "select ? as id, ? as name", params: ["1", "2"] },
+    sqlite: { dialect: "sqlite", sql: "select ?1 as id, ?2 as name, ?1 as again", params: ["1", "2"] },
+  };
+  for (const [client, named, dialect] of [[pgClient, pg, "postgres"], [mysqlPool, my, "mysql"], [d1, lite, "sqlite"]] as const) {
+    seen.length = 0;
+    await execute(client as never, named, [1, "ada"]);
+    await execute(client as never, named, { id: 1, name: "ada" });
+    assert.deepEqual(seen[0], seen[1], `${dialect}: [1, "ada"] binds as { id: 1, name: "ada" }`);
+    seen.length = 0;
+    await execute(client as never, positional[dialect]!, [1, "ada"]);
+    await execute(client as never, positional[dialect]!, { 1: 1, 2: "ada" });
+    assert.deepEqual(seen[0], seen[1], `${dialect}: [1, "ada"] binds as { 1: 1, 2: "ada" }`);
+  }
+  assert.deepEqual(seen.at(-1), ["select ? as id, ? as name, ? as again", [1, "ada", 1]]);
+  // The mapper's rewritten statement binds by `order`, which names params.
+  const unsafe: unknown[][] = [];
+  await execute({ unsafe: async (_: string, values: unknown[]) => (unsafe.push(values), []) }, { ...pg, text: "select $1, $2, $1", order: ["name", "id", "name"] }, [1, "ada"]);
+  assert.deepEqual(unsafe, [["ada", 1, "ada"]]);
+  // runSync takes an array too.
+  assert.deepEqual((execute(new DatabaseSync(":memory:"), lite, [1, "ada"]) as unknown[]).map((r) => ({ ...(r as object) })), [row]);
+});
+
+test("an array shorter than params binds NULL for the rest; a longer one is a TypeError naming both lengths", async () => {
+  const seen: unknown[][] = [];
+  await execute({ unsafe: async (_: string, values: unknown[]) => (seen.push(values), []) }, pg, [1]);
+  assert.deepEqual(seen, [[1, null]]);
+  await assert.rejects(() => execute({ unsafe: async () => [] }, pg, [1, "ada", true]) as Promise<unknown>, (e: TypeError) => e instanceof TypeError && /takes 2 parameters \("id", "name"\); got an array of 3 values/.test(e.message));
+  assert.throws(() => execute(new DatabaseSync(":memory:"), { dialect: "sqlite", sql: "select 1", params: [] }, [1]), /takes 0 parameters \(none\); got an array of 1 value\./);
+  await assert.rejects(() => execute({ unsafe: async () => [] }, pg, "ada" as never) as Promise<unknown>, /must be an object .* or an array .*; got ada/);
+});
+
+test("runSync: on a synchronous client the value comes back at once and an error is thrown, so db.transaction(fn) rolls back", () => {
+  const db = new DatabaseSync(":memory:");
+  db.exec("create table users (id integer primary key, email text unique)");
+  const insert = defineQuery<{ email: string }, { id: number }, "one", "sqlite">({ dialect: "sqlite", sql: "insert into users (email) values (:email) returning id", params: ["email"], cardinality: "one" });
+  const count = defineQuery<{}, { n: number }, "one", "sqlite">({ dialect: "sqlite", sql: "select count(*) as n from users", params: [], cardinality: "one" });
+  // better-sqlite3's and bun:sqlite's transaction(fn): BEGIN, the function, then COMMIT, or ROLLBACK if it throws.
+  const transaction = (fn: () => void) => {
+    db.exec("begin");
+    try {
+      fn();
+      db.exec("commit");
+    } catch (e) {
+      db.exec("rollback");
+      throw e;
+    }
+  };
+  const first = insert.runSync(db, { email: "ada@example.com" });
+  assert.equal(first.id, 1);
+  assert.throws(() => transaction(() => {
+    insert.runSync(db, { email: "bo@example.com" });
+    insert.runSync(db, { email: "ada@example.com" }); // the unique constraint fails here
+  }), /UNIQUE constraint failed/);
+  assert.equal(count.runSync(db).n, 1, "the transaction's first insert was rolled back");
+  assert.throws(() => defineQuery<{}, unknown, "one", "sqlite">({ dialect: "sqlite", sql: "select 1 where 0", params: [], cardinality: "one" }).runSync(db), /Expected exactly one row, got 0/);
+});
+
+test("run: on a synchronous client the statement runs at once, and its rows and its error still come through the promise", async () => {
+  const db = new DatabaseSync(":memory:");
+  db.exec("create table users (id integer primary key, email text unique)");
+  const insert = defineQuery<{ email: string }, { id: number }, "one", "sqlite">({ dialect: "sqlite", sql: "insert into users (email) values (:email) returning id", params: ["email"], cardinality: "one" });
+  const pending = insert.run(db, { email: "ada@example.com" });
+  assert.ok(pending instanceof Promise);
+  assert.equal((db.prepare("select count(*) as n from users").get() as { n: number }).n, 1, "the insert ran before run returned");
+  assert.equal((await pending).id, 1);
+  let duplicate: unknown;
+  assert.doesNotThrow(() => void (duplicate = insert.run(db, { email: "ada@example.com" })));
+  await assert.rejects(duplicate as Promise<unknown>, /UNIQUE constraint failed/);
+});
+
+test("runSync: a client that answers through a promise, or a Postgres or MySQL statement, is refused before anything runs", () => {
+  let called = false;
+  const libsql = { execute: async () => ((called = true), { rows: [] }), executeMultiple: async () => {} };
+  const lite = defineQuery<{}, unknown, "many", "sqlite">({ dialect: "sqlite", sql: "select 1", params: [] });
+  assert.throws(() => lite.runSync(libsql as never), /runSync takes a synchronous SQLite client .*answers through a promise\. run takes every client/);
+  const pgq = defineQuery<{}, unknown, "many", "postgres">({ dialect: "postgres", sql: "select 1", params: [] });
+  assert.throws(() => pgq.runSync({ query: async () => ((called = true), { rows: [] }) } as never), /a postgres statement has none/);
+  assert.equal(called, false);
+});
+
+test("run: on an asynchronous client every failure is a rejection, never a throw", async () => {
+  const q = defineQuery<{ id: number }, { id: number }, "maybeOne", "postgres">({ dialect: "postgres", sql: "select :id::int as id", params: ["id"], cardinality: "maybeOne" });
+  const two = { query: async () => ({ rows: [{ id: 1 }, { id: 2 }] }) };
+  let returned: unknown;
+  assert.doesNotThrow(() => void (returned = q.run(two, { id: 1 })));
+  await assert.rejects(returned as Promise<unknown>, /Expected at most one row, got 2/);
+  await assert.rejects(q.run({} as never, { id: 1 }), TypeError);
+  assert.deepEqual(await q.with({ query: async () => ({ rows: [] }) })({ id: 1 }), null);
+});

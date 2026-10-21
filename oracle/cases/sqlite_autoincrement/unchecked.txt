@@ -1,0 +1,1 @@
+a_full.sql: database or disk is full

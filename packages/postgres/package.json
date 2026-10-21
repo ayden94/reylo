@@ -1,0 +1,16 @@
+{
+  "name": "@reylosql/postgres",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Reylo's analysis engine for Postgres: the WebAssembly artifact reylo loads to type .sql files against a Postgres database. Install it beside reylo, at reylo's version.",
+  "license": "MIT",
+  "author": "Colin McDonnell",
+  "type": "module",
+  "exports": {
+    "./engine.wasm": "./engine.wasm",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "engine.wasm"
+  ]
+}

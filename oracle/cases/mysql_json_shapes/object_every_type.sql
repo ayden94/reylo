@@ -1,0 +1,1 @@
+select json_object('flag', flag, 'score', score, 'ratio', ratio, 'born', born, 'seen', seen, 'at', at, 'doc', doc, 'raw', raw, 'kind', kind, 'bits', bits, 'y', y, 'big', big, 'tags', tags) as o from users

@@ -1,0 +1,1 @@
+replace into users (id, name) values (:id, :name)

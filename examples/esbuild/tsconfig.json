@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "esnext",
+    "module": "nodenext",
+    "types": ["node"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true
+  },
+  "contentMappers": [
+    { "package": "reylo", "extensions": [".sql"] }
+  ],
+  "include": ["src", "build.ts", "setup.ts"]
+}

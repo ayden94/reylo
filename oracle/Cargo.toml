@@ -1,0 +1,24 @@
+[package]
+name = "reylo-oracle"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Runs the engine against live databases: each case's statements are analyzed through a real describe and catalog, compared with the expected types and row counts, then executed over seeded data to check that no value contradicts the types."
+
+[[bin]]
+name = "reylo-oracle"
+path = "src/main.rs"
+
+[dependencies]
+reylo-engine-core = { path = "../engine/core" }
+reylo-engine-postgres = { path = "../engine/postgres" }
+reylo-engine-sqlite = { path = "../engine/sqlite" }
+reylo-engine-mysql = { path = "../engine/mysql" }
+serde_json = { version = "1", features = ["preserve_order", "unbounded_depth"] }
+# The same features as Reylo Framework's, so the two share one build of each in the workspace's target.
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time", "fs", "io-util", "process"] }
+tokio-postgres = "0.7"
+rusqlite = { version = "0.39", features = ["bundled", "column_decltype", "column_metadata", "hooks", "functions"] }
+# Pure Rust (`minimal-rust`: no TLS, flate2's Rust backend): its `Statement` carries the prepare's
+# column and parameter definitions whole, type code, flags and character set, as mysql2 reports them.
+mysql_async = { version = "0.37", default-features = false, features = ["minimal-rust"] }

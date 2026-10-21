@@ -1,0 +1,21 @@
+{
+  "name": "reylo-example-bun",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "setup": "bun setup.ts",
+    "typecheck": "tsc --noEmit --runExternalCode",
+    "start": "bun src/main.ts",
+    "test": "bun test",
+    "build": "bun build.ts",
+    "start:dist": "bun dist/main.js"
+  },
+  "dependencies": {
+    "reylo": "link:../../dist/reylo"
+  },
+  "devDependencies": {
+    "@reylosql/sqlite": "link:../../dist/sqlite",
+    "@types/bun": "^1.4.3",
+    "typescript": "7.1.0-beta"
+  }
+}

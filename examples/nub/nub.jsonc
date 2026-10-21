@@ -1,0 +1,4 @@
+{
+  // Reylo's preload: `nub main.ts` imports .sql files with no flag
+  "preload": ["reylo/register"]
+}

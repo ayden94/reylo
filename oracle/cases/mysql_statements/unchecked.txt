@@ -1,0 +1,30 @@
+alter_table.sql: the engine refused it: reylo10: only SELECT, TABLE, VALUES, INSERT, REPLACE, UPDATE and DELETE statements are typed
+ambiguous.sql: the engine refused it: reylo6: Column 'id' in field list is ambiguous (ER_NON_UNIQ_ERROR)
+begin.sql: the engine refused it: reylo10: only SELECT, TABLE, VALUES, INSERT, REPLACE, UPDATE and DELETE statements are typed
+call_procedure.sql: the engine refused it: reylo10: only SELECT, TABLE, VALUES, INSERT, REPLACE, UPDATE and DELETE statements are typed
+create_table.sql: the engine refused it: reylo10: only SELECT, TABLE, VALUES, INSERT, REPLACE, UPDATE and DELETE statements are typed
+describe.sql: the engine refused it: reylo10: only SELECT, TABLE, VALUES, INSERT, REPLACE, UPDATE and DELETE statements are typed
+do_statement.sql: the engine refused it: reylo10: only SELECT, TABLE, VALUES, INSERT, REPLACE, UPDATE and DELETE statements are typed
+drop_table.sql: the engine refused it: reylo10: only SELECT, TABLE, VALUES, INSERT, REPLACE, UPDATE and DELETE statements are typed
+executable_comment_ddl.sql: the engine refused it: reylo10: MySQL runs the text of a /*! … */ comment as SQL where the server's version allows it, so the statement is not the one written outside it: write it as plain SQL
+executable_comment_filter.sql: the engine refused it: reylo10: MySQL runs the text of a /*! … */ comment as SQL where the server's version allows it, so the statement is not the one written outside it: write it as plain SQL
+executable_comment_future.sql: the engine refused it: reylo10: MySQL runs the text of a /*! … */ comment as SQL where the server's version allows it, so the statement is not the one written outside it: write it as plain SQL
+executable_comment_versioned.sql: the engine refused it: reylo10: MySQL runs the text of a /*! … */ comment as SQL where the server's version allows it, so the statement is not the one written outside it: write it as plain SQL
+executable_comment_whole.sql: the engine refused it: reylo10: MySQL runs the text of a /*! … */ comment as SQL where the server's version allows it, so the statement is not the one written outside it: write it as plain SQL
+explain.sql: the engine refused it: reylo10: only SELECT, TABLE, VALUES, INSERT, REPLACE, UPDATE and DELETE statements are typed
+lock_tables.sql: the engine refused it: reylo10: only SELECT, TABLE, VALUES, INSERT, REPLACE, UPDATE and DELETE statements are typed
+placeholder_dollar.sql: the engine refused it: reylo6: Unknown column '$1' in 'where clause' (ER_BAD_FIELD_ERROR)
+placeholder_mixed.sql: the engine refused it: reylo2: Named and positional parameters cannot be mixed in one statement.
+placeholder_numbered.sql: the engine refused it: reylo1: MySQL has no numbered placeholder ?1; write ? for each value, or :name
+select_into_outfile.sql: The MySQL server is running with the --secure-file-priv option so it cannot execute this statement (1290)
+set_variable.sql: the engine refused it: reylo10: only SELECT, TABLE, VALUES, INSERT, REPLACE, UPDATE and DELETE statements are typed
+show_tables.sql: the engine refused it: reylo10: only SELECT, TABLE, VALUES, INSERT, REPLACE, UPDATE and DELETE statements are typed
+syntax_error.sql: the engine refused it: reylo6: You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '' at line 1 (ER_PARSE_ERROR)
+truncate.sql: the engine refused it: reylo10: only SELECT, TABLE, VALUES, INSERT, REPLACE, UPDATE and DELETE statements are typed
+two_statements.sql: the engine refused it: reylo10: expected exactly one statement
+unknown_column.sql: the engine refused it: reylo6: Unknown column 'nope' in 'field list' (ER_BAD_FIELD_ERROR)
+unknown_function.sql: the engine refused it: reylo6: FUNCTION reylo_oracle_mysql_statements.nope does not exist (ER_SP_DOES_NOT_EXIST)
+unknown_keyword.sql: the engine refused it: reylo6: You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'selec id from users' at line 1 (ER_PARSE_ERROR)
+unknown_table.sql: the engine refused it: reylo6: Table 'reylo_oracle_mysql_statements.nowhere' doesn't exist (ER_NO_SUCH_TABLE)
+use_database.sql: the engine refused it: reylo10: only SELECT, TABLE, VALUES, INSERT, REPLACE, UPDATE and DELETE statements are typed
+wrong_group.sql: the engine refused it: reylo6: In aggregated query without GROUP BY, expression #1 of SELECT list contains nonaggregated column 'reylo_oracle_mysql_statements.users.id'; this is incompatible with sql_mode=only_full_group_by (ER_MIX_OF_GROUP_FUNC_AND_FIELDS)

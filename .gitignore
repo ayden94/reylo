@@ -1,0 +1,43 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+coverage/
+
+# Local agent / loop state — not part of the repo
+.claude/
+.frizz/
+
+# Cargo workspace build output (engine/, framework/engine/ and pg-extension/)
+target/
+
+# Lab emit output
+lab/**/dist/
+
+# The JSON Schema Test Suite, fetched by lab/json-schema-suite/run.ts
+lab/json-schema-suite/.suite/
+
+# Mapper cache written into lab projects
+lab/**/.reylo/
+
+# SQLite lab database file
+lab/sqlite/lab.db*
+
+# Example projects: mapper cache and local env
+examples/**/.reylo/
+
+# The Postgres extension's build outputs: the shim, its objects, and pg_regress's own files.
+pg-extension/*.so
+pg-extension/*.dylib
+pg-extension/src/*.o
+pg-extension/src/*.bc
+pg-extension/test/results/
+pg-extension/test/regression.diffs
+pg-extension/test/regression.out
+pg-extension/test/log/
+
+# Python bytecode
+__pycache__/

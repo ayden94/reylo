@@ -1,0 +1,30 @@
+import { AgentPrompt, docsMdxComponents } from 'docs-kit/components';
+import type { MDXComponents } from 'mdx/types';
+import type { ReactNode } from 'react';
+import { Dialect, DialectTabs } from './dialect-tabs';
+import { HowItWorksDiagram } from './how-it-works-diagram';
+
+/**
+ * docs-kit's components (headings with the link icon and the copy-as-Markdown button, accordions,
+ * tabs, `<Details>`, code tabs with the file name in the strip, Twoslash's popups) and Reylo's own.
+ */
+export function getMDXComponents(components?: MDXComponents) {
+  return docsMdxComponents({
+    // The setup instructions for a coding agent at the top of Setup.
+    AgentPrompt: ({ children }: { children: ReactNode }) => <AgentPrompt title="Set up Reylo with an agent">{children}</AgentPrompt>,
+    // The figure under How it works (components/how-it-works-diagram.tsx).
+    HowItWorksDiagram,
+    // One dialect choice for the page: <DialectTabs> with a strip, <DialectTabs follow> without,
+    // each holding <Dialect value="Postgres|MySQL|SQLite"> panels, in step with the code tabs
+    // marked tab-group="dialect" (components/dialect-tabs.tsx).
+    DialectTabs,
+    Dialect,
+    ...components,
+  });
+}
+
+export const useMDXComponents = getMDXComponents;
+
+declare global {
+  type MDXProvidedComponents = ReturnType<typeof getMDXComponents>;
+}

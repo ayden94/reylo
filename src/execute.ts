@@ -1,0 +1,490 @@
+// Runtime execution over a caller-supplied client, typed structurally so that
+// reylo has no dependency (not even a type-only one) on any driver package.
+// Each type is the smallest slice of the real driver that execution needs, and
+// the query's dialect selects which clients are accepted at compile time. A
+// transaction, savepoint, reserved or checked-out connection has the same shape
+// as the client it came from, so it is accepted wherever that client is.
+
+import { bunRows, neonCallable, postgresJs, queryPostgres } from "./decode.ts";
+import { mariadb, mysql2, planetscale } from "./decode-mysql.ts";
+import { normalize, runSyncSqlite } from "./decode-sqlite.ts";
+import type { Columns } from "./values.ts";
+import type { EngineType } from "./engine-type.ts";
+import { lexPlaceholders } from "./lex.ts";
+import type { JsonSchema } from "./engine-type.ts";
+import { cloneJson, validate, withDefaults } from "./json-schema.ts";
+import { checkCast, prepareRows, variant, zoned, type Structured } from "./rows.ts";
+import { differences, due, passed, staleError, type Fresh } from "./fresh.ts";
+
+export type Dialect = "postgres" | "mysql" | "sqlite";
+
+/**
+ * pg's Pool, Client and PoolClient; PGlite and its transactions; Neon's Pool and Client;
+ * pg-promise's database, tasks and transactions; @vercel/postgres: query(text, values) → { rows }
+ * (pg-promise resolves to the rows themselves, and its types say any).
+ */
+export type PgQueryClient = {
+  query(text: string, values?: any[]): PromiseLike<{ rows: unknown[] }>;
+  /** mariadb's query() resolves to any as well; its escapeId() tells it apart. */
+  escapeId?: never;
+};
+/**
+ * Neon's neon() function from 1.0: query(text, values) → rows. Its transaction() tells it from
+ * mysql2/promise, whose query(text, values) resolves to a [rows, fields] array as well.
+ */
+export type NeonHttpClient = {
+  query(text: string, values?: any[]): PromiseLike<Record<string, unknown>[]>;
+  transaction(...args: any[]): unknown;
+};
+/** postgres.js `sql`, its begin and savepoint transactions and reserved connections; Bun.sql, likewise: unsafe(text, params) → rows. */
+export type UnsafeClient = {
+  unsafe(text: string, params?: any[]): PromiseLike<unknown[]>;
+};
+/** Bun.sql on MySQL or SQLite; commitDistributed() tells it from postgres.js, which has unsafe() too. */
+export type BunSqlClient = UnsafeClient & { commitDistributed(name: string): Promise<unknown> };
+/** Neon's neon() function before 1.0, which is called with (text, params). */
+export type CallableClient = (text: string, params?: any[]) => PromiseLike<unknown[] | { rows: unknown[] }>;
+/**
+ * mysql2/promise Pool, Connection and PoolConnection (→ [rows, fields]); PlanetScale's Connection,
+ * Client and transaction from 1.x (→ { rows }). PlanetScale 2.0 binds no parameters, so its
+ * execute(query, options) is not one of these.
+ */
+export type MysqlExecuteClient = {
+  execute(text: string, values?: any[]): PromiseLike<[unknown, unknown] | { rows: unknown[]; statement: string }>;
+};
+/** mysql2's callback Pool, Connection and PoolConnection, run through their promise() wrapper. */
+export type Mysql2CallbackClient = { promise(): MysqlExecuteClient };
+/** mariadb's Pool, Connection and PoolConnection: query(text, values) → rows, or an OK packet for a write. */
+export type MariadbClient = {
+  query(text: string, values?: any): Promise<unknown>;
+  batch(text: string, values?: any): Promise<unknown>;
+};
+/** The same from mariadb's callback API (`mariadb/callback`): query(text, values, callback). */
+export type MariadbCallbackClient = {
+  query(text: string, values: any, callback: (error: Error | null, rows?: any) => void): void;
+  batch(text: string, values: any, callback: (error: Error | null, result?: any) => void): void;
+};
+/**
+ * better-sqlite3, node:sqlite's DatabaseSync and bun:sqlite's Database, which answer at once:
+ * `runSync` takes them and returns the result itself, so it works inside their
+ * `db.transaction(fn)`, whose function must not await.
+ */
+export type SyncSqliteClient = {
+  prepare(sql: string): { all(...params: any[]): unknown[] };
+};
+/** Cloudflare D1's database and sessions: prepare(sql).bind(...values).all() → { results }. */
+export type D1Client = {
+  prepare(sql: string): { bind(...values: any[]): { all(): Promise<{ results: unknown[] }> } };
+};
+/** @libsql/client's Client and Transaction: execute({ sql, args }) → { rows }. */
+export type LibsqlClient = {
+  execute(statement: { sql: string; args: any[] }): Promise<{ rows: unknown[] }>;
+  /** mariadb's execute() takes an object with sql and resolves to any; executeMultiple() tells libSQL apart. */
+  executeMultiple(sql: string): Promise<unknown>;
+};
+/** The sqlite3 package's callback Database: all(sql, params, callback). */
+export type Sqlite3Client = {
+  all(sql: string, params: any[], callback: (error: Error | null, rows: any[]) => void): unknown;
+};
+/** The sqlite package's promise Database: all(sql, params) → rows. */
+export type SqlitePromiseClient = {
+  all(sql: string, params?: any): Promise<unknown[]>;
+  getDatabaseInstance(): unknown;
+};
+
+/** Every Postgres client `run` takes, or a transaction, savepoint or connection taken from one. */
+export type PostgresClient = PgQueryClient | NeonHttpClient | UnsafeClient | CallableClient;
+/** Every MySQL client `run` takes, or a transaction or connection taken from one. */
+export type MysqlClient = MysqlExecuteClient | Mysql2CallbackClient | MariadbClient | MariadbCallbackClient | BunSqlClient;
+/** Every SQLite client `run` takes, or a transaction taken from one. */
+export type SqliteClient = SyncSqliteClient | D1Client | LibsqlClient | Sqlite3Client | SqlitePromiseClient | BunSqlClient;
+
+// Each dialect's clients are one named union, so a hover over `run` reads
+// `run(client: PostgresClient, …)` rather than listing every client's shape.
+export type ClientFor<D extends Dialect> = D extends "postgres" ? PostgresClient : D extends "mysql" ? MysqlClient : SqliteClient;
+
+/** The clients `runSync` takes: the synchronous SQLite drivers, and none for Postgres or MySQL. */
+export type SyncClientFor<D extends Dialect> = D extends "sqlite" ? SyncSqliteClient : never;
+
+export type QueryModule<D extends Dialect = Dialect> = {
+  readonly dialect: D;
+  /** The statement as written, with Reylo's placeholders (`:id`) left in place: the query's `raw`. */
+  readonly sql: string;
+  /** Parameter names in placeholder order, so an object of params binds positionally. */
+  readonly params: readonly string[];
+  /** The statement as the engine compiled it for the database, when a build step ran: the query's `sql`. A query without it is compiled by `compile` below. */
+  readonly text?: string | undefined;
+  /** The binding order for `text`: one name per placeholder of the rewritten statement. */
+  readonly order?: readonly string[] | undefined;
+  /** What the analysis found of each parameter, by name (every build step puts it in the module). */
+  readonly inputs?: Inputs | undefined;
+  /** Each output column's name and kind (src/values.ts), in order: what the run time gives each value (every build step puts it in the module). */
+  readonly columns?: Columns | undefined;
+  /** Each structured parameter in insert position, with the lists of `text` the run time writes again for the keys a call carries. */
+  readonly structured?: readonly Structured[] | undefined;
+  /** The catalog facts the statement relied on, checked before it runs (src/fresh.ts). */
+  readonly fresh?: Fresh | undefined;
+  /** The `.sql` file the module was built from, relative to the project, for messages. */
+  readonly source?: string | undefined;
+};
+
+/**
+ * Each parameter by name: `type` is the engine's type for it. The run time reads it where a
+ * driver binds a value of one type wrong (an array to a SQL array on postgres.js and Bun.sql, to
+ * JSON on pg); a query without it, defined by hand or built before 2026-10-12, binds every value
+ * as it is. A typed JSON parameter (docs/typed-json-params.md) carries its schema beside it, and
+ * a parameter cast with `::` on MySQL or SQLite the type as written (src/rows.ts, `checkCast`).
+ */
+export type Inputs = Readonly<Record<string, { readonly type: EngineType; readonly schema?: JsonSchema; readonly cast?: string }>>;
+
+type AnyClient = Record<string, any> & ((...args: any[]) => any);
+
+/**
+ * The parameters: an object keyed by name, or an array whose element i binds the query's
+ * `params[i]` (for `$1` and `$2`, `params` is `["1", "2"]`), for callers that hold the values
+ * in order already.
+ */
+export type ParamsInput = Record<string, unknown> | readonly unknown[];
+
+/**
+ * Runs the statement and returns its rows (an empty array for a statement that returns none).
+ * On a synchronous SQLite client the rows come back at once and an error is thrown; on every
+ * other client they come back as a promise, which rejects with the driver's own error.
+ */
+export function execute<D extends Dialect>(
+  client: ClientFor<D>,
+  query: QueryModule<D>,
+  params: ParamsInput = {},
+): unknown[] | Promise<unknown[]> {
+  const c = client as AnyClient;
+  if (query.dialect === "sqlite" && isSyncSqlite(c)) return executeSyncSqlite(c, query, params);
+  return executeAsync(c, query, params);
+}
+
+/** The synchronous path alone, for `runSync`: any other client is refused before anything runs. */
+export function executeSync<D extends Dialect>(client: SyncClientFor<D>, query: QueryModule<D>, params: ParamsInput = {}): unknown[] {
+  const c = client as unknown as AnyClient;
+  const refuse = (why: string) => new TypeError(`runSync takes a synchronous SQLite client (better-sqlite3, node:sqlite or bun:sqlite); ${why}. run takes every client.`);
+  if (query.dialect !== "sqlite") throw refuse(`a ${query.dialect} statement has none`);
+  if (!isSyncSqlite(c)) throw refuse("this client answers through a promise");
+  const rows = executeSyncSqlite(c, query, params);
+  if (Array.isArray(rows)) return rows;
+  rows.catch(() => {});
+  throw refuse("this client's statement answered with a promise");
+}
+
+function executeSyncSqlite(c: AnyClient, query: QueryModule, params: ParamsInput): unknown[] | Promise<unknown[]> {
+  if (query.fresh && due(query)) {
+    let rows: unknown[] | undefined;
+    try {
+      rows = c.prepare(query.fresh.query).all();
+    } catch {}
+    const lines = (rows && differences(query.fresh, rows)) ?? [];
+    if (lines.length) throw staleError(query.source, lines);
+    passed(query);
+  }
+  const { text, values } = statement(query, params);
+  return runSyncSqlite(c, text, values, query.columns);
+}
+
+// A SQLite client with prepare() whose statements answer at once. D1 (batch()), sqlite3 and
+// sqlite (all() on the database), libSQL (execute()) and Bun.sql (unsafe()) are asynchronous.
+function isSyncSqlite(c: AnyClient | null | undefined): boolean {
+  return (
+    c != null &&
+    typeof c.prepare === "function" &&
+    typeof c.batch !== "function" &&
+    typeof c.all !== "function" &&
+    typeof c.execute !== "function" &&
+    typeof c.unsafe !== "function"
+  );
+}
+
+async function executeAsync(c: AnyClient | null | undefined, query: QueryModule, params: ParamsInput): Promise<unknown[]> {
+  if (c == null || (typeof c !== "object" && typeof c !== "function")) throw unsupported(c, query.dialect);
+  // The catalog facts the statement relied on, read again through the same client.
+  if (query.fresh && due(query)) {
+    const fresh = query.fresh;
+    let rows: unknown[] | undefined;
+    try {
+      rows = await executeAsync(c, { dialect: query.dialect, sql: fresh.query, params: [], text: fresh.query, order: [] }, {});
+    } catch {}
+    const lines = (rows && differences(fresh, rows)) ?? [];
+    if (lines.length) throw staleError(query.source, lines);
+    passed(query);
+  }
+  const { text, values, names } = statement(query, params);
+  const type = (i: number) => query.inputs?.[names[i]!]?.type;
+  const isJsonParam = (v: unknown, i: number) => isJsonValue(query, names[i]!, v);
+  switch (query.dialect) {
+    case "postgres": {
+      // An array for a SQL array parameter goes as its literal text, which the server reads as
+      // the parameter's type, written as pg writes it: Bun.sql binds no JavaScript array
+      // (`any($1)` failed with "insufficient data left in message"), postgres.js types an
+      // array by its first element ("cannot cast type boolean to boolean[]" for `$1::bool[]`),
+      // and the copy of pg inside Neon's Pool and Client threw on a Uint8Array element and
+      // left the connection out of step. Each element of a `jsonb[]` is a JSON value.
+      const bound = values.map((v, i) => {
+        const t = type(i);
+        return Array.isArray(v) && t?.kind === "array" ? arrayLiteral(isJson(t.of.kind) ? v.map((e) => (e == null ? e : JSON.stringify(e))) : v) : v;
+      });
+      // A JSON parameter goes to pg's family, PGlite and Neon as its JSON text. postgres.js and
+      // Bun.sql serialize a value for a JSON parameter themselves, so JSON text would be stored
+      // as a JSON string; and they type a boolean, a number (Bun.sql) or an array of either by
+      // its JavaScript type ("cannot cast type boolean to jsonb"). An object whose toJSON()
+      // returns the value is bound as JSON and serialized to exactly its JSON text.
+      const json = () => bound.map((v, i) => (isJsonParam(v, i) ? JSON.stringify(v) : v));
+      // query() before unsafe(): Neon's neon() has both, and its unsafe() builds a fragment
+      // for a template instead of running anything. Reylo decodes every value itself (decode.ts).
+      if (typeof c.query === "function") return await queryPostgres(c, text, json(), query.columns);
+      if (typeof c.unsafe === "function") {
+        // postgres.js reads a string for a date or time parameter through `new Date(x)` and binds
+        // its toISOString(), so a timestamp's wall-clock time moved by the app's offset, and
+        // `infinity` or a zone name failed with "Invalid time value". Declared `unknown` (705), it
+        // is sent as the text, which the server reads as the parameter's type, as it would an
+        // undeclared one. Bun.sql (commitDistributed()) sends the text and has no typed().
+        const bun = typeof c.commitDistributed === "function";
+        const asText = typeof c.typed === "function" && !bun;
+        const mapped = bound.map((v, i) => (isJsonParam(v, i) ? { toJSON: () => v } : asText && typeof v === "string" && isTime(type(i)) ? c.typed(v, 705) : v));
+        return bun ? bunRows(await c.unsafe(text, mapped), query.columns) : await postgresJs(c, text, mapped, query.columns);
+      }
+      if (typeof c === "function") return await neonCallable(c, text, json().map(asByteaHex), query.columns);
+      break;
+    }
+    case "mysql": {
+      if (typeof c.unsafe === "function") return bunRows(await c.unsafe(text, values), query.columns);
+      // mariadb, checked before execute() because it has one too (returning rows, not a pair).
+      // Its callback API (mariadb/callback) answers through the callback and returns a command
+      // object; its promise API returns a promise and ignores the callback.
+      if (typeof c.batch === "function" && typeof c.query === "function") return await mariadb(c, text, values.map(asBuffer), query.columns);
+      // mysql2's callback API: the promise() wrapper runs on the same connection.
+      const m = typeof c.promise === "function" ? c.promise() : c;
+      if (typeof m.execute === "function") {
+        // mysql2 has query() beside execute(); PlanetScale's Connection, Client and transaction do not.
+        return typeof m.query === "function" ? await mysql2(m, text, values, query.columns) : await planetscale(m, text, values, query.columns);
+      }
+      break;
+    }
+    case "sqlite": {
+      // The driver's rows, each value given its kind (decode-sqlite.ts).
+      const columns = query.columns;
+      if (typeof c.unsafe === "function") return normalize(await c.unsafe(text, values), columns);
+      if (typeof c.execute === "function") return normalize((await c.execute({ sql: text, args: values })).rows, columns);
+      if (typeof c.getDatabaseInstance === "function") return normalize(await c.all(text, values), columns);
+      if (typeof c.all === "function" && typeof c.exec === "function") {
+        return normalize(
+          await new Promise<unknown[]>((resolve, reject) => c.all(text, values, (error: Error | null, rows: unknown[]) => (error ? reject(error) : resolve(rows)))),
+          columns,
+        );
+      }
+      if (typeof c.prepare === "function") {
+        const prepared = c.prepare(text);
+        if (typeof prepared.first === "function") return normalize((await prepared.bind(...values).all()).results, columns, { d1: true });
+        return normalize(await prepared.all(...values), columns);
+      }
+      break;
+    }
+  }
+  throw unsupported(c, query.dialect);
+}
+
+// The rows are bound positionally in every dialect. A value left out binds NULL, as pg,
+// PGlite, better-sqlite3 and Bun.sql already do; postgres.js, mysql2, node:sqlite and libSQL
+// would reject it instead. An array shorter than `params` leaves the rest out.
+function statement(query: QueryModule, input: ParamsInput) {
+  let params: Record<string, unknown>;
+  if (Array.isArray(input)) {
+    if (input.length > query.params.length) {
+      throw new TypeError(`The statement takes ${query.params.length} parameter${query.params.length === 1 ? "" : "s"} (${query.params.map((name) => JSON.stringify(name)).join(", ") || "none"}); got an array of ${input.length} value${input.length === 1 ? "" : "s"}.`);
+    }
+    params = Object.fromEntries(query.params.map((name, i) => [name, input[i]]));
+  } else if (input === null || typeof input !== "object") {
+    throw new TypeError(`The parameters must be an object keyed by parameter name (or by number, { 1: ... }, for positional placeholders), or an array in the order of the query's params; got ${String(input)}.`);
+  } else params = input as Record<string, unknown>;
+  // The build step already compiled the statement; only the values need ordering.
+  const compiled = compile(query);
+  const bound: { text: string; values: unknown[]; names: readonly string[] } = { text: compiled.text, values: compiled.order.map((name) => value(params, name)), names: compiled.order };
+  bound.names.forEach((name, i) => {
+    const type = query.inputs?.[name]?.type;
+    // A typed JSON parameter (`:p::jsonb('…')`): a value left out takes the schema's default, a
+    // key under `properties` too, and the value is checked against the schema before the
+    // statement runs (docs/typed-json-params.md). Null is SQL NULL, whose type the statement says.
+    const schema = query.inputs?.[name]?.schema;
+    if (schema !== undefined) {
+      let v = params[name];
+      if (v === undefined && schema !== null && typeof schema === "object" && "default" in schema) v = cloneJson(schema.default);
+      if (v !== undefined && v !== null) {
+        v = withDefaults(schema, v);
+        const failure = validate(schema, v);
+        if (failure) throw new TypeError(`Parameter "${name}"${failure.path ? ` at ${failure.path}` : ""} ${failure.message}.`);
+      }
+      bound.values[i] = v === undefined ? null : v;
+      return;
+    }
+    // A structured parameter is checked against its column list and written as the JSON the
+    // statement reads; in an insert, its lists name only the keys the call carries.
+    if (type?.kind === "rows") {
+      const structured = query.structured?.find((s) => s.name === name);
+      const prepared = prepareRows(name, type, bound.values[i], query.dialect, structured !== undefined);
+      bound.values[i] = prepared.value;
+      if (structured) bound.text = variant(bound.text, structured, type.fields, prepared.present);
+      return;
+    }
+    // A `::type` written on MySQL or SQLite, whose cast turns a value it cannot read into 0 or
+    // NULL: the value is checked against the type as written.
+    const cast = query.inputs?.[name]?.cast;
+    if (cast !== undefined && type !== undefined) checkCast(name, cast, type, bound.values[i], query.dialect);
+    checkTime(type, name, bound.values[i]);
+  });
+  // Every MySQL and SQLite driver binds JSON text as text, which the database reads as JSON (a
+  // structured parameter's is written already).
+  if (query.dialect !== "postgres") bound.values = bound.values.map((v, i) => (isJsonValue(query, bound.names[i]!, v) && query.inputs?.[bound.names[i]!]?.type.kind !== "rows" ? JSON.stringify(v) : v));
+  return bound;
+}
+
+function value(params: Record<string, unknown>, name: string) {
+  const v = params[name];
+  return v === undefined ? null : v;
+}
+
+// A binary parameter is typed Uint8Array, and every driver binds one as it is (pg-promise too,
+// since it gets { text, values }) but two (lab/driver-matrix, S1c). mariadb writes any value
+// that is not a Buffer as JSON, so a plain Uint8Array (TextEncoder's, getRandomValues') arrived
+// as the text {"0":1,"1":2,"2":255}: it gets a Buffer over the same memory, where a Buffer
+// exists (not in every Worker). Neon's neon() before 0.10 sends a Buffer as JSON as well, so it
+// gets Postgres's hex form, `\x0102ff`, which 0.10 and later send for a Buffer themselves.
+function asBuffer(v: unknown) {
+  // Named structurally, so that a project without Node's types can type-check the module.
+  const NodeBuffer = (globalThis as { Buffer?: { isBuffer(v: unknown): boolean; from(buffer: ArrayBufferLike, offset: number, length: number): Uint8Array } }).Buffer;
+  return v instanceof Uint8Array && NodeBuffer !== undefined && !NodeBuffer.isBuffer(v) ? NodeBuffer.from(v.buffer, v.byteOffset, v.byteLength) : v;
+}
+
+const isJson = (kind: EngineType["kind"] | undefined) => kind === "json" || kind === "object" || kind === "list" || kind === "rows";
+
+// A JSON parameter's value is a JavaScript value, which reaches the database as its JSON text
+// (JSON.stringify), so a string is a JSON string on every driver; null is SQL NULL. Each driver
+// left to itself did something else (docs/driver-decoding.md, 2026-10-12): pg wrote an array as
+// an array literal and a string as raw JSON text, mariadb expanded an array into a list, the
+// SQLite drivers refused an object, and mysql2 bound 5 as 5.0.
+function isJsonValue(query: QueryModule, name: string, v: unknown): boolean {
+  return v != null && isJson(query.inputs?.[name]?.type.kind);
+}
+
+// A date or time value's type says whether it has a zone (src/render.ts; the maintainer,
+// 2026-10-12), and a value that would be read in a zone nobody chose is refused before the
+// statement runs. A `timestamp` or a `date` (MySQL's DATETIME and TIMESTAMP are the engine's
+// `timestamp`) takes no Date: pg and mysql2 wrote its wall-clock time in the app's zone,
+// postgres.js in the server's, PGlite and Bun.sql in UTC, and Bun.sql's `date` failed in every
+// zone. A string for a `timestamptz` names its zone: without one the server reads it in the
+// session's TimeZone, which the driver or the server sets.
+
+const isTime = (type: EngineType | undefined) => type?.kind === "scalar" && type.name.split("|").every((part) => part === "timestamp" || part === "timestamptz" || part === "date");
+
+function checkTime(type: EngineType | undefined, name: string, v: unknown): void {
+  if (type === undefined || v == null) return;
+  if (type.kind === "array") {
+    if (Array.isArray(v)) for (const e of v) checkTime(Array.isArray(e) ? type : type.of, name, e);
+    return;
+  }
+  if (type.kind !== "scalar") return;
+  if (type.name === "timestamptz") {
+    if (typeof v === "string" && !zoned.test(v.trim())) {
+      throw new TypeError(`Parameter "${name}" is a timestamptz, an instant, so a string for it names its zone ("2026-10-12T19:06:48.282Z", "2026-10-12 19:06:48+09", "2026-10-12 19:06:48 America/Los_Angeles"); got ${JSON.stringify(v)}, which the server would read in the session's time zone. A Date is the instant it is.`);
+    }
+  } else if (v instanceof Date && type.name.split("|").every((part) => part === "timestamp" || part === "date")) {
+    throw new TypeError(`Parameter "${name}" is a ${type.name === "date" ? "date" : "timestamp"} without a time zone, so it takes the wall-clock text ("2026-10-12 19:06:48.282", "2026-10-12"), not a Date: drivers write a Date's time in different zones (the app's, the server's or UTC). A timestamptz parameter takes a Date.`);
+  }
+}
+
+function asByteaHex(v: unknown) {
+  if (!(v instanceof Uint8Array)) return v;
+  let hex = "\\x";
+  for (const byte of v) hex += (byte < 16 ? "0" : "") + byte.toString(16);
+  return hex;
+}
+
+/**
+ * A Postgres array literal, written as pg writes one (`arrayString` in pg/lib/utils.js): a nested
+ * array in braces, null and undefined as NULL, binary data as `\\x` and its hex, and every other
+ * element quoted, with `"` and `\` escaped: a Date as its local time and offset, an object as
+ * its JSON, anything else as its string.
+ */
+export function arrayLiteral(array: readonly unknown[]): string {
+  let out = "{";
+  for (let i = 0; i < array.length; i++) {
+    const v = array[i];
+    if (i) out += ",";
+    if (v == null) out += "NULL";
+    else if (Array.isArray(v)) out += arrayLiteral(v);
+    else if (ArrayBuffer.isView(v)) out += "\\" + asByteaHex(new Uint8Array(v.buffer, v.byteOffset, v.byteLength));
+    else out += `"${(v instanceof Date ? dateText(v) : typeof v === "object" ? JSON.stringify(v) : String(v)).replace(/[\\"]/g, "\\$&")}"`;
+  }
+  return out + "}";
+}
+
+/** pg's `dateToString`: the local date and time to the millisecond, then the offset; BC for a year before 1. */
+function dateText(d: Date): string {
+  const pad = (n: number, width = 2) => String(n).padStart(width, "0");
+  const year = d.getFullYear();
+  const offset = -d.getTimezoneOffset();
+  const abs = Math.abs(offset);
+  return `${pad(year < 1 ? 1 - year : year, 4)}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}${offset < 0 ? "-" : "+"}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}${year < 1 ? " BC" : ""}`;
+}
+
+/**
+ * The statement as Reylo sends it to the database, and the parameter each placeholder binds: the
+ * engine's compiled text where a build step wrote one into the module. Without it (a query
+ * defined by hand) the run time lexes the placeholders itself (`lex.ts`); the engine's lexer is
+ * the authoritative one, and the two agree on every statement the fallback is meant for.
+ * Postgres numbers each distinct parameter once; MySQL has only `?`, and better-sqlite3 reads
+ * SQLite's `?NNN` as a named parameter, so both get one `?` per placeholder and a repeated name is
+ * repeated in the binding order.
+ */
+export function compile(query: QueryModule): { text: string; order: readonly string[] } {
+  if (query.text && query.order) return { text: query.text, order: query.order };
+  const { placeholders } = lexPlaceholders(query.sql, query.dialect);
+  const postgres = query.dialect === "postgres";
+  let text = "";
+  let last = 0;
+  const order: string[] = [];
+  for (const p of placeholders) {
+    const index = indexOf(query, p);
+    text += query.sql.slice(last, p.start) + (postgres ? `$${index + 1}` : "?");
+    order.push(p.name);
+    last = p.end;
+  }
+  return { text: text + query.sql.slice(last), order: postgres ? query.params : order };
+}
+
+function indexOf(query: QueryModule, p: { name: string; start: number; end: number }) {
+  const index = query.params.indexOf(p.name);
+  // A hand-built query whose `params` misses a placeholder would bind `$0`.
+  if (index === -1) throw new Error(`The statement's placeholder ${query.sql.slice(p.start, p.end)} is parameter "${p.name}", which the query's params (${JSON.stringify(query.params)}) do not list.`);
+  return index;
+}
+
+const accepted: Record<Dialect, string> = {
+  postgres: "query(text, values) as on pg, PGlite, Neon and pg-promise; unsafe(text, values) as on postgres.js and Bun.sql; or Neon's neon() function",
+  mysql: "execute(text, values) as on mysql2 and PlanetScale; query() and batch() as on mariadb; unsafe(text, values) as on Bun.sql; or a mysql2 callback pool or connection",
+  sqlite: "prepare(sql) as on better-sqlite3, node:sqlite, bun:sqlite and Cloudflare D1; execute({ sql, args }) as on @libsql/client; all(sql, params) as on sqlite3 and sqlite; or unsafe(text, values) as on Bun.sql",
+};
+
+function unsupported(c: unknown, dialect: Dialect): TypeError {
+  let seen: string;
+  if (c === null || (typeof c !== "object" && typeof c !== "function")) seen = String(c);
+  else {
+    const names = new Set<string>();
+    for (let o: object | null = c; o && o !== Object.prototype && o !== Function.prototype; o = Object.getPrototypeOf(o)) {
+      for (const key of Object.getOwnPropertyNames(o)) {
+        const d = Object.getOwnPropertyDescriptor(o, key);
+        if (key !== "constructor" && typeof d?.value === "function") names.add(key);
+      }
+    }
+    seen = names.size ? `an object with ${[...names].slice(0, 12).join(", ")}${names.size > 12 ? ", ..." : ""}` : "an object with no methods";
+  }
+  // Drizzle's database keeps its driver client on $client (its transactions keep none), and
+  // node:sqlite's tag store keeps its database on db.
+  const o = c as { $client?: unknown; db?: { prepare?: unknown } } | null;
+  const hint = o && typeof o === "object" && "$client" in o ? " A Drizzle database is not a client: pass db.$client." : typeof o?.db?.prepare === "function" ? " A tag store is not a client: pass its database, store.db." : "";
+  return new TypeError(`reylo cannot run a ${dialect} statement on ${seen}. It takes a client with ${accepted[dialect]}.${hint}`);
+}

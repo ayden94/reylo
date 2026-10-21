@@ -1,0 +1,1 @@
+select legacy from accounts

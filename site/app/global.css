@@ -1,0 +1,75 @@
+/* The docs sites' shared stylesheet (docs-kit/src/style.css, a copy of ~/Documents/docs-kit): the
+   layout, the measure, prose, headings, the table of contents, code, Twoslash, collapsibles, tabs,
+   the agent card and the cursors. Below it, only what is Reylo's own. */
+@import 'docs-kit/style.css';
+
+/* ── Reylo: neutral greys and one yellow ──────────────────────────────────────
+   The type is Geist and Geist Mono (app/layout.tsx). Every surface and rule is
+   a colourless grey, near-black by night and white by day, so the yellow is
+   the page's only colour: it marks links, the active table-of-contents entry
+   and inline code. In light mode the yellow darkens to ochre wherever it
+   carries text, so it keeps its contrast on white. The maintainer chose this
+   on 2026-10-20 from six directions compared on the live page. ─────────── */
+
+:root {
+  --dk-accent: hsl(46, 97%, 52%);
+
+  --color-fd-background: hsl(0, 0%, 100%);
+  --color-fd-foreground: hsl(0, 0%, 16%);
+  --color-fd-headings: hsl(0, 0%, 5%);
+  --color-fd-muted: hsl(0, 0%, 96%);
+  --color-fd-muted-foreground: hsl(0, 0%, 40%);
+  --color-fd-popover: hsl(0, 0%, 100%);
+  --color-fd-popover-foreground: hsl(0, 0%, 16%);
+  --color-fd-card: hsl(0, 0%, 98%);
+  --color-fd-card-foreground: hsl(0, 0%, 16%);
+  --color-fd-border: hsl(0, 0%, 89%);
+  --color-fd-primary: hsl(40, 92%, 31%);
+  --color-fd-primary-foreground: hsl(0, 0%, 100%);
+  --color-fd-secondary: hsl(0, 0%, 97%);
+  --color-fd-secondary-foreground: hsl(0, 0%, 16%);
+  --color-fd-accent: hsl(0, 0%, 94%);
+  --color-fd-accent-foreground: hsl(0, 0%, 5%);
+  --color-fd-ring: hsl(46, 97%, 52%);
+
+  --color-fd-info: hsl(212, 45%, 42%);
+  --color-fd-warning: hsl(40, 92%, 36%);
+  --color-fd-success: hsl(150, 40%, 32%);
+  --color-fd-error: hsl(2, 60%, 45%);
+}
+
+.dark {
+  --dk-accent: hsl(48, 96%, 58%);
+
+  --color-fd-background: hsl(0, 0%, 5.5%);
+  --color-fd-foreground: hsl(0, 0%, 86%);
+  --color-fd-headings: hsl(0, 0%, 98%);
+  --color-fd-muted: hsl(0, 0%, 10%);
+  --color-fd-muted-foreground: hsl(0, 0%, 63%);
+  --color-fd-popover: hsl(0, 0%, 8%);
+  --color-fd-popover-foreground: hsl(0, 0%, 86%);
+  --color-fd-card: hsl(0, 0%, 8.5%);
+  --color-fd-card-foreground: hsl(0, 0%, 86%);
+  --color-fd-border: hsl(0, 0%, 17%);
+  --color-fd-primary: hsl(48, 96%, 58%);
+  --color-fd-primary-foreground: hsl(0, 0%, 5.5%);
+  --color-fd-secondary: hsl(0, 0%, 9%);
+  --color-fd-secondary-foreground: hsl(0, 0%, 98%);
+  --color-fd-accent: hsl(0, 0%, 14%);
+  --color-fd-accent-foreground: hsl(0, 0%, 98%);
+  --color-fd-ring: hsl(48, 96%, 58%);
+
+  --color-fd-info: hsl(212, 60%, 70%);
+  --color-fd-warning: hsl(46, 90%, 60%);
+  --color-fd-success: hsl(150, 40%, 60%);
+  --color-fd-error: hsl(2, 70%, 68%);
+}
+
+/* The What and Where tables in How it works (inside `<Details>`) keep a first column of 10rem, so
+   their short labels line up from one dialect's tab to the next, except on a phone, where it would
+   squeeze the second column. */
+@media (min-width: 640px) {
+  #nd-page .prose .dk-details-body table :is(th, td):first-child {
+    width: 10rem;
+  }
+}
