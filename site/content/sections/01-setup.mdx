@@ -139,7 +139,7 @@ const nextConfig: NextConfig = {
     rules: {
       "*.sql": {
         condition: { not: "browser" },
-        loaders: ["reylo/webpack-loader"],
+        loaders: ["reylo/turbopack"],
         as: "*.js",
       },
     },
@@ -148,7 +148,7 @@ const nextConfig: NextConfig = {
     if (isServer) {
       config.module.rules.push({
         test: /\.sql$/,
-        use: "reylo/webpack-loader",
+        use: "reylo/webpack",
       });
     }
     return config;
@@ -194,7 +194,7 @@ await esbuild.build({
 export default {
   // ...
   module: {
-    rules: [{ test: /\.sql$/, use: "reylo/webpack-loader" }],
+    rules: [{ test: /\.sql$/, use: "reylo/webpack" }],
   },
 };
 ```
@@ -208,7 +208,7 @@ Compile TypeScript with `swc-loader` or `babel-loader`, since TypeScript 7 has n
 export default {
   // ...
   module: {
-    rules: [{ test: /\.sql$/, use: "reylo/webpack-loader" }],
+    rules: [{ test: /\.sql$/, use: "reylo/webpack" }],
   },
 };
 ```

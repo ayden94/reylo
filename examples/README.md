@@ -8,10 +8,10 @@ One complete, working project for each setup the [docs](https://reylo.dev/#setup
 | [nub](./nub) | the preload in `nub.jsonc` ([nub](https://reylo.dev/#setup-nub)) | SQLite, `node:sqlite` | a script, and tests with `nub --test` |
 | [bun](./bun) | the preload in `bunfig.toml`, and `Bun.build` with `reylo/esbuild` ([Bun](https://reylo.dev/#setup-bun)) | SQLite, `bun:sqlite` | a script, `bun test`, and a bundle |
 | [vite](./vite) | `reylo/vite` in a React Router app ([Vite](https://reylo.dev/#setup-vite)) | Postgres, pg | the dev server, the production server, and Vitest |
-| [nextjs](./nextjs) | `reylo/webpack-loader` under Turbopack and webpack ([Next.js](https://reylo.dev/#setup-nextjs)) | Postgres, postgres.js | an App Router app: `next dev`, and `next build` and `next start` with each bundler |
+| [nextjs](./nextjs) | `reylo/turbopack` under Turbopack and `reylo/webpack` under webpack ([Next.js](https://reylo.dev/#setup-nextjs)) | Postgres, postgres.js | an App Router app: `next dev`, and `next build` and `next start` with each bundler |
 | [esbuild](./esbuild) | `reylo/esbuild`: a standalone ES module ([esbuild](https://reylo.dev/#setup-esbuild)) | Postgres, postgres.js | an HTTP server, bundled into one file that runs with plain `node`, and built without a database from `.reylo/` |
-| [webpack](./webpack) | `reylo/webpack-loader` ([webpack](https://reylo.dev/#setup-webpack)) | MySQL, mysql2 | an HTTP server, bundled into one ES module |
-| [rspack](./rspack) | `reylo/webpack-loader` ([Rspack](https://reylo.dev/#setup-rspack)) | Postgres, pg | an HTTP server, bundled into one ES module |
+| [webpack](./webpack) | `reylo/webpack` ([webpack](https://reylo.dev/#setup-webpack)) | MySQL, mysql2 | an HTTP server, bundled into one ES module |
+| [rspack](./rspack) | `reylo/webpack` ([Rspack](https://reylo.dev/#setup-rspack)) | Postgres, pg | an HTTP server, bundled into one ES module |
 | [jest](./jest) | `reylo/jest` ([Jest](https://reylo.dev/#setup-jest)) | SQLite, better-sqlite3 | Jest, in an ES module run and a CommonJS run |
 | [cloudflare-workers](./cloudflare-workers) | `reylo/vite` beside the Cloudflare Vite plugin | SQLite, Cloudflare D1 (the local database wrangler keeps) | a Worker in workerd: `vite dev`, the build and `vite preview`, Vitest inside workerd, and `wrangler deploy --dry-run`, all without a Cloudflare account |
 

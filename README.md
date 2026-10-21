@@ -110,8 +110,8 @@ node --env-file=.env --import reylo/register main.ts
 | nub | `"preload": ["reylo/register"]` in `nub.jsonc` |
 | Vite, Vitest | `import reylo from "reylo/vite"`, then `reylo()` in `plugins` |
 | esbuild, `Bun.build` | `import reylo from "reylo/esbuild"`, then `reylo()` in `plugins` |
-| webpack, Rspack | `{ test: /\.sql$/, use: "reylo/webpack-loader" }` in `module.rules` |
-| Next.js | `reylo/webpack-loader`, on the server, for Turbopack and webpack ([setup](https://reylo.dev/#setup-nextjs)) |
+| webpack, Rspack | `{ test: /\.sql$/, use: "reylo/webpack" }` in `module.rules` |
+| Next.js | `reylo/turbopack` for Turbopack and `reylo/webpack` for webpack, on the server ([setup](https://reylo.dev/#setup-nextjs)) |
 | Jest | `transform: { "\\.sql$": "reylo/jest" }` ([setup](https://reylo.dev/#setup-jest)) |
 
 In VS Code or Cursor, install the **TypeScript 7** extension (`TypeScriptTeam.native-preview`) and point it at your project's TypeScript, since the extension bundles TypeScript 7.0:

@@ -1,7 +1,8 @@
 // A webpack-style loader, for webpack 5, Rspack and Next.js with Turbopack, which take loaders
-// (not plugins) for a file type:
-//   webpack / Rspack:  module.rules: [{ test: /\.sql$/, use: "reylo/webpack-loader" }]
-//   Turbopack:         turbopack: { rules: { "*.sql": { loaders: ["reylo/webpack-loader"], as: "*.js" } } }
+// (not plugins) for a file type. Turbopack takes the same function as `reylo/turbopack`
+// (`src/turbopack.ts`), so that each host's config names its own host:
+//   webpack / Rspack:  module.rules: [{ test: /\.sql$/, use: "reylo/webpack" }]
+//   Turbopack:         turbopack: { rules: { "*.sql": { loaders: ["reylo/turbopack"], as: "*.js" } } }
 import { sqlModule } from "./loader.ts";
 
 type LoaderContext = {

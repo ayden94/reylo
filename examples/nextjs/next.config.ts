@@ -15,7 +15,7 @@ const nextConfig: NextConfig = {
     rules: {
       "*.sql": {
         condition: { not: "browser" },
-        loaders: ["reylo/webpack-loader"],
+        loaders: ["reylo/turbopack"],
         as: "*.js",
       },
     },
@@ -23,7 +23,7 @@ const nextConfig: NextConfig = {
   // Reylo: the same loader for `next dev --webpack` and `next build --webpack`, on the server only.
   webpack(config, { isServer }) {
     if (isServer) {
-      config.module.rules.push({ test: /\.sql$/, use: "reylo/webpack-loader" });
+      config.module.rules.push({ test: /\.sql$/, use: "reylo/webpack" });
     }
     return config;
   },

@@ -12,11 +12,11 @@ const nextConfig: NextConfig = {
     // installs reylo from the registry keeps the default root.
     root: join(import.meta.dirname, "../.."),
     rules: {
-      "*.sql": { condition: { not: "browser" }, loaders: ["reylo/webpack-loader"], as: "*.js" },
+      "*.sql": { condition: { not: "browser" }, loaders: ["reylo/turbopack"], as: "*.js" },
     },
   },
   webpack(config, { isServer }) {
-    if (isServer) config.module.rules.push({ test: /\.sql$/, use: "reylo/webpack-loader" });
+    if (isServer) config.module.rules.push({ test: /\.sql$/, use: "reylo/webpack" });
     return config;
   },
 };
