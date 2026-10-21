@@ -705,9 +705,28 @@ code {
 /* A table of two columns (Reylo's Data types tables, "SQL type | TypeScript") splits the width in
    halves, as the maintainer asked; its columns once came out 197px beside 603px and then, sized by
    their content, the other way round. A wider table shares its width by its content. */
-#nd-page .prose table:has(tr > :nth-child(2):last-child) {
+#nd-page .prose table:has(tr > :nth-child(2):last-child):has(th:not(:empty)) {
   table-layout: fixed;
   width: 100%;
+}
+
+/* A table whose header cells are all empty is a list of labels and their values (Reylo's dialect
+   pages open with one: "Versions | Postgres 18, 17 and 14"). It shows no header row, which would be
+   an empty band, and its first column is as wide as its longest label, so the values keep the rest
+   of the width; in halves, a one-word label sat in 320px beside values that wrapped to three
+   lines. */
+#nd-page .prose table:not(:has(th:not(:empty))) {
+  width: 100%;
+}
+
+#nd-page .prose table:not(:has(th:not(:empty))) > thead {
+  display: none;
+}
+
+#nd-page .prose table:not(:has(th:not(:empty))) td:first-child {
+  width: 1%;
+  white-space: nowrap;
+  color: var(--color-fd-headings);
 }
 
 /* On a phone, a table of four columns fits the text column in a smaller face and

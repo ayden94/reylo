@@ -41,10 +41,12 @@ const hand = Caveat({
   variable: '--font-hand',
 });
 
-// The site is one page, so its metadata is the page's: the title, the frontmatter's description,
-// and the link previews, whose image is app/opengraph-image.tsx. It lives here rather than on the
-// page because Next.js replaces an inherited `openGraph` or `alternates` whole: a page that set its
-// own would drop the image Next.js attaches at this level. The icons are linked in <head> below.
+// The main page's metadata: the title, the frontmatter's description, and the link previews, whose
+// image is app/opengraph-image.tsx. It lives here rather than on the page because Next.js replaces
+// an inherited `openGraph` or `alternates` whole: a page that set its own would drop the image
+// Next.js attaches at this level. Each dialect's page sets its own title, description and address
+// over these, and carries the image over itself (generateMetadata in app/[[...slug]]/page.tsx).
+// The icons are linked in <head> below.
 export function generateMetadata(): Metadata {
   const description = source.getPage([])?.data.description;
   return {

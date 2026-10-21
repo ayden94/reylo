@@ -1,0 +1,358 @@
+---
+title: SQLite
+description: How Reylo types and runs SQL on SQLite. Every type and the value it returns, nulls, row counts, parameters, drivers and limits.
+---
+
+<p className="dk-subheader">Every type, null, row count and parameter rule on SQLite</p>
+
+This page is the reference behind [the main docs](/) for SQLite: the place to look when a type, a `| null`, a row count or a parameter surprises you. [Postgres](/postgres) and [MySQL](/mysql) have the same page, with every answer in the same place.
+
+| | |
+| --- | --- |
+| Versions | The type check prepares each statement in Reylo's own SQLite 3.53, against the schema of your database file; your app runs on its driver's SQLite ([Functions](#functions)) |
+| URL | A `file:` or `sqlite:` URL and a path, which starts at the directory of `package.json`, in `DATABASE_URL` or [`url`](/#url) |
+| Type check | Reads the schema through Node's built-in `node:sqlite`, so it needs no driver |
+| Drivers | better-sqlite3, `node:sqlite`, `bun:sqlite`, libSQL, Cloudflare D1, sqlite3, sqlite and Bun.sql ([Drivers](#drivers)) |
+
+<Details summary="View the schema behind the examples" id="schema">
+
+```sql file="schema.sql" dialect="sqlite"
+-- not strict, since a STRICT table takes no BOOLEAN column
+create table users (
+  id integer primary key,
+  name text not null,
+  email text unique,
+  nick text,
+  active boolean not null default 1,
+  created_at text not null default current_timestamp
+);
+```
+
+```sql file="schema.sql" dialect="sqlite"
+create table orders (
+  id integer primary key,
+  user_id integer not null references users (id),
+  total_cents integer not null,
+  placed_at text not null default current_timestamp,
+  ships_on text,
+  receipt blob
+) strict;
+```
+
+```sql file="schema.sql" dialect="sqlite"
+create table events (
+  id integer primary key,
+  kind text not null,
+  payload text not null
+) strict;
+```
+
+</Details>
+
+## Data types
+
+SQLite types values, not columns: a declared type gives a column an affinity, which Reylo types it by, and only a `STRICT` table holds a column to it ([Declared types and STRICT tables](#declared-types-and-strict-tables)). Reylo decodes every value of its own queries itself, on every driver:
+
+| Declared type, or expression | TypeScript | The value `.run()` returns |
+| --- | --- | --- |
+| `INTEGER`, and any type with `INT` in its name | `number` | `42` |
+| `REAL`, `FLOAT`, `DOUBLE` | `number` | `1.5` |
+| `TEXT`, `VARCHAR`, and any type with `CHAR`, `CLOB` or `TEXT` | `string` | `"Ada"` |
+| `BLOB` | `Uint8Array` | `Uint8Array.of(1, 2, 255)` |
+| `BOOLEAN`, `BOOL` | `boolean` | `true` |
+| A comparison, `IS NULL`, `IN`, `BETWEEN`, `LIKE`, `GLOB`, `EXISTS`, `NOT`, `AND`, `OR` | `boolean` | `false` |
+| `NUMERIC`, `DECIMAL`, `DATE`, `DATETIME`, and any other name | `number \| string` | `1.5`, `"2026-10-20"` |
+| No type, or `ANY` in a `STRICT` table | `unknown` | whatever was stored |
+| `count(*)`, `length(…)` | `number` | `2` |
+| `json_object(…)`, `json_group_array(…)` | `string` | `'{"total":1250}'` |
+| `json_extract(…)`, `->`, `->>` | `unknown` | `1250` |
+
+### Integers
+
+An `INTEGER` is a JavaScript `number`, and so is `count(*)`. One past ±(2^53 − 1), which a `number` cannot hold, is an error that names its column, never a rounded number. Cast it to text in the statement to read it exactly:
+
+```sql file="lite_order_counts.sql" dialect="sqlite"
+select count(*) as total, cast(max(id) as text) as last_id
+from orders
+```
+
+```ts twoslash
+import orderCounts from "./lite_order_counts.sql";
+
+const counts = await orderCounts.run(db);
+//    ^?
+```
+
+- better-sqlite3, `node:sqlite` and `bun:sqlite` read the exact integer, and Reylo refuses one past 2^53. The drivers sqlite3 and sqlite, Cloudflare D1, and Bun.sql without `safeIntegers` round it before Reylo sees it, and Reylo refuses the rounded number. libSQL at its default `intMode` refuses it itself, with a `RangeError` that names no column.
+- An `INTEGER` parameter takes a `number`.
+
+### Decimals
+
+SQLite has no decimal type: a `NUMERIC` or `DECIMAL` column holds an integer, a real or text, whichever the row stored, so it is `number | string`. A `REAL` is a double, the same on every driver.
+
+- Keep an exact amount as an integer of its smallest unit, as `orders.total_cents` does, or as text.
+- The `sum()` of integers is an integer, and `avg()` and `total()` are reals.
+
+### Dates and times
+
+SQLite has no date or time type. A date is the text, the number or the real you store, and its type is its column's: a `TEXT` column's date is a `string`, as SQLite's own date functions write it:
+
+```sql file="lite_order_dates.sql" dialect="sqlite"
+select placed_at, ships_on from orders where id = :id
+```
+
+```ts twoslash
+import orderDates from "./lite_order_dates.sql";
+
+const order = await orderDates.run(db, { id: 1 });
+//    ^?
+```
+
+- SQLite's `current_timestamp` and `datetime()` write UTC as `"2026-10-20 10:00:00"`, with a space and no zone, which `Temporal.PlainDateTime.from(…)` reads where your runtime has `Temporal`.
+- A column declared `DATE` or `DATETIME` has `NUMERIC` affinity, so it holds a number or a text, `number | string`. Declare it `TEXT`, or `INTEGER` for Unix time.
+- SQLite's date functions, `date()`, `datetime()`, `unixepoch()` and the rest, answer `NULL` for text they cannot read as a date, so keep every date in one form they read: ISO 8601 text, or Unix time in an `INTEGER`.
+- A `::date` or `::timestamp` cast is SQLite's `CAST(… AS TEXT)`, since SQLite's `CAST` to a date reads `'2026-10-12'` as 2026.
+
+### Truth values
+
+SQLite has no boolean type, and computes a truth value as 1 or 0. Reylo makes every truth value the statement computes a `boolean`, and a column declared `BOOLEAN` or `BOOL`:
+
+```sql file="lite_user_flags.sql" dialect="sqlite"
+select id, active, name like 'A%' as starts_with_a from users
+```
+
+```ts twoslash
+import userFlags from "./lite_user_flags.sql";
+
+const rows = await userFlags.run(db);
+//    ^?
+```
+
+- A truth value the statement computes is a comparison, `IN`, `BETWEEN`, `EXISTS`, `IS`, `NOT`, `AND`, `OR`, `TRUE`, `FALSE`, `like`, `glob`, `regexp` and `match`, and a `CASE`, `coalesce`, `ifnull`, `iif` or subquery whose every value is one.
+- A column declared `BOOLEAN` reads as a boolean through any subquery or view too.
+- A `STRICT` table takes no `BOOLEAN` column, so a flag there is an `INTEGER`, a `number`.
+- SQLite holds a column declared `BOOLEAN` to nothing, so it may hold 2, `'yes'` or a `BLOB`. Reylo reads 0 and 1 as `false` and `true`, and refuses any other value, naming its column. Read the stored number with `active + 0`.
+- A truth value parameter is bound as 1 or 0, since better-sqlite3 refuses a boolean and libSQL would bind `true` as the real 1.0.
+- Inside JSON the statement builds, a truth value is the number SQLite writes, `1` or `0`.
+
+### JSON
+
+SQLite has no JSON type: a document is `TEXT`, a `string`, and so is the JSON a statement builds, which `JSON.parse` reads:
+
+```sql file="lite_order_summaries.sql" dialect="sqlite"
+select u.name,
+  json_object('total_cents', o.total_cents, 'active', u.active) as summary
+from orders o
+join users u on u.id = o.user_id
+```
+
+```ts twoslash
+import orderSummaries from "./lite_order_summaries.sql";
+
+const rows = await orderSummaries.run(db);
+//    ^?
+```
+
+- What `json_extract`, `->` and `->>` return is `unknown`, since it depends on the document.
+- A `CHECK` that holds a column to a JSON Schema (sqlite-jsonschema's `jsonschema_matches`) types nothing, since `pragma ignore_check_constraints` lets any connection write past it.
+- JavaScript's `JSON.parse` rounds an integer past 2^53 inside a document.
+- A typed JSON parameter (`:events::json('…')`) is bound as its JSON text, which `json_each` reads, as in the main docs' [JSON parameters](/#json-parameters).
+
+### Binary
+
+A `BLOB` is a `Uint8Array` on every driver: better-sqlite3, sqlite3 and sqlite give a `Buffer`, which is one, libSQL an `ArrayBuffer` and Cloudflare D1 an array of numbers, which Reylo turns into one.
+
+- A `BLOB` parameter takes a `Uint8Array`, a `Buffer` or not, on every driver.
+
+### Declared types and STRICT tables
+
+Reylo types a column by its declared type's affinity, by the rule SQLite applies: a type with `INT` in its name is `INTEGER`; with `CHAR`, `CLOB` or `TEXT`, `TEXT`; with `BLOB`, `BLOB`; with `REAL`, `FLOA` or `DOUB`, `REAL`; any other, `NUMERIC`. Outside a `STRICT` table, SQLite stores a value of any class in any column:
+
+```sql file="lite_loose.sql" dialect="sqlite"
+-- users is not strict: name may hold 42, and nick a BLOB
+select name, nick from users
+```
+
+```ts twoslash
+import loose from "./lite_loose.sql";
+
+const rows = await loose.run(db);
+//    ^?
+```
+
+- In a `STRICT` table the declared type is a promise: SQLite refuses a value of another class, and the types above are exact. Declare tables `strict` wherever you can.
+- A `STRICT` table takes only `INT`, `INTEGER`, `REAL`, `TEXT`, `BLOB` and `ANY`, so no `BOOLEAN`, `DATE` or `NUMERIC` column.
+- A column declared with no type, or `ANY` in a `STRICT` table, holds any class, so it is `unknown`.
+- A `BOOLEAN` column, which has `NUMERIC` affinity, is a `boolean` by its declared name ([Truth values](#truth-values)).
+- A `CHECK` narrows no type, since `pragma ignore_check_constraints` lets a connection write past it: `check (role in ('admin', 'member'))` leaves `role` a `string`.
+
+### Functions
+
+SQLite says nothing of a function's result, so Reylo keeps a table of SQLite's built-in functions: `count` is a non-null integer, `coalesce` takes its arguments' type, `upper` is text that is `NULL` only where its argument is.
+
+- A function the table lacks is `unknown`: one your application registers (better-sqlite3's `db.function()`, `node:sqlite`'s `db.function()`), or one a loadable extension adds. Cast its result to type it: `cast(slugify(name) as text)`.
+- Which functions exist is the answer of the SQLite in the Node that runs the type check, from `pragma_function_list`: a call to one it lacks is an error at the call, "no such function: soundex on this database's SQLite". Builds differ in the math functions, `soundex` and each release's additions.
+- Your app runs on its driver's SQLite, which may be older: better-sqlite3 12.11 carries 3.53.2, and libSQL, Cloudflare D1 and `bun:sqlite` carry their own. The check is by name, so an argument count only a newer SQLite takes (`iif` with two arguments, before 3.48) is not caught.
+- A table whose `CHECK`, index or generated column calls a function the type check's SQLite lacks is read with that function stubbed, so it types as any other.
+
+### Values Reylo refuses
+
+Every SQLite driver hands Reylo the stored value, so two values are refused, each with an error that names its column:
+
+- **An integer past ±(2^53 − 1)**, which a `number` cannot hold, or which the driver already rounded. Read it with `cast(n as text)`.
+- **A truth value other than 0 or 1**, in a column declared `BOOLEAN` or `BOOL`, a `BLOB` included. Store 0 or 1 in it, or read the stored number with `active + 0`.
+
+## Nullability
+
+A column is `| null` unless Reylo proves it never is. SQLite's own check says "may be null" of everything but a literal or a column, so Reylo reads the schema and the statement:
+
+- **A table's column** is non-null where it is declared `NOT NULL`.
+- **An outer join** makes the joined table's columns nullable, by SQLite's own mark on the join.
+- **A test in the `where`** that fails on `NULL` proves the column: `where nick is not null`, `where lower(nick) = :nick`, and a `left join`'s column tested in the `where`.
+- **An expression** is non-null by Reylo's table of SQLite's functions: `length(name)`, `coalesce(nick, name)`, `name || '!'` and `id + 1` over non-null inputs, `count`. A division is `| null`, since SQLite answers `NULL` for a division by zero.
+- **An aggregate** other than `count` is `NULL` over no rows.
+
+```sql file="lite_nicknames.sql" dialect="sqlite"
+select upper(nick) as shout, coalesce(nick, name) as label
+from users
+```
+
+```ts twoslash
+import nicknames from "./lite_nicknames.sql";
+
+const rows = await nicknames.run(db);
+//    ^?
+```
+
+Where you know more than Reylo can prove, say it in the statement: `coalesce(x, …)` gives a default, and a `where x is not null` test both filters and proves.
+
+## Row counts
+
+How many rows `.run()` resolves to comes from what Reylo proves the statement can return:
+
+| Resolves to | `cardinality` | On SQLite, when the statement |
+| --- | --- | --- |
+| `Row` | `one` | is an aggregate without a `group by`, `values` of one row, or inserts one row and has `returning`, an `on conflict do update` included |
+| `Row \| null` | `maybeOne` | matches every column of a primary key, an `integer primary key` or a unique index with `=`, through joins on the joined table's key; has `limit 1`; is a `distinct` or `group by` over values the `where` pins; or is an `update` or `delete` by key with `returning` |
+| `void` | `none` | is an `insert`, `update`, `delete` or `replace` without `returning` |
+| `Row[]` | `many` | is anything else |
+
+What proves nothing on SQLite:
+
+- **A unique index on an expression, or with a `where`.** A statement with `where lower(email) = :email` is `Row[]`, whatever index `lower(email)` has.
+- **A key that SQLite converts.** SQLite gives a numeric side's affinity to a `TEXT` or untyped key, so `where code = cast(:code as integer)` matches `'1'` and `'01'`.
+- **A key compared under another collation.** SQLite compares under the left side's collation, so a `NOCASE` column on the left of a plain key, `r.k = c.code`, meets `'x'` and `'X'`.
+- **A declared column named `rowid`**, which is no rowid.
+
+At run time a `Row` statement throws unless it gets exactly one row, and a `Row | null` statement throws when it gets more than one.
+
+## Parameters
+
+### Placeholders
+
+Write each parameter as `:name`, or as SQLite's own `@name` or `$name`, one prefix per statement. Reylo sends `?` and `.run()` takes an object keyed by name, without the prefix. A statement may use SQLite's positional `?` or `?1` instead, never beside a name, and the object's keys are then the numbers, `{ 1: 42 }`.
+
+- Each parameter appears once in a statement, so that one place types it. To use a value twice, select it once in a `with` and read it from there.
+- SQLite reads `$1` as a parameter named `$1`, so Reylo refuses it and says to write `?1`.
+
+### What a parameter takes
+
+Every value `.run()` returns goes back in as a parameter of its type, on every driver, so a row can be passed straight to the next statement:
+
+| Affinity | A parameter takes |
+| --- | --- |
+| `INTEGER` | `number` |
+| `REAL` | `number` |
+| `TEXT` | `string` |
+| `BLOB` | `Uint8Array` |
+| `NUMERIC`, a `BOOLEAN` or `DATE` column's included | `number`, `string` or `boolean` |
+| A typed JSON parameter | what its schema admits |
+
+- A `boolean` is bound as 1 or 0 on every driver.
+
+### Parameters without a type
+
+SQLite types a parameter only where its own reading of the statement places one: compared with a typed expression, an element of a row value compared with a typed one (`(created_at, id) < (:at, :id)`), an `insert`'s or `update`'s column, a `cast`, arithmetic, `limit` and `offset`, `in`, `between`, a `case` arm, and an argument of a built-in function from Reylo's table (`lower(:s)` is text, `abs(:n)` a number, `coalesce(:a, 0)` an integer). Anywhere else, such as a bare `select :x`, `:x is null`, or an argument of a function your application registers, the parameter is `unknown` until a cast types it:
+
+```sql file="lite_echo.sql" dialect="sqlite"
+select :value as value, :count::int as count
+```
+
+```ts twoslash
+import echo, { type Params } from "./lite_echo.sql";
+//                  ^?
+```
+
+With [`strict_params: true`](/#strict_params) in `.reylo.yaml`, a parameter nothing types is an error instead of `unknown`.
+
+### Parameters that may be null
+
+A parameter is `| null` where the statement lets it be: where it tests it for null or coalesces it, and where it writes it whole to a column that may hold `NULL`. Any other parameter is typed without `null`. A test for null types nothing on SQLite, so cast the parameter, and select it in a `with` to read it twice:
+
+```sql file="lite_users_by_nick.sql" dialect="sqlite"
+with input as (select cast(:nick as text) as nick)
+select users.id, users.name from users, input
+where input.nick is null or users.nick = input.nick
+```
+
+```ts twoslash
+import usersByNick from "./lite_users_by_nick.sql";
+
+const users = await usersByNick.run(db, { nick: null });
+//                                        ^?
+```
+
+The one-line form is `where nick = coalesce(:nick, nick)`.
+
+### Casts
+
+SQLite has no `::`, so Reylo writes `:p::type` as SQLite's `CAST`, by the type's affinity, and checks the value against the type before the statement runs, since SQLite's `CAST` never fails: `CAST('abc' AS INTEGER)` is 0, and `CAST('1.9' AS INTEGER)` is 1. SQLite's own `cast(:p as …)` works too.
+
+| You write | SQLite runs |
+| --- | --- |
+| `::int`, `::integer`, `::bigint` | `CAST(? AS INTEGER)` |
+| `::real`, `::float`, `::double precision` | `CAST(? AS REAL)` |
+| `::text`, `::varchar(20)` | `CAST(? AS TEXT)` |
+| `::numeric`, `::decimal` | `CAST(? AS NUMERIC)` |
+| `::date`, `::time`, `::timestamp`, `::uuid` | `CAST(? AS TEXT)` |
+| `::blob` | `CAST(? AS BLOB)` |
+| `::json`, `::jsonb` | `json(?)`, `jsonb(?)` |
+
+- The check refuses a number that is no integer for `::int`, and a value out of SQLite's 64-bit range, before the statement runs.
+- A `::boolean` cast is an error: SQLite's `CAST` to a boolean reads a value as the number it starts with. Pass 1 or 0 and write `::integer`.
+- SQLite has no arrays, so a `::text[]` cast is an error.
+
+### How the text is read
+
+Reylo reads the statement as SQLite does: a `:name`, `@name` or `$name` is a placeholder only outside single-quoted strings (with `''`), double-quoted names and comments (`--` and `/* … */`).
+
+## Drivers
+
+Every SQLite driver turns each stored value into a JavaScript value in native code, and the drivers differ only on an integer and a `BLOB`. Reylo runs its own query on the database you pass and gives each value its type after the driver, so a setting of yours does not reach Reylo's query, and none of Reylo's reaches yours.
+
+| Driver | How Reylo reads its values | Lost before Reylo sees it |
+| --- | --- | --- |
+| better-sqlite3, `node:sqlite`, `bun:sqlite` | Reylo's own statement, prepared once per database, with its own integer setting, whatever the database's | |
+| libSQL | The driver's rows, each value given its type | At its default `intMode`, an integer past 2^53, which libSQL refuses; with `intMode: "string"`, an integer in a column with no type is its digits |
+| sqlite3, sqlite | The driver's rows; the statement is not kept, since a statement left open makes the app's `close()` fail | An integer past 2^53, rounded |
+| Cloudflare D1 | The driver's rows; a `BLOB`'s array of numbers made a `Uint8Array` | An integer past 2^53, rounded |
+| Bun.sql | The driver's rows | An integer past 2^53, rounded, without `safeIntegers`; no rows, with no error, for a statement with a `"` inside a single-quoted string |
+
+- better-sqlite3, `node:sqlite` and `bun:sqlite` take `.runSync()` too, which returns the result itself, so it works inside better-sqlite3's and `bun:sqlite`'s `db.transaction(fn)`.
+- The drivers sqlite3 and sqlite bind a `bigint` as `NULL`, so Reylo passes them one that a `number` holds as that number, and refuses a larger one before the statement runs. Every other SQLite driver binds a `bigint` exactly.
+- Each driver takes its transactions too: libSQL's `.transaction()`, Bun.sql's `.begin()` and `.savepoint()`, and D1's `.withSession()` sessions.
+
+The type check needs no driver: it reads the schema through `node:sqlite`, which Node has built in since 22.5.
+
+## Limits
+
+The edges of what Reylo types on SQLite, each with what to write instead:
+
+- **A declared type outside a `STRICT` table**, which SQLite does not hold a value to. Declare tables `strict`.
+- **JSON the statement builds**, which is its text. Parse it with `JSON.parse`, or build the nested rows in TypeScript.
+- **A function your application registers, or an extension's.** Its result is `unknown`: cast it in the statement.
+- **A table in an attached database.** The type check reads one database file, and an `ATTACH` happens on your app's connection at run time, so `select … from other.users` is an error: the database has no schema `other`. A `TEMP` table is the same.
+- **A virtual table's module.** Reylo's SQLite has FTS3, FTS4, FTS5, R-tree, Geopoly and `dbstat`, so a schema that uses one is read, and the type check does not ask whether your driver's SQLite has the module.
+- **A parameter in place of a name.** A parameter is a value: `select * from :table` is SQLite's syntax error, and `order by :column` sorts by a constant. Choose a column with `case :sort when 'name' then name end`.
+- **A statement nested deeper than 500 expressions**, which is SQLite's error, "Expression tree is too large".
+- **One statement per file.** A file holds one `select`, `insert`, `update`, `delete`, `replace` or `values`. A file of several statements or of DDL, such as a migration, is an error in the type check.
