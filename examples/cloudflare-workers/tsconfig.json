@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "esnext",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "lib": ["esnext"],
+    "types": ["@cloudflare/workers-types", "@cloudflare/vitest-plugin/types", "node"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "contentMappers": [
+    { "package": "reylo", "extensions": [".sql"] }
+  ],
+  "include": ["src", "test", "vite.config.ts", "vitest.config.ts", "setup.ts"]
+}
