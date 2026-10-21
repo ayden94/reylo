@@ -89,14 +89,14 @@
   --dk-column: 42rem;
 }
 
-/* The main page's title and subheader stand apart from what follows: 12.5rem under the subheader
+/* The main page's title and subheader stand apart from what follows: 8rem under the subheader
    (`<p className="dk-subheader hero">` in content/docs/index.mdx) where docs-kit leaves 2rem, and
-   5rem on a phone, where 12.5rem would be most of a screen. The dialect pages keep docs-kit's. */
+   5rem on a phone. The dialect pages keep docs-kit's. */
 #nd-page .prose .dk-subheader.hero {
   margin-bottom: 5rem;
 }
 @media (min-width: 768px) {
   #nd-page .prose .dk-subheader.hero {
-    margin-bottom: 12.5rem;
+    margin-bottom: 8rem;
   }
 }
