@@ -66,7 +66,7 @@ SQLite types values, not columns: a declared type gives a column an affinity, wh
 | `NUMERIC`, `DECIMAL`, `DATE`, `DATETIME`, and any other name | `number \| string` | `1.5`, `"2026-10-20"` |
 | No type, or `ANY` in a `STRICT` table | `unknown` | whatever was stored |
 | `count(*)`, `length(…)` | `number` | `2` |
-| `json_object(…)`, `json_group_array(…)` | `string` | `'{"total":1250}'` |
+| `json_object(…)`, `json_group_array(…)` | the object or array it builds | `{ total: 1250 }` |
 | `json_extract(…)`, `->`, `->>` | `unknown` | `1250` |
 
 ### Integers
@@ -144,7 +144,7 @@ select id, active, name like 'A%' as starts_with_a from users
 
 ### JSON
 
-SQLite has no JSON type: a document is `TEXT`, a `string`, and so is the JSON a statement builds, which `JSON.parse` reads:
+SQLite has no JSON type: a stored document is `TEXT`, a `string`. JSON the statement builds with `json_object`, `json_array`, `json_group_array` or `json_group_object` is typed from its arguments and comes back parsed, each value as SQLite writes it in JSON, a truth value as `1` or `0`:
 
 ```ts twoslash tab="main.ts"
 import orderSummaries from "./lite_order_summaries.sql";
@@ -160,6 +160,8 @@ from orders o
 join users u on u.id = o.user_id
 ```
 
+- Built JSON nests inside other built JSON through `coalesce`, `case` and a scalar subquery. Through a subquery's or a view's column, a cast or `lag`, SQLite no longer knows it is JSON, and Reylo types it `unknown`.
+- A `json_group_array` over no rows is `[]`, never `null`.
 - What `json_extract`, `->` and `->>` return is `unknown`, since it depends on the document.
 - A `CHECK` that holds a column to a JSON Schema (sqlite-jsonschema's `jsonschema_matches`) types nothing, since `pragma ignore_check_constraints` lets any connection write past it.
 - JavaScript's `JSON.parse` rounds an integer past 2^53 inside a document.

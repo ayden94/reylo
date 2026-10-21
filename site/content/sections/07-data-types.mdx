@@ -68,7 +68,7 @@ Reylo decodes its own queries' values itself, so every driver gives the same typ
 | A comparison, `IS NULL`, `IN`, `BETWEEN`, `LIKE`, `EXISTS`, `NOT`, `AND`, `OR` | `boolean` |
 | `NUMERIC`, `DATE`, `DATETIME` | `number \| string` |
 | No type, or `ANY` in a `STRICT` table | `unknown` |
-| `json_object(…)`, `json_group_array(…)` | `string` |
+| `json_object(…)`, `json_group_array(…)` | the object or array it builds |
 
 </Dialect>
 </DialectTabs>
