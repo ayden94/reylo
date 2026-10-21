@@ -190,6 +190,7 @@ const rows = await loose.run(db);
 
 SQLite says nothing of a function's result, so Reylo keeps a table of SQLite's built-in functions: `count` is a non-null integer, `coalesce` takes its arguments' type, `upper` is text that is `NULL` only where its argument is.
 
+- A function that SQLite answers with `NULL` for some non-null arguments is `| null` whatever its arguments. The date and time functions return `NULL` for text they cannot read as a date and for a failing modifier, so `date(placed_at)` is `string | null`, while `date('now')` and `datetime('now', '+7 days')` are `string`. The math functions with a domain (`sqrt`, `ln`, `log`, `acos`, `pow`, …) return `NULL` outside it, and `printf` returns `NULL` when its format writes nothing.
 - A function the table lacks is `unknown`: one your application registers (better-sqlite3's `db.function()`, `node:sqlite`'s `db.function()`), or one a loadable extension adds. Cast its result to type it: `cast(slugify(name) as text)`.
 - Which functions exist is the answer of the SQLite in the Node that runs the type check, from `pragma_function_list`: a call to one it lacks is an error at the call, "no such function: soundex on this database's SQLite". Builds differ in the math functions, `soundex` and each release's additions.
 - Your app runs on its driver's SQLite, which may be older: better-sqlite3 12.11 carries 3.53.2, and libSQL, Cloudflare D1 and `bun:sqlite` carry their own. The check is by name, so an argument count only a newer SQLite takes (`iif` with two arguments, before 3.48) is not caught.
