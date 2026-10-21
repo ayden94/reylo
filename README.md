@@ -68,7 +68,7 @@ npm install -D @reylosql/postgres  # or @reylosql/mysql, @reylosql/sqlite
 npm install -D typescript@beta
 ```
 
-`reylo` is the content mapper, the run time, the bundler plugins, the preload and the CLI. The engine that reads your database's statements is a package of its own, one per database, at Reylo's version: install the one for each database the project uses. A development dependency does, since a built module carries its analysis; a program run under the preload analyzes as it imports, and needs it installed. Without it, a `.sql` import reports what to install: `postgres statements need @reylosql/postgres: npm install -D @reylosql/postgres`.
+The `reylo` package is the content mapper, the run time, the bundler plugins, the preload and the CLI. The engine that reads your database's statements is a package of its own, one per database, at Reylo's version: install the one for each database the project uses. A development dependency does, since a built module carries its analysis; a program run under the preload analyzes as it imports, and needs it installed. Without it, a `.sql` import reports what to install: `postgres statements need @reylosql/postgres: npm install -D @reylosql/postgres`.
 
 Name Reylo in `tsconfig.json`, and type-check with `--runExternalCode`, the flag that lets `tsc` run content mappers:
 
@@ -128,7 +128,7 @@ Then trust the workspace, and click **Allow** when the extension asks to use the
 
 ## Usage
 
-Write one statement per `.sql` file, with a `:name` for each parameter, and import it. `run` takes a client from your own driver, here `db`, and the parameters.
+Write one statement per `.sql` file, with a `:name` for each parameter, and import it. The `.run()` method takes a client from your own driver, here `db`, and the parameters.
 
 <details>
 <summary>The schema behind the examples</summary>
@@ -168,7 +168,7 @@ const user = await getUser.run(db, { id: 1 });
 //    ^? { id: number; name: string; email: string | null } | null
 ```
 
-`id` is the primary key, so the result is one row or `null`, and `email` is a nullable column. An insert with `returning` resolves to the row it wrote:
+The `id` column is the primary key, so the result is one row or `null`, and `email` is a nullable column. An insert with `returning` resolves to the row it wrote:
 
 ```sql
 -- create_user.sql
@@ -199,9 +199,9 @@ const admins = await listUsers.run(db, { role: "admin" });
 //    ^? { id: number; name: string; role: "admin" | "member"; created_at: string }[]
 ```
 
-What `run` resolves to follows from how many rows Reylo proves the statement can return, and `run` checks the count when it runs:
+What `.run()` resolves to follows from how many rows Reylo proves the statement can return, and `.run()` checks the count when it runs:
 
-| The statement | `run` resolves to |
+| The statement | What `.run()` resolves to |
 | --- | --- |
 | A match on a primary or unique key, or `limit 1` | `Row \| null` |
 | An aggregate without `group by`, or a one-row `insert … returning` | `Row` |
@@ -285,7 +285,7 @@ await addUsers.run(db, { names: ["Grace", "Edsger"] });
 
 ### Transactions
 
-`run` takes a transaction, a savepoint or a connection from your driver as its client:
+The `.run()` method takes a transaction, a savepoint or a connection from your driver as its client:
 
 ```ts
 import createUser from "./create_user.sql";
@@ -297,11 +297,11 @@ await db.begin(async (tx) => {
 });
 ```
 
-On better-sqlite3, `node:sqlite` and `bun:sqlite`, `runSync` runs a statement synchronously and returns its result, for code that cannot await, such as the function that better-sqlite3's `db.transaction` takes.
+On better-sqlite3, `node:sqlite` and `bun:sqlite`, `.runSync()` runs a statement synchronously and returns its result, for code that cannot await, such as the function that better-sqlite3's `db.transaction` takes.
 
 ### The imported query
 
-Besides `run`, an imported query carries its statement, as Reylo sends it to the database (`sql`) and as written (`raw`), both typed as string literals, and its schemas, and the module exports its types:
+Besides `.run()`, an imported query carries its statement, as Reylo sends it to the database (`sql`) and as written (`raw`), both typed as string literals, and its schemas, and the module exports its types:
 
 ```ts
 import getUser, { type Params, type Row } from "./get_user.sql";
@@ -317,7 +317,7 @@ getUser.outputSchema;          // the result, as JSON Schema
 
 ## Supported drivers
 
-Reylo is bring-your-own-driver: `run` takes a client from any of these, or a transaction, savepoint or connection taken from one.
+Reylo is bring-your-own-driver: `.run()` takes a client from any of these, or a transaction, savepoint or connection taken from one.
 
 | Database | Drivers |
 | --- | --- |

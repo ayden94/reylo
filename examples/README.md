@@ -39,4 +39,4 @@ cd examples/<name>
 nub install              # or pnpm install; npm does not take link: dependencies
 ```
 
-Then follow the example's README: it names the database to point `DATABASE_URL` at, the setup that creates the tables, and each command with what it prints. `scripts/gates.sh` runs every example this way, each against a database of its own (`scripts/gates.sh --only example`).
+Then follow the example's README: it names the database to point `DATABASE_URL` at, the setup that creates the tables, and each command with what it prints. The script `scripts/gates.sh` runs every example this way, each against a database of its own (`scripts/gates.sh --only example`).
