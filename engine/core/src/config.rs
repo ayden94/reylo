@@ -1,7 +1,8 @@
 //! The project file, `.reylo.yaml`: the settings the content mapper reads, parsed once here so
 //! every host reads the same YAML the same way. The file is shared with Reylo Framework (decision
-//! 93 of its log): the framework reads the top-level `url` and `env` too, and its own settings are
-//! the `api` section, which `framework/engine/src/config.rs` parses.
+//! 93 of its log): the framework reads the top-level `env` too and `url`, its connection, which
+//! the importer never reads (since 2026-10-21), and its own settings are the `api` section, which
+//! `framework/engine/src/config.rs` parses.
 //!
 //! A host finds the file (beside the project's `package.json`), reads it and hands the text over;
 //! what the file names outside itself (the environment, `.env` files, the database) is the host's
@@ -20,13 +21,14 @@ pub struct Project {
     /// The published schema an editor validates the file against; no host reads it.
     #[serde(rename = "$schema", default, skip_serializing)]
     pub schema: Option<serde_yaml::Value>,
-    /// The connection, usually `${DATABASE_URL}`, which is also the default. Reylo Framework
-    /// connects through it too.
+    /// Reylo Framework's connection, through which its queries run, usually `${DATABASE_URL}`.
+    /// Parsed for the framework: the importer's type check never connects through it (since
+    /// 2026-10-21), and tells a file that sets it without `direct_url` so.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
-    /// A connection that bypasses a pooler, which the type check prefers to `url`: describing a
-    /// statement through a transaction pooler can fail. The importer's alone: the framework
-    /// serves through `url`.
+    /// The dev database the importer's type check reads, `${DATABASE_URL}` when absent: a
+    /// connection that bypasses a pooler, since describing a statement through a transaction
+    /// pooler can fail. The importer's alone: the framework serves through `url`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub direct_url: Option<String>,
     /// The `.env` files the importer and Reylo Framework read, relative to the project file

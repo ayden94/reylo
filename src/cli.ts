@@ -118,7 +118,10 @@ async function generate(args: string[]): Promise<number> {
     const here = session.root === process.cwd() ? "" : `${shown(session.root)}: `;
     console.log(paint("dim", `${here}${project.dialect} at ${session.where()} (${project.urlSource})`));
     // A project that cannot be used at all is said once, above its files.
-    let unusable = project.error ?? (project.url ? undefined : `No database URL: set DATABASE_URL in the environment, .env.local or .env, or "url" in .reylo.yaml.`);
+    let unusable = project.error ?? (project.url ? undefined : project.missingUrl);
+    // A file that sets `url` alone is told once, under the line that names the connection used
+    // instead; where there is none, the error says it.
+    if (project.notice && project.url) console.log(paint("yellow", project.notice));
     let offline = false;
     if (!unusable) {
       const schema = await session.schema();

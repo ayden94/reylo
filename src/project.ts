@@ -3,16 +3,20 @@
 // another file), is parsed by the engine so that every reylo tool reads the same YAML, and is
 // resolved here against the environment: the process environment first, then the `.env` files the
 // project file names under `env` (by default `.env.local`, then `.env`, beside it), and a `${VAR}`
-// in a URL is replaced from that. The URL's scheme names the dialect. A project without the file
-// behaves as if it held `url: ${DATABASE_URL}`.
+// in a URL is replaced from that. The URL's scheme names the dialect. The connection is
+// `direct_url`, else `${DATABASE_URL}`, and never `url`, which the file keeps for another use
+// (wiki/project-config.md section 4). A file that sets `url` without `direct_url` is told so by
+// `reylo generate`, once, and by the error a project with no connection gets; never by an error of
+// its own, since TypeScript makes every content mapper diagnostic one.
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { type Engine, MissingEngine } from "./engine.ts";
 
 export type Dialect = "postgres" | "sqlite" | "mysql";
 
-/** What the engine reads out of `.reylo.yaml`: the keys the library uses. */
+/** What the engine reads out of `.reylo.yaml`: the keys the library looks at. */
 export type ProjectFile = {
+  /** Never the type check's connection: read only to say so. */
   url?: string;
   direct_url?: string;
   env?: string[];
@@ -33,7 +37,7 @@ export type ResolvedProject = {
   strictParams: boolean;
   /** Which files `reylo generate` analyzes: `include` replaces every `.sql` file, `exclude` adds to what is left out. */
   cli: Cli;
-  /** The connection the type check uses: `direct_url` when the file names one, else `url`. */
+  /** The connection the type check uses: `direct_url` when the file names one, else `DATABASE_URL`; never `url`. */
   url: string | undefined;
   /** Where the URL came from, for a diagnostic: never the URL itself. */
   urlSource: string;
@@ -41,6 +45,10 @@ export type ResolvedProject = {
   watched: string[];
   /** Why the project cannot be used, already placed (`.reylo.yaml:3:1: ...`); every transform reports it. */
   error: string | undefined;
+  /** That the file sets `url`, which Reylo does not read, and no `direct_url`: said once per project, never an error. */
+  notice: string | undefined;
+  /** What the project is told when it has no connection: where to set one. */
+  missingUrl: string;
 };
 
 export const PROJECT_FILE = ".reylo.yaml";
@@ -136,8 +144,13 @@ export function resolveProject(engine: Engine | MissingEngine, projectDir: strin
   };
   let url: string | undefined;
   let urlSource = "DATABASE_URL";
-  const key = config.direct_url !== undefined ? "direct_url" : "url";
-  const written = config.direct_url ?? config.url;
+  // Reylo never reads `url`; a file that sets `direct_url` beside it has named Reylo's connection, and is fine.
+  const urlAlone = config.url !== undefined && config.direct_url === undefined;
+  const notice = urlAlone ? `${shown(file!)}: Reylo does not read url; set direct_url to the dev database Reylo reads your types from (it uses DATABASE_URL meanwhile)` : undefined;
+  const missingUrl = urlAlone
+    ? `No database URL: ${shown(file!)} sets url, which Reylo does not read; set direct_url there, or DATABASE_URL in the environment, .env.local or .env.`
+    : `No database URL: set DATABASE_URL in the environment, .env.local or .env, or "direct_url" in ${file ? shown(file) : PROJECT_FILE}.`;
+  const written = config.direct_url;
   if (written !== undefined) {
     const missing: string[] = [];
     const sources: string[] = [];
@@ -147,9 +160,9 @@ export function resolveProject(engine: Engine | MissingEngine, projectDir: strin
       else sources.push(hit.source);
       return hit?.value ?? "";
     });
-    urlSource = `"${key}" in ${shown(file!)}${sources.length ? `, ${sources.join(", ")}` : ""}`;
+    urlSource = `"direct_url" in ${shown(file!)}${sources.length ? `, ${sources.join(", ")}` : ""}`;
     if (missing.length) {
-      error ??= `${shown(file!)}: "${key}" names ${missing.map((m) => `\${${m}}`).join(", ")}, which neither the environment nor ${envFiles.map(shown).join(" nor ")} sets.`;
+      error ??= `${shown(file!)}: "direct_url" names ${missing.map((m) => `\${${m}}`).join(", ")}, which neither the environment nor ${envFiles.map(shown).join(" nor ")} sets.`;
       url = undefined;
     }
   } else {
@@ -160,5 +173,6 @@ export function resolveProject(engine: Engine | MissingEngine, projectDir: strin
   const dialect = url ? dialectOf(url) : "postgres";
   if (url && !dialect) error ??= `Cannot tell the database from the URL (${urlSource}): reylo reads postgres://, postgresql://, mysql://, file: and sqlite: URLs.`;
   const watched = [...(file ? [file] : [join(root, PROJECT_FILE)]), ...envFiles];
-  return { file, root, dialect: dialect ?? "postgres", strictParams: config.strict_params ?? true, cli: config.cli ?? {}, url, urlSource, watched, error };
+  return { file, root, dialect: dialect ?? "postgres", strictParams: config.strict_params ?? true, cli: config.cli ?? {}, url, urlSource, watched, error, notice, missingUrl };
 }
+

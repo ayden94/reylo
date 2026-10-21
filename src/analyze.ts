@@ -115,7 +115,7 @@ export class Session {
 
   async #analyze(sql: string, options: { force?: boolean }): Promise<Outcome> {
     if (this.project.error) return { ok: false, message: this.project.error, code: 11 };
-    if (!this.project.url) return { ok: false, message: `No database URL: set DATABASE_URL in the environment, .env.local or .env, or "url" in .reylo.yaml.`, code: 4 };
+    if (!this.project.url) return { ok: false, message: this.project.missingUrl, code: 4 };
     // The URL names the database, whose engine package the project has to have installed.
     const engine = this.#engine;
     if (engine instanceof MissingEngine) return { ok: false, message: engine.message, code: 11 };
