@@ -1,10 +1,12 @@
 // Structured parameters at run time (wiki/structured-params.md): the value of a `:events::rows(…)`
-// or `:user::row(…)` parameter is checked against its column list before the statement runs,
-// written as the JSON the statement reads, and an insert's column lists are written again
-// without the keys a call leaves out, so that each of those columns takes its default (the
-// maintainer, 2026-10-15). Nothing here changes a value: a value the database would round,
-// truncate or read in a zone nobody chose is refused (the maintainer, 2026-10-15: "Never, except
-// defaults").
+// or `:user::row(…)` parameter is checked against its column list before the statement runs, and
+// written as the JSON the statement reads. A key a row leaves out takes its column's default: on
+// Postgres and SQLite the statement holds each such default, copied from the catalog, so it is one
+// text whatever keys the rows give (the maintainer, 2026-10-20: "copy the default from the catalog
+// on the databases where it can be done with high fidelity"); on MySQL an insert's column lists are
+// written again without the keys a call leaves out, so every row of a call gives the same keys.
+// Nothing here changes a value: a value the database would round, truncate or read in a zone
+// nobody chose is refused (the maintainer, 2026-10-15: "Never, except defaults").
 import type { EngineType } from "./engine-type.ts";
 import { validate, withDefaults } from "./json-schema.ts";
 import { postgresYear } from "./values.ts";
@@ -54,8 +56,9 @@ class Raw {
 /**
  * Checks a structured parameter's value against its column list, and gives the value to bind:
  * on Postgres the JSON value, which the run time binds as it binds every JSON parameter, and on
- * MySQL and SQLite its JSON text. `inserted` is a parameter whose rows an insert writes, whose
- * keys are the same in every row; `present` is the keys they carry.
+ * MySQL and SQLite its JSON text. `inserted` is a parameter whose rows a MySQL insert writes, whose
+ * lists the run time writes again, so its keys are the same in every row; `present` is the keys
+ * they carry.
  */
 export function prepareRows(name: string, type: RowsType, value: unknown, dialect: Dialect, inserted: boolean): { value: unknown; present: ReadonlySet<string> } {
   const fail = (message: string): never => {
@@ -97,9 +100,9 @@ export function prepareRows(name: string, type: RowsType, value: unknown, dialec
         written[f.name] = filled;
       } else written[f.name] = checked;
     }
-    // One statement inserts every row of a call, so its column list is the same for each: a key
-    // one row leaves out and another gives cannot have its default in one and its value in the
-    // other.
+    // One statement inserts every row of a call, so on MySQL, which copies no default, its column
+    // list is the same for each: a key one row leaves out and another gives cannot have its
+    // default in one and its value in the other.
     if (inserted) {
       if (present === undefined) {
         present = keys;
@@ -353,7 +356,7 @@ function write(v: unknown): string {
   return JSON.stringify(v);
 }
 
-/** The statement with each list of a structured parameter written again for the keys present: an entry stays when its key is required or present. */
+/** The statement with each list of a structured parameter written again for the keys present (MySQL): an entry stays when its key is required or present. */
 export function variant(text: string, structured: Structured, fields: readonly RowField[], present: ReadonlySet<string>): string {
   const lists = [...structured.lists].sort((a, b) => b.start - a.start);
   let out = text;

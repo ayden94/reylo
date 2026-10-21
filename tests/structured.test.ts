@@ -10,9 +10,10 @@ import { Session } from "../src/analyze.ts";
 import { sqlModule } from "../src/loader.ts";
 
 // Structured parameters (wiki/structured-params.md): a parameter cast to `rows(…)` or `row(…)` is
-// typed by its column list and written for its position; the run time checks each value and
-// writes the insert's column lists for the keys a call carries, so a key left out takes its
-// column's default. Postgres and MySQL run on throwaway servers, never one anyone uses: each test
+// typed by its column list and written for its position; the run time checks each value, and a key
+// a row leaves out takes its column's default: on Postgres and SQLite the insert holds each such
+// default, copied from the catalog, and on MySQL the run time writes the insert's column lists for
+// the keys a call carries. Postgres and MySQL run on throwaway servers, never one anyone uses: each test
 // makes a database of its own there and drops it after.
 const PG = process.env.REYLO_TEST_PG;
 const MYSQL = process.env.REYLO_TEST_MYSQL;
@@ -75,7 +76,6 @@ test("SQLite: an insert's rows are checked and written in their order, a key lef
     const q = await built(root, url, "insert_events", insert);
     assert.deepEqual(plain(await q.run(db, { events: [{ id: 2, ts: "2026-10-20", status: "done", amount: 1.5, meta: { source: "x" } }, { id: 1, ts: "2026-10-20", status: "late", amount: null, meta: null }] })), [{ id: 2, status: "done" }, { id: 1, status: "late" }]);
     assert.deepEqual(plain(await q.run(db, { events: [{ id: 3, ts: "2026-10-21" }] })), [{ id: 3, status: "new" }]);
-    await assert.rejects(q.run(db, { events: [{ id: 4, ts: "x" }, { id: 5, ts: "x", status: "s" }] }), /row 2 gives "status", which row 1 leaves out/);
     await assert.rejects(q.run(db, { events: [{ id: 4, ts: "x", status: null }] }), /"status" is text not null, and the row gives null/);
     await assert.rejects(q.run(db, { events: [{ id: "4", ts: "x" }] }), /"id" is integer, an integer; got "4"/);
     // An explicit null stores NULL, never the text null, and a document stays JSON text.
@@ -84,9 +84,49 @@ test("SQLite: an insert's rows are checked and written in their order, a key lef
       { id: 2, status: "done", amount: 1.5, meta: `{"source":"x"}`, t: "text" },
       { id: 3, status: "new", amount: null, meta: null, t: "null" },
     ]);
+    // Rows that leave out different keys go in one insert, each such row with the default.
+    assert.deepEqual(plain(await q.run(db, { events: [{ id: 4, ts: "x" }, { id: 5, ts: "x", status: "s" }] })), [{ id: 4, status: "new" }, { id: 5, status: "s" }]);
     // An upsert reads ON CONFLICT as its own, since the expansion ends in WHERE.
     const upsert = await built(root, url, "upsert", "insert into events :events::rows(id integer not null, ts text not null) on conflict (id) do update set ts = excluded.ts returning id, ts");
     assert.deepEqual(plain(await upsert.run(db, { events: [{ id: 3, ts: "2026-10-22" }] })), [{ id: 3, ts: "2026-10-22" }]);
+  } finally {
+    db.close();
+    await closeAll();
+  }
+});
+
+test("SQLite: rows that leave out different keys go in one insert, each such row with its column's default copied from the catalog", async () => {
+  const root = project();
+  const db = new DatabaseSync(join(root, "app.db"));
+  db.exec(`create table accounts (id integer primary key, name text not null, email text, role text not null default 'member',
+    nick text default member, token text not null default (lower(hex(randomblob(8)))), n integer default 7, at text not null default current_timestamp)`);
+  const url = "file:./app.db";
+  const insert = "insert into accounts :a::rows(id? integer not null, name text not null, email text, role? text not null, nick text, token? text not null, n integer, at? text not null) returning id, role";
+  try {
+    const file = join(root, "insert_accounts.sql");
+    writeFileSync(file, insert);
+    writeFileSync(join(root, ".env"), `DATABASE_URL=${url}\n`);
+    // One statement for every call: no list for the run time to write again.
+    const { code } = await sqlModule(file, insert);
+    assert.ok(!code.includes("structured:"), code);
+    const q = await built(root, url, "insert_accounts", insert);
+    assert.match(q.sql, /CASE WHEN json_type\("reylo\.e"\.value, '\$\."role"'\) IS NOT NULL THEN "reylo\.e"\.value ->> '\$\."role"' ELSE \('member'\) END/);
+    const rows = [{ name: "Ada" }, { id: 100, name: "Grace", role: "admin", nick: "g", token: "given", n: 1 }, { name: "Linus", email: null, nick: null, n: null }];
+    assert.deepEqual(plain(await q.run(db, { a: rows })), [{ id: 1, role: "member" }, { id: 100, role: "admin" }, { id: 101, role: "member" }]);
+    const stored = db.prepare("select id, name, email, role, nick, token, n, at, typeof(n) as tn from accounts order by id").all().map((r) => ({ ...r })) as Record<string, unknown>[];
+    // A key left out takes the default; a key given as null is NULL; the bare identifier `member` is the string SQLite stores.
+    assert.deepEqual(stored.map((r) => [r.id, r.email, r.role, r.nick, r.n, r.tn]), [[1, null, "member", "member", 7, "integer"], [100, null, "admin", "g", 1, "integer"], [101, null, "member", null, null, "null"]]);
+    // An expression default runs per row, current_timestamp once per statement, as the database's own.
+    assert.equal(stored[1]!.token, "given");
+    assert.match(String(stored[0]!.token), /^[0-9a-f]{16}$/);
+    assert.match(String(stored[2]!.token), /^[0-9a-f]{16}$/);
+    assert.notEqual(stored[0]!.token, stored[2]!.token);
+    assert.equal(stored[0]!.at, stored[2]!.at);
+    assert.match(String(stored[0]!.at), /^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/);
+    // One row: the same.
+    const one = await built(root, url, "insert_account", "insert into accounts :a::row(name text not null, role? text not null) returning role");
+    assert.deepEqual(plain(await one.run(db, { a: { name: "Mary" } })), [{ role: "member" }]);
+    assert.deepEqual(plain(await one.run(db, { a: { name: "Ken", role: "owner" } })), [{ role: "owner" }]);
   } finally {
     db.close();
     await closeAll();
@@ -259,6 +299,88 @@ returning email, name`);
   }
 });
 
+test("Postgres: rows that leave out different keys go in one insert, each such row with its column's default copied from the catalog, a sequence advancing only for those rows", { skip: pgLive }, async () => {
+  const require = createRequire(join(DRIVERS, "postgres", "package.json"));
+  const postgres = require("postgres");
+  const admin = postgres(PG, { max: 1, onnotice: () => {} });
+  const name = `reylo_structured_mixed_${process.pid}`;
+  await admin.unsafe(`drop database if exists ${name}`);
+  await admin.unsafe(`create database ${name}`);
+  const url = new URL(PG!);
+  url.pathname = `/${name}`;
+  // A zone with a daylight-saving gap, where a timestamp read through timestamptz moves.
+  const sql = postgres(url.href, { max: 1, onnotice: () => {}, connection: { TimeZone: "America/New_York" } });
+  const root = project("postgres");
+  try {
+    await sql.unsafe(`create sequence ext_seq;
+      create domain dom_t as text default 'from domain';
+      create table accounts (
+        id int8 generated by default as identity primary key,
+        n int8 not null default nextval('ext_seq'),
+        name text not null,
+        email text,
+        role text not null default 'member',
+        owner text not null default current_user,
+        tag text not null default concat('t-', gen_random_uuid()),
+        created timestamp not null default now(),
+        dom dom_t)`);
+    const insert = "insert into accounts :a::rows(id? int8 not null, n? int8 not null, name text not null, email text, role? text not null, owner? text not null, tag? text not null, created? timestamp not null, dom text) returning id, role";
+    const file = join(root, "insert_accounts.sql");
+    writeFileSync(file, insert);
+    writeFileSync(join(root, ".env"), `DATABASE_URL=${url.href}\n`);
+    const { code } = await sqlModule(file, insert);
+    assert.ok(!code.includes("structured:"), code);
+    const q = await built(root, url.href, "insert_accounts", insert);
+    // Each default is cast to its column's type, so the CASE keeps a given value as it is.
+    assert.match(q.sql, /ELSE \(CURRENT_USER\)::text END/);
+    assert.match(q.sql, /ELSE \(now\(\)\)::timestamp without time zone END/);
+    const rows = [
+      { name: "Ada" },
+      { id: 100, n: 500, name: "Grace", role: "admin", owner: "o".repeat(100), tag: "given", created: "2026-03-08 02:30:00", dom: "given" },
+      { name: "Linus", email: null, dom: null },
+    ];
+    assert.deepEqual(plain(await q.run(sql, { a: rows })), [{ id: 1n, role: "member" }, { id: 100n, role: "admin" }, { id: 2n, role: "member" }]);
+    const stored = await sql.unsafe("select id::text, n::text, email, role, owner, length(owner) as owner_length, tag, created::text as created, dom, current_user::text as me from accounts order by accounts.id");
+    const me = stored[0].me;
+    assert.deepEqual(
+      stored.map((r: Record<string, unknown>) => [r.id, r.n, r.email, r.role, r.owner_length, r.dom]),
+      [["1", "1", null, "member", me.length, "from domain"], ["2", "2", null, "member", me.length, null], ["100", "500", null, "admin", 100, "given"]],
+    );
+    assert.equal(stored[0].owner, me);
+    // The sequences moved only for the rows that left their keys out.
+    assert.deepEqual(plain(await sql.unsafe("select last_value::text from ext_seq")), [{ last_value: "2" }]);
+    // An expression default runs per row; the given timestamp is stored as given, in a gap of the session's zone.
+    assert.match(stored[0].tag, /^t-[0-9a-f-]{36}$/);
+    assert.match(stored[1].tag, /^t-[0-9a-f-]{36}$/);
+    assert.notEqual(stored[0].tag, stored[1].tag);
+    assert.equal(stored[2].tag, "given");
+    assert.equal(stored[2].created, "2026-03-08 02:30:00");
+    // node-postgres binds the same statement.
+    const pg = require("pg");
+    const client = new pg.Client(url.href);
+    await client.connect();
+    try {
+      assert.deepEqual(plain(await q.run(client, { a: [{ name: "Mary", role: "owner" }, { name: "Ken" }] })), [{ id: 3n, role: "owner" }, { id: 4n, role: "member" }]);
+    } finally {
+      await client.end();
+    }
+    // One row reads the object itself for its key tests.
+    const one = await built(root, url.href, "insert_account", "insert into accounts :a::row(name text not null, role? text not null) returning role");
+    assert.deepEqual(plain(await one.run(sql, { a: { name: "Joan" } })), [{ role: "member" }]);
+    assert.deepEqual(plain(await one.run(sql, { a: { name: "Alan", role: "admin" } })), [{ role: "admin" }]);
+    // A view's column with no default of its own would take its table's, which is not copied.
+    await sql.unsafe("create view accounts_v as select id, name, email from accounts");
+    const view = "insert into accounts_v :a::rows(name text not null, email text)";
+    const found = (await analysis(root, url.href, view)).diagnostics.filter((x) => x.code === 21);
+    assert.deepEqual(found.map((x) => [x.message, view.slice(x.start, x.start + x.length)]), [["accounts_v.email is a column of a view with no default of its own, so a row that leaves `email` out would take the default of the view's table, which Reylo does not copy into the insert: give the view's column a default (ALTER VIEW accounts_v ALTER COLUMN email SET DEFAULT …), or write the member without `?` and with `not null`.", "email"]]);
+  } finally {
+    await closeAll();
+    await sql.end();
+    await admin.unsafe(`drop database if exists ${name}`);
+    await admin.end();
+  }
+});
+
 test("MySQL: a rows insert reads each column with ERROR ON ERROR, keeps a 64-bit id exact and gives a key left out its default", { skip: mysqlLive }, async () => {
   const require = createRequire(join(DRIVERS, "mysql2", "package.json"));
   const mysql = require("mysql2/promise");
@@ -281,6 +403,8 @@ test("MySQL: a rows insert reads each column with ERROR ON ERROR, keeps a 64-bit
     const q = await built(root, url.href, "insert_events", insert);
     await q.run(db, { events: [{ id: 9223372036854775807n, ts: "2026-10-20 10:00:00", amount: "1.50", meta: { a: 1 } }, { id: 1, ts: "2026-10-20 11:00:00", amount: null, meta: null }] });
     await assert.rejects(q.run(db, { events: [{ id: 2, ts: "2026-10-20 10:00:00", status: "x".repeat(33) }] }), /at most 32 characters/);
+    // MySQL copies no default: the run time writes the lists for the keys a call carries, the same in every row.
+    await assert.rejects(q.run(db, { events: [{ id: 3, ts: "2026-10-20 10:00:00", status: "done" }, { id: 4, ts: "2026-10-20 10:00:00" }] }), /row 2 leaves out "status", which row 1 gives\. Every row of one call gives the same keys/);
     const mismatch = "insert into events :e::rows(id bigint not null, ts datetime not null)";
     const found = (await analysis(root, url.href, mismatch)).diagnostics.filter((x) => x.code === 21);
     assert.deepEqual(found.map((x) => [x.message, mismatch.slice(x.start, x.start + x.length)]), [["events.ts is datetime(6), and the column list says datetime: a column list writes each column's own type, so that the checks the run time makes are the column's.", "datetime"]]);

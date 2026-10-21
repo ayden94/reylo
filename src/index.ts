@@ -38,8 +38,8 @@ export type ReyloTypes<Params, Row, C extends Cardinality> = {
 export interface Query<Params, Row, C extends Cardinality, D extends Dialect>
   extends StandardTypedV1<Params, Materialize<Row, C>>, StandardJSONSchemaV1<Params, Materialize<Row, C>> {
   readonly dialect: D;
-  // The base text: a structured parameter (`::rows`, `::row`, src/rows.ts) in an insert has its
-  // column lists written again for the keys each call carries. Said here and not in the doc
+  // The base text: a structured parameter (`::rows`, `::row`, src/rows.ts) in a MySQL insert has
+  // its column lists written again for the keys each call carries. Said here and not in the doc
   // comment, whose text the docs site shows in its hovers, which leave structured parameters out.
   /**
    * The statement as Reylo sends it to the database, as the module's `sql` export: `:id` is `$1`
@@ -92,7 +92,7 @@ export type QueryDefinition = {
   inputs?: Inputs;
   /** Each output column's name and kind (src/values.ts), in order: every build step puts them in the module, and the run time gives each value its kind by them. */
   columns?: Columns;
-  /** Each structured parameter in insert position, with the lists of `text` the run time writes again for the keys a call carries. */
+  /** Each structured parameter in a MySQL insert, with the lists of `text` the run time writes again for the keys a call carries (a Postgres or SQLite insert copies its defaults instead). */
   structured?: readonly Structured[];
   /** The catalog facts the statement relied on, which the run time checks before it runs (src/fresh.ts). */
   fresh?: Fresh;

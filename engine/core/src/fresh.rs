@@ -9,6 +9,10 @@
 //! reads it leaves the query alone, as the notes ask ("unrelated schema changes, like a new column
 //! it never touches, don't trip the check").
 //!
+//! On Postgres and SQLite an insert of a structured parameter copies the defaults of the columns
+//! whose keys a row may leave out into its statement (crate::structured), so the text of each such
+//! default is a fact too: a default changed after the build would otherwise be written as it was.
+//!
 //! The facts are the rows of one catalog query, all text, and the module carries the query with
 //! them: the run time runs the same query through the caller's driver and compares strings, so a
 //! difference is a change whatever the driver decodes.
@@ -37,23 +41,41 @@ pub struct Fresh {
     /// none, and a MySQL session under NO_BACKSLASH_ESCAPES reads a value written into the text
     /// differently).
     pub query: String,
-    /// The facts, `[table, column, type, not null, has a default]`, all text, in the query's order.
-    /// The query names each column, since a driver hands rows back as objects keyed by name.
+    /// The facts, `[table, column, type, not null, has a default]`, all text, in the query's order,
+    /// and where a structured insert copied defaults (on Postgres and SQLite) a sixth, the
+    /// default's text for each column it copied ([`Fresh::defaults`]) and empty for the others. The query names each column, since a driver
+    /// hands rows back as objects keyed by name.
     pub rows: Vec<Vec<String>>,
     /// The tables an insert writes, each of whose columns that needs a value is a fact.
     pub inserts: Vec<String>,
+    /// `[table, column]` of each column whose default the statement copied, whose sixth fact is
+    /// compared: empty where it copied none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub defaults: Vec<[String; 2]>,
 }
 
 /// Postgres: every column of each table `{tables}` names (string literals, each a name as the
 /// statement writes it, quoted as an identifier), a domain's not null and default counted as the
 /// column's.
-const PG_QUERY: &str = "SELECT r.name AS fresh_table, a.attname::text AS fresh_column, pg_catalog.format_type(a.atttypid, a.atttypmod) AS fresh_type, \
-    (a.attnotnull OR (t.typtype = 'd' AND t.typnotnull))::text AS fresh_not_null, \
-    (a.atthasdef OR a.attidentity <> '' OR (t.typtype = 'd' AND t.typdefault IS NOT NULL))::text AS fresh_default \
-    FROM pg_catalog.unnest(ARRAY[{tables}]::text[]) AS r(name) \
-    JOIN pg_catalog.pg_attribute a ON a.attrelid = pg_catalog.to_regclass(r.name) AND a.attnum > 0 AND NOT a.attisdropped \
-    JOIN pg_catalog.pg_type t ON t.oid = a.atttypid \
-    ORDER BY 1, 2";
+macro_rules! pg_query {
+    ($expr:expr, $join:expr) => {
+        concat!(
+            "SELECT r.name AS fresh_table, a.attname::text AS fresh_column, pg_catalog.format_type(a.atttypid, a.atttypmod) AS fresh_type, \
+            (a.attnotnull OR (t.typtype = 'd' AND t.typnotnull))::text AS fresh_not_null, \
+            (a.atthasdef OR a.attidentity <> '' OR (t.typtype = 'd' AND t.typdefault IS NOT NULL))::text AS fresh_default",
+            $expr,
+            " FROM pg_catalog.unnest(ARRAY[{tables}]::text[]) AS r(name) \
+            JOIN pg_catalog.pg_attribute a ON a.attrelid = pg_catalog.to_regclass(r.name) AND a.attnum > 0 AND NOT a.attisdropped \
+            JOIN pg_catalog.pg_type t ON t.oid = a.atttypid",
+            $join,
+            " ORDER BY 1, 2"
+        )
+    };
+}
+const PG_QUERY: &str = pg_query!("", "");
+/// The same with a sixth column, each default's text as a structured insert copies it, for a
+/// statement that copied one.
+const PG_QUERY_DEFAULTS: &str = pg_query!(concat!(", ", crate::structured::pg_default!(), " AS fresh_expr"), " LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum");
 
 /// MySQL: every column of each table of the session's database that `{tables}` names.
 const MYSQL_QUERY: &str = "select c.table_name as fresh_table, c.column_name as fresh_column, c.column_type as fresh_type, cast(c.is_nullable = 'NO' as char) as fresh_not_null, \
@@ -63,10 +85,20 @@ const MYSQL_QUERY: &str = "select c.table_name as fresh_table, c.column_name as 
 
 /// SQLite: every column of each table `{tables}` (a SELECT of their names) names; an INTEGER
 /// PRIMARY KEY, the rowid, has a default.
-const SQLITE_QUERY: &str = "select j.value as fresh_table, p.name as fresh_column, p.type as fresh_type, cast(p.\"notnull\" as text) as fresh_not_null, \
-    cast(p.dflt_value is not null or (p.pk > 0 and lower(p.type) = 'integer' and (select count(*) from pragma_table_xinfo(j.value) k where k.pk > 0) = 1) as text) as fresh_default \
-    from ({tables}) j, pragma_table_xinfo(j.value) p \
-    order by 1, 2";
+macro_rules! sqlite_query {
+    ($expr:expr) => {
+        concat!(
+            "select j.value as fresh_table, p.name as fresh_column, p.type as fresh_type, cast(p.\"notnull\" as text) as fresh_not_null, \
+            cast(p.dflt_value is not null or (p.pk > 0 and lower(p.type) = 'integer' and (select count(*) from pragma_table_xinfo(j.value) k where k.pk > 0) = 1) as text) as fresh_default",
+            $expr,
+            " from ({tables}) j, pragma_table_xinfo(j.value) p \
+            order by 1, 2"
+        )
+    };
+}
+const SQLITE_QUERY: &str = sqlite_query!("");
+/// The same with a sixth column, each default's source text, which a structured insert copies.
+const SQLITE_QUERY_DEFAULTS: &str = sqlite_query!(", p.dflt_value as fresh_expr");
 
 /// A string literal every dialect reads as written: a quote doubled. MySQL reads a backslash by
 /// its session's mode, so a MySQL name with one is not checked.
@@ -91,10 +123,14 @@ pub fn facts<D: Describe>(analysis: &Analysis, dialect: Dialect, tables: Option<
         return Some(None);
     }
     let literals: Vec<String> = names.iter().map(|n| literal(n)).collect();
+    // The columns whose defaults a structured insert copied (on Postgres and SQLite), each in a
+    // table the statement inserts into: their defaults' text is a sixth fact.
+    let copied: Vec<&String> = analysis.structured.iter().flat_map(|i| &i.copied).collect();
+    let with_defaults = !copied.is_empty() && dialect != Dialect::Mysql;
     let query = match dialect {
-        Dialect::Postgres => PG_QUERY.replace("{tables}", &literals.join(", ")),
+        Dialect::Postgres => (if with_defaults { PG_QUERY_DEFAULTS } else { PG_QUERY }).replace("{tables}", &literals.join(", ")),
         Dialect::Mysql => MYSQL_QUERY.replace("{tables}", &literals.join(", ")),
-        Dialect::Sqlite => SQLITE_QUERY.replace("{tables}", &literals.iter().enumerate().map(|(k, l)| if k == 0 { format!("select {l} as value") } else { format!("select {l}") }).collect::<Vec<_>>().join(" union all ")),
+        Dialect::Sqlite => (if with_defaults { SQLITE_QUERY_DEFAULTS } else { SQLITE_QUERY }).replace("{tables}", &literals.iter().enumerate().map(|(k, l)| if k == 0 { format!("select {l} as value") } else { format!("select {l}") }).collect::<Vec<_>>().join(" union all ")),
     };
     let rows = host.query(&query, Vec::new(), Scope::Statement)?;
     let Ok(rows) = rows else { return Some(None) };
@@ -105,16 +141,29 @@ pub fn facts<D: Describe>(analysis: &Analysis, dialect: Dialect, tables: Option<
         Value::Null => String::new(),
         other => other.to_string(),
     };
-    let kept: Vec<Vec<String>> = rows
-        .iter()
-        .map(|r| r.iter().map(text).collect::<Vec<String>>())
-        .filter(|r| r.len() == 5)
-        .filter(|r| star || named.contains(&r[1].to_ascii_lowercase()) || (inserts.contains(&r[0]) && yes(&r[3]) && !yes(&r[4])))
-        .collect();
+    let is_copied = |r: &[String]| inserts.contains(&r[0]) && copied.iter().any(|c| **c == r[1]);
+    let width = if with_defaults { 6 } else { 5 };
+    let mut defaults = Vec::new();
+    let mut kept: Vec<Vec<String>> = Vec::new();
+    for r in rows.iter().map(|r| r.iter().map(text).collect::<Vec<String>>()).filter(|r| r.len() == width) {
+        if !(star || named.contains(&r[1].to_ascii_lowercase()) || (inserts.contains(&r[0]) && yes(&r[3]) && !yes(&r[4]))) {
+            continue;
+        }
+        let mut r = r;
+        if width == 6 {
+            if is_copied(&r) {
+                defaults.push([r[0].clone(), r[1].clone()]);
+            } else {
+                // A default the statement does not write is no fact.
+                r[5] = String::new();
+            }
+        }
+        kept.push(r);
+    }
     if kept.is_empty() {
         return Some(None);
     }
-    Some(Some(Fresh { query, rows: kept, inserts }))
+    Some(Some(Fresh { query, rows: kept, inserts, defaults }))
 }
 
 /// A table's name as Postgres's `to_regclass` reads it, each part quoted, so its case holds.

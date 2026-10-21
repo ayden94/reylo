@@ -22,6 +22,14 @@
 //! SQLite, `JSON_TABLE` with `ERROR ON ERROR` on every column on MySQL (which otherwise turns a
 //! value it cannot read into NULL without a warning; `wiki/structured-params/verify.md`).
 //!
+//! A key a row leaves out takes its column's default. On Postgres and SQLite the insert reads,
+//! for each member whose key may be left out, the row's value where it has the key and else the
+//! column's default copied from the catalog ([`copies`]), so one statement takes rows with any mix
+//! of keys (the maintainer, 2026-10-20: "I think we should copy the default from the catalog on
+//! the databases where it can be done with high fidelity. I don't really care about MySQL, so I
+//! think it can reject for MySQL."). On MySQL the run time writes the insert's lists again per call
+//! without the keys it leaves out ([`Info`]), and refuses a call whose rows give different keys.
+//!
 //! The column list is written bare in the cast's parentheses (the maintainer, 2026-10-20: "Bare in
 //! the parentheses"). A member is `name[?] type [not null]`: `?` lets the caller leave a `not null` key out so that the column's default
 //! applies, a member without `not null` may be null or left out, and `json('…')` or `jsonb('…')`
@@ -102,6 +110,12 @@ pub struct Found {
     pub json: Option<JsonCast>,
     /// A `::type` cast on MySQL or SQLite instead of a column list.
     pub plain: Option<PlainCast>,
+    /// In insert position on Postgres and SQLite, per member, the default copied from the catalog
+    /// that a row which leaves the member's key out takes, `None` for a member that takes none
+    /// (required, or with no default, where the missing key's NULL is the column's own); `None`
+    /// as a whole where the run time writes the lists again per call instead (MySQL)
+    /// ([`copies`]).
+    pub copied: Option<Vec<Option<String>>>,
 }
 
 /// A `::type` cast on a dialect that has no `::`: the type as written, and the text the expansion
@@ -469,7 +483,7 @@ pub fn find(sql: &str, dialect: Dialect, server: &Server) -> Result<Vec<Found>, 
             if let Some(message) = profile(&schema, "") {
                 return error(message, span.0, span.1);
             }
-            found.push(Found { name: p.name.clone(), placeholder: (p.start, p.end), one: false, members: Vec::new(), region: (p.start, close + 1), head: (p.start, p.end), alias: None, insert: false, table: None, json: Some(JsonCast { jsonb, schema, schema_span: span }), plain: None });
+            found.push(Found { name: p.name.clone(), placeholder: (p.start, p.end), one: false, members: Vec::new(), region: (p.start, close + 1), head: (p.start, p.end), alias: None, insert: false, table: None, json: Some(JsonCast { jsonb, schema, schema_span: span }), plain: None, copied: None });
             let _ = word_end;
             continue;
         }
@@ -478,7 +492,7 @@ pub fn find(sql: &str, dialect: Dialect, server: &Server) -> Result<Vec<Found>, 
             if dialect != Dialect::Postgres {
                 if let Some((written, end)) = plain_cast_at(sql, p.end) {
                     let around = cast_around(&written, dialect, spot(sql, p.start, end, &lexed.opaque), server).map_err(|message| DescriptorError { message, start: p.end, end })?;
-                    found.push(Found { name: p.name.clone(), placeholder: (p.start, p.end), one: false, members: Vec::new(), region: (p.start, end), head: (p.start, end), alias: None, insert: false, table: None, json: None, plain: Some(PlainCast { written, around }) });
+                    found.push(Found { name: p.name.clone(), placeholder: (p.start, p.end), one: false, members: Vec::new(), region: (p.start, end), head: (p.start, end), alias: None, insert: false, table: None, json: None, plain: Some(PlainCast { written, around }), copied: None });
                 }
             }
             continue;
@@ -530,7 +544,7 @@ pub fn find(sql: &str, dialect: Dialect, server: &Server) -> Result<Vec<Found>, 
                 );
             }
         }
-        found.push(Found { name: p.name.clone(), placeholder: (p.start, p.end), one, members, region, head: (p.start, word_end), alias, insert, table, json: None, plain: None });
+        found.push(Found { name: p.name.clone(), placeholder: (p.start, p.end), one, members, region, head: (p.start, word_end), alias, insert, table, json: None, plain: None, copied: None });
     }
     Ok(found)
 }
@@ -996,6 +1010,20 @@ fn alias_of(found: &Found, dialect: Dialect) -> String {
     }
 }
 
+/// The default copied for member `k` of `found`, if a row that leaves its key out takes one.
+fn copied_at(found: &Found, k: usize) -> Option<&str> {
+    found.copied.as_ref()?.get(k)?.as_deref()
+}
+
+/// A Postgres string literal that reads the same whatever `standard_conforming_strings` says.
+fn pg_literal(s: &str) -> String {
+    if s.contains('\\') {
+        format!("E'{}'", s.replace('\\', "\\\\").replace('\'', "''"))
+    } else {
+        format!("'{}'", s.replace('\'', "''"))
+    }
+}
+
 struct Writer {
     text: String,
     members: Vec<Vec<(usize, usize)>>,
@@ -1112,11 +1140,31 @@ pub fn lower(found: &Found, dialect: Dialect, placeholder: &str, server: &Server
                 w.push("::jsonb)");
             };
             if found.insert {
+                // A member whose key a row may leave out reads, for such a row, the default copied
+                // from the catalog; `->` tells a missing key (SQL NULL) from a JSON null.
+                let select = ms
+                    .iter()
+                    .enumerate()
+                    .map(|(k, m)| {
+                        let value = format!("{alias}.{}", q(&m.name));
+                        match copied_at(found, k) {
+                            Some(default) => format!("CASE WHEN (\"reylo.e\".\"reylo.v\" -> {}) IS NOT NULL THEN {value} ELSE {default} END", pg_literal(&m.name)),
+                            None => value,
+                        }
+                    })
+                    .collect();
                 w.push("(");
                 w.list(ms.iter().map(|m| q(&m.name)).collect(), &mut lists);
                 w.push(") SELECT ");
-                w.list(ms.iter().map(|m| format!("{alias}.{}", q(&m.name))).collect(), &mut lists);
-                if found.one {
+                w.list(select, &mut lists);
+                if found.one && (0..ms.len()).any(|k| copied_at(found, k).is_some()) {
+                    // The object itself, which the key tests read.
+                    w.push(" FROM (SELECT ");
+                    w.placeholder(placeholder);
+                    w.push(&format!("::jsonb AS \"reylo.v\") AS \"reylo.e\", jsonb_to_record(\"reylo.e\".\"reylo.v\") AS {alias}("));
+                    coldefs(&mut w);
+                    w.push(")");
+                } else if found.one {
                     w.push(" FROM jsonb_to_record(");
                     w.placeholder(placeholder);
                     w.push(&format!("::jsonb) AS {alias}("));
@@ -1179,7 +1227,17 @@ pub fn lower(found: &Found, dialect: Dialect, placeholder: &str, server: &Server
                 w.push("(");
                 w.list(ms.iter().map(|m| q(&m.name)).collect(), &mut lists);
                 w.push(") SELECT ");
-                w.list(ms.iter().map(read).collect(), &mut lists);
+                // As on Postgres, a member whose key a row may leave out reads the copied default
+                // for such a row; json_type() is NULL for a missing key and 'null' for a JSON null.
+                let select = ms
+                    .iter()
+                    .enumerate()
+                    .map(|(k, m)| match copied_at(found, k) {
+                        Some(default) => format!("CASE WHEN json_type(\"reylo.e\".value, {}) IS NOT NULL THEN {} ELSE {default} END", path(&m.name), read(m)),
+                        None => read(m),
+                    })
+                    .collect();
+                w.list(select, &mut lists);
                 w.push(" FROM ");
                 source(&mut w);
                 // `WHERE` keeps a following ON CONFLICT from reading as a join's ON.
@@ -1355,6 +1413,23 @@ const PROBE: &str = "SELECT * FROM ";
 pub struct Info {
     pub name: String,
     pub lists: Vec<List>,
+    /// On Postgres and SQLite, where the statement copies the defaults instead of being written
+    /// again per call, the columns whose defaults it copied, for the freshness facts
+    /// ([`crate::fresh`]). Not on the wire.
+    #[serde(skip)]
+    pub copied: Vec<String>,
+}
+
+/// Whether no structured parameter has lists the run time writes again, so that the analysis
+/// carries none ([`Analysis::structured`]).
+pub fn none_rewritten(infos: &[Info]) -> bool {
+    infos.iter().all(|i| i.lists.is_empty())
+}
+
+/// The structured parameters whose lists the run time writes again, as the analysis carries them:
+/// one whose statement copies its defaults has none.
+pub fn rewritten_only<S: serde::Serializer>(infos: &[Info], s: S) -> Result<S::Ok, S::Error> {
+    s.collect_seq(infos.iter().filter(|i| !i.lists.is_empty()))
 }
 
 /// The diagnostic code of a column list Reylo cannot read, or one whose types the database
@@ -1391,10 +1466,9 @@ pub fn analyze<D: Describe>(sql: &str, dialect: Dialect, host: &Host<'_, D>, inn
             Err(e) => return refused(e),
         }
     };
-    let expanded = expand(sql, found, dialect, &server);
-    // Each member's type as the database names it, and the statement itself, asked in one round.
-    let probes: Vec<(Lowered, Lazy<Analysis>)> = expanded
-        .found
+    // Each member's type as the database names it, and the columns of each table an insert
+    // writes, for the checks below and the defaults it copies, asked in one round.
+    let probes: Vec<(Lowered, Lazy<Analysis>)> = found
         .iter()
         .map(|f| {
             if f.json.is_some() || f.plain.is_some() {
@@ -1404,16 +1478,32 @@ pub fn analyze<D: Describe>(sql: &str, dialect: Dialect, host: &Host<'_, D>, inn
             (lowered, inner(&text))
         })
         .collect();
-    // The columns of each table an insert writes, for the checks below, asked in the same round.
-    let tables: Vec<Lazy<Vec<TableColumn>>> = expanded.found.iter().map(|f| table_columns(f, sql, dialect, &server, host)).collect();
+    let tables: Vec<Lazy<Vec<TableColumn>>> = found.iter().map(|f| table_columns(f, sql, dialect, &server, host)).collect();
+    // On Postgres and SQLite an insert whose rows may leave keys out copies each such column's
+    // default into the statement, which is then one text for every call, whatever keys its rows
+    // give; the statement is analyzed with them, a round later. MySQL's run time writes the lists
+    // again per call instead (wiki/structured-params.md, question 6).
+    let mut found = found;
+    let mut columns = Vec::with_capacity(tables.len());
+    let copying = dialect != Dialect::Mysql && found.iter().any(|f| f.insert && f.json.is_none() && f.plain.is_none() && f.members.iter().any(Member::omittable));
+    if copying {
+        for t in &tables {
+            columns.push(t.clone()?);
+        }
+        for (f, c) in found.iter_mut().zip(&columns) {
+            f.copied = copies(f, c, dialect);
+        }
+    }
+    let expanded = expand(sql, found, dialect, &server);
     let mut analysis = inner(&expanded.sql)?;
     let mut probed = Vec::with_capacity(probes.len());
     for (lowered, a) in probes {
         probed.push((lowered, a?));
     }
-    let mut columns = Vec::with_capacity(tables.len());
-    for t in tables {
-        columns.push(t?);
+    if !copying {
+        for t in tables {
+            columns.push(t?);
+        }
     }
 
     // The statement's diagnostics, at the author's text.
@@ -1504,10 +1594,19 @@ pub fn analyze<D: Describe>(sql: &str, dialect: Dialect, host: &Host<'_, D>, inn
         let delta: isize = spans.iter().filter(|&&(_, oe, _, _)| oe <= p).map(|&(os, oe, rs, re)| (re - rs) as isize - (oe - os) as isize).sum();
         (p as isize + delta) as usize
     };
-    for (f, (l, at)) in expanded.found.iter().zip(&expanded.lowered) {
-        if f.insert {
+    for ((f, (l, at)), table) in expanded.found.iter().zip(&expanded.lowered).zip(&columns) {
+        if !f.insert {
+            continue;
+        }
+        if f.copied.is_some() {
+            // The columns whose defaults the statement copied, defaults or none, which the
+            // freshness check compares: a default changed after the build would otherwise be
+            // written as it was.
+            let copied = f.members.iter().filter(|m| m.omittable()).filter_map(|m| column_of(table, &m.name, dialect)).map(|c| c.name.clone()).collect();
+            analysis.structured.push(Info { name: f.name.clone(), lists: Vec::new(), copied });
+        } else {
             let lists = l.lists.iter().map(|list| List { start: rewritten(at + list.start), end: rewritten(at + list.end), entries: list.entries.clone() }).collect();
-            analysis.structured.push(Info { name: f.name.clone(), lists });
+            analysis.structured.push(Info { name: f.name.clone(), lists, copied: Vec::new() });
         }
     }
     // Each placeholder at its place in the author's text; a structured parameter's covers its
@@ -1676,18 +1775,52 @@ pub struct TableColumn {
     pub generated: bool,
     /// Postgres's `GENERATED ALWAYS AS IDENTITY`, which an insert may not set.
     pub always: bool,
+    /// On Postgres and SQLite, the default as the insert writes it for a row that leaves the
+    /// column's key out ([`copy_of`]); `None` for a column with none, whose missing key's NULL is
+    /// what the database writes.
+    pub default: Option<String>,
+    /// A Postgres view's column with no default of its own, where an insert that leaves it out
+    /// takes the default of the view's table, which the catalog does not give with the view.
+    pub inherited: bool,
 }
 
-/// Every column of a Postgres table: `$1` is its name as the statement writes it.
-pub const PG_TABLE_QUERY: &str = "SELECT a.attname::text, b.typname::text, \
+/// A Postgres column's default as SQL text (`pg_attribute a`, `pg_attrdef d`, `pg_type t` of the
+/// column's type), or NULL where it has none, by the rules wiki/structured-params/default-extraction.md
+/// measured on Postgres 14, 17 and 18: the column's own default, else for an identity
+/// `GENERATED BY DEFAULT` its sequence's `nextval`, else its domain's default; a generated
+/// column has none. `pg_get_expr` writes a name without its schema only where the session's
+/// `search_path` finds the same object by it, so the text is read under the session's own path,
+/// and the freshness check reads it again under the path the query runs with: equal text is the
+/// same objects (wiki/design.md §24).
+macro_rules! pg_default {
+    () => {
+        "CASE WHEN a.attgenerated <> '' THEN NULL \
+        WHEN d.adbin IS NOT NULL THEN pg_catalog.pg_get_expr(d.adbin, d.adrelid) \
+        WHEN a.attidentity = 'd' THEN 'nextval(' || pg_catalog.quote_literal(pg_catalog.pg_get_serial_sequence(a.attrelid::pg_catalog.regclass::text, a.attname::text)) || '::regclass)' \
+        WHEN t.typtype = 'd' THEN pg_catalog.pg_get_expr(t.typdefaultbin, 0) END"
+    };
+}
+pub(crate) use pg_default;
+
+/// Every column of a Postgres table: `$1` is its name as the statement writes it. Beside the
+/// facts the checks read, the default ([`pg_default`]), the type it is cast to, without
+/// modifiers, as `format_type` writes a type for a cast, and whether the column is a view's with
+/// no default of its own.
+pub const PG_TABLE_QUERY: &str = concat!(
+    "SELECT a.attname::text, b.typname::text, \
     pg_catalog.format_type(b.oid, CASE WHEN t.typtype = 'd' THEN t.typtypmod ELSE a.atttypmod END), \
     a.attnotnull OR (t.typtype = 'd' AND t.typnotnull), \
     a.atthasdef OR a.attidentity <> '' OR (t.typtype = 'd' AND t.typdefault IS NOT NULL), \
-    a.attgenerated <> '', a.attidentity = 'a' \
+    a.attgenerated <> '', a.attidentity = 'a', ",
+    pg_default!(),
+    ", pg_catalog.format_type(a.atttypid, NULL), c.relkind = 'v' AND d.adbin IS NULL \
     FROM pg_catalog.pg_attribute a \
+    JOIN pg_catalog.pg_class c ON c.oid = a.attrelid \
     JOIN pg_catalog.pg_type t ON t.oid = a.atttypid \
     JOIN pg_catalog.pg_type b ON b.oid = CASE WHEN t.typtype = 'd' THEN t.typbasetype ELSE t.oid END \
-    WHERE a.attrelid = pg_catalog.to_regclass($1) AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum";
+    LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum \
+    WHERE a.attrelid = pg_catalog.to_regclass($1) AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum"
+);
 
 /// Every column of a SQLite table: its name and its schema.
 pub const SQLITE_TABLE_QUERY: &str = "select name, type, \"notnull\", dflt_value, pk, hidden, (select count(*) from pragma_table_xinfo(?1, ?2) where pk > 0) from pragma_table_xinfo(?1, ?2)";
@@ -1746,8 +1879,11 @@ fn table_columns<D: Describe>(f: &Found, sql: &str, dialect: Dialect, server: &S
     Some(
         rows.iter()
             .map(|r| match dialect {
-                Dialect::Postgres => TableColumn { name: text(r, 0), base: text(r, 1), written: text(r, 2), not_null: flag(r, 3), has_default: flag(r, 4), generated: flag(r, 5), always: flag(r, 6) },
-                Dialect::Mysql => TableColumn { name: text(r, 0), base: text(r, 1), written: text(r, 2), not_null: flag(r, 3), has_default: flag(r, 4), generated: flag(r, 5), always: false },
+                Dialect::Postgres => {
+                    let default = r.get(7).and_then(as_str).map(|e| copy_of(e, &text(r, 8), dialect));
+                    TableColumn { name: text(r, 0), base: text(r, 1), written: text(r, 2), not_null: flag(r, 3), has_default: flag(r, 4), generated: flag(r, 5), always: flag(r, 6), default, inherited: flag(r, 9) }
+                }
+                Dialect::Mysql => TableColumn { name: text(r, 0), base: text(r, 1), written: text(r, 2), not_null: flag(r, 3), has_default: flag(r, 4), generated: flag(r, 5), always: false, default: None, inherited: false },
                 Dialect::Sqlite => {
                     let declared = text(r, 1);
                     let pk = r.get(4).and_then(Value::as_i64).unwrap_or(0);
@@ -1755,11 +1891,79 @@ fn table_columns<D: Describe>(f: &Found, sql: &str, dialect: Dialect, server: &S
                     let keys = r.get(6).and_then(Value::as_i64).unwrap_or(0);
                     // An INTEGER PRIMARY KEY is the rowid, which SQLite fills when it is left out.
                     let rowid = pk > 0 && keys == 1 && declared.eq_ignore_ascii_case("integer");
-                    TableColumn { name: text(r, 0), base: declared.clone(), written: declared, not_null: flag(r, 2), has_default: !matches!(r.get(3), None | Some(Value::Null)) || rowid, generated: hidden == 2 || hidden == 3, always: false }
+                    let default = match r.get(3) {
+                        None | Some(Value::Null) => None,
+                        Some(Value::String(e)) => Some(copy_of(e, "", dialect)),
+                        Some(other) => Some(copy_of(&other.to_string(), "", dialect)),
+                    };
+                    TableColumn { name: text(r, 0), base: declared.clone(), written: declared, not_null: flag(r, 2), has_default: default.is_some() || rowid, generated: hidden == 2 || hidden == 3, always: false, default, inherited: false }
                 }
             })
             .collect(),
     )
+}
+
+/// A default from the catalog as the insert writes it, by the rules
+/// wiki/structured-params/default-extraction.md measured. On Postgres it is cast to the column's
+/// type (`cast`, without modifiers): `pg_get_expr` leaves out the coercion the column applies, and
+/// a CASE whose ELSE has another type changes the caller's own value (`DEFAULT CURRENT_USER`, a
+/// `name`, cut a 100-character text to 63) or is refused (`text DEFAULT 1`); a cast to the type
+/// without its modifiers leaves the length or precision to the column, which refuses a default too
+/// long for it as the database does. On SQLite it is the default's source text, in parentheses
+/// (which `dflt_value` drops), and a default written as a bare identifier, which SQLite stores as
+/// a string, is written as one: as text it would read as a column.
+fn copy_of(expr: &str, cast: &str, dialect: Dialect) -> String {
+    match dialect {
+        Dialect::Postgres => format!("({expr})::{cast}"),
+        _ => format!("({})", sqlite_identifier_default(expr).unwrap_or_else(|| expr.to_string())),
+    }
+}
+
+/// A SQLite default written as one identifier, `member`, `"member"`, `[member]` or `` `member` ``,
+/// as the string SQLite stores for it; `None` for any other default. `true` and `false` bare are
+/// SQLite's truth values, and `null` and the `current_*` keywords are no identifiers.
+fn sqlite_identifier_default(expr: &str) -> Option<String> {
+    let e = expr.trim();
+    let name = if let Some(inner) = e.strip_prefix('"').and_then(|r| r.strip_suffix('"')) {
+        if inner.replace("\"\"", "").contains('"') {
+            return None;
+        }
+        inner.replace("\"\"", "\"")
+    } else if let Some(inner) = e.strip_prefix('`').and_then(|r| r.strip_suffix('`')) {
+        if inner.replace("``", "").contains('`') {
+            return None;
+        }
+        inner.replace("``", "`")
+    } else if let Some(inner) = e.strip_prefix('[').and_then(|r| r.strip_suffix(']')) {
+        if inner.contains(']') {
+            return None;
+        }
+        inner.to_string()
+    } else {
+        let bare = e.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || !c.is_ascii()) && e.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$' || !c.is_ascii());
+        if !bare || ["true", "false", "null", "current_time", "current_date", "current_timestamp"].iter().any(|k| e.eq_ignore_ascii_case(k)) {
+            return None;
+        }
+        e.to_string()
+    };
+    Some(format!("'{}'", name.replace('\'', "''")))
+}
+
+/// Per member of an insert's column list on Postgres and SQLite, the default a row that leaves
+/// its key out takes, copied from `columns`, the catalog's columns of the table: the maintainer,
+/// 2026-10-20, "I think we should copy the default from the catalog on the databases where it can
+/// be done with high fidelity". `None` where the catalog gave no column, so that the run time
+/// writes the lists again per call, as on MySQL.
+pub fn copies(f: &Found, columns: &[TableColumn], dialect: Dialect) -> Option<Vec<Option<String>>> {
+    if dialect == Dialect::Mysql || !f.insert || f.json.is_some() || f.plain.is_some() || columns.is_empty() {
+        return None;
+    }
+    Some(f.members.iter().map(|m| if m.omittable() { column_of(columns, &m.name, dialect).and_then(|c| c.default.clone()) } else { None }).collect())
+}
+
+/// The column named `name`, as the dialect compares names.
+fn column_of<'a>(columns: &'a [TableColumn], name: &str, dialect: Dialect) -> Option<&'a TableColumn> {
+    columns.iter().find(|c| if dialect == Dialect::Postgres { c.name == name } else { c.name.eq_ignore_ascii_case(name) })
 }
 
 /// The column list against the table its insert writes: a key that may be null goes to a column
@@ -1786,7 +1990,12 @@ fn check_table(f: &Found, sql: &str, fields: &[RowField], columns: &[TableColumn
             at(m.name_span, format!("{table}.{} is GENERATED ALWAYS AS IDENTITY, which an insert cannot set: leave it out of the column list, so the database numbers the rows.", c.name));
             continue;
         }
-        if !m.not_null && c.not_null {
+        if c.inherited && m.omittable() {
+            at(
+                m.name_span,
+                format!("{table}.{} is a column of a view with no default of its own, so a row that leaves `{}` out would take the default of the view's table, which Reylo does not copy into the insert: give the view's column a default (ALTER VIEW {table} ALTER COLUMN {} SET DEFAULT …), or write the member without `?` and with `not null`.", c.name, m.name, c.name),
+            );
+        } else if !m.not_null && c.not_null {
             let fix = if c.has_default { format!("`{}? {} not null`, which lets a row leave the key out so that the default applies", m.name, m.ty) } else { format!("`{} {} not null`", m.name, m.ty) };
             at(m.span, format!("{table}.{} is not null, and `{}` lets a row give null or leave the key out: write {fix}.", c.name, m.name));
         } else if m.optional && !c.has_default {
@@ -2238,4 +2447,105 @@ mod tests {
         let (s, t) = e.to_author(reader);
         assert_eq!(&sql[s..t], ":events::rows");
     }
+
+    /// `columns` as the catalog query answers for a table: Postgres's ten columns, SQLite's seven.
+    fn table(dialect: Dialect, columns: &[(&str, &str, bool, Option<&str>)]) -> Vec<Vec<Value>> {
+        use serde_json::json;
+        columns
+            .iter()
+            .map(|&(name, ty, not_null, default)| match dialect {
+                Dialect::Postgres => vec![json!(name), json!(ty), json!(ty), json!(not_null), json!(default.is_some()), json!(false), json!(false), json!(default), json!(ty), json!(false)],
+                _ => vec![json!(name), json!(ty), json!(not_null as i64), json!(default), json!(if name == "id" { 1 } else { 0 }), json!(0), json!(1)],
+            })
+            .collect()
+    }
+
+    /// The analysis of `sql` over a host whose table query answers `rows`, and every statement the
+    /// analysis asked to have analyzed, the expanded statement last.
+    fn drive(sql: &str, dialect: Dialect, rows: Vec<Vec<Value>>) -> (Analysis, Vec<String>) {
+        use crate::api::{Answer, Answers, NoDescribe, Need};
+        let mut answers: Answers<NoDescribe> = Answers::new();
+        for _ in 0..4 {
+            let host = Host::new(&answers);
+            let seen = std::cell::RefCell::new(Vec::new());
+            let inner = |s: &str| {
+                seen.borrow_mut().push(s.to_string());
+                Some(crate::analysis::bare_of(s, dialect, Vec::new()))
+            };
+            if let Some(a) = analyze(sql, dialect, &host, &inner, &|d| crate::analysis::bare_of(sql, dialect, d)) {
+                return (a, seen.into_inner());
+            }
+            for need in host.needs() {
+                if let Need::Query { id, sql: q, .. } = need {
+                    let answer = if q.contains("pg_attribute") || q.contains("pragma_table_xinfo") { rows.clone() } else { Vec::new() };
+                    answers.insert(id, Answer::Rows { rows: answer });
+                }
+            }
+        }
+        panic!("the analysis of {sql} never settled");
+    }
+
+    #[test]
+    fn postgres_and_sqlite_copy_each_omittable_columns_default_into_one_statement() {
+        // Postgres: the default cast to the column's type, read only where the row leaves the key
+        // out; a member with no default reads its value, whose missing key is NULL.
+        let sql = "insert into accounts :a::rows(name text not null, role? text not null, email text, n? int8 not null) returning id";
+        let rows = table(Dialect::Postgres, &[("id", "int8", true, Some("nextval('accounts_id_seq'::regclass)")), ("name", "text", true, None), ("role", "text", true, Some("'member'::text")), ("email", "text", false, None), ("n", "int8", true, Some("nextval('public.n_seq'::regclass)"))]);
+        let (a, seen) = drive(sql, Dialect::Postgres, rows);
+        assert_eq!(
+            seen.last().unwrap(),
+            "insert into accounts (\"name\", \"role\", \"email\", \"n\") SELECT \"a\".\"name\", CASE WHEN (\"reylo.e\".\"reylo.v\" -> 'role') IS NOT NULL THEN \"a\".\"role\" ELSE ('member'::text)::text END, \"a\".\"email\", CASE WHEN (\"reylo.e\".\"reylo.v\" -> 'n') IS NOT NULL THEN \"a\".\"n\" ELSE (nextval('public.n_seq'::regclass))::int8 END FROM jsonb_array_elements(:a::jsonb) WITH ORDINALITY AS \"reylo.e\"(\"reylo.v\", \"reylo.n\"), jsonb_to_record(\"reylo.e\".\"reylo.v\") AS \"a\"(\"name\" text, \"role\" text, \"email\" text, \"n\" int8) ORDER BY \"reylo.e\".\"reylo.n\" returning id"
+        );
+        // No list for the run time to write again, and the copied columns for the freshness facts.
+        assert_eq!(a.structured, vec![Info { name: "a".into(), lists: Vec::new(), copied: vec!["role".into(), "email".into(), "n".into()] }]);
+        assert!(!serde_json::to_value(&a).unwrap().as_object().unwrap().contains_key("structured"));
+
+        // One row reads the object itself for its key tests.
+        let sql = "insert into accounts :a::row(name text not null, role? text not null)";
+        let rows = table(Dialect::Postgres, &[("name", "text", true, None), ("role", "text", true, Some("'member'::text"))]);
+        let (_, seen) = drive(sql, Dialect::Postgres, rows);
+        assert_eq!(seen.last().unwrap(), "insert into accounts (\"name\", \"role\") SELECT \"a\".\"name\", CASE WHEN (\"reylo.e\".\"reylo.v\" -> 'role') IS NOT NULL THEN \"a\".\"role\" ELSE ('member'::text)::text END FROM (SELECT :a::jsonb AS \"reylo.v\") AS \"reylo.e\", jsonb_to_record(\"reylo.e\".\"reylo.v\") AS \"a\"(\"name\" text, \"role\" text)");
+
+        // SQLite: the default's source text in parentheses, a bare identifier as the string it is.
+        let sql = "insert into accounts :a::rows(id? integer not null, name text not null, role? text not null, nick text, token? text not null)";
+        let rows = table(Dialect::Sqlite, &[("id", "INTEGER", false, None), ("name", "TEXT", true, None), ("role", "TEXT", true, Some("'member'")), ("nick", "TEXT", false, Some("member")), ("token", "TEXT", true, Some("lower(hex(randomblob(4)))"))]);
+        let (a, seen) = drive(sql, Dialect::Sqlite, rows);
+        assert_eq!(
+            seen.last().unwrap(),
+            "insert into accounts (\"id\", \"name\", \"role\", \"nick\", \"token\") SELECT \"reylo.e\".value ->> '$.\"id\"', \"reylo.e\".value ->> '$.\"name\"', CASE WHEN json_type(\"reylo.e\".value, '$.\"role\"') IS NOT NULL THEN \"reylo.e\".value ->> '$.\"role\"' ELSE ('member') END, CASE WHEN json_type(\"reylo.e\".value, '$.\"nick\"') IS NOT NULL THEN \"reylo.e\".value ->> '$.\"nick\"' ELSE ('member') END, CASE WHEN json_type(\"reylo.e\".value, '$.\"token\"') IS NOT NULL THEN \"reylo.e\".value ->> '$.\"token\"' ELSE (lower(hex(randomblob(4)))) END FROM json_each(:a) AS \"reylo.e\" WHERE true ORDER BY \"reylo.e\".key"
+        );
+        assert_eq!(a.structured[0].copied, ["id", "role", "nick", "token"]);
+
+        // MySQL: unchanged, the lists the run time writes again per call.
+        let sql = "insert into accounts :a::rows(name varchar(9) not null, role? varchar(9) not null)";
+        let (a, seen) = drive(sql, Dialect::Mysql, Vec::new());
+        assert!(seen.last().unwrap().starts_with("insert into accounts (`name`, `role`) SELECT `a`.`name`, `a`.`role` FROM JSON_TABLE("), "{}", seen.last().unwrap());
+        assert_eq!((a.structured.len(), a.structured[0].lists.len(), a.structured[0].copied.len()), (1, 2, 0));
+        assert!(serde_json::to_value(&a).unwrap()["structured"].is_array());
+    }
+
+    #[test]
+    fn a_default_is_copied_by_each_databases_rules() {
+        // Postgres: cast to the column's type without its modifiers, which the column applies.
+        assert_eq!(copy_of("CURRENT_USER", "text", Dialect::Postgres), "(CURRENT_USER)::text");
+        assert_eq!(copy_of("'abcdef'::character varying", "character varying", Dialect::Postgres), "('abcdef'::character varying)::character varying");
+        // SQLite: a lone identifier is the string SQLite stores; keywords and expressions are not.
+        for (written, copied) in [("member", "('member')"), ("\"member\"", "('member')"), ("[a b]", "('a b')"), ("`it``s`", "('it`s')"), ("o'k", "(o'k)"), ("\"it's\"", "('it''s')"), ("true", "(true)"), ("FALSE", "(FALSE)"), ("null", "(null)"), ("current_timestamp", "(current_timestamp)"), ("'member'", "('member')"), ("-7", "(-7)"), ("x'00ff'", "(x'00ff')"), ("datetime('now')", "(datetime('now'))"), ("1 + 1", "(1 + 1)")] {
+            assert_eq!(copy_of(written, "", Dialect::Sqlite), copied, "{written}");
+        }
+        // A view's column with no default of its own is refused where a row may leave its key out.
+        let sql = "insert into v :a::rows(name text not null, note text)";
+        let mut rows = table(Dialect::Postgres, &[("name", "text", true, None), ("note", "text", false, None)]);
+        rows[1][9] = serde_json::json!(true);
+        let found = find(sql, Dialect::Postgres, &Server::default()).unwrap();
+        let columns: Vec<TableColumn> = rows
+            .iter()
+            .map(|r| TableColumn { name: r[0].as_str().unwrap().into(), base: "text".into(), written: "text".into(), not_null: r[3] == true, has_default: false, generated: false, always: false, default: None, inherited: r[9] == true })
+            .collect();
+        let fields: Vec<RowField> = found[0].members.iter().map(|m| RowField { name: m.name.clone(), ty: Type::Scalar { name: "text".into() }, written: m.ty.clone(), nullable: !m.not_null, optional: m.omittable(), schema: None }).collect();
+        let d = check_table(&found[0], sql, &fields, &columns, Dialect::Postgres);
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert!(d[0].message.starts_with("v.note is a column of a view with no default of its own"), "{}", d[0].message);
+    }
+
 }
