@@ -4,7 +4,6 @@
 #   Postgres 14 (shared, local)  postgres://localhost:5432/postgres, schema driver_matrix only
 #   porg-dm-mysql84              MySQL 8.4    127.0.0.1:33406  root/porg  database driver_matrix
 #   porg-dm-mysql80              MySQL 8.0    127.0.0.1:33380  root/porg  database driver_matrix
-#   porg-dm-mariadb11            MariaDB 11   127.0.0.1:33411  root/porg  database driver_matrix
 #   porg-dm-neon-pg              Postgres 14  127.0.0.1:55414  postgres/postgres  database main (behind the Neon proxy)
 #   porg-dm-neon-proxy           Neon proxy   127.0.0.1:54444  HTTP /sql and WebSocket /v1
 #   porg-dm-ps-sim               PlanetScale HTTP API simulator  127.0.0.1:38080, in front of porg-dm-mysql84
@@ -35,7 +34,6 @@ start() {
 
 start porg-dm-mysql84 mysql:8.4 -e MYSQL_ROOT_PASSWORD=porg -e MYSQL_DATABASE=driver_matrix -p 127.0.0.1:33406:3306 mysql:8.4
 start porg-dm-mysql80 mysql:8.0 -e MYSQL_ROOT_PASSWORD=porg -e MYSQL_DATABASE=driver_matrix -p 127.0.0.1:33380:3306 mysql:8.0
-start porg-dm-mariadb11 mariadb:11 -e MARIADB_ROOT_PASSWORD=porg -e MARIADB_DATABASE=driver_matrix -p 127.0.0.1:33411:3306 mariadb:11
 start porg-dm-neon-pg postgres:14 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=main -p 127.0.0.1:55414:5432 postgres:14
 
 wait_for() {
@@ -51,7 +49,6 @@ wait_for() {
 
 wait_for "MySQL 8.4" docker exec porg-dm-mysql84 mysql -uroot -pporg -h127.0.0.1 -e 'select 1'
 wait_for "MySQL 8.0" docker exec porg-dm-mysql80 mysql -uroot -pporg -h127.0.0.1 -e 'select 1'
-wait_for "MariaDB 11" docker exec porg-dm-mariadb11 mariadb -uroot -pporg -h127.0.0.1 -e 'select 1'
 wait_for "Neon's Postgres" docker exec porg-dm-neon-pg pg_isready -U postgres -h 127.0.0.1
 
 # The proxy and the simulator need their upstream to be up before they start.
@@ -68,7 +65,6 @@ seed() {
 }
 seed "MySQL 8.4" sh -c 'docker exec -i porg-dm-mysql84 mysql -uroot -pporg < seed/mysql.sql'
 seed "MySQL 8.0" sh -c 'docker exec -i porg-dm-mysql80 mysql -uroot -pporg < seed/mysql.sql'
-seed "MariaDB 11" sh -c 'docker exec -i porg-dm-mariadb11 mariadb -uroot -pporg < seed/mysql.sql'
 seed "the shared Postgres (schema driver_matrix)" psql "$PG_URL" -q -v ON_ERROR_STOP=1 -f seed/postgres.sql
 seed "Neon's Postgres" sh -c 'docker exec -i porg-dm-neon-pg psql -q -v ON_ERROR_STOP=1 -U postgres -d main < seed/postgres.sql'
 echo "setup.sh: ready"

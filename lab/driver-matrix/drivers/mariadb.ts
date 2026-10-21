@@ -1,4 +1,4 @@
-// The mariadb connector against a MariaDB or MySQL container (--port, --target): Pool,
+// The mariadb connector, a MySQL client, against the MySQL container (--port, --target): Pool,
 // Connection, PoolConnection, a PoolConnection inside beginTransaction(), and the callback API's
 // Connection (mariadb/callback).
 import { args, lazy, manualTx, notRun, requireFrom, runJob } from "../lib/harness.ts";

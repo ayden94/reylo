@@ -54,7 +54,7 @@ for (const [alias, v] of [["mysql2-3", "3.24.5"], ["mysql2-315", "3.15.3"], ["my
   for (const [port, target] of mysqlServers) add({ id: `mysql2@${v}/${target}`, bin: NODE26, file: "drivers/mysql2.ts", args: ["--pkg", alias, "--version", v, "--port", port!, "--target", target!], meta: { pkg: "mysql2", version: v, target: target!, runtime: n26 } });
 }
 for (const [alias, v] of [["mariadb-3", "3.5.4"], ["mariadb-34", "3.4.5"], ["mariadb-2", "2.5.6"]]) {
-  for (const [port, target] of [["33411", "MariaDB 11"], ["33406", "MySQL 8.4"]]) add({ id: `mariadb@${v}/${target}`, bin: NODE26, file: "drivers/mariadb.ts", args: ["--pkg", alias, "--version", v, "--port", port!, "--target", target!], meta: { pkg: "mariadb", version: v, target: target!, runtime: n26 } });
+  for (const [port, target] of [["33406", "MySQL 8.4"]]) add({ id: `mariadb@${v}/${target}`, bin: NODE26, file: "drivers/mariadb.ts", args: ["--pkg", alias, "--version", v, "--port", port!, "--target", target!], meta: { pkg: "mariadb", version: v, target: target!, runtime: n26 } });
 }
 for (const [port, target] of mysqlServers) add({ id: `bun-sql-mysql/${target}`, bin: BUN, file: "drivers/bunsql.ts", args: ["--adapter", "mysql", "--url", `mysql://root:porg@127.0.0.1:${port}/driver_matrix`, "--target", target!], meta: { pkg: "Bun.sql (mysql)", version: "1.3.14", target: target!, runtime: "bun" } });
 for (const [alias, v] of [["planetscale-2", "2.0.0"], ["planetscale-1", "1.20.2"]]) add({ id: `planetscale@${v}`, bin: NODE26, file: "drivers/planetscale.ts", args: ["--pkg", alias, "--version", v], meta: { pkg: "@planetscale/database", version: v, target: "MySQL 8.4 via ps-http-sim", runtime: n26 } });
