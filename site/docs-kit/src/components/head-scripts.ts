@@ -105,7 +105,25 @@ export const TABS_PREPAINT_SCRIPT = `(() => { try {
     }
     flush();
   }, true);
-} catch {} })();`;
+  // An accordion item pressed before its accordion has hydrated (Radix toggles on click) opens or
+  // closes at once: its parts take the state Radix would give them, which style.css shows, and the
+  // item is kept for the accordion to start with as it hydrates (Accordions, ./accordion.tsx).
+  const accordions = (window.__dkAccordionPending = new Map());
+  addEventListener('click', (e) => {
+    if (e.button !== 0) return;
+    const trigger = e.target.closest && e.target.closest('[data-accordion-value] > button[aria-expanded]');
+    const item = trigger && trigger.parentElement.parentElement;
+    const panel = item && item.querySelector(':scope > [data-dk-accordion-panel]');
+    if (!panel || panel.hasAttribute('data-dk-ready')) return;
+    const value = trigger.parentElement.getAttribute('data-accordion-value');
+    const state = panel.getAttribute('data-state') === 'open' ? 'closed' : 'open';
+    for (const el of [item, ...item.querySelectorAll('[data-state]')]) if (el.hasAttribute('data-state')) el.setAttribute('data-state', state);
+    trigger.setAttribute('aria-expanded', String(state === 'open'));
+    // The opening animation runs to this height, which Radix would measure.
+    if (state === 'open') panel.style.setProperty('--radix-collapsible-content-height', panel.scrollHeight + 'px');
+    accordions.set(value, state === 'open');
+  }, true);
+} catch {} })();`
 
 /**
  * Keeps a control the reader presses under the pointer. Switching a tab switches every group of

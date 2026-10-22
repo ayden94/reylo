@@ -26,7 +26,7 @@ Every step that loads a `.sql` file (the type check, a plugin, the preload) keep
 </Accordion>
 <Accordion title="Can I build without a database?" id="faq-no-database">
 
-A build that can't reach the database, such as a container build, reads the `.reylo/` a type check filled, with any database URL or none: where it has no analysis of its own for a statement, it takes the newest one, whichever database it was read from.
+No, not yet: Reylo reads your types from a live database, so a type check or a build needs one.
 
 </Accordion>
 <Accordion title="Why are dates strings, and 64-bit integers bigints?" id="faq-value-types">
