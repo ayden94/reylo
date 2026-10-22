@@ -17,16 +17,12 @@ Not at the moment: bring your own. Reylo types your queries against whatever sch
 </Accordion>
 <Accordion title="How do I type-check in CI?" id="in-ci">
 
-Start the database, apply the migrations, and run `tsc --noEmit --runExternalCode` with `DATABASE_URL` set. Your tests need the database too, or a filled [`.reylo/`](#faq-reylo-directory).
+Start the database, apply the migrations, and run `tsc --noEmit --runExternalCode` with `DATABASE_URL` set. Your tests need the database too.
 
 </Accordion>
 <Accordion title="What is the .reylo directory, and should I commit it?" id="faq-reylo-directory">
 
-Every step that loads a `.sql` file (the type check, a plugin, the preload) keeps its analysis in `.reylo/`, and a later step reads it from there:
-
-- The `.reylo/` directory is a cache with its own `.gitignore`, so git skips it.
-- When the database answers, an entry made against another schema is analyzed again. An editor or a dev server checks the schema again at most every 5 seconds.
-- When the database is out of reach, or no database URL is set, the entries are used as they are, and a statement that `.reylo/` lacks is an error.
+It is Reylo's cache of each query's analysis. It has its own `.gitignore`, so git skips it: don't commit it.
 
 </Accordion>
 <Accordion title="Can I build without a database?" id="faq-no-database">

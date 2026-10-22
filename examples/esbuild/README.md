@@ -51,22 +51,6 @@ Misspell a column in `queries/get_user.sql` and run `nub run typecheck` again: t
 - The `queries/*.sql` files hold one statement per file, with `:name` parameters, imported from `src/server.ts` with a relative path. The query `get_user.sql` resolves to a row or `null`, `list_posts.sql` to an array, and `create_post.sql`, an insert with `returning`, to the row it wrote.
 - In `.vscode/settings.json` and `.vscode/extensions.json`, the TypeScript 7 extension is pointed at this project's TypeScript, so the editor shows the queries' types and errors ([Editors](https://reylo.dev/#editors)). In Zed, `.zed/settings.json` does the same.
 
-## Build without a database
-
-A container or CI build that cannot reach the database builds from `.reylo/`, the analyses the type check, the plugin and `reylo generate` keep (see [In CI](https://reylo.dev/#in-ci)). Where the database can be reached, fill it:
-
-```sh
-DATABASE_URL=postgres://db.internal:5432/app npx reylo generate   # nubx reylo generate here
-```
-
-Carry `.reylo/` into the build with the sources (it ignores itself in git, so copy it, or run `reylo generate` in the same CI job), then build. The build needs no `DATABASE_URL`: one it cannot reach, or none, reads the analyses in `.reylo/`, whichever database they were read from.
-
-```sh
-npm run build
-```
-
-The type check and the plugin both read `.reylo/`, so both pass without the database, and the dev dependencies (esbuild, TypeScript and `@reylosql/postgres`) must be installed for the build. The image that runs the server needs only `node` and `dist/server.mjs`. A query that `.reylo/` lacks, such as one edited since `reylo generate` ran, fails the type check and the build at that file: with a `DATABASE_URL` it cannot reach, `.reylo has no analysis of this statement, so run reylo generate where the database can be reached`, and with none, `No database URL`.
-
 ## In your own project
 
 - Install from npm instead of the `link:` dependencies: `npm install reylo postgres` and `npm install -D @reylosql/postgres esbuild typescript@beta @types/node`.
