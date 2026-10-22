@@ -10,6 +10,11 @@ title: "FAQ"
 No. Reylo has your database prepare each query, which checks it and describes its parameters and columns without running it, and reads the rest from the catalog. On SQLite, Reylo prepares the query in its own copy of SQLite, from the schema in your database file.
 
 </Accordion>
+<Accordion title="Does Reylo run migrations?" id="faq-migrations">
+
+Not at the moment: bring your own. Reylo types your queries against whatever schema your dev database has, so apply your migrations with the tool you already use, such as Prisma Migrate, Drizzle Kit, Atlas, dbmate or plain SQL files. After a migration, the next type check sees the new schema: a dropped column is an error in the `.sql` file that names it, and in the code that reads it.
+
+</Accordion>
 <Accordion title="How do I type-check in CI?" id="in-ci">
 
 Start the database, apply the migrations, and run `tsc --noEmit --runExternalCode` with `DATABASE_URL` set. Your tests need the database too, or a filled [`.reylo/`](#faq-reylo-directory).
