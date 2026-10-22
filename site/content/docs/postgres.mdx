@@ -131,7 +131,7 @@ A cast to `int` that overflows is Postgres's error, never a wrapped number.
 
 **Writing a `bigint` out**
 
-JavaScript's `JSON.stringify` refuses a `bigint`, so write one out of your API as its text, `String(v)`, or as the integer itself, `JSON.rawJSON(String(v))`, which is what `.outputSchema` describes.
+JavaScript's `JSON.stringify` refuses a `bigint`, so write one out of your API as its text, `String(v)`, or as the integer itself, `JSON.rawJSON(String(v))`.
 
 <Pairs>
 

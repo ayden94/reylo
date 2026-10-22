@@ -131,7 +131,7 @@ It resolves to the rows, shaped by how many the query can return:
 | An `insert`, `update` or `delete` without `returning` | `void` |
 | Anything else | `Row[]` |
 
-An imported query also has `.runSync()`, `.with()`, `.sql`, `.raw`, `.inputSchema` and `.outputSchema` ([Usage](https://reylo.dev/#usage)).
+An imported query also has `.runSync()`, `.with()`, `.sql` and `.raw` ([Usage](https://reylo.dev/#usage)).
 
 ## What Reylo infers
 
