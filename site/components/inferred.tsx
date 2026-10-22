@@ -10,14 +10,17 @@ import { DialectSwitch } from './dialect-tabs';
  * statement's captured module, which follow the page's dialect choice, and the switch here sets it.
  */
 
-/** The card. `layout` is `side` (the parameters and the result beside the query) or `rows` (under it). */
-export function Inferred({ dialects, layout = 'side', children }: { dialects?: string; layout?: 'side' | 'rows'; children: ReactNode }) {
+/** The card. `layout` is `side` (the parameters and the result beside the query) or `rows` (under it); `bare` drops the dialect switch. */
+export function Inferred({ dialects, layout = 'side', bare, children }: { dialects?: string; layout?: 'side' | 'rows'; bare?: boolean; children: ReactNode }) {
   const shown = dialects ? DIALECTS.filter((d) => dialects.split(',').includes(d)) : DIALECTS;
   return (
     <div className="reylo-inferred" data-layout={layout}>
-      <div className="reylo-inferred-switch">
-        <DialectSwitch dialects={shown.length < DIALECTS.length ? shown.join(',') : undefined} />
-      </div>
+      {/* On a database's own page, `bare`: no switch, and no label naming the one database. */}
+      {!bare && (
+        <div className="reylo-inferred-switch">
+          <DialectSwitch dialects={shown.length < DIALECTS.length ? shown.join(',') : undefined} />
+        </div>
+      )}
       {children}
     </div>
   );

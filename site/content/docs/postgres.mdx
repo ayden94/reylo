@@ -354,67 +354,116 @@ A domain over `jsonb` with a JSON Schema `CHECK` is typed by its schema. A `CHEC
 
 Every column is typed `| null` unless Reylo can tell it never is null. On Postgres, it reads your schema and the query:
 
-- **A table's column** is non-null if it has a valid `NOT NULL` constraint, in every table that inherits from it too.
-- **An outer join** makes the joined table's columns nullable: the right side of a `left join`, the left side of a `right join`, and both sides of a `full join`. Aliases tell apart a table joined to itself, so in `employees e left join employees m …`, `e.name` stays non-null.
-- **A test that fails on `NULL`**, in the `where` or in a later inner join's `on`, makes that column non-null: `where o.total > 0`, `where email is not null`, `where lower(email) = :email`.
-- **An expression** is non-null when Reylo's rules show it:
-  - a literal, a cast, `count`, `exists` and `is null` are always non-null;
-  - concatenation (`||`), comparisons, arithmetic, `like` and the other pattern matches, and the bit, containment and JSON key operators (`&`, `@>`, `&&`, `?`) are non-null over non-null operands;
-  - so are built-in functions that return `NULL` only for a `NULL` argument (`length`, `lower`, `round`, …);
-  - so are the values of `generate_series`, and of `unnest(array[…])` over non-null elements;
-  - a `coalesce`, `greatest` or `least` is non-null if one of its arguments is, and a `case` if every branch is.
-- **An aggregate** other than `count` returns `NULL` over no rows, so it's nullable without a `group by`. With a `group by`, every group has rows:
-  - the aggregates `array_agg`, `json_agg`, `jsonb_agg` and `jsonb_object_agg` are non-null;
-  - the others, such as `sum`, `max` and `string_agg`, are non-null when their argument is;
-  - an aggregate with a `filter` stays nullable, since the filter can leave a group empty.
-- **A whole row** (`select e`, `jsonb_agg(e)`, `jsonb_agg(e.*)`) is non-null unless an outer join can null it, and its columns keep their types.
-- **A scalar subquery** is non-null only when it always returns one non-null value: an aggregate without `group by`, like `(select count(*) …)`, or a `select` without `from`, like `(select 1)`.
-- **A `union` column** is non-null when it's non-null in every branch.
-- **A column of a `with` query or a subquery in `from`** is as nullable as it is in that query.
-- **Your own operators, functions and casts**, or an extension's, tell Reylo nothing: it assumes nothing wherever Postgres could pick one of them over a built-in.
+<Rules>
 
-```ts twoslash tab="main.ts"
-import userTotals from "./pg_user_totals.sql";
+**`NOT NULL` columns**
 
-const rows = await userTotals.run(db);
-//    ^?
+A table's column is non-null if it has a valid `NOT NULL` constraint, including in every table that inherits from it.
+
+<Inferred>
+
+```sql file="pg_null_columns.sql"
+select name, email
+from users
 ```
 
-```sql tab="pg_user_totals.sql"
-select u.name, o.total, coalesce(o.paid, false) as paid
+</Inferred>
+
+**Outer joins**
+
+An outer join makes the joined table's columns nullable: the right side of a `left join`, the left side of a `right join`, and both sides of a `full join`. A table joined to itself is told apart by its alias.
+
+<Inferred>
+
+```sql file="pg_null_left_join.sql"
+select u.name, o.total
 from users u
 left join orders o on o.user_id = u.id
 ```
 
-A `where` test on the joined table means its row exists, so its columns are non-null. Window functions are typed like anything else: `lag` is nullable, since the first row has no previous row:
+</Inferred>
 
-```ts twoslash tab="main.ts"
-import paidOrders from "./pg_paid_orders.sql";
+**Tests that rule out `NULL`**
 
-const rows = await paidOrders.run(db);
-//    ^?
-```
+A test that fails on `NULL`, in the `where` or a later inner join's `on`, makes its column non-null. On a joined table, it also shows the row exists, so the table's `NOT NULL` columns are non-null again.
 
-```sql tab="pg_paid_orders.sql"
-select u.name, o.total, o.placed_at
+<Inferred>
+
+```sql file="pg_null_where.sql"
+select u.name, o.total, o.ships_on
 from users u
 left join orders o on o.user_id = u.id
 where o.paid
 ```
 
-```ts twoslash tab="main.ts"
-import orderGaps from "./pg_order_gaps.sql";
+</Inferred>
 
-const rows = await orderGaps.run(db);
-//    ^?
+**Expressions**
+
+Literals, casts, `count`, `exists` and `is null` are never null. Operators, built-in functions and `case` are non-null when their inputs are, and `coalesce`, `greatest` and `least` are non-null when one of their arguments is.
+
+<Inferred>
+
+```sql file="pg_null_expressions.sql"
+select name || '!' as shout,
+  upper(email) as upper_email,
+  coalesce(email, '') as email_or_empty,
+  email is null as no_email
+from users
 ```
 
-```sql tab="pg_order_gaps.sql"
-select id, placed_at,
-  placed_at - lag(placed_at) over (order by placed_at) as since_previous,
+</Inferred>
+
+**Aggregates**
+
+Without a `group by`, an aggregate other than `count` returns `NULL` over no rows. With one, every group has rows: `array_agg` and `jsonb_agg` are non-null, `max` and `sum` are non-null when their argument is, and a `filter` keeps an aggregate nullable.
+
+<Inferred>
+
+```sql file="pg_null_aggregates.sql"
+select user_id,
+  array_agg(id) as order_ids,
+  max(ships_on) as last_ships_on,
+  sum(total) filter (where paid) as paid_total
+from orders
+group by user_id
+```
+
+</Inferred>
+
+**Scalar subqueries**
+
+A scalar subquery is non-null only when it always returns one non-null value: an aggregate without a `group by`, or a `select` without a `from`.
+
+<Inferred>
+
+```sql file="pg_null_subqueries.sql"
+select (select count(*) from orders) as orders,
+  (select name from users order by id limit 1) as first_name
+```
+
+</Inferred>
+
+**Window functions**
+
+A window function is typed like any other function: `lag` is nullable, since the first row has no previous row.
+
+<Inferred>
+
+```sql file="pg_null_window.sql"
+select id,
+  lag(placed_at) over (order by placed_at) as previous,
   row_number() over (order by placed_at) as n
 from orders
 ```
+
+</Inferred>
+
+</Rules>
+
+- **A `union` column** is non-null when it's non-null in every branch, and a column of a `with` query or a subquery in `from` is as nullable as it is in that query.
+- **A whole row** (`jsonb_agg(e)`, `jsonb_agg(e.*)`) is non-null unless an outer join can null it.
+- **Your own operators, functions and casts**, or an extension's, tell Reylo nothing: it assumes nothing wherever Postgres could pick one of them over a built-in.
 
 To tell Reylo a value is never null, say so in the query: `coalesce(x, …)` gives a default, and `where x is not null` filters out the nulls.
 

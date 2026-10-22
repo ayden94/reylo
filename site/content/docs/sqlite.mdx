@@ -338,53 +338,95 @@ A function that can return `NULL` for non-null arguments is typed `| null`. That
 
 Every column is typed `| null` unless Reylo can tell it never is null. SQLite itself reports nothing useful here, so Reylo reads your schema and the query:
 
-- **A table's column** is non-null if it's declared `NOT NULL`.
-- **An outer join** makes the joined table's columns nullable.
-- **A `where` test that fails on `NULL`** makes that column non-null: `where nick is not null`, `where lower(nick) = :nick`, including a test on a `left join`'s column.
-- **An expression** is non-null when Reylo's function table says so: `length(name)`, `coalesce(nick, name)`, `name || '!'` and `id + 1` over non-null inputs, and `count`. A division is nullable, since dividing by zero returns `NULL`. Arithmetic on a `REAL` with no answer is the one exception ([Limits](#limits)).
-- **An aggregate** other than `count` returns `NULL` over no rows.
+<Rules>
 
-```ts twoslash tab="main.ts"
-import nicknames from "./lite_nicknames.sql";
+**`NOT NULL` columns**
 
-const rows = await nicknames.run(db);
-//    ^?
-```
+A table's column is non-null if it's declared `NOT NULL`.
 
-```sql tab="lite_nicknames.sql" dialect="sqlite"
-select upper(nick) as shout, coalesce(nick, name) as label
+<Inferred>
+
+```sql file="lite_null_columns.sql" dialect="sqlite"
+select name, nick
 from users
 ```
 
-A `where` test on the joined table means its row exists, so its columns are non-null. Window functions are typed like anything else: `lag` is nullable, since the first row has no previous row:
+</Inferred>
 
-```ts twoslash tab="main.ts"
-import shipped from "./lite_shipped.sql";
+**Outer joins**
 
-const rows = await shipped.run(db);
-//    ^?
+An outer join makes the joined table's columns nullable.
+
+<Inferred>
+
+```sql file="lite_null_left_join.sql" dialect="sqlite"
+select u.name, o.total_cents
+from users u
+left join orders o on o.user_id = u.id
 ```
 
-```sql tab="lite_shipped.sql" dialect="sqlite"
+</Inferred>
+
+**Tests that rule out `NULL`**
+
+A test that fails on `NULL` in the `where` makes its column non-null, and on a joined table shows the row exists.
+
+<Inferred>
+
+```sql file="lite_null_where.sql" dialect="sqlite"
 select u.name, o.total_cents, o.ships_on
 from users u
 left join orders o on o.user_id = u.id
 where o.ships_on is not null
 ```
 
-```ts twoslash tab="main.ts"
-import orderGaps from "./lite_order_gaps.sql";
+</Inferred>
 
-const rows = await orderGaps.run(db);
-//    ^?
+**Expressions**
+
+Reylo's table of SQLite's functions says which are non-null over non-null inputs: `length`, `coalesce`, `||` and arithmetic are; division by a column is not, since dividing by zero returns `NULL`. Arithmetic on a `REAL` with no answer is the one exception ([Limits](#limits)).
+
+<Inferred>
+
+```sql file="lite_null_expressions.sql" dialect="sqlite"
+select upper(nick) as shout,
+  coalesce(nick, name) as label,
+  length(name) as n,
+  100 / id as per_id
+from users
 ```
 
-```sql tab="lite_order_gaps.sql" dialect="sqlite"
-select id, total_cents,
+</Inferred>
+
+**Aggregates**
+
+An aggregate other than `count` returns `NULL` over no rows.
+
+<Inferred>
+
+```sql file="lite_null_aggregates.sql" dialect="sqlite"
+select count(*) as n, max(total_cents) as top
+from orders
+```
+
+</Inferred>
+
+**Window functions**
+
+A window function is typed like any other function: `lag` is nullable, since the first row has no previous row.
+
+<Inferred>
+
+```sql file="lite_null_window.sql" dialect="sqlite"
+select id,
   lag(total_cents) over (order by id) as previous_total,
   row_number() over (order by id) as n
 from orders
 ```
+
+</Inferred>
+
+</Rules>
 
 To tell Reylo a value is never null, say so in the query: `coalesce(x, …)` gives a default, and `where x is not null` filters out the nulls.
 

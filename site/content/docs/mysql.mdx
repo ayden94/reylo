@@ -285,45 +285,87 @@ A `VECTOR`, new in MySQL 9, comes back as a `number[]` of 32-bit floats. A vecto
 
 ## Nullability
 
-Every column is typed `| null` unless Reylo can tell it never is null. On MySQL, it starts from what the server reports for each column, then adds what the query's `where` and `group by` rule out.
+Every column is typed `| null` unless Reylo can tell it never is null. On MySQL, it starts from what the server reports for each column, then adds what the query's `where` and `group by` rule out:
 
-- **A table's column** is non-null if it's `NOT NULL`.
-- **An outer join** makes the joined table's columns nullable, unless a test that fails on `NULL` shows the joined row exists: `where p.published_at is not null` or `where p.id > 0` in the `where`, or a later inner join's `on`.
-- **An expression** is non-null when the server says so: `coalesce` and `ifnull` with a non-null argument, `count`, `length`, arithmetic on non-null integers, and comparisons.
-  - The server is cautious with string and date functions, most casts and division: `upper(name)`, `concat(name, '!')`, `date(created_at)`, `cast(id as char)` and `id / 2` are nullable even over a `NOT NULL` column.
-- **A `where` test that fails on `NULL`** makes the column it tests non-null: `where email is not null`, `where email like '%@%'`, `where lower(email) = :email`. It doesn't count under an `or` that tests another column, or through `coalesce`, `ifnull` and `<=>`.
-- **`json_arrayagg`** returns `NULL` over no rows, but is non-null with a `group by`, since every group has rows.
-- **`WITH ROLLUP`** adds summary rows whose grouped columns are `NULL`, and the types include `null`.
+<Rules>
 
-A `where` test on the joined table means its row exists, so its columns are non-null:
+**`NOT NULL` columns**
 
-```ts twoslash tab="main.ts"
-import shipped from "./my_shipped.sql";
+A table's column is non-null if it's `NOT NULL`.
 
-const rows = await shipped.run(db);
-//    ^?
+<Inferred>
+
+```sql file="my_null_columns.sql" dialect="mysql"
+select name, email
+from users
 ```
 
-```sql tab="my_shipped.sql" dialect="mysql"
+</Inferred>
+
+**Outer joins**
+
+An outer join makes the joined table's columns nullable.
+
+<Inferred>
+
+```sql file="my_null_left_join.sql" dialect="mysql"
+select u.name, o.total
+from users u
+left join orders o on o.user_id = u.id
+```
+
+</Inferred>
+
+**Tests that rule out `NULL`**
+
+A test that fails on `NULL`, in the `where` or a later inner join's `on`, makes its column non-null, and on a joined table shows the row exists. It doesn't count under an `or` that tests another column, or through `coalesce`, `ifnull` and `<=>`.
+
+<Inferred>
+
+```sql file="my_null_where.sql" dialect="mysql"
 select u.name, o.total, o.ships_on
 from users u
 left join orders o on o.user_id = u.id
 where o.ships_on is not null
 ```
 
-To tell Reylo a value is never null, give it a default with `coalesce` or `ifnull`:
+</Inferred>
 
-```ts twoslash tab="main.ts"
-import shouts from "./my_shouts.sql";
+**Expressions**
 
-const rows = await shouts.run(db);
-//    ^?
-```
+An expression is non-null when the server says so: `coalesce` and `ifnull` with a non-null argument, `count`, `length`, comparisons and integer arithmetic. The server is cautious with string and date functions, most casts and division, which stay nullable even over a `NOT NULL` column.
 
-```sql tab="my_shouts.sql" dialect="mysql"
-select upper(name) as shout, coalesce(upper(name), '') as shout_or_empty
+<Inferred>
+
+```sql file="my_null_expressions.sql" dialect="mysql"
+select length(name) as n,
+  upper(name) as shout,
+  coalesce(upper(name), '') as shout_or_empty,
+  id / 2 as half
 from users
 ```
+
+</Inferred>
+
+**`WITH ROLLUP`**
+
+A `WITH ROLLUP` adds summary rows whose grouped columns are `NULL`, and the types include `null`.
+
+<Inferred>
+
+```sql file="my_null_rollup.sql" dialect="mysql"
+select role, count(*) as n
+from users
+group by role with rollup
+```
+
+</Inferred>
+
+</Rules>
+
+`json_arrayagg` returns `NULL` over no rows, but is non-null with a `group by`, since every group has rows.
+
+To tell Reylo a value is never null, give it a default with `coalesce` or `ifnull`, or filter out the nulls with `where x is not null`.
 
 ## Cardinality
 

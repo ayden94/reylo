@@ -180,6 +180,9 @@ function attr(node: MdNode, name: string): unknown {
 }
 const where = (node: MdNode) => `line ${node.position?.start.line ?? '?'}`;
 
+/** A database's own page, whose every example is that database's. */
+const DIALECT_PAGE = /(^|\/)(postgres|mysql|sqlite)\.mdx$/;
+
 /** The element that shows its statements with the types Reylo infers for them (`renderInferred`). */
 export const INFERRED = 'Inferred';
 /** A card's schema block: ```sql schema dialect="postgres"```. */
@@ -502,6 +505,8 @@ function renderInferred(tree: MdNode, blocks: Block[], modules: Modules, page: s
     card.attributes = [
       { type: 'mdxJsxAttribute', name: 'dialects', value: dialects.map((d) => DIALECT_NAME[d]).join(',') },
       { type: 'mdxJsxAttribute', name: 'layout', value: INFERRED_LAYOUT },
+      // A database's own page is that database's throughout: its cards need no switch or label.
+      ...(DIALECT_PAGE.test(page) ? [{ type: 'mdxJsxAttribute', name: 'bare', value: null }] : []),
     ];
     card.children = [jsx('DialectTabs', [['follow', null]], panels)];
   }
