@@ -274,9 +274,20 @@ Inside JSON, a value can differ from the same value in a column. Numbers past 2^
 
 </Pairs>
 
-**Aggregates beside the statement's columns**
+**Aggregates beside columns**
 
-Inside the JSON a statement builds, an aggregate can sit beside the statement's own columns wherever its `GROUP BY` allows: `jsonb_build_object('name', u.name, 'posts', count(p.id))` with `group by u.id` is `{ name: string; posts: number }`. With `GROUP BY` by position (`group by 1`) or by a name from the select list (`lower(u.name) as n … group by n`), an object that mixes aggregates with columns has `unknown` values.
+Inside JSON a statement builds, an aggregate can sit beside the statement's columns wherever its `GROUP BY` allows. With `group by 1`, or a `GROUP BY` by a name from the select list, an object that mixes the two has `unknown` values.
+
+<Inferred>
+
+```sql file="pg_json_grouped.sql"
+select jsonb_build_object('name', u.name, 'orders', count(o.id)) as summary
+from users u
+left join orders o on o.user_id = u.id
+group by u.id
+```
+
+</Inferred>
 
 **Aggregates over no rows**
 
@@ -289,12 +300,55 @@ Over no rows, `jsonb_agg` returns `null`, and its type includes `null`. Write `c
 
 </Pairs>
 
+**Where a schema's type applies**
+
+A JSON Schema `CHECK`'s type reaches the column wherever you use it as it is: selected directly or through a view or subquery, inside JSON you build, in a whole row, and as a parameter written to the column.
+
+<Inferred>
+
+```sql file="pg_json_schema_param.sql"
+insert into events (kind, payload)
+values (:kind, :payload)
+returning id
+```
+
+</Inferred>
+
+**Where it doesn't**
+
+An expression on the column, a column under a `union`, a `CHECK` added `NOT VALID`, and `to_jsonb` of a single value are typed `unknown`.
+
+<Inferred>
+
+```sql file="pg_json_unknown.sql"
+select payload -> 'x' as x, to_jsonb(kind) as k
+from events
+```
+
+</Inferred>
+
+**Through a `with` query or a subquery**
+
+JSON built in a `with` query or a subquery in `from` keeps its type when you select its column as it is. Through a `union`, a `lateral` subquery or a `*`, it's `unknown`.
+
+<Inferred>
+
+```sql file="pg_json_with.sql"
+with totals as (
+  select user_id, jsonb_agg(total) as totals
+  from orders
+  group by user_id
+)
+select u.name, t.totals
+from users u
+join totals t on t.user_id = u.id
+```
+
+</Inferred>
+
 </Rules>
 
-- **Where a schema's type applies:** selecting the column, directly or through a view or subquery; the column inside JSON your query builds; a whole row (`jsonb_agg(e)`); and a parameter written to the column.
-- **Where it doesn't:** an expression on the column (`payload -> 'x'`), a column under a `union`, a `CHECK` added `NOT VALID`, and a single value passed to `to_jsonb` are all `unknown`.
-- **Through a `with` query or a subquery in `from`,** built JSON keeps its type when you select its column as it is, alone or inside JSON you build, including under `coalesce(…, '[]')`. Through a `union`, a `lateral` subquery or a `*`, it's `unknown`.
-- **Supported validators:** pg_jsonschema's `jsonb_matches_schema` and `json_matches_schema`, and those of `jsonschema`, `postgres-json-schema`, `is_jsonb_valid` and `json_schema_validate`. Reylo reads only the keywords and draft each one enforces.
+The JSON Schema validators Reylo reads are pg_jsonschema's `jsonb_matches_schema` and `json_matches_schema`, and those of `jsonschema`, `postgres-json-schema`, `is_jsonb_valid` and `json_schema_validate`, each by the keywords and draft it enforces.
 
 ### Arrays
 
@@ -459,13 +513,36 @@ from orders
 
 </Inferred>
 
+**`union`**
+
+A `union` column is non-null when it's non-null in every branch. A column of a `with` query or a subquery in `from` is as nullable as it is in that query.
+
+<Inferred>
+
+```sql file="pg_null_union.sql"
+select name as label, email as contact from users
+union all
+select 'guest', null
+```
+
+</Inferred>
+
+**Whole rows**
+
+A whole row is non-null, and keeps each column's type, unless an outer join can null it.
+
+<Inferred>
+
+```sql file="pg_null_rows.sql"
+select to_jsonb(o) as "order"
+from orders o
+```
+
+</Inferred>
+
 </Rules>
 
-- **A `union` column** is non-null when it's non-null in every branch, and a column of a `with` query or a subquery in `from` is as nullable as it is in that query.
-- **A whole row** (`jsonb_agg(e)`, `jsonb_agg(e.*)`) is non-null unless an outer join can null it.
-- **Your own operators, functions and casts**, or an extension's, tell Reylo nothing: it assumes nothing wherever Postgres could pick one of them over a built-in.
-
-To tell Reylo a value is never null, say so in the query: `coalesce(x, …)` gives a default, and `where x is not null` filters out the nulls.
+Your own operators, functions and casts, or an extension's, tell Reylo nothing: it assumes nothing wherever Postgres could pick one of them over a built-in. To tell Reylo a value is never null, say so in the query: `coalesce(x, …)` gives a default, and `where x is not null` filters out the nulls.
 
 ## Cardinality
 
@@ -478,22 +555,60 @@ Reylo infers how many rows a query returns, and types `.run()`'s result to match
 | `void` | `none` | is an `insert`, `update`, `delete` or `merge` without `returning` |
 | `Row[]` | `many` | is anything else |
 
-A unique index on an expression counts when the query compares the same expression, and a partial unique index counts when the `where` includes its condition:
+<Rules>
 
-```ts twoslash tab="main.ts"
-import userByEmail from "./pg_user_by_email.sql";
+**Unique keys**
 
-const user = await userByEmail.run(db, { email: "Ada@example.com" });
-//    ^?
+A query that compares every column of a primary key or unique index with `=` returns one row or `null`. A unique index on an expression counts when the query compares the same expression, written as Postgres stores it in the index, cast included.
+
+<Inferred>
+
+```sql file="pg_card_unique.sql"
+select id, name
+from users
+where lower(email) = lower(:email)
 ```
 
-```sql tab="pg_user_by_email.sql"
-select id, name from users where lower(email) = lower(:email)
+</Inferred>
+
+**Partial unique indexes**
+
+A partial unique index counts only when the `where` includes its condition.
+
+<Inferred>
+
+```sql schema
+create table slugs (
+  id serial primary key,
+  slug text not null,
+  deleted boolean not null default false
+);
+create unique index on slugs (slug) where not deleted;
 ```
 
-- The expression must match the one Postgres stores in the index. An index on a domain column stores a cast, `lower((email)::text)`, so the query must write the cast too.
-- Without its condition in the `where`, a partial unique index doesn't count: if the index is `on (slug) where not deleted`, then `where slug = :slug` returns `Row[]`.
-- Part of a composite key doesn't count, and neither does a `having` or an `insert … select … returning`.
+```sql file="pg_card_partial.sql"
+select id
+from slugs
+where slug = :slug and not deleted
+```
+
+</Inferred>
+
+**What doesn't count**
+
+Part of a composite key doesn't count, and neither does a `having` or an `insert … select … returning`.
+
+<Inferred>
+
+```sql file="pg_card_insert_select.sql"
+insert into orders (user_id, total)
+select id, 0 from users
+returning id
+```
+
+</Inferred>
+
+</Rules>
 
 ## Parameters
 
@@ -508,7 +623,7 @@ A parameter accepts the same values `.run()` returns for its type, so you can pa
 | SQL type | A parameter takes |
 | --- | --- |
 | `smallint`, `integer` | `number` |
-| `bigint` | `number`, `bigint` or a string of digits |
+| `bigint`, `limit`, `offset` | `number`, `bigint` or a string of digits |
 | `numeric` | `string` |
 | `boolean` | `boolean` |
 | `date`, `timestamp`, `time` | `string` |
@@ -518,55 +633,111 @@ A parameter accepts the same values `.run()` returns for its type, so you can pa
 | An array | an array of its element's parameter type, without `null` |
 | An enum | the union of its labels |
 
-- A `timestamptz` parameter needs a time zone in its text, as `.run()` returns it: `"2026-10-12T19:06:48Z"`, `"2026-10-12 19:06:48+09"`, `"2026-10-12 19:06:48 Asia/Tokyo"`, or `infinity`. Pass a `Date` as `date.toISOString()`. Text without a zone is rejected before the query runs, since Postgres would read it in the session's time zone.
-- A `timestamp` or `date` parameter rejects a `Date`, since drivers convert a `Date` using different time zones.
-- A `bytea` parameter takes only a `Uint8Array`, and rejects base64 or hex text before the query runs, since each driver would store a string differently. Decode the text into a `Uint8Array` first.
-- A JSON parameter is sent as JSON, so a string is stored as a JSON string: `'{"a":1}'` becomes `"{\"a\":1}"`. To pass JSON text you already have, cast it from text: `:data::text::jsonb`.
-- The parameters of `limit` and `offset` are `bigint`s, which accept a `number` too.
+<Rules>
+
+**Dates and times**
+
+A date or time parameter takes text, never a `Date`, since drivers convert a `Date` in different time zones. A `timestamptz` needs a zone in its text, as `.run()` returns it, so pass a `Date` as `date.toISOString()`:
+
+```ts twoslash tab="main.ts"
+import ordersSince from "./pg_orders_since.sql";
+
+await ordersSince.run(db, { since: "2026-10-12T19:06:48Z" });
+await ordersSince.run(db, { since: new Date().toISOString() });
+// rejected before the query runs: the text names no zone
+await ordersSince.run(db, { since: "2026-10-12 19:06:48" });
+```
+
+```sql tab="pg_orders_since.sql"
+select id from orders where placed_at > :since
+```
+
+**JSON text**
+
+A JSON parameter is sent as JSON, so a string is stored as a JSON string. To pass JSON text you already have, cast it from text:
+
+```ts twoslash tab="main.ts"
+import addEvent from "./pg_add_event_text.sql";
+
+// stored as the object {"x": 1}
+await addEvent.run(db, { payload: '{"x": 1}' });
+```
+
+```sql tab="pg_add_event_text.sql"
+insert into events (kind, payload)
+values ('click', :payload::text::jsonb)
+```
+
+</Rules>
+
+A `bytea` parameter takes only a `Uint8Array`, and rejects base64 or hex text before the query runs, since each driver would store a string differently. Decode the text into a `Uint8Array` first.
 
 ### Parameters that may be null
 
 A parameter accepts `null` in two places:
 
-- as the first argument of `coalesce`;
-- written directly into a nullable column, with no cast. A column is nullable unless it's `NOT NULL`, its domain is `not null`, or a `check (… is not null)` covers it.
+<Rules>
 
-```ts twoslash tab="main.ts"
-import addOrder, { type Params } from "./pg_add_order.sql";
-//                      ^?
+**In `coalesce`**
+
+As the first argument of `coalesce`, where `null` falls back to the next argument.
+
+<Inferred>
+
+```sql file="pg_param_coalesce.sql"
+select id, name
+from users
+where role = coalesce(:role::user_role, role)
 ```
 
-```sql tab="pg_add_order.sql"
+</Inferred>
+
+**Written to a nullable column**
+
+Written directly into a column that accepts `NULL`, with no cast. A column accepts it unless it's `NOT NULL`, its domain is `not null`, or a `check (… is not null)` covers it.
+
+<Inferred>
+
+```sql file="pg_param_insert.sql"
 insert into orders (user_id, total, ships_on)
 values (:user_id, :total, :ships_on)
 ```
+
+</Inferred>
+
+</Rules>
 
 A cast sets the parameter's whole type, so `:email::text` never accepts `null`. Testing a parameter for null (`:role is null`) doesn't make it nullable.
 
 ## Drivers
 
-Reylo decodes its query results itself, so type parsers and options you set on your client don't affect Reylo's queries, and Reylo's don't affect yours. Drivers differ only in what they reject or lose:
+Reylo decodes its query results itself, so type parsers and options you set on your client don't affect Reylo's queries, and Reylo's don't affect yours:
 
-| Driver | Not supported | Lost before Reylo sees it |
+| Driver | Transactions and connections | Not supported, or lost |
 | --- | --- | --- |
-| `pg` | `binary: true` | |
-| `pg-promise` | A `receive` event that rewrites results | |
-| postgres.js | A `transform.row` | |
-| `Bun.sql` | | Microseconds of a `timestamp` or `timestamptz`, and dates before 1 AD, which Reylo rejects |
-| PGlite, Neon, `@vercel/postgres` | | |
+| `pg` | `Pool`, `Client`, `PoolClient` | A client with `binary: true` |
+| postgres.js | `.begin()`, `.savepoint()`, `.reserve()` | A `transform.row` |
+| `pg-promise` | `.task()`, `.tx()` | A `receive` event that rewrites results |
+| `Bun.sql` | `.begin()`, `.savepoint()`, `.reserve()` | The microseconds of a `timestamp` or `timestamptz`, and dates before 1 AD, which Reylo rejects |
+| PGlite | `.transaction()` | |
+| Neon | `Pool`, `Client` | |
+| `@vercel/postgres` | | Deprecated on npm: type-checked, not tested |
+| Drizzle, over `pg` or postgres.js | `.transaction()` and its savepoints | |
 
-- On `Bun.sql`, queries with parameters are read in binary and others as text, so a `real` comes back exact (`1.100000023841858`) only with a parameter. Bun itself fails with "Failed to read data" on a `NULL` in an `int4[]` or `float4[]`, a two-dimensional `int[]` in a query with a parameter, and an array with explicit bounds in one without.
-- The `@vercel/postgres` package is deprecated on npm: Reylo's types accept its client, but Reylo's tests don't run it.
-- Transactions and connections from each driver work too: `pg`'s Pool, Client and PoolClient; postgres.js's and `Bun.sql`'s `.begin()`, `.savepoint()` and `.reserve()`; PGlite's `.transaction()`; Neon's Pool and Client; `pg-promise`'s `.task()` and `.tx()`; and a Drizzle database's `.transaction()` and savepoints, over `pg` or postgres.js.
+On `Bun.sql`, queries with parameters are read in binary and others as text, so a `real` comes back exact (`1.100000023841858`) only with a parameter. Bun itself fails with "Failed to read data" on a `NULL` in an `int4[]` or `float4[]`, a two-dimensional `int[]` in a query with a parameter, and an array with explicit bounds in one without.
 
 Type checking reads your schema through postgres.js or `pg`, so if your app uses another driver, add one of these as a dev dependency.
 
 ## Limits
 
-What Reylo can't type on Postgres, and what to write instead:
+What Reylo can't type on Postgres, and what to do instead:
 
-- **Function bodies.** A SQL function is typed from its declared `returns`, never its body, and a PL/pgSQL body isn't read at all. Declare the type you return.
-- **Array dimensions and elements.** An `int[]` is `(number | null)[]` whatever its dimensions, and its elements may be `null` unless your query builds it from non-null values. Keep arrays one-dimensional, and remove `null` elements before passing an array back as a parameter.
-- **Row values outside JSON.** A row value comes back as text. Select its fields as columns, or build an object with `to_jsonb` or `jsonb_build_object`.
-- **Very deep queries.** Past 1,000 levels of nesting (about 496 terms of `a + b + …`, or 164 nested subqueries), Reylo uses only what Postgres reports: any number of rows, every column nullable.
-- **Statements other than queries.** A statement such as `create index`, `truncate` or `explain` is typed from what Postgres reports: it returns nothing, or rows whose columns are all nullable, and it takes parameters only where Postgres allows them (`explain`, `call`, `create table … as`). `copy … from stdin` and `copy … to stdout` are errors, because their rows go through the connection rather than the statement. A file of several statements, such as a migration, is an error.
+| Limit | Instead |
+| --- | --- |
+| A function's body: a SQL function is typed from its declared `returns`, and a PL/pgSQL body isn't read | Declare the type you return |
+| An array's dimensions, and whether its elements are `null` | Keep arrays one-dimensional, and remove `null` elements before passing an array back in |
+| A row value outside JSON, which comes back as text | Select its fields as columns, or build an object with `to_jsonb` |
+| A query nested past 1,000 levels, about 164 subqueries deep | None: Reylo falls back to Postgres's own types, any number of rows and every column nullable |
+| A statement other than a query, such as `create index` or `explain` | None: it returns nothing, or rows whose columns are all nullable, as Postgres reports |
+| `copy … from stdin` and `copy … to stdout`, whose rows go through the connection | Run them through your driver |
+| A file of several statements, such as a migration | Put each statement in a file of its own |

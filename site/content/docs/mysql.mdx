@@ -266,12 +266,37 @@ Inside JSON, a value can differ from the same value in a column. Numbers past 2^
 
 </Pairs>
 
+**Where a schema's type applies**
+
+A schema's type reaches the column when you select it straight from its table, and inside `json_object` or `json_arrayagg`. Through a subquery or a `with` query, under a `union`, in an expression, and as a parameter written to the column, it's `unknown`.
+
+<Inferred>
+
+```sql file="my_json_reach.sql" dialect="mysql"
+select json_object('p', payload) as wrapped,
+  json_extract(payload, '$.x') as x
+from events
+```
+
+</Inferred>
+
+**An empty array as a default**
+
+Over no rows, `json_arrayagg` returns `NULL`. A default of an empty array keeps the array's type:
+
+<Inferred>
+
+```sql file="my_json_default.sql" dialect="mysql"
+select coalesce(json_arrayagg(id), json_array()) as ids
+from orders
+where user_id = :user_id
+```
+
+</Inferred>
+
 </Rules>
 
-- **Where a schema's type applies:** selecting the column from a table named without a schema, and the column inside `json_object` or `json_arrayagg`.
-- **Where it doesn't:** through a subquery or a `with` query, under a `union`, in an expression (`json_extract(payload, '$.x')`), and in a parameter written to the column, it's `unknown`.
-- **Draft 4 only:** MySQL validates every schema as draft 4, whatever its `$schema` says, so `const`, `if`, `prefixItems` and `contains` don't narrow the type.
-- **An empty array as a default,** as in `coalesce(json_arrayagg(…), json_array())`, keeps the array's type.
+MySQL validates every schema as draft 4, whatever its `$schema` says, so `const`, `if`, `prefixItems` and `contains` don't narrow the type.
 
 ### Vectors
 
@@ -398,11 +423,14 @@ select last_insert_id() as id
 
 These don't count as a key match, so the query returns `Row[]`:
 
-- A joined table's key: `posts join users on users.id = posts.user_id where posts.id = :id`.
-- A `distinct` or `group by`, unless it's over the key.
-- A string key compared with a number, which MySQL compares as doubles: `where email = 5`.
-- A `TIMESTAMP` key, since two instants can show as the same time when the clocks go back.
-- A `WITH ROLLUP`, which adds rows, and a `with` query named like a table.
+| Case | Example |
+| --- | --- |
+| A joined table's key | `orders o join users u on u.id = o.user_id where o.id = :id` |
+| A `distinct` or `group by` that isn't over the key | `select distinct total from orders where user_id = :id` |
+| A string key compared with a number, which MySQL compares as doubles | `where email = 5` |
+| A `TIMESTAMP` key, since two instants can show as one time when the clocks go back | `where created = :at` |
+| A `WITH ROLLUP`, which adds rows | `group by id with rollup` |
+| A `with` query named like a table | `with users as (…) select … from users where id = :id` |
 
 A multi-table `delete` or `update` returns nothing, and so does `select … into @variable`.
 
@@ -429,27 +457,77 @@ A parameter accepts the same values `.run()` returns for its type, so you can pa
 | `BINARY`, `VARBINARY`, `BLOB` | `Uint8Array` |
 | `VECTOR` | `number[]` |
 
-- MySQL reports every integer parameter as a `BIGINT`, so Reylo types it from the column it's compared with (`col = :p`, `in`, `between`) or written to (an `insert` or `update`). Elsewhere it uses what MySQL reports: `limit :n` takes a `number`.
-- A `DATE`, `DATETIME` or `TIMESTAMP` parameter takes the text, `"2026-10-12 19:06:48"`, and rejects a `Date`, since drivers convert a `Date` using different time zones.
-- A `BINARY`, `VARBINARY` or `BLOB` parameter takes only a `Uint8Array`, and rejects base64 or hex text before the query runs, since MySQL would store the text's own bytes. Decode the text into a `Uint8Array` first.
-- A JSON parameter is sent as JSON, so a string is stored as a JSON string: `'{"a":1}'` becomes `"{\"a\":1}"`.
+<Rules>
+
+**Integers**
+
+MySQL reports every integer parameter as a `BIGINT`, so Reylo types it from the column it's compared with or written to. Elsewhere it uses MySQL's type, as for `limit`:
+
+<Inferred>
+
+```sql file="my_param_int.sql" dialect="mysql"
+select name
+from users
+where id > :after
+limit :n
+```
+
+</Inferred>
+
+**Dates and times**
+
+A date or time parameter takes the text, never a `Date`, since drivers convert a `Date` in different time zones:
+
+```ts twoslash tab="main.ts"
+import ordersSince from "./my_orders_since.sql";
+
+await ordersSince.run(db, { since: "2026-10-12 19:06:48" });
+```
+
+```sql tab="my_orders_since.sql" dialect="mysql"
+select id from orders where placed_at > :since
+```
+
+</Rules>
+
+A `BINARY`, `VARBINARY` or `BLOB` parameter takes only a `Uint8Array`, and rejects base64 or hex text before the query runs, since MySQL would store the text's own bytes. Decode the text into a `Uint8Array` first.
+
+A JSON parameter is sent as JSON, so a string is stored as a JSON string: `'{"a":1}'` becomes `"{\"a\":1}"`.
 
 ### Parameters that may be null
 
 A parameter accepts `null` in two places:
 
-- as the first argument of `coalesce` or `ifnull`;
-- written directly into a nullable column, with no cast, in an `insert`, `update`, `replace` or `on duplicate key update`. A column is nullable unless it's `NOT NULL` or a `check (… is not null)` covers it.
+<Rules>
 
-```ts twoslash tab="main.ts"
-import addOrder, { type Params } from "./my_add_order.sql";
-//                      ^?
+**In `coalesce` or `ifnull`**
+
+As the first argument of `coalesce` or `ifnull`, where `null` falls back to the next argument.
+
+<Inferred>
+
+```sql file="my_param_coalesce.sql" dialect="mysql"
+select id, name
+from users
+where role = coalesce(:role::text, role)
 ```
 
-```sql tab="my_add_order.sql" dialect="mysql"
+</Inferred>
+
+**Written to a nullable column**
+
+Written directly into a column that accepts `NULL`, with no cast, in an `insert`, `update`, `replace` or `on duplicate key update`. A column accepts it unless it's `NOT NULL` or a `check (… is not null)` covers it.
+
+<Inferred>
+
+```sql file="my_param_insert.sql" dialect="mysql"
 insert into orders (user_id, total, ships_on)
 values (:user_id, :total, :ships_on)
 ```
+
+</Inferred>
+
+</Rules>
 
 A cast sets the parameter's whole type, so `:email::text` never accepts `null`. Testing a parameter for null (`:p is null`, `:p <=> col`) doesn't make it nullable.
 
@@ -467,35 +545,39 @@ MySQL has no `::` casts, so Reylo turns `:p::type` into MySQL's `CAST`. It also 
 | `::date`, `::time`, `::datetime` | `CAST(? AS DATE)`, `CAST(? AS TIME)`, `CAST(? AS DATETIME(6))` |
 | `::json` | `CAST(? AS JSON)` |
 | `::bytea`, `::blob` | `CAST(? AS BINARY)` |
+| `::int` in `limit` or `offset` | `?`, since MySQL takes only a bare value there |
+| `::timestamptz`, `::boolean` | An error: MySQL has neither type |
 
-- The check rejects an integer out of range, a decimal with more digits than its scale, and a date that doesn't exist (`"2026-02-30"`).
-- In `limit` and `offset`, which MySQL only allows as a bare `?`, write `:n::int`; any other cast there is an error.
-- Casting to `::timestamptz` or `::boolean` is an error, since MySQL has neither type.
+The check rejects an integer out of range, a decimal with more digits than its scale, and a date that doesn't exist (`"2026-02-30"`).
 
 ## Drivers
 
-Reylo decodes its query results itself, so options you set on your client don't affect Reylo's queries, and Reylo's don't affect yours. Drivers differ only in what they reject or lose:
+Reylo decodes its query results itself, so options you set on your client don't affect Reylo's queries, and Reylo's don't affect yours:
 
-| Driver | Not supported | Lost before Reylo sees it |
+| Driver | Transactions and connections | Not supported, or lost |
 | --- | --- | --- |
-| `mysql2` | | |
-| PlanetScale | Version 2.0, which can't bind parameters | |
-| `Bun.sql` | | Microseconds of a `DATETIME`, a fraction that is all zeros, and a `TIME`'s fraction in a query with parameters |
+| `mysql2` | Pools and connections of its promise and callback APIs | |
+| PlanetScale | `.transaction()` | Version 2.0, which can't bind parameters |
+| `Bun.sql` | `.begin()`, `.savepoint()`, `.reserve()` | The microseconds of a `DATETIME`, a fraction of all zeros, a `TIME`'s fraction in a query with parameters, and every `VECTOR` |
+| Drizzle, over `mysql2` | `.transaction()` and its savepoints | |
 
-- On `Bun.sql`, an expression that could be a `BIGINT` or a `DECIMAL` (`round(:x)`) comes back as a `bigint` when it has no decimal point, since Bun returns both as text. Bun 1.4 can't read a `VECTOR` at all (`ERR_MYSQL_UNSUPPORTED_COLUMN_TYPE`), so select `vector_to_string(v)` instead.
-- Transactions and connections from each driver work too: `mysql2`'s promise and callback APIs, PlanetScale's `.transaction()`, `Bun.sql`'s `.begin()`, `.savepoint()` and `.reserve()`, and a Drizzle database's `.transaction()` and savepoints, over `mysql2`.
+On `Bun.sql`, an expression that could be a `BIGINT` or a `DECIMAL` (`round(:x)`) comes back as a `bigint` when it has no decimal point, since Bun returns both as text. Bun 1.4 can't read a `VECTOR` at all, so select `vector_to_string(v)` instead.
 
 Type checking reads your schema through `mysql2`, so if your app uses PlanetScale or `Bun.sql`, add `mysql2` as a dev dependency.
 
 ## Limits
 
-What Reylo can't type on MySQL, and what to write instead:
+What Reylo can't type on MySQL, and what to do instead:
 
-- **`ENUM` labels.** An `ENUM` is typed `string`, not the union of its labels. Check the value in TypeScript where you need the union.
-- **Error positions.** MySQL doesn't say where in a query an error is, so the type check marks the whole query.
-- **Queries Reylo can't parse.** Reylo parses each query to infer row counts and JSON shapes. If it can't, the query keeps MySQL's types and nullability, returns `Row[]`, and any JSON is `unknown`.
-- **Non-default `sql_mode`.** If your session's `sql_mode` changes how MySQL reads a query (`NO_BACKSLASH_ESCAPES`, `ANSI_QUOTES`, `PIPES_AS_CONCAT`), Reylo keeps MySQL's types and infers no row counts or JSON shapes.
-- **`/*! … */` comments.** MySQL runs the SQL inside them, so a query with one is an error. Write it as plain SQL.
-- **`with` before `insert`.** MySQL 8.4 rejects `with … insert`, so put the `with` after `insert into … (…)`, as in [JSON parameters](/#typed-json).
-- **Very large queries.** Past 500 operators (`a + b + …`, `x = 1 or x = 2 or …`), or 200 levels of nesting, Reylo uses only what MySQL reports: any number of rows.
-- **Statements other than queries.** A statement such as `create index`, `truncate` or `show tables` is typed from what MySQL reports: it returns nothing, or rows whose columns are all nullable. `explain` and `call` are errors, because MySQL doesn't describe their rows before they run. A file of several statements, such as a migration, is an error.
+| Limit | Instead |
+| --- | --- |
+| An `ENUM`'s labels: an `ENUM` is typed `string` | Check the value in TypeScript where you need the union |
+| Where in a query an error is, which MySQL doesn't say | None: the type check marks the whole query |
+| A query Reylo's parser can't read | None: it keeps MySQL's types and nullability, returns `Row[]`, and its JSON is `unknown` |
+| A `sql_mode` that changes how MySQL reads a query (`NO_BACKSLASH_ESCAPES`, `ANSI_QUOTES`, `PIPES_AS_CONCAT`) | None: Reylo keeps MySQL's types, with no row counts or JSON shapes |
+| A `/*! … */` comment, which MySQL runs as SQL, so it's an error | Write it as plain SQL |
+| `with … insert`, which MySQL 8.4 rejects | Put the `with` after `insert into … (…)`, as in [JSON parameters](/#typed-json) |
+| A query past 500 operators or 200 levels of nesting | None: Reylo falls back to MySQL's own types and any number of rows |
+| A statement other than a query, such as `create index` or `show tables` | None: it returns nothing, or rows whose columns are all nullable, as MySQL reports |
+| `explain` and `call`, whose rows MySQL describes only once they run | None: each is an error |
+| A file of several statements, such as a migration | Put each statement in a file of its own |
