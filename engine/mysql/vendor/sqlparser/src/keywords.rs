@@ -14,6 +14,8 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+//
+// Changed in Reylo's copy (engine/mysql/vendor/sqlparser/README.md).
 
 //! This module defines:
 //! 1) a list of constants for every keyword
@@ -79,8 +81,9 @@ macro_rules! define_keywords {
         impl core::fmt::Display for Keyword {
             fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
                 match self {
-                    Keyword::NoKeyword => write!(f, "NoKeyword"),
-                    $(Keyword::$ident => write!(f, "{}", $ident),)*
+                    Keyword::NoKeyword => f.write_str("NoKeyword"),
+                    // Each keyword after `NoKeyword` is declared in the order of `ALL_KEYWORDS`.
+                    k => f.write_str(ALL_KEYWORDS[*k as usize - 1]),
                 }
             }
         }

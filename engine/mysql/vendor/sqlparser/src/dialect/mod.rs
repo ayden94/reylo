@@ -14,6 +14,8 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+//
+// Changed in Reylo's copy (engine/mysql/vendor/sqlparser/README.md).
 
 mod ansi;
 mod bigquery;
@@ -154,7 +156,8 @@ use alloc::boxed::Box;
 /// to `true` if `parser.dialect` is one of the [`Dialect`]s specified.
 macro_rules! dialect_of {
     ( $parsed_dialect: ident is $($dialect_type: ty)|+ ) => {
-        ($($parsed_dialect.dialect.is::<$dialect_type>())||+)
+        // Reylo's copy: decided for MySQL at compile time, as the engine's only dialect is MySQL's.
+        ($(::core::any::TypeId::of::<$dialect_type>() == ::core::any::TypeId::of::<$crate::dialect::MySqlDialect>())||+)
     };
 }
 
@@ -163,7 +166,8 @@ macro_rules! dialect_of {
 // mixing match guards and token references.
 macro_rules! dialect_is {
     ($dialect:ident is $($dialect_type:ty)|+) => {
-        ($($dialect.is::<$dialect_type>())||+)
+        // Reylo's copy: decided for MySQL at compile time, as `dialect_of!` is.
+        ($({ let _ = &$dialect; ::core::any::TypeId::of::<$dialect_type>() == ::core::any::TypeId::of::<$crate::dialect::MySqlDialect>() })||+)
     }
 }
 

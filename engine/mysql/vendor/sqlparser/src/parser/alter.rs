@@ -9,6 +9,8 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// Changed in Reylo's copy (engine/mysql/vendor/sqlparser/README.md).
 
 //! SQL Parser for ALTER
 
@@ -18,30 +20,16 @@ use alloc::{string::ToString, vec};
 use super::{Parser, ParserError};
 use crate::{
     ast::{
-        helpers::key_value_options::{KeyValueOptions, KeyValueOptionsDelimiter},
-        AlterConnectorOwner, AlterPolicy, AlterPolicyOperation, AlterRoleOperation, AlterUser,
+        helpers::key_value_options::{KeyValueOptions, KeyValueOptionsDelimiter}, AlterPolicy, AlterPolicyOperation, AlterUser,
         AlterUserAddMfaMethodOtp, AlterUserAddRoleDelegation, AlterUserModifyMfaMethod,
-        AlterUserPassword, AlterUserRemoveRoleDelegation, AlterUserSetPolicy, Expr, MfaMethodKind,
-        Password, ResetConfig, RoleOption, SetConfigValue, Statement, UserPolicyKind,
+        AlterUserPassword, AlterUserRemoveRoleDelegation, AlterUserSetPolicy, MfaMethodKind, UserPolicyKind,
     },
-    dialect::{MsSqlDialect, PostgreSqlDialect},
     keywords::Keyword,
     tokenizer::Token,
 };
 
 impl Parser<'_> {
-    /// Parse `ALTER ROLE` statement
-    pub fn parse_alter_role(&mut self) -> Result<Statement, ParserError> {
-        if dialect_of!(self is PostgreSqlDialect) {
-            return self.parse_pg_alter_role();
-        } else if dialect_of!(self is MsSqlDialect) {
-            return self.parse_mssql_alter_role();
-        }
 
-        Err(ParserError::ParserError(
-            "ALTER ROLE is only support for PostgreSqlDialect, MsSqlDialect".into(),
-        ))
-    }
 
     /// Parse ALTER POLICY statement
     /// ```sql
@@ -103,46 +91,7 @@ impl Parser<'_> {
         }
     }
 
-    /// Parse an `ALTER CONNECTOR` statement
-    /// ```sql
-    /// ALTER CONNECTOR connector_name SET DCPROPERTIES(property_name=property_value, ...);
-    ///
-    /// ALTER CONNECTOR connector_name SET URL new_url;
-    ///
-    /// ALTER CONNECTOR connector_name SET OWNER [USER|ROLE] user_or_role;
-    /// ```
-    pub fn parse_alter_connector(&mut self) -> Result<Statement, ParserError> {
-        let name = self.parse_identifier()?;
-        self.expect_keyword_is(Keyword::SET)?;
 
-        let properties = match self.parse_options_with_keywords(&[Keyword::DCPROPERTIES])? {
-            properties if !properties.is_empty() => Some(properties),
-            _ => None,
-        };
-
-        let url = if self.parse_keyword(Keyword::URL) {
-            Some(self.parse_literal_string()?)
-        } else {
-            None
-        };
-
-        let owner = if self.parse_keywords(&[Keyword::OWNER, Keyword::USER]) {
-            let owner = self.parse_identifier()?;
-            Some(AlterConnectorOwner::User(owner))
-        } else if self.parse_keywords(&[Keyword::OWNER, Keyword::ROLE]) {
-            let owner = self.parse_identifier()?;
-            Some(AlterConnectorOwner::Role(owner))
-        } else {
-            None
-        };
-
-        Ok(Statement::AlterConnector {
-            name,
-            properties,
-            url,
-            owner,
-        })
-    }
 
     /// Parse an `ALTER USER` statement
     /// ```sql
@@ -344,169 +293,9 @@ impl Parser<'_> {
         }
     }
 
-    fn parse_mssql_alter_role(&mut self) -> Result<Statement, ParserError> {
-        let role_name = self.parse_identifier()?;
 
-        let operation = if self.parse_keywords(&[Keyword::ADD, Keyword::MEMBER]) {
-            let member_name = self.parse_identifier()?;
-            AlterRoleOperation::AddMember { member_name }
-        } else if self.parse_keywords(&[Keyword::DROP, Keyword::MEMBER]) {
-            let member_name = self.parse_identifier()?;
-            AlterRoleOperation::DropMember { member_name }
-        } else if self.parse_keywords(&[Keyword::WITH, Keyword::NAME]) {
-            if self.consume_token(&Token::Eq) {
-                let role_name = self.parse_identifier()?;
-                AlterRoleOperation::RenameRole { role_name }
-            } else {
-                return self.expected_ref("= after WITH NAME ", self.peek_token_ref());
-            }
-        } else {
-            return self.expected_ref("'ADD' or 'DROP' or 'WITH NAME'", self.peek_token_ref());
-        };
 
-        Ok(Statement::AlterRole {
-            name: role_name,
-            operation,
-        })
-    }
 
-    fn parse_pg_alter_role(&mut self) -> Result<Statement, ParserError> {
-        let role_name = self.parse_identifier()?;
 
-        // [ IN DATABASE _`database_name`_ ]
-        let in_database = if self.parse_keywords(&[Keyword::IN, Keyword::DATABASE]) {
-            self.parse_object_name(false).ok()
-        } else {
-            None
-        };
 
-        let operation = if self.parse_keyword(Keyword::RENAME) {
-            if self.parse_keyword(Keyword::TO) {
-                let role_name = self.parse_identifier()?;
-                AlterRoleOperation::RenameRole { role_name }
-            } else {
-                return self.expected_ref("TO after RENAME", self.peek_token_ref());
-            }
-        // SET
-        } else if self.parse_keyword(Keyword::SET) {
-            let config_name = self.parse_object_name(false)?;
-            // FROM CURRENT
-            if self.parse_keywords(&[Keyword::FROM, Keyword::CURRENT]) {
-                AlterRoleOperation::Set {
-                    config_name,
-                    config_value: SetConfigValue::FromCurrent,
-                    in_database,
-                }
-            // { TO | = } { value | DEFAULT }
-            } else if self.consume_token(&Token::Eq) || self.parse_keyword(Keyword::TO) {
-                if self.parse_keyword(Keyword::DEFAULT) {
-                    AlterRoleOperation::Set {
-                        config_name,
-                        config_value: SetConfigValue::Default,
-                        in_database,
-                    }
-                } else if let Ok(expr) = self.parse_expr() {
-                    AlterRoleOperation::Set {
-                        config_name,
-                        config_value: SetConfigValue::Value(expr),
-                        in_database,
-                    }
-                } else {
-                    self.expected_ref("config value", self.peek_token_ref())?
-                }
-            } else {
-                self.expected_ref("'TO' or '=' or 'FROM CURRENT'", self.peek_token_ref())?
-            }
-        // RESET
-        } else if self.parse_keyword(Keyword::RESET) {
-            if self.parse_keyword(Keyword::ALL) {
-                AlterRoleOperation::Reset {
-                    config_name: ResetConfig::ALL,
-                    in_database,
-                }
-            } else {
-                let config_name = self.parse_object_name(false)?;
-                AlterRoleOperation::Reset {
-                    config_name: ResetConfig::ConfigName(config_name),
-                    in_database,
-                }
-            }
-        // option
-        } else {
-            // [ WITH ]
-            let _ = self.parse_keyword(Keyword::WITH);
-            // option
-            let mut options = vec![];
-            while let Some(opt) = self.maybe_parse(|parser| parser.parse_pg_role_option())? {
-                options.push(opt);
-            }
-            // check option
-            if options.is_empty() {
-                return self.expected_ref("option", self.peek_token_ref())?;
-            }
-
-            AlterRoleOperation::WithOptions { options }
-        };
-
-        Ok(Statement::AlterRole {
-            name: role_name,
-            operation,
-        })
-    }
-
-    fn parse_pg_role_option(&mut self) -> Result<RoleOption, ParserError> {
-        let option = match self.parse_one_of_keywords(&[
-            Keyword::BYPASSRLS,
-            Keyword::NOBYPASSRLS,
-            Keyword::CONNECTION,
-            Keyword::CREATEDB,
-            Keyword::NOCREATEDB,
-            Keyword::CREATEROLE,
-            Keyword::NOCREATEROLE,
-            Keyword::INHERIT,
-            Keyword::NOINHERIT,
-            Keyword::LOGIN,
-            Keyword::NOLOGIN,
-            Keyword::PASSWORD,
-            Keyword::REPLICATION,
-            Keyword::NOREPLICATION,
-            Keyword::SUPERUSER,
-            Keyword::NOSUPERUSER,
-            Keyword::VALID,
-        ]) {
-            Some(Keyword::BYPASSRLS) => RoleOption::BypassRLS(true),
-            Some(Keyword::NOBYPASSRLS) => RoleOption::BypassRLS(false),
-            Some(Keyword::CONNECTION) => {
-                self.expect_keyword_is(Keyword::LIMIT)?;
-                RoleOption::ConnectionLimit(Expr::Value(self.parse_number_value()?))
-            }
-            Some(Keyword::CREATEDB) => RoleOption::CreateDB(true),
-            Some(Keyword::NOCREATEDB) => RoleOption::CreateDB(false),
-            Some(Keyword::CREATEROLE) => RoleOption::CreateRole(true),
-            Some(Keyword::NOCREATEROLE) => RoleOption::CreateRole(false),
-            Some(Keyword::INHERIT) => RoleOption::Inherit(true),
-            Some(Keyword::NOINHERIT) => RoleOption::Inherit(false),
-            Some(Keyword::LOGIN) => RoleOption::Login(true),
-            Some(Keyword::NOLOGIN) => RoleOption::Login(false),
-            Some(Keyword::PASSWORD) => {
-                let password = if self.parse_keyword(Keyword::NULL) {
-                    Password::NullPassword
-                } else {
-                    Password::Password(Expr::Value(self.parse_value()?))
-                };
-                RoleOption::Password(password)
-            }
-            Some(Keyword::REPLICATION) => RoleOption::Replication(true),
-            Some(Keyword::NOREPLICATION) => RoleOption::Replication(false),
-            Some(Keyword::SUPERUSER) => RoleOption::SuperUser(true),
-            Some(Keyword::NOSUPERUSER) => RoleOption::SuperUser(false),
-            Some(Keyword::VALID) => {
-                self.expect_keyword_is(Keyword::UNTIL)?;
-                RoleOption::ValidUntil(Expr::Value(self.parse_value()?))
-            }
-            _ => self.expected_ref("option", self.peek_token_ref())?,
-        };
-
-        Ok(option)
-    }
 }

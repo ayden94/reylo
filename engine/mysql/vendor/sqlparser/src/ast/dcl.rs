@@ -14,6 +14,8 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+//
+// Changed in Reylo's copy (engine/mysql/vendor/sqlparser/README.md).
 
 //! AST types specific to GRANT/REVOKE/ROLE variants of [`Statement`](crate::ast::Statement)
 //! (commonly referred to as Data Control Language, or DCL)
@@ -480,11 +482,7 @@ impl fmt::Display for Grant {
     }
 }
 
-impl From<Grant> for crate::ast::Statement {
-    fn from(v: Grant) -> Self {
-        crate::ast::Statement::Grant(v)
-    }
-}
+
 
 /// REVOKE privileges ON objects FROM grantees
 /// See [PostgreSQL](https://www.postgresql.org/docs/current/sql-revoke.html)
@@ -530,8 +528,4 @@ impl fmt::Display for Revoke {
     }
 }
 
-impl From<Revoke> for crate::ast::Statement {
-    fn from(v: Revoke) -> Self {
-        crate::ast::Statement::Revoke(v)
-    }
-}
+

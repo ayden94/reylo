@@ -14,12 +14,14 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+//
+// Changed in Reylo's copy (engine/mysql/vendor/sqlparser/README.md).
 
 #[cfg(not(feature = "std"))]
 use alloc::boxed::Box;
 
 use crate::{
-    ast::{BinaryOperator, Expr, LockTable, LockTableType, Statement},
+    ast::{BinaryOperator, Expr},
     dialect::Dialect,
     keywords::Keyword,
     parser::{Parser, ParserError},
@@ -117,15 +119,7 @@ impl Dialect for MySqlDialect {
         }
     }
 
-    fn parse_statement(&self, parser: &mut Parser) -> Option<Result<Statement, ParserError>> {
-        if parser.parse_keywords(&[Keyword::LOCK, Keyword::TABLES]) {
-            Some(parse_lock_tables(parser))
-        } else if parser.parse_keywords(&[Keyword::UNLOCK, Keyword::TABLES]) {
-            Some(parse_unlock_tables(parser))
-        } else {
-            None
-        }
-    }
+
 
     fn require_interval_qualifier(&self) -> bool {
         true
@@ -227,48 +221,10 @@ impl Dialect for MySqlDialect {
     }
 }
 
-/// `LOCK TABLES`
-/// <https://dev.mysql.com/doc/refman/8.0/en/lock-tables.html>
-fn parse_lock_tables(parser: &mut Parser) -> Result<Statement, ParserError> {
-    let tables = parser.parse_comma_separated(parse_lock_table)?;
-    Ok(Statement::LockTables { tables })
-}
 
-// tbl_name [[AS] alias] lock_type
-fn parse_lock_table(parser: &mut Parser) -> Result<LockTable, ParserError> {
-    let table = parser.parse_identifier()?;
-    let alias =
-        parser.parse_optional_alias(&[Keyword::READ, Keyword::WRITE, Keyword::LOW_PRIORITY])?;
-    let lock_type = parse_lock_tables_type(parser)?;
 
-    Ok(LockTable {
-        table,
-        alias,
-        lock_type,
-    })
-}
 
-// READ [LOCAL] | [LOW_PRIORITY] WRITE
-fn parse_lock_tables_type(parser: &mut Parser) -> Result<LockTableType, ParserError> {
-    if parser.parse_keyword(Keyword::READ) {
-        if parser.parse_keyword(Keyword::LOCAL) {
-            Ok(LockTableType::Read { local: true })
-        } else {
-            Ok(LockTableType::Read { local: false })
-        }
-    } else if parser.parse_keyword(Keyword::WRITE) {
-        Ok(LockTableType::Write {
-            low_priority: false,
-        })
-    } else if parser.parse_keywords(&[Keyword::LOW_PRIORITY, Keyword::WRITE]) {
-        Ok(LockTableType::Write { low_priority: true })
-    } else {
-        parser.expected_ref("an lock type in LOCK TABLES", parser.peek_token_ref())
-    }
-}
 
-/// UNLOCK TABLES
-/// <https://dev.mysql.com/doc/refman/8.0/en/lock-tables.html>
-fn parse_unlock_tables(_parser: &mut Parser) -> Result<Statement, ParserError> {
-    Ok(Statement::UnlockTables)
-}
+
+
+

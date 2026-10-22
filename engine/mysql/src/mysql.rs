@@ -2057,6 +2057,15 @@ mod tests {
     }
 
     #[test]
+    fn a_table_may_be_named_local_or_directory() {
+        // Hive's `INSERT OVERWRITE [LOCAL] DIRECTORY` took both words in upstream's sqlparser,
+        // which refused these; the engine's copy reads them as MySQL does (vendor/sqlparser).
+        for sql in ["insert into local values (1)", "insert into directory (id) values (1)"] {
+            assert!(parse(&MySqlDialect {}, sql).is_ok(), "{sql}");
+        }
+    }
+
+    #[test]
     fn a_write_the_parser_does_not_read_returns_no_rows() {
         // sqlparser reads neither MySQL's multi-table DELETE nor its multi-table UPDATE, nor a
         // SELECT … INTO after its WHERE; the prepare has no columns, so none returns a row.

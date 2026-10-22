@@ -14,6 +14,8 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+//
+// Changed in Reylo's copy (engine/mysql/vendor/sqlparser/README.md).
 
 #[cfg(not(feature = "std"))]
 use alloc::{format, string::String, vec::Vec};
@@ -25,9 +27,8 @@ use serde::{Deserialize, Serialize};
 use sqlparser_derive::{Visit, VisitMut};
 
 use crate::ast::{
-    CatalogSyncNamespaceMode, ContactEntry, ObjectName, Statement, StorageSerializationPolicy, Tag,
+    CatalogSyncNamespaceMode, ContactEntry, ObjectName, StorageSerializationPolicy, Tag,
 };
-use crate::parser::ParserError;
 
 /// Builder for create database statement variant ([1]).
 ///
@@ -276,91 +277,8 @@ impl CreateDatabaseBuilder {
         self
     }
 
-    /// Build the `CREATE DATABASE` statement.
-    pub fn build(self) -> Statement {
-        Statement::CreateDatabase {
-            db_name: self.db_name,
-            if_not_exists: self.if_not_exists,
-            managed_location: self.managed_location,
-            location: self.location,
-            or_replace: self.or_replace,
-            transient: self.transient,
-            clone: self.clone,
-            data_retention_time_in_days: self.data_retention_time_in_days,
-            max_data_extension_time_in_days: self.max_data_extension_time_in_days,
-            external_volume: self.external_volume,
-            catalog: self.catalog,
-            replace_invalid_characters: self.replace_invalid_characters,
-            default_ddl_collation: self.default_ddl_collation,
-            storage_serialization_policy: self.storage_serialization_policy,
-            comment: self.comment,
-            default_charset: self.default_charset,
-            default_collation: self.default_collation,
-            catalog_sync: self.catalog_sync,
-            catalog_sync_namespace_mode: self.catalog_sync_namespace_mode,
-            catalog_sync_namespace_flatten_delimiter: self.catalog_sync_namespace_flatten_delimiter,
-            with_tags: self.with_tags,
-            with_contacts: self.with_contacts,
-        }
-    }
+
 }
 
-impl TryFrom<Statement> for CreateDatabaseBuilder {
-    type Error = ParserError;
 
-    fn try_from(stmt: Statement) -> Result<Self, Self::Error> {
-        match stmt {
-            Statement::CreateDatabase {
-                db_name,
-                if_not_exists,
-                location,
-                managed_location,
-                or_replace,
-                transient,
-                clone,
-                data_retention_time_in_days,
-                max_data_extension_time_in_days,
-                external_volume,
-                catalog,
-                replace_invalid_characters,
-                default_ddl_collation,
-                storage_serialization_policy,
-                comment,
-                default_charset,
-                default_collation,
-                catalog_sync,
-                catalog_sync_namespace_mode,
-                catalog_sync_namespace_flatten_delimiter,
-                with_tags,
-                with_contacts,
-            } => Ok(Self {
-                db_name,
-                if_not_exists,
-                location,
-                managed_location,
-                or_replace,
-                transient,
-                clone,
-                data_retention_time_in_days,
-                max_data_extension_time_in_days,
-                external_volume,
-                catalog,
-                replace_invalid_characters,
-                default_ddl_collation,
-                storage_serialization_policy,
-                comment,
-                default_charset,
-                default_collation,
-                catalog_sync,
-                catalog_sync_namespace_mode,
-                catalog_sync_namespace_flatten_delimiter,
-                with_tags,
-                with_contacts,
-            }),
-            _ => Err(ParserError::ParserError(format!(
-                "Expected create database statement, but received: {stmt}"
-            ))),
-        }
-    }
-}
 

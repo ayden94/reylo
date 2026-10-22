@@ -14,6 +14,8 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+//
+// Changed in Reylo's copy (engine/mysql/vendor/sqlparser/README.md).
 
 /// This module contains internal utilities used for testing the library.
 /// While technically public, the library's users are not supposed to rely
@@ -341,22 +343,9 @@ pub fn expr_from_projection(item: &SelectItem) -> &Expr {
     }
 }
 
-pub fn alter_table_op_with_name(stmt: Statement, expected_name: &str) -> AlterTableOperation {
-    match stmt {
-        Statement::AlterTable(alter_table) => {
-            assert_eq!(alter_table.name.to_string(), expected_name);
-            assert!(!alter_table.if_exists);
-            assert!(!alter_table.only);
-            assert_eq!(alter_table.table_type, None);
-            only(alter_table.operations)
-        }
-        _ => panic!("Expected ALTER TABLE statement"),
-    }
-}
 
-pub fn alter_table_op(stmt: Statement) -> AlterTableOperation {
-    alter_table_op_with_name(stmt, "tab")
-}
+
+
 
 /// Creates a `Value::Number`, panic'ing if n is not a number
 pub fn number(n: &str) -> Value {
@@ -454,50 +443,4 @@ pub fn call(function: &str, args: impl IntoIterator<Item = Expr>) -> Expr {
     })
 }
 
-/// Gets the first index column (mysql calls it a key part) of the first index found in a
-/// [`Statement::CreateIndex`], [`Statement::CreateTable`], or [`Statement::AlterTable`].
-pub fn index_column(stmt: Statement) -> Expr {
-    match stmt {
-        Statement::CreateIndex(CreateIndex { columns, .. }) => {
-            columns.first().unwrap().column.expr.clone()
-        }
-        Statement::CreateTable(CreateTable { constraints, .. }) => {
-            match constraints.first().unwrap() {
-                TableConstraint::Index(constraint) => {
-                    constraint.columns.first().unwrap().column.expr.clone()
-                }
-                TableConstraint::Unique(constraint) => {
-                    constraint.columns.first().unwrap().column.expr.clone()
-                }
-                TableConstraint::PrimaryKey(constraint) => {
-                    constraint.columns.first().unwrap().column.expr.clone()
-                }
-                TableConstraint::FulltextOrSpatial(constraint) => {
-                    constraint.columns.first().unwrap().column.expr.clone()
-                }
-                _ => panic!("Expected an index, unique, primary, full text, or spatial constraint (foreign key does not support general key part expressions)"),
-            }
-        }
-        Statement::AlterTable(alter_table) => match alter_table.operations.first().unwrap() {
-            AlterTableOperation::AddConstraint { constraint, .. } => {
-                match constraint {
-                    TableConstraint::Index(constraint) => {
-                        constraint.columns.first().unwrap().column.expr.clone()
-                    }
-                    TableConstraint::Unique(constraint) => {
-                        constraint.columns.first().unwrap().column.expr.clone()
-                    }
-                    TableConstraint::PrimaryKey(constraint) => {
-                        constraint.columns.first().unwrap().column.expr.clone()
-                    }
-                    TableConstraint::FulltextOrSpatial(constraint) => {
-                        constraint.columns.first().unwrap().column.expr.clone()
-                    }
-                    _ => panic!("Expected an index, unique, primary, full text, or spatial constraint (foreign key does not support general key part expressions)"),
-                }
-            }
-            _ => panic!("Expected a constraint"),
-        },
-        _ => panic!("Expected CREATE INDEX, ALTER TABLE, or CREATE TABLE, got: {stmt:?}"),
-    }
-}
+

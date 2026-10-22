@@ -14,12 +14,12 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+//
+// Changed in Reylo's copy (engine/mysql/vendor/sqlparser/README.md).
 
-use crate::ast::Statement;
 use crate::dialect::Dialect;
 use crate::keywords::Keyword;
-use crate::parser::{Parser, ParserError};
-use crate::tokenizer::Token;
+use crate::parser::Parser;
 
 /// These keywords are disallowed as column identifiers. Such that
 /// `SELECT 5 AS <col> FROM T` is rejected by BigQuery.
@@ -47,20 +47,7 @@ const RESERVED_FOR_COLUMN_ALIAS: &[Keyword] = &[
 pub struct BigQueryDialect;
 
 impl Dialect for BigQueryDialect {
-    fn parse_statement(&self, parser: &mut Parser) -> Option<Result<Statement, ParserError>> {
-        if parser.parse_keyword(Keyword::BEGIN) {
-            if parser.peek_keyword(Keyword::TRANSACTION)
-                || parser.peek_token_ref().token == Token::SemiColon
-                || parser.peek_token_ref().token == Token::EOF
-            {
-                parser.prev_token();
-                return None;
-            }
-            return Some(parser.parse_begin_exception_end());
-        }
 
-        None
-    }
 
     /// See <https://cloud.google.com/bigquery/docs/reference/standard-sql/lexical#identifiers>
     fn is_delimited_identifier_start(&self, ch: char) -> bool {

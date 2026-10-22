@@ -14,6 +14,8 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+//
+// Changed in Reylo's copy (engine/mysql/vendor/sqlparser/README.md).
 
 #[cfg(not(feature = "std"))]
 use alloc::{boxed::Box, format, string::String, vec, vec::Vec};
@@ -28,11 +30,10 @@ use crate::ast::{
     ClusteredBy, ColumnDef, CommentDef, CreateTable, CreateTableLikeKind, CreateTableOptions,
     DistStyle, Expr, FileFormat, ForValues, HiveDistributionStyle, HiveFormat, Ident,
     InitializeKind, ObjectName, OnCommit, OneOrManyWithParens, Query, RefreshModeKind,
-    RowAccessPolicy, Statement, StorageLifecyclePolicy, StorageSerializationPolicy,
+    RowAccessPolicy, StorageLifecyclePolicy, StorageSerializationPolicy,
     TableConstraint, TableVersion, Tag, WithData, WrappedCollection,
 };
 
-use crate::parser::ParserError;
 
 /// Builder for create table statement variant ([1]).
 ///
@@ -669,20 +670,7 @@ impl CreateTableBuilder {
     }
 }
 
-impl TryFrom<Statement> for CreateTableBuilder {
-    type Error = ParserError;
 
-    // As the builder can be transformed back to a statement, it shouldn't be a problem to take the
-    // ownership.
-    fn try_from(stmt: Statement) -> Result<Self, Self::Error> {
-        match stmt {
-            Statement::CreateTable(create_table) => Ok(create_table.into()),
-            _ => Err(ParserError::ParserError(format!(
-                "Expected create table statement, but received: {stmt}"
-            ))),
-        }
-    }
-}
 
 impl From<CreateTable> for CreateTableBuilder {
     fn from(table: CreateTable) -> Self {

@@ -14,12 +14,10 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+//
+// Changed in Reylo's copy (engine/mysql/vendor/sqlparser/README.md).
 
-use crate::ast::helpers::attached_token::AttachedToken;
-use crate::ast::{
-    BeginEndStatements, ConditionalStatementBlock, ConditionalStatements, CreateTrigger,
-    GranteesType, IfStatement, Statement,
-};
+use crate::ast::GranteesType;
 use crate::dialect::Dialect;
 use crate::keywords::Keyword;
 use crate::parser::{Parser, ParserError};
@@ -197,48 +195,7 @@ impl Dialect for MsSqlDialect {
         }
     }
 
-    fn parse_statement(&self, parser: &mut Parser) -> Option<Result<Statement, ParserError>> {
-        if parser.parse_keyword(Keyword::BEGIN) {
-            // Check if this is a BEGIN...END block rather than BEGIN TRANSACTION
-            let is_block = parser
-                .maybe_parse(|p| {
-                    if p.parse_transaction_modifier().is_some()
-                        || p.parse_one_of_keywords(&[
-                            Keyword::TRANSACTION,
-                            Keyword::WORK,
-                            Keyword::TRAN,
-                        ])
-                        .is_some()
-                        || matches!(p.peek_token_ref().token, Token::SemiColon | Token::EOF)
-                    {
-                        p.expected_ref("statement", p.peek_token_ref())
-                    } else {
-                        Ok(())
-                    }
-                })
-                .unwrap_or(None)
-                .is_some();
-            if is_block {
-                Some(parser.parse_begin_exception_end())
-            } else {
-                parser.prev_token();
-                None
-            }
-        } else if parser.peek_keyword(Keyword::IF) {
-            Some(self.parse_if_stmt(parser))
-        } else if parser.parse_keywords(&[Keyword::CREATE, Keyword::TRIGGER]) {
-            Some(self.parse_create_trigger(parser, false))
-        } else if parser.parse_keywords(&[
-            Keyword::CREATE,
-            Keyword::OR,
-            Keyword::ALTER,
-            Keyword::TRIGGER,
-        ]) {
-            Some(self.parse_create_trigger(parser, true))
-        } else {
-            None
-        }
-    }
+
 
     fn get_next_precedence(&self, parser: &Parser) -> Option<Result<u8, ParserError>> {
         let token = parser.peek_token_ref();
@@ -251,152 +208,9 @@ impl Dialect for MsSqlDialect {
 }
 
 impl MsSqlDialect {
-    /// ```sql
-    /// IF boolean_expression
-    ///     { sql_statement | statement_block }
-    /// [ ELSE
-    ///     { sql_statement | statement_block } ]
-    /// ```
-    fn parse_if_stmt(&self, parser: &mut Parser) -> Result<Statement, ParserError> {
-        let if_token = parser.expect_keyword(Keyword::IF)?;
 
-        let condition = parser.parse_expr()?;
 
-        let if_block = if parser.peek_keyword(Keyword::BEGIN) {
-            let begin_token = parser.expect_keyword(Keyword::BEGIN)?;
-            let statements = self.parse_statement_list(parser, Some(Keyword::END))?;
-            let end_token = parser.expect_keyword(Keyword::END)?;
-            ConditionalStatementBlock {
-                start_token: AttachedToken(if_token),
-                condition: Some(condition),
-                then_token: None,
-                conditional_statements: ConditionalStatements::BeginEnd(BeginEndStatements {
-                    begin_token: AttachedToken(begin_token),
-                    statements,
-                    end_token: AttachedToken(end_token),
-                }),
-            }
-        } else {
-            let stmt = parser.parse_statement()?;
-            ConditionalStatementBlock {
-                start_token: AttachedToken(if_token),
-                condition: Some(condition),
-                then_token: None,
-                conditional_statements: ConditionalStatements::Sequence {
-                    statements: vec![stmt],
-                },
-            }
-        };
 
-        let mut prior_statement_ended_with_semi_colon = false;
-        while let Token::SemiColon = parser.peek_token_ref().token {
-            parser.advance_token();
-            prior_statement_ended_with_semi_colon = true;
-        }
 
-        let mut else_block = None;
-        if parser.peek_keyword(Keyword::ELSE) {
-            let else_token = parser.expect_keyword(Keyword::ELSE)?;
-            if parser.peek_keyword(Keyword::BEGIN) {
-                let begin_token = parser.expect_keyword(Keyword::BEGIN)?;
-                let statements = self.parse_statement_list(parser, Some(Keyword::END))?;
-                let end_token = parser.expect_keyword(Keyword::END)?;
-                else_block = Some(ConditionalStatementBlock {
-                    start_token: AttachedToken(else_token),
-                    condition: None,
-                    then_token: None,
-                    conditional_statements: ConditionalStatements::BeginEnd(BeginEndStatements {
-                        begin_token: AttachedToken(begin_token),
-                        statements,
-                        end_token: AttachedToken(end_token),
-                    }),
-                });
-            } else {
-                let stmt = parser.parse_statement()?;
-                else_block = Some(ConditionalStatementBlock {
-                    start_token: AttachedToken(else_token),
-                    condition: None,
-                    then_token: None,
-                    conditional_statements: ConditionalStatements::Sequence {
-                        statements: vec![stmt],
-                    },
-                });
-            }
-        } else if prior_statement_ended_with_semi_colon {
-            parser.prev_token();
-        }
 
-        Ok(IfStatement {
-            if_block,
-            else_block,
-            elseif_blocks: Vec::new(),
-            end_token: None,
-        }
-        .into())
-    }
-
-    /// Parse `CREATE TRIGGER` for [MsSql]
-    ///
-    /// [MsSql]: https://learn.microsoft.com/en-us/sql/t-sql/statements/create-trigger-transact-sql
-    fn parse_create_trigger(
-        &self,
-        parser: &mut Parser,
-        or_alter: bool,
-    ) -> Result<Statement, ParserError> {
-        let name = parser.parse_object_name(false)?;
-        parser.expect_keyword_is(Keyword::ON)?;
-        let table_name = parser.parse_object_name(false)?;
-        let period = parser.parse_trigger_period()?;
-        let events = parser.parse_comma_separated(Parser::parse_trigger_event)?;
-
-        parser.expect_keyword_is(Keyword::AS)?;
-        let statements = Some(parser.parse_conditional_statements(&[Keyword::END])?);
-
-        Ok(CreateTrigger {
-            or_alter,
-            temporary: false,
-            or_replace: false,
-            is_constraint: false,
-            name,
-            period: Some(period),
-            period_before_table: false,
-            events,
-            table_name,
-            referenced_table_name: None,
-            referencing: Vec::new(),
-            trigger_object: None,
-            condition: None,
-            exec_body: None,
-            statements_as: true,
-            statements,
-            characteristics: None,
-        }
-        .into())
-    }
-
-    /// Parse a sequence of statements, optionally separated by semicolon.
-    ///
-    /// Stops parsing when reaching EOF or the given keyword.
-    fn parse_statement_list(
-        &self,
-        parser: &mut Parser,
-        terminal_keyword: Option<Keyword>,
-    ) -> Result<Vec<Statement>, ParserError> {
-        let mut stmts = Vec::new();
-        loop {
-            if let Token::EOF = parser.peek_token_ref().token {
-                break;
-            }
-            if let Some(term) = terminal_keyword {
-                if parser.peek_keyword(term) {
-                    break;
-                }
-            }
-            stmts.push(parser.parse_statement()?);
-            while let Token::SemiColon = parser.peek_token_ref().token {
-                parser.advance_token();
-            }
-        }
-        Ok(stmts)
-    }
 }

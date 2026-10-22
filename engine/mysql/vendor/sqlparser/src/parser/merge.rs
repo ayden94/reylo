@@ -9,6 +9,8 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// Changed in Reylo's copy (engine/mysql/vendor/sqlparser/README.md).
 
 //! SQL Parser for a `MERGE` statement
 
@@ -18,7 +20,7 @@ use alloc::{boxed::Box, format, vec, vec::Vec};
 use crate::{
     ast::{
         Merge, MergeAction, MergeClause, MergeClauseKind, MergeInsertExpr, MergeInsertKind,
-        MergeUpdateExpr, MergeUpdateKind, ObjectName, OutputClause, SetExpr,
+        MergeUpdateExpr, MergeUpdateKind, ObjectName, OutputClause,
     },
     dialect::{BigQueryDialect, GenericDialect, MySqlDialect},
     keywords::Keyword,
@@ -30,17 +32,7 @@ use crate::{
 use super::{Parser, ParserError};
 
 impl Parser<'_> {
-    /// Parse a `MERGE` statement, returning a `Box`ed SetExpr
-    ///
-    /// This is used to reduce the size of the stack frames in debug builds
-    pub(super) fn parse_merge_setexpr_boxed(
-        &mut self,
-        merge_token: TokenWithSpan,
-    ) -> Result<Box<SetExpr>, ParserError> {
-        Ok(Box::new(SetExpr::Merge(
-            self.parse_merge(merge_token)?.into(),
-        )))
-    }
+
 
     /// Parse a `MERGE` statement
     pub fn parse_merge(&mut self, merge_token: TokenWithSpan) -> Result<Merge, ParserError> {

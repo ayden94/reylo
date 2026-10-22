@@ -14,6 +14,8 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+//
+// Changed in Reylo's copy (engine/mysql/vendor/sqlparser/README.md).
 
 //! AST types specific to CREATE/ALTER variants of [`Statement`](crate::ast::Statement)
 //! (commonly referred to as Data Definition Language, or DDL)
@@ -5947,17 +5949,9 @@ impl fmt::Display for DropPolicy {
     }
 }
 
-impl From<CreatePolicy> for crate::ast::Statement {
-    fn from(v: CreatePolicy) -> Self {
-        crate::ast::Statement::CreatePolicy(v)
-    }
-}
 
-impl From<DropPolicy> for crate::ast::Statement {
-    fn from(v: DropPolicy) -> Self {
-        crate::ast::Statement::DropPolicy(v)
-    }
-}
+
+
 
 /// ALTER POLICY statement.
 ///
@@ -5990,8 +5984,4 @@ impl fmt::Display for AlterPolicy {
     }
 }
 
-impl From<AlterPolicy> for crate::ast::Statement {
-    fn from(v: AlterPolicy) -> Self {
-        crate::ast::Statement::AlterPolicy(v)
-    }
-}
+
