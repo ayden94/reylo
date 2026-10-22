@@ -88,14 +88,22 @@ STUBS="$(pwd)/postgres/vendor/stubs"
 
 export CC_wasm32_wasip1="$WASI_SDK_PATH/bin/clang"
 export AR_wasm32_wasip1="$WASI_SDK_PATH/bin/llvm-ar"
-export CFLAGS_wasm32_wasip1="--sysroot=$SYSROOT -I $STUBS -include $STUBS/wasi_extra.h -mllvm -wasm-enable-sjlj -D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_PROCESS_CLOCKS -D_WASI_EMULATED_MMAN -D_WASI_EMULATED_GETPID"
+# The artifacts are published, so they name no path on the machine that built them: the
+# checkout, the Cargo registry and wasi-sdk are written as /reylo, /cargo and /wasi-sdk wherever
+# the Rust panic locations and the C sources' __FILE__ would record them. A build from any checkout
+# then gives the same bytes, as long as it builds every artifact in one run: `build.sh sqlite`
+# alone gives other bytes, since cargo unifies the features of the crates the three share.
+REPO_ROOT=$(cd .. && pwd)
+CARGO_HOME_DIR=$(cd "${CARGO_HOME:-$HOME/.cargo}" 2>/dev/null && pwd || echo "$HOME/.cargo")
+PREFIX_MAPS="-ffile-prefix-map=$REPO_ROOT=/reylo -ffile-prefix-map=$CARGO_HOME_DIR=/cargo -ffile-prefix-map=$WASI_SDK_PATH=/wasi-sdk"
+export CFLAGS_wasm32_wasip1="--sysroot=$SYSROOT -I $STUBS -include $STUBS/wasi_extra.h -mllvm -wasm-enable-sjlj -D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_PROCESS_CLOCKS -D_WASI_EMULATED_MMAN -D_WASI_EMULATED_GETPID $PREFIX_MAPS"
 export BINDGEN_EXTRA_CLANG_ARGS_wasm32_wasip1="--sysroot=$SYSROOT --target=wasm32-wasip1 -I $STUBS"
 # The shadow stack, where C and the Rust frames that spill keep their locals, is 8 MiB rather than
 # the 1 MiB rustc links by default: the analysis of a statement as deep as libpg_query hands over
 # (src/stack.rs) needs about 0.5 MiB of it. libpg_query cannot find the bounds of a WebAssembly
 # stack and keeps its default budget of 100 kB of it, which stops a statement nested about twice
 # that deep while the JavaScript engine's own stack, which every wasm call also spends, has room.
-export CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="-C link-arg=-L$SYSROOT/lib/wasm32-wasip1 -C link-arg=-lwasi-emulated-signal -C link-arg=-lwasi-emulated-process-clocks -C link-arg=-lwasi-emulated-mman -C link-arg=-lwasi-emulated-getpid -C link-arg=-lsetjmp -C link-arg=-zstack-size=8388608"
+export CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="-C link-arg=-L$SYSROOT/lib/wasm32-wasip1 -C link-arg=-lwasi-emulated-signal -C link-arg=-lwasi-emulated-process-clocks -C link-arg=-lwasi-emulated-mman -C link-arg=-lwasi-emulated-getpid -C link-arg=-lsetjmp -C link-arg=-zstack-size=8388608 --remap-path-prefix=$REPO_ROOT=/reylo --remap-path-prefix=$CARGO_HOME_DIR=/cargo"
 
 # The artifacts asked for, every database's by default.
 if [ $# -gt 0 ]; then WANTED=("$@"); else WANTED=("${DATABASES[@]}"); fi

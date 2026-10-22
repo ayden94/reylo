@@ -60,7 +60,7 @@ show("param_limit", paramLimit.cardinality, await paramLimit.run(sql, { n: 2 }))
 show("param_expr", paramExpr.cardinality, await paramExpr.run(sql, { x: 7, y: "z" }));
 show("param_positional", paramPositional.cardinality, await paramPositional.run(sql, { 1: 7, 2: "z" }));
 show("views", views.cardinality, await views.run(sql));
-show("casts", casts.cardinality, await casts.run(sql, { id: 1, since: new Date(0) }));
+show("casts", casts.cardinality, await casts.run(sql, { id: 1, since: "1970-01-01T00:00:00Z" }));
 show("types", types.cardinality, await types.run(sql, { id: 1 }));
 // The runtime shape of a record column: the text Postgres prints.
 console.log("typeof rows.pair_anon:", typeof (await rows.run(sql, { id: 1 }))!.pair_anon);

@@ -1,0 +1,105 @@
+{
+  "$comment": "Written by `nub run capture` (scripts/capture-types.ts): the errors the content mapper gives each error example. Read by lib/sql-errors.ts. Never edit by hand.",
+  "postgres": {
+    "get_user.sql": {
+      "7f8d7c6f516750df": [
+        {
+          "start": {
+            "line": 1,
+            "column": 12
+          },
+          "end": {
+            "line": 1,
+            "column": 16
+          },
+          "source": "reylo(6)",
+          "message": "column \"nmae\" does not exist (42703)"
+        }
+      ]
+    },
+    "record_click.sql": {
+      "57123fa582c9c7a7": [
+        {
+          "start": {
+            "line": 2,
+            "column": 33
+          },
+          "end": {
+            "line": 2,
+            "column": 53
+          },
+          "source": "reylo(20)",
+          "message": "The schema in the cast of :payload is not JSON: expected value at line 1 column 11."
+        }
+      ]
+    }
+  },
+  "mysql": {
+    "get_user.sql": {
+      "7f8d7c6f516750df": [
+        {
+          "start": {
+            "line": 1,
+            "column": 1
+          },
+          "end": {
+            "line": 3,
+            "column": 20
+          },
+          "source": "reylo(6)",
+          "message": "Unknown column 'nmae' in 'field list' (ER_BAD_FIELD_ERROR)"
+        }
+      ]
+    },
+    "record_click.sql": {
+      "57123fa582c9c7a7": [
+        {
+          "start": {
+            "line": 2,
+            "column": 33
+          },
+          "end": {
+            "line": 2,
+            "column": 53
+          },
+          "source": "reylo(20)",
+          "message": "The schema in the cast of :payload is not JSON: expected value at line 1 column 11."
+        }
+      ]
+    }
+  },
+  "sqlite": {
+    "get_user.sql": {
+      "7f8d7c6f516750df": [
+        {
+          "start": {
+            "line": 1,
+            "column": 12
+          },
+          "end": {
+            "line": 1,
+            "column": 16
+          },
+          "source": "reylo(6)",
+          "message": "no such column: nmae"
+        }
+      ]
+    },
+    "record_click.sql": {
+      "57123fa582c9c7a7": [
+        {
+          "start": {
+            "line": 2,
+            "column": 33
+          },
+          "end": {
+            "line": 2,
+            "column": 53
+          },
+          "source": "reylo(20)",
+          "message": "The schema in the cast of :payload is not JSON: expected value at line 1 column 11."
+        }
+      ]
+    }
+  }
+}

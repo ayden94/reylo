@@ -1,4 +1,4 @@
--- Truth values (docs/driver-decoding.md, 2026-10-20). MySQL has no boolean type: BOOLEAN is
+-- Truth values (wiki/driver-decoding.md, 2026-10-20). MySQL has no boolean type: BOOLEAN is
 -- TINYINT(1), which the prepare reports one digit wide, and a BIT(1) one bit wide. A table's such
 -- column is typed bool and holds whatever was stored (the seeds put -128 and 127 in it), which the
 -- run time refuses unless it is 0 or 1; a comparison, a test or a logical operator the statement

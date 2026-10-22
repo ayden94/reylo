@@ -22,6 +22,11 @@ use std::collections::{HashMap, HashSet};
 const COLUMNS_QUERY: &str = "select c.table_name, c.column_name, c.is_nullable, c.extra from information_schema.columns c \
     where c.table_schema = database() and find_in_set(c.table_name, ?) order by c.table_name, c.ordinal_position";
 
+/// Each column's type of the named tables of the current schema, for [`column_types`]: its
+/// `data_type`, its `column_type` (`tinyint(1)`, `bit(1)`, `bigint unsigned`) and its `extra`.
+const TYPES_QUERY: &str = "select c.table_name, c.column_name, c.data_type, c.column_type, c.extra from information_schema.columns c \
+    where c.table_schema = database() and find_in_set(c.table_name, ?) order by c.table_name, c.ordinal_position";
+
 /// The parameter each `?` of the rewritten text is, by where it stands as the parser counts:
 /// lines and characters from 1.
 pub(crate) type Names = HashMap<(u64, u64), String>;
@@ -46,6 +51,148 @@ pub(crate) fn prefetch(statement: &Statement, names: &Names, host: &Host) {
     if !tables.is_empty() {
         let _ = host.query(COLUMNS_QUERY, vec![json!(tables.join(","))], Scope::Statement);
     }
+    let typed = typed_targets(statement, names);
+    if !typed.is_empty() {
+        let _ = host.query(TYPES_QUERY, vec![json!(written_tables(&typed).join(","))], Scope::Statement);
+    }
+}
+
+/// The parameters written whole to a column or compared whole with one, each with that column.
+fn typed_targets(statement: &Statement, names: &Names) -> Vec<(String, String, Target)> {
+    let mut targets = filled(statement, names);
+    targets.extend(compared(statement, names));
+    targets
+}
+
+/// The type of each parameter whose column the statement names directly, where it differs from
+/// what MySQL's prepare says: the server describes every integer context as a BIGINT and a BIT
+/// context as BIT(64), whatever the column, so a parameter written to or compared with a BIGINT
+/// column is `int8`, one with a TINYINT(1) or BIT(1) column, which a row returns as a truth
+/// value, `bool|int4`, and one with a wider BIT column `bytea`. A row's value then goes back in
+/// as a parameter of its type (the round-trip rule, the maintainer, 2026-10-20). A parameter whose
+/// columns disagree keeps the prepare's type.
+pub(crate) fn column_types(statement: &Statement, names: &Names, host: &Host) -> Lazy<HashMap<String, &'static str>> {
+    let targets = typed_targets(statement, names);
+    if targets.is_empty() {
+        return Some(HashMap::new());
+    }
+    let rows = host.query(TYPES_QUERY, vec![json!(written_tables(&targets).join(","))], Scope::Statement)?;
+    // Per table as the server names it: each column in lower case, its type, and whether it is INVISIBLE.
+    let mut columns: HashMap<String, Vec<(String, Option<&'static str>, bool)>> = HashMap::new();
+    for row in rows.unwrap_or_default() {
+        let (Some(table), Some(column), Some(data_type), Some(column_type)) = (row.first().and_then(as_str), row.get(1).and_then(as_str), row.get(2).and_then(as_str), row.get(3).and_then(as_str)) else { continue };
+        let invisible = row.get(4).and_then(as_str).is_some_and(|extra| extra.to_ascii_uppercase().contains("INVISIBLE"));
+        let column_type = column_type.to_ascii_lowercase();
+        let ty = match data_type.to_ascii_lowercase().as_str() {
+            "bigint" => Some("int8"),
+            "tinyint" if column_type.starts_with("tinyint(1)") => Some("bool|int4"),
+            "bit" if column_type.starts_with("bit(1)") => Some("bool|int4"),
+            "bit" => Some("bytea"),
+            _ => None,
+        };
+        columns.entry(table.to_string()).or_default().push((column.to_ascii_lowercase(), ty, invisible));
+    }
+    let mut found: HashMap<String, Option<&'static str>> = HashMap::new();
+    for (param, table, target) in targets {
+        let known = match columns.get(&table) {
+            Some(known) => Some(known),
+            None => {
+                let mut same = columns.iter().filter(|(name, _)| name.eq_ignore_ascii_case(&table));
+                match (same.next(), same.next()) {
+                    (Some((_, known)), None) => Some(known),
+                    _ => None,
+                }
+            }
+        };
+        let ty = known.and_then(|known| match &target {
+            Target::Name(name) => known.iter().find(|(c, _, _)| c == name).map(|(_, ty, _)| *ty),
+            Target::Position(i) => known.iter().filter(|(_, _, invisible)| !invisible).nth(*i).map(|(_, ty, _)| *ty),
+        });
+        // A column nothing narrows, or one the statement names that the table lacks, keeps the prepare's type.
+        let ty = ty.flatten();
+        found.entry(param).and_modify(|seen| if *seen != ty { *seen = None }).or_insert(ty);
+    }
+    Some(found.into_iter().filter_map(|(param, ty)| ty.map(|ty| (param, ty))).collect())
+}
+
+/// Every parameter compared whole with a column of the table the statement reads, in its WHERE
+/// or its HAVING (`col = :p`, `<>`, `<`, `<=`, `>`, `>=`, `<=>`, `col in (:a, :b)`, `col between
+/// :a and :b`): (parameter, table as the statement names it, column). A bare column is the one
+/// table's where the statement reads one; a qualified one is the table its name or alias names.
+fn compared(statement: &Statement, names: &Names) -> Vec<(String, String, Target)> {
+    let mut out = Vec::new();
+    let (from, filters): (Vec<&TableWithJoins>, Vec<&Expr>) = match statement {
+        Statement::Query(q) => match q.body.as_ref() {
+            SetExpr::Select(s) => (s.from.iter().collect(), s.selection.iter().chain(s.having.iter()).collect()),
+            _ => return out,
+        },
+        Statement::Update(update) => (std::iter::once(&update.table).collect(), update.selection.iter().collect()),
+        Statement::Delete(delete) => {
+            let (ast::FromTable::WithFromKeyword(from) | ast::FromTable::WithoutKeyword(from)) = &delete.from;
+            (from.iter().collect(), delete.selection.iter().collect())
+        }
+        _ => return out,
+    };
+    // The tables by the name the statement reads each by; `plain` where every item is a table.
+    let mut tables: Vec<(String, String)> = Vec::new();
+    let mut plain = true;
+    for twj in &from {
+        for factor in std::iter::once(&twj.relation).chain(twj.joins.iter().map(|j| &j.relation)) {
+            match factor {
+                TableFactor::Table { name, alias, .. } => match table_name(name) {
+                    Some(table) => {
+                        let by = alias.as_ref().map(|a| a.name.value.clone()).unwrap_or_else(|| table.clone());
+                        tables.push((by.to_ascii_lowercase(), table));
+                    }
+                    None => plain = false,
+                },
+                _ => plain = false,
+            }
+        }
+    }
+    let column = |e: &Expr| -> Option<(String, String)> {
+        match e {
+            Expr::Identifier(i) if plain && tables.len() == 1 => Some((tables[0].1.clone(), i.value.to_ascii_lowercase())),
+            Expr::CompoundIdentifier(parts) if parts.len() == 2 => {
+                let by = parts[0].value.to_ascii_lowercase();
+                tables.iter().find(|(b, _)| *b == by).map(|(_, t)| (t.clone(), parts[1].value.to_ascii_lowercase()))
+            }
+            _ => None,
+        }
+    };
+    fn walk(e: &Expr, names: &Names, column: &dyn Fn(&Expr) -> Option<(String, String)>, out: &mut Vec<(String, String, Target)>) {
+        use ast::BinaryOperator::*;
+        let pair = |col: &Expr, p: &Expr, out: &mut Vec<(String, String, Target)>| {
+            if let (Some((table, name)), Some(param)) = (column(col), direct(p, names)) {
+                out.push((param, table, Target::Name(name)));
+            }
+        };
+        match e {
+            Expr::BinaryOp { left, op: Eq | NotEq | Lt | LtEq | Gt | GtEq | Spaceship, right } => {
+                pair(left, right, out);
+                pair(right, left, out);
+            }
+            Expr::BinaryOp { left, op: And | Or | Xor, right } => {
+                walk(left, names, column, out);
+                walk(right, names, column, out);
+            }
+            Expr::InList { expr, list, .. } => {
+                for item in list {
+                    pair(expr, item, out);
+                }
+            }
+            Expr::Between { expr, low, high, .. } => {
+                pair(expr, low, out);
+                pair(expr, high, out);
+            }
+            Expr::Nested(inner) | Expr::UnaryOp { expr: inner, .. } => walk(inner, names, column, out),
+            _ => {}
+        }
+    }
+    for filter in filters {
+        walk(filter, names, &column, &mut out);
+    }
+    out
 }
 
 /// The parameters of `statement` the caller may pass null for, by name.
@@ -142,7 +289,8 @@ fn table_name(name: &ast::ObjectName) -> Option<String> {
     }
 }
 
-/// The parameter an expression is, whole: under casts and parentheses, which leave a NULL as it is.
+/// The parameter an expression is, whole: under casts, parentheses and the `JSON_COMPACT()` a
+/// `::json` cast compiles to on MariaDB, which leave a NULL as it is.
 fn direct(e: &Expr, names: &Names) -> Option<String> {
     match e {
         Expr::Value(v) => match &v.value {
@@ -150,6 +298,17 @@ fn direct(e: &Expr, names: &Names) -> Option<String> {
             _ => None,
         },
         Expr::Nested(inner) | Expr::Cast { expr: inner, .. } | Expr::Convert { expr: inner, .. } => direct(inner, names),
+        _ => json_compact(e).and_then(|inner| direct(inner, names)),
+    }
+}
+
+/// The argument of `JSON_COMPACT(x)`, which MariaDB writes for a `::json` cast (it has no
+/// `CAST(… AS JSON)`), and which is NULL for NULL.
+fn json_compact(e: &Expr) -> Option<&Expr> {
+    let Expr::Function(f) = e else { return None };
+    let ast::FunctionArguments::List(list) = &f.args else { return None };
+    match list.args.as_slice() {
+        [only] if crate::mysql::builtin(f) == "json_compact" && list.clauses.is_empty() && f.over.is_none() => arg_expr(only),
         _ => None,
     }
 }
@@ -284,6 +443,7 @@ impl Walk<'_> {
     fn param_of(&self, e: &Expr, env: &Env) -> Option<String> {
         match e {
             Expr::Nested(inner) | Expr::Cast { expr: inner, .. } | Expr::Convert { expr: inner, .. } => self.param_of(inner, env),
+            Expr::Function(_) => json_compact(e).and_then(|inner| self.param_of(inner, env)),
             Expr::CompoundIdentifier(parts) if parts.len() == 2 => {
                 let (by, column) = (parts[0].value.to_ascii_lowercase(), parts[1].value.to_ascii_lowercase());
                 let item = env.levels.iter().rev().find_map(|level| level.iter().find(|item| item.name == by))?;
@@ -653,6 +813,57 @@ mod tests {
         panic!("the analysis never settled")
     }
 
+    /// Each parameter's type, the prepare describing every `?` with `code` as MySQL 8.4 does for a context (8 an integer one, 16 a BIT one).
+    fn param_types(sql: &str, code: u32) -> Vec<(String, String)> {
+        let types = json!({ "rows": [
+            ["t", "id", "int", "int", ""], ["t", "big", "bigint", "bigint unsigned", ""], ["t", "flag", "tinyint", "tinyint(1)", ""], ["t", "small", "tinyint", "tinyint", ""],
+            ["t", "bit1", "bit", "bit(1)", ""], ["t", "bits", "bit", "bit(8)", ""], ["t", "hidden", "bigint", "bigint", "INVISIBLE"],
+            ["u", "id", "bigint", "bigint", ""], ["u", "big", "int", "int", ""],
+        ] });
+        let mut answers: HashMap<String, Answer> = HashMap::new();
+        for _ in 0..8 {
+            let host = Host::new(&answers);
+            if let Some(analysis) = crate::mysql::analyze_text(sql, &host) {
+                assert!(analysis.diagnostics.is_empty(), "{sql}: {:?}", analysis.diagnostics);
+                return analysis.params.iter().map(|p| (p.name.clone(), match &p.ty { crate::types::Type::Scalar { name } => name.clone(), other => format!("{other:?}") })).collect();
+            }
+            for need in host.needs() {
+                let (id, answer) = match need {
+                    Need::Describe { id, sql: text } => {
+                        let params: Vec<_> = text.matches('?').map(|_| json!({ "type": code, "flags": 0, "charset": 63 })).collect();
+                        (id, json!({ "mysql": { "columns": [], "params": params } }))
+                    }
+                    Need::Query { id, sql, .. } if sql == super::TYPES_QUERY => (id, types.clone()),
+                    // The server's default mode, under which the engine reads `NOT` as the server does.
+                    Need::Query { id, sql, .. } if sql == "select @@session.sql_mode" => (id, json!({ "rows": [["ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION"]] })),
+                    Need::Query { id, .. } => (id, json!({ "rows": [] })),
+                };
+                answers.insert(id, serde_json::from_value(answer).unwrap());
+            }
+        }
+        panic!("the analysis never settled")
+    }
+
+    #[test]
+    fn a_parameter_written_to_or_compared_with_a_column_takes_the_values_its_rows_return() {
+        let p = |name: &str, ty: &str| (name.to_string(), ty.to_string());
+        // A BIGINT column's rows are BigInts, a TINYINT(1)'s and a BIT(1)'s truth values, a wider BIT's bytes.
+        assert_eq!(param_types("select id from t where big = :b and flag = :f and id = :i and small = :s", 8), [p("b", "int8"), p("f", "bool|int4"), p("i", "int4"), p("s", "int4")]);
+        assert_eq!(param_types("select id from t where bit1 = :one and bits = :eight", 16), [p("one", "bool|int4"), p("eight", "bytea")]);
+        // Either side of a comparison, IN, BETWEEN, under NOT and OR, and a qualified column of a join.
+        assert_eq!(param_types("select t.id from t join u on u.id = t.id where :b < t.big or not (u.id in (:x, :y)) and t.big between :lo and :hi", 8), [p("b", "int8"), p("x", "int8"), p("y", "int8"), p("lo", "int8"), p("hi", "int8")]);
+        // A bare column of a join is ambiguous, and a column whose two uses disagree keeps the prepare's type.
+        assert_eq!(param_types("select t.id from t join u on u.id = t.id where big = :b", 8), [p("b", "int4")]);
+        assert_eq!(param_types("select t.id from t, u where t.big = :b and u.big = :b2 and t.id = :c and u.id = :c2", 8), [p("b", "int8"), p("b2", "int4"), p("c", "int4"), p("c2", "int8")]);
+        // Written whole: VALUES by name and by place (the INVISIBLE column is no place), and an UPDATE's SET and WHERE.
+        assert_eq!(param_types("insert into t (big, flag) values (:b, :f)", 8), [p("b", "int8"), p("f", "bool|int4")]);
+        assert_eq!(param_types("insert into t values (:i, :b, :f, :s, :one, :eight)", 8), [p("i", "int4"), p("b", "int8"), p("f", "bool|int4"), p("s", "int4"), p("one", "bool|int4"), p("eight", "bytea")]);
+        assert_eq!(param_types("update t set flag = :f where big = :b", 8), [p("f", "bool|int4"), p("b", "int8")]);
+        assert_eq!(param_types("delete from t where big = :b", 8), [p("b", "int8")]);
+        // An expression of the column is not the column: `big + 1` is the prepare's.
+        assert_eq!(param_types("select id from t where big + 1 = :b limit :n", 8), [p("b", "int4"), p("n", "int4")]);
+    }
+
     /// The tables `sql` reads and writes, as the freshness facts name them.
     fn tables(sql: &str) -> (Vec<String>, Vec<String>) {
         use sqlparser::dialect::MySqlDialect;
@@ -702,6 +913,23 @@ mod tests {
         assert!(may_be_null("insert into users (name, email) select name, :email from users").is_empty());
         // A read asks for no columns.
         assert_eq!(nullable("select id from users where email = :email"), (vec![("email".into(), false)], false));
+    }
+
+    #[test]
+    fn a_cast_parameter_is_as_nullable_as_the_bare_one() {
+        // What a `:name::type` cast compiles to: the bare placeholder for a text type, `CAST(? AS
+        // SIGNED)`, `CAST(? AS DECIMAL(…))` and `CAST(? AS JSON)`, and on MariaDB `JSON_COMPACT(?)`
+        // for `::json`. Each keeps NULL: written whole to a nullable column the parameter may be
+        // null, to a NOT NULL one it is a value, and coalesced or tested it may be null.
+        let lists = |a: Vec<String>| a.join(" ");
+        let q = |sql: &str| lists(may_be_null(sql));
+        assert_eq!(q("insert into users (name, email, bio) values (:name, CAST(:email AS JSON), JSON_COMPACT(:bio))"), "email bio");
+        assert_eq!(q("insert into users (name, email, bio) values (CAST(:name AS SIGNED), CAST(:email AS DECIMAL(10,2)), CAST(:bio AS UNSIGNED)), (JSON_COMPACT(:n2), :e2, CAST(:b2 AS DATETIME(6)))"), "email bio e2 b2");
+        assert_eq!(q("update users set email = CAST(:email AS SIGNED), name = JSON_COMPACT(:name), bio = JSON_COMPACT(:bio) where id = CAST(:id AS SIGNED)"), "email bio");
+        assert_eq!(q("insert into users (name, email) values (:name, :email) on duplicate key update bio = CAST(:bio AS JSON), name = CAST(:again AS SIGNED)"), "email bio");
+        assert_eq!(q("update users set email = coalesce(JSON_COMPACT(:e), email), name = coalesce(CAST(:n AS SIGNED), name) where JSON_COMPACT(:j) is null"), "e n j");
+        // A function that is not the cast's, or JSON_COMPACT of more than the parameter, is an expression.
+        assert_eq!(q("update users set email = json_quote(:e), bio = JSON_COMPACT(concat(:b, '')) where id = :id"), "");
     }
 
     #[test]

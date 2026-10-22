@@ -1,6 +1,6 @@
 // Runs the official JSON Schema Test Suite (draft 2020-12) over the run time's validator,
 // src/json-schema.ts, which checks a typed JSON parameter's value and a `json('…')` member's
-// before the statement runs (docs/typed-json-params.md). The suite is fetched into `.suite/` at the
+// before the statement runs (wiki/typed-json-params.md). The suite is fetched into `.suite/` at the
 // commit below. The keywords the profile refuses are skipped and counted (references, the dynamic
 // keywords, `unevaluatedItems`, a schema in `unevaluatedProperties`); `format` is asserted, as the
 // record decides, so the suite's optional format files run and its annotation-only `format.json`

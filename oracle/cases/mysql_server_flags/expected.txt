@@ -1,5 +1,5 @@
 aggregates.sql: one () -> { a: int8, b: int8, c: int8, d: numeric?, e: numeric?, f: int4|int8?, g: text?, h: date?, i: text?, j: int8, k: int8, l: int8, m: float8?, o: float8?, p: [int4]?, q: json?, r: numeric?, s: int8|int4?, u: int4|int8?, v: int8, w: numeric, x: bool, z: timestamp?, aa: numeric?, ab: float8?, ac: json?, ad: text?, ae: text?, af: bytea?, ag: int2?, ah: int2?, ai: time?, aj: float8?, ak: float8? }
-aggregates_grouped.sql: many () -> { n: int4, a: int8, b: numeric?, c: text?, d: int4|int8?, e: text?, f: text, g: int8, h: numeric?, i: int8, j: date?, k: [int2]? }
+aggregates_grouped.sql: many () -> { n: int4, a: int8, b: numeric?, c: text?, d: int4|int8?, e: text?, f: text, g: int8, h: numeric?, i: int8, j: date?, k: [int2] }
 aggregates_no_rows.sql: one () -> { a: int8, b: numeric?, c: int4|int8?, d: int8, e: int8, f: int8, g: int8, h: numeric?, i: float8?, j: text?, k: [int4]?, l: numeric?, m: int4|int8?, o: int4|int8?, p: bool }
 aggregates_rollup.sql: many () -> { n: int4|int8?, small: int2?, a: int8, b: numeric?, c: int8?, d: text? }
 bit_and_enum.sql: many () -> { a: bytea, b: int8|int4, c: text?, d: text, e: float8, f: text, g: float8, h: bool, i: bool, j: int2, k: int8|int4, l: bool, m: int8|int4, o: int8, p: text?, q: text?, r: text?, s: text?, u: text?, v: int8, w: int8, x: int8 }
@@ -30,9 +30,9 @@ left_join.sql: many () -> { id: int4, name: text, other_id: int4?, label: text?,
 left_join_chain.sql: many () -> { id: int4, label: text?, second: text? }
 left_join_derived.sql: many () -> { id: int4, c: int8?, m: text? }
 left_join_lateral.sql: many () -> { id: int4, c: int8?, m: text? }
-left_join_then_inner.sql: many () -> { id: int4, label: text?, second: text }
+left_join_then_inner.sql: many () -> { id: int4, label: text, second: text }
 left_join_using.sql: many () -> { id: int4, name: text, label: text? }
-left_join_where_not_null.sql: many () -> { id: int4, other_id: int4?, label: text? }
+left_join_where_not_null.sql: many () -> { id: int4, other_id: int4, label: text }
 literals.sql: one () -> { a: int8|int4, b: numeric, c: float8, d: text, e: unknown?, f: bool, g: bytea, h: date, i: timestamp, j: time, k: bytea, l: bytea, m: text, o: text, p: int8|int4, q: text }
 natural_left_join.sql: many () -> { id: int4, name: text, label: text? }
 now_functions.sql: one () -> { a: timestamp, b: date, c: time, d: timestamp, e: timestamp, f: int8, g: text?, h: text?, i: text, j: int8, k: int8, l: int8, m: int8, o: text?, p: float8, q: float8, r: text?, s: text?, u: text?, v: text?, w: int8, x: text?, z: text?, aa: unknown?, ab: int8, ac: text? }
@@ -56,7 +56,7 @@ user_variable_quoted.sql: many () -> { seen: unknown, nothing: unknown?, n: int4
 view_columns.sql: many () -> { id: int4|int8, n: int4|int8, more: int8|int4, m: int8, small: int2, q: int8|int4?, big: int8 }
 view_columns_ordered.sql: many () -> { id: int4|int8, n: int4|int8, more: int8|int4, m: int8, small: int2, q: int8|int4?, big: int8 }
 view_expression_alone.sql: many () -> { more: int8|int4, q: int8|int4? }
-where_never_narrows.sql: many () -> { maybe_name: text?, maybe_n: int4? }
+where_narrows.sql: many () -> { maybe_name: text, maybe_n: int4 }
 window_functions.sql: many () -> { a: int8, b: int8, c: int8, d: int8, e: numeric?, f: int4|int8?, g: text?, h: text?, i: int4|int8?, j: int4|int8?, k: int8, l: float8, m: float8, o: int4|int8?, p: int8, q: text?, r: numeric?, s: int8, u: numeric?, v: int4|int8?, w: int8, x: [int4]? }
 with_query.sql: many () -> { name: text, maybe_name: text?, next: int8 }
 zero_dates.sql: many () -> { a: date, b: date?, c: int2?, d: int8|int4?, e: int8, f: int8, g: text?, i: text?, j: text?, k: date?, l: text, m: date, o: bool, p: bool, q: int8|int4, r: text, s: timestamp, u: date?, v: timestamp?, w: timestamp, x: date?, z: bool, aa: int8|int4?, ab: int8|int4?, ac: int8|int4?, ad: int8|int4?, ae: text?, af: date?, ag: date?, ah: date?, ai: date?, aj: int8|int4?, ak: int8? }

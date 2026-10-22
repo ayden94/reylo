@@ -1,5 +1,5 @@
 // The TypeScript type of a typed JSON parameter, from the schema in its cast
-// (`:users::jsonb('{ ... }')`, docs/typed-json-params.md). The loader types such a parameter
+// (`:users::jsonb('{ ... }')`, wiki/typed-json-params.md). The loader types such a parameter
 // `unknown` until typed JSON parameters are built; scripts/capture-types.ts puts this type in its
 // place, so the docs show what the build will give.
 //
@@ -8,7 +8,7 @@
 // optional unless `required` lists it; every schema is an object, never a bare type name; `enum` and
 // `const` narrow a type, and `oneOf`, `anyOf` and `allOf` combine schemas. A database type name is an
 // error: database types belong to the statement's column list and to `row` and `rows` descriptors
-// (docs/structured-params.md).
+// (wiki/structured-params.md).
 
 export type Dialect = 'postgres' | 'mysql' | 'sqlite';
 type Schema = string | boolean | { [key: string]: unknown };

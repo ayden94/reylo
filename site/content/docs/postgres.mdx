@@ -1,0 +1,816 @@
+---
+title: Postgres
+description: How Reylo types and runs SQL on Postgres. Every type and the value it returns, nulls, row counts, parameters, drivers and limits.
+---
+
+<p className="dk-subheader">Every type, null, row count and parameter rule on Postgres</p>
+
+This page is the reference behind [the main docs](/) for Postgres: the place to look when a type, a `| null`, a row count or a parameter surprises you. [MySQL](/mysql) and [SQLite](/sqlite) have the same page, with every answer in the same place.
+
+| | |
+| --- | --- |
+| Versions | Postgres 18, 17 and 14 |
+| URL | A `postgres://` or `postgresql://` URL, in `DATABASE_URL` or [`direct_url`](/#direct_url), a direct connection past a pooler such as PgBouncer |
+| Type check | Reads the schema through postgres.js or `pg`, whichever your project has |
+| Drivers | postgres.js, `pg`, `pg-promise`, `Bun.sql`, PGlite, Neon and `@vercel/postgres` ([Drivers](#drivers)) |
+
+<Details summary="View the schema behind the examples" id="schema">
+
+```sql file="schema.sql"
+create extension if not exists pg_jsonschema;
+
+create type user_role as enum ('admin', 'member');
+create domain amount as numeric(12, 2) check (value >= 0);
+
+create table users (
+  id serial primary key,
+  name text not null,
+  email text unique,
+  role user_role not null default 'member',
+  tags text[] not null default '{}',
+  created_at timestamptz not null default now()
+);
+create unique index users_email_lower on users (lower(email));
+```
+
+```sql file="schema.sql"
+create table orders (
+  id bigserial primary key,
+  user_id integer not null references users (id),
+  total amount not null,
+  paid boolean not null default false,
+  placed_at timestamptz not null default now(),
+  ships_on date,
+  receipt bytea
+);
+```
+
+```sql file="schema.sql"
+create table events (
+  id bigserial primary key,
+  kind text not null check (kind in ('click', 'key')),
+  payload jsonb not null check (jsonb_matches_schema('{
+    "type": "object",
+    "properties": {
+      "x": { "type": "integer" },
+      "y": { "type": "integer" },
+      "code": { "type": "string" }
+    }
+  }', payload)),
+  at timestamp not null default localtimestamp
+);
+```
+
+</Details>
+
+## Data types
+
+Reylo decodes every value of its own queries itself, on every driver, so each SQL type has one TypeScript type and one form at run time. In each pair below the table, the SQL is a value and the JavaScript is what Reylo returns: `select <SQL> as v` gives the row `{ v: <JavaScript> }`.
+
+| SQL type | TypeScript | The value `.run()` returns |
+| --- | --- | --- |
+| `smallint`, `integer`, `oid` | `number` | `42` |
+| `bigint`, `bigserial`, `count(*)` | `bigint` | `9007199254740993n` |
+| `real`, `double precision` | `number` | `1.1` |
+| `numeric`, `money` | `string` | `"12.50"`, `"$1.50"` |
+| `text`, `varchar`, `char`, `uuid` | `string` | `"Ada"` |
+| `boolean` | `boolean` | `true` |
+| `date` | `string` | `"2026-10-20"` |
+| `timestamp` | `string` | `"2026-10-20T10:00:00.123456"` |
+| `timestamptz` | `string` | `"2026-10-20T08:00:00.123456Z"` |
+| `time`, `timetz`, `interval` | `string` | `"10:00:00"`, `"1 day 02:03:04"` |
+| `json`, `jsonb` | `unknown` | `{ a: 1 }` |
+| `json`, `jsonb` a JSON Schema `CHECK` holds | what the schema admits | `{ x: 10, y: 20 }` |
+| JSON the statement builds (`jsonb_build_object`, `jsonb_agg`) | the object or array it builds | `{ total: 12.5 }` |
+| `bytea` | `Uint8Array` | `Uint8Array.of(1, 2, 255)` |
+| An array | an array of its element type | `["math", "poetry"]` |
+| An enum | the union of its labels | `"admin"` |
+| A domain | its base type | its base type's |
+| A row value | `string` | `"(1,Ada)"` |
+| Every other type (`inet`, ranges, `point`, `tsvector`, `xml`, …) | `string` | `"[1,5)"` |
+
+### Integers
+
+A `bigint` is a JavaScript `bigint`, and so is `count(*)`, which Postgres types `bigint`. Cast in the statement where you want a `number`:
+
+```ts twoslash tab="main.ts"
+import countOrders from "./pg_count_orders.sql";
+
+const counts = await countOrders.run(db);
+//    ^?
+```
+
+```sql tab="pg_count_orders.sql"
+select count(*) as total, count(*)::int as total_number
+from orders
+```
+
+<Rules>
+
+**`sum()`**
+
+The `sum()` of an `integer` column is a `bigint`, and of a `bigint` or a `numeric` a `numeric`, so a `string`.
+
+<Pairs>
+
+- `sum(2::integer)` → `2n`
+- `sum(2::bigint)` → `"2"`
+- `sum(2.5::numeric)` → `"2.5"`
+
+</Pairs>
+
+**A cast that overflows**
+
+A cast to `int` that overflows is Postgres's error, never a wrapped number.
+
+<Pairs>
+
+- `3000000000::bigint::int` → `throws PostgresError: integer out of range`
+
+</Pairs>
+
+**Writing a `bigint` out**
+
+JavaScript's `JSON.stringify` refuses a `bigint`, so write one out of your API as its text, `String(v)`, or as the integer itself, `JSON.rawJSON(String(v))`, which is what `.outputSchema` describes.
+
+<Pairs>
+
+- `9007199254740993::bigint` → `9007199254740993n`
+
+</Pairs>
+
+**Inside JSON the statement builds**
+
+A `bigint` is a JSON number, which `JSON.parse` rounds past 2^53 ([JSON](#json)).
+
+<Pairs>
+
+- `json_build_object('n', 9007199254740993::bigint)` → `{ n: 9007199254740992 }`
+
+</Pairs>
+
+</Rules>
+
+### Decimals
+
+A `numeric` is its exact text, `"12.50"`, with the column's scale, and so is an `avg()`. A `money` is its text in the server's currency format, `"$1.50"`.
+
+<Rules>
+
+**32-bit floats**
+
+A `real` is a 32-bit float, given as the shorter text Postgres writes, except on `Bun.sql` in a statement with a parameter. A `double precision` is the same on every driver.
+
+<Pairs>
+
+- `1.1::real` → `1.1`
+- `1.1::double precision` → `1.1`
+
+</Pairs>
+
+**On `Bun.sql`**
+
+In a statement with a parameter, `Bun.sql` reads the binary protocol and gives a `real`'s exact value; in one without, it reads the text, as the other drivers do. Here the statement has a parameter.
+
+<Pairs>
+
+- `1.1::real` → `1.100000023841858`
+
+</Pairs>
+
+**Inside JSON the statement builds**
+
+A `numeric` is a JSON number, which `JSON.parse` reads as a double.
+
+<Pairs>
+
+- `json_build_object('n', 12345678901234.123456::numeric)` → `{ n: 12345678901234.123 }`
+
+</Pairs>
+
+**Decimal parameters**
+
+A `numeric` parameter takes the text, `"12.50"` ([What a parameter takes](#what-a-parameter-takes)).
+
+</Rules>
+
+### Dates and times
+
+No value is a `Date`. A `timestamptz` is the instant in UTC, in ISO 8601 with a `Z`, and every type without a zone is the text Postgres writes, with a `T` between the date and the time of a `timestamp`:
+
+```ts twoslash tab="main.ts"
+import orderDates from "./pg_order_dates.sql";
+
+const order = await orderDates.run(db, { id: 1 });
+//    ^?
+```
+
+```sql tab="pg_order_dates.sql"
+select placed_at, ships_on from orders where id = :id
+```
+
+Where your runtime has `Temporal`, `Temporal.Instant.from()` reads the instant, and `Temporal.PlainDate.from()` the date. Each text goes back in as a parameter as it is ([What a parameter takes](#what-a-parameter-takes)).
+
+<Rules>
+
+**Fractions of a second**
+
+The fraction is the server's, to the microsecond, with its trailing zeros dropped, and none for a whole second.
+
+<Pairs>
+
+- `'2026-10-20 10:00:00.123456+00'::timestamptz` → `"2026-10-20T10:00:00.123456Z"`
+- `'2026-10-20 10:00:00.5+00'::timestamptz` → `"2026-10-20T10:00:00.5Z"`
+- `'2026-10-20 10:00:00+00'::timestamptz` → `"2026-10-20T10:00:00Z"`
+
+</Pairs>
+
+**An offset with seconds**
+
+An offset with seconds, as before standard time, moves to UTC exactly.
+
+<Pairs>
+
+- `'1883-11-18 12:00:00-07:52:58'::timestamptz` → `"1883-11-18T19:52:58Z"`
+
+</Pairs>
+
+**Infinity**
+
+The values `infinity` and `-infinity` stay those words, in every date and time type.
+
+<Pairs>
+
+- `'infinity'::timestamptz` → `"infinity"`
+- `'-infinity'::date` → `"-infinity"`
+
+</Pairs>
+
+**Years past 9999 or before 1 AD**
+
+A `timestamptz` takes ISO 8601's extended year, as `Temporal.Instant` writes it. A `date` or a `timestamp` keeps Postgres's text.
+
+<Pairs>
+
+- `'12344-12-31 18:30:00+00'::timestamptz` → `"+012344-12-31T18:30:00Z"`
+- `'0002-06-01 12:00:00+00 BC'::timestamptz` → `"-000001-06-01T12:00:00Z"`
+- `'12345-01-01'::date` → `"12345-01-01"`
+- `'0002-06-01 BC'::date` → `"0002-06-01 BC"`
+- `'0002-06-01 12:00:00 BC'::timestamp` → `"0002-06-01T12:00:00 BC"`
+
+</Pairs>
+
+**Past Temporal's range**
+
+Postgres reaches 294276 AD, and `Temporal.Instant` stops at 275760 AD, where `Temporal.Instant.from` throws a `RangeError`.
+
+<Pairs>
+
+- `'294276-12-31 23:59:59+00'::timestamptz` → `"+294276-12-31T23:59:59Z"`
+
+</Pairs>
+
+**Times and intervals**
+
+A `time`, a `timetz` and an `interval` are the server's text. Reylo reads the text at Postgres's default `DateStyle` (`ISO`) and `IntervalStyle`, so a session that sets others gets the text they write.
+
+<Pairs>
+
+- `'10:00:00'::time` → `"10:00:00"`
+- `'10:00:00+02'::timetz` → `"10:00:00+02"`
+- `'1 day 02:03:04'::interval` → `"1 day 02:03:04"`
+
+</Pairs>
+
+**Inside JSON the statement builds**
+
+A `timestamptz` is Postgres's text in the session's time zone, not the UTC form above. Here the session's `TimeZone` is `America/Los_Angeles`.
+
+<Pairs>
+
+- `json_build_object('at', '2026-10-20 08:00:00.123456+00'::timestamptz)` → `{ at: "2026-10-20T01:00:00.123456-07:00" }`
+
+</Pairs>
+
+**On `Bun.sql`**
+
+A `timestamp` or a `timestamptz` keeps its milliseconds, not its microseconds ([Drivers](#drivers)).
+
+<Pairs>
+
+- `'2026-10-20 10:00:00.123456+00'::timestamptz` → `"2026-10-20T10:00:00.123Z"`
+
+</Pairs>
+
+</Rules>
+
+### Truth values
+
+A `boolean` is a JavaScript `boolean`, and so is every comparison, `IS NULL`, `EXISTS`, `IN`, `LIKE`, `NOT`, `AND` and `OR` the statement computes. Postgres stores a real boolean, so no truth value is refused here, as it can be on [MySQL](/mysql#truth-values) and [SQLite](/sqlite#truth-values).
+
+### JSON
+
+A `json` or `jsonb` value is parsed, and typed `unknown`, unless a JSON Schema `CHECK` holds the column or the statement builds the JSON. With the schema's `CHECK`, `events.payload` is what the schema admits, and `kind`, which a `CHECK` keeps to two strings, is their union:
+
+```ts twoslash tab="main.ts"
+import events from "./pg_events.sql";
+
+const rows = await events.run(db);
+//    ^?
+```
+
+```sql tab="pg_events.sql"
+select kind, payload from events
+```
+
+JSON the statement builds with `jsonb_build_object`, `json_build_object`, `jsonb_agg`, `json_agg` or `to_jsonb` of a whole row is typed from its arguments, each value as JSON writes it:
+
+```ts twoslash tab="main.ts"
+import orderSummaries from "./pg_order_summaries.sql";
+
+const rows = await orderSummaries.run(db);
+//    ^?
+```
+
+```sql tab="pg_order_summaries.sql"
+select u.name,
+  jsonb_build_object(
+    'total', o.total,
+    'placed_at', o.placed_at,
+    'paid', o.paid
+  ) as summary
+from orders o
+join users u on u.id = o.user_id
+```
+
+Through an aggregate the schema's type holds, and a whole row as JSON is typed column by column, an enum's labels included:
+
+```ts twoslash tab="main.ts"
+import eventsByKind from "./pg_events_by_kind.sql";
+
+const groups = await eventsByKind.run(db);
+//    ^?
+```
+
+```sql tab="pg_events_by_kind.sql"
+select kind, jsonb_agg(payload order by id) as payloads
+from events
+group by kind
+```
+
+```ts twoslash tab="main.ts"
+import userRow from "./pg_user_row.sql";
+
+const row = await userRow.run(db, { id: 1 });
+//    ^?
+```
+
+```sql tab="pg_user_row.sql"
+select to_jsonb(u) as "user" from users u where u.id = :id::int
+```
+
+<Rules>
+
+**The validators Reylo reads**
+
+The `CHECK` may call pg_jsonschema's `jsonb_matches_schema` or `json_matches_schema`, or the validator of four other extensions (`jsonschema`, `postgres-json-schema`, `is_jsonb_valid`, `json_schema_validate`). Reylo knows each by the extension that defines it, never by its name, and reads only the keywords that validator enforces, under the draft it applies.
+
+**Where the schema's type reaches**
+
+The schema's type reaches a bare read of the column, through a view or a subquery too; the column inside JSON the statement builds; a whole stored row (`jsonb_agg(e)` over `from events e`); and a parameter written whole to the column.
+
+**Where it stops**
+
+An expression over the column (`payload -> 'x'`) is `unknown`, and so is a column under a `union`, and one whose `CHECK` was added `NOT VALID`.
+
+**Built with `to_jsonb`**
+
+One value turned to JSON by `to_jsonb` is `unknown`, and a whole row is the row's object.
+
+**Values inside a document**
+
+Inside a document a value is what JSON writes: integers and `numeric` are numbers, which `JSON.parse` rounds past 2^53 on every driver; a `date` is its text, and a `timestamptz` its text in the session's time zone, here `America/Los_Angeles`; a `bytea` is its hex text; a `boolean` is `true` or `false`.
+
+<Pairs>
+
+- `jsonb_build_object('n', 9007199254740993::bigint)` → `{ n: 9007199254740992 }`
+- `jsonb_build_object('n', 12.50::numeric)` → `{ n: 12.5 }`
+- `jsonb_build_object('d', '2026-10-20'::date)` → `{ d: "2026-10-20" }`
+- `jsonb_build_object('at', '2026-10-20 08:00:00+00'::timestamptz)` → `{ at: "2026-10-20T01:00:00-07:00" }`
+- `jsonb_build_object('b', '\x0102ff'::bytea)` → `{ b: "\\x0102ff" }`
+- `jsonb_build_object('ok', true)` → `{ ok: true }`
+
+</Pairs>
+
+**Aggregates over no rows**
+
+Over no rows, `jsonb_agg` is `null`, and its type says so: `coalesce(jsonb_agg(…), '[]')` is the array alone.
+
+<Pairs>
+
+- `jsonb_agg(1) filter (where false)` → `null`
+- `coalesce(jsonb_agg(1) filter (where false), '[]')` → `[]`
+
+</Pairs>
+
+**JSON parameters**
+
+A JSON parameter takes any JSON value, and a string is stored as a JSON string ([What a parameter takes](#what-a-parameter-takes)).
+
+</Rules>
+
+### Binary
+
+A `bytea` is a `Uint8Array`. Most drivers give Reylo a `Buffer`, which is one, so `.run()` returns it as it is.
+
+<Rules>
+
+**Both text forms**
+
+Reylo reads both of Postgres's text forms of a `bytea`, the hex form of the default `bytea_output` and the escape form. The second pair's session sets `bytea_output` to `escape`.
+
+<Pairs>
+
+- `'\x0102ff'::bytea` → `<Buffer 01 02 ff>`
+- `'\x0102ff'::bytea` → `Uint8Array(3) [ 1, 2, 255 ]`
+
+</Pairs>
+
+**Binary parameters**
+
+A `bytea` parameter takes a `Uint8Array`, a `Buffer` or not, on every driver.
+
+**Inside JSON the statement builds**
+
+A `bytea` is its text in the session's `bytea_output`: the hex form by default, and the escape form in the second pair, whose session sets `escape`.
+
+<Pairs>
+
+- `json_build_object('b', '\x0102ff'::bytea)` → `{ b: "\\x0102ff" }`
+- `json_build_object('b', '\x0102ff'::bytea)` → `{ b: "\\001\\002\\377" }`
+
+</Pairs>
+
+</Rules>
+
+### Arrays
+
+An array is a JavaScript array of its element's type, on every driver, an enum's and a domain's included:
+
+```ts twoslash tab="main.ts"
+import orderIds from "./pg_order_ids.sql";
+
+const rows = await orderIds.run(db);
+//    ^?
+```
+
+```sql tab="pg_order_ids.sql"
+select u.name, u.tags, array_agg(o.id) as order_ids
+from users u
+left join orders o on o.user_id = u.id
+group by u.id
+```
+
+<Rules>
+
+**`NULL` elements**
+
+Postgres lets any array hold `NULL`, whatever the column's `NOT NULL` says. A `text[]` column is typed `string[]`, and a `NULL` element comes back as `null`. Where the statement builds the array from values that may be `NULL`, as `array_agg` over a `left join` does, the type says so: `(bigint | null)[]`.
+
+<Pairs>
+
+- `'{a,NULL}'::text[]` → `[ "a", null ]`
+
+</Pairs>
+
+**The string NULL**
+
+A quoted `"NULL"` element stays a string.
+
+<Pairs>
+
+- `'{"NULL"}'::text[]` → `[ "NULL" ]`
+
+</Pairs>
+
+**Several dimensions**
+
+Postgres does not record how many dimensions an array has, so a two-dimensional `int[]` is typed `number[]` and comes back as nested arrays. On `Bun.sql`, one in a statement with a parameter fails with Bun's own error, "Failed to read data", before Reylo sees it.
+
+<Pairs>
+
+- `'{{1,2},{3,4}}'::int[]` → `[ [ 1, 2 ], [ 3, 4 ] ]`
+
+</Pairs>
+
+**Explicit bounds**
+
+An array with explicit bounds comes back as a plain array, its bounds dropped. On `Bun.sql`, one in a statement without a parameter fails with Bun's own error, "Failed to read data", before Reylo sees it.
+
+<Pairs>
+
+- `'[0:1]={5,6}'::int[]` → `[ 5, 6 ]`
+
+</Pairs>
+
+**Arrays of row values**
+
+An array of row values is its text, as a row value is.
+
+<Pairs>
+
+- `array[row(1, 'Ada')]` → `"{\"(1,Ada)\"}"`
+
+</Pairs>
+
+**Array parameters**
+
+An array parameter takes a JavaScript array on every driver, for a SQL array (`any(:ids)`, `:tags::text[]`) and for JSON (`:data::jsonb`) alike: Reylo writes it in the form the driver binds right.
+
+</Rules>
+
+### Enums and domains
+
+An enum is the union of its labels, and so is a `text` or `varchar` column whose `CHECK` keeps it to a list of strings (`kind in ('click', 'key')`). A domain is its base type: `orders.total`, an `amount`, is a `numeric`, so a `string`.
+
+<Rules>
+
+**Arrays of an enum**
+
+An array of an enum is an array of the union.
+
+<Pairs>
+
+- `'{admin,member}'::user_role[]` → `[ "admin", "member" ]`
+
+</Pairs>
+
+**Enum parameters**
+
+A parameter compared with an enum takes the union, and a value that is no label is Postgres's error, "invalid input value for enum".
+
+**Domains over JSON**
+
+A domain over `jsonb` whose `CHECK` holds it to a JSON Schema is what the schema admits.
+
+**Checks added `NOT VALID`**
+
+A `CHECK` added `NOT VALID` narrows nothing, since rows written before it may not hold.
+
+</Rules>
+
+### Other types
+
+Every other type is the text Postgres writes for it, a `string`: `uuid`, `inet`, `cidr`, `macaddr`, ranges and multiranges, geometric types, `tsvector`, `xml`, `money`, and a type an extension creates.
+
+<Rules>
+
+**Fixed-length text**
+
+A `char(n)` is padded with spaces to its length.
+
+<Pairs>
+
+- `'c'::char(3)` → `"c  "`
+
+</Pairs>
+
+**Row values**
+
+A row value, or a column of a composite type, is its text. Inside JSON the statement builds, a composite is an object of its fields.
+
+<Pairs>
+
+- `row(1, 'Ada')` → `"(1,Ada)"`
+- `json_build_object('u', row(1, 'Ada'))` → `{ u: { f1: 1, f2: "Ada" } }`
+
+</Pairs>
+
+**Function results**
+
+A function's result has the type the function declares.
+
+</Rules>
+
+### Values Reylo refuses
+
+Every Postgres driver but `Bun.sql` hands Reylo each value's text, which Reylo decodes itself, so one value is refused, with an error that names its column:
+
+<Rules>
+
+**Dates before 1 AD on `Bun.sql`**
+
+Bun decodes a `date` before 1 AD as an Invalid Date before Reylo sees it, and so a `timestamp` or a `timestamptz` in a statement without a parameter. Reylo refuses each rather than return a wrong value.
+
+<Pairs>
+
+- `'0002-06-01 BC'::date` → `throws DecodeError: Column "v": the driver returned an Invalid Date, which is how Bun.sql decodes a date or timestamp before 1 AD. Reylo refuses it rather than return a wrong value.`
+
+</Pairs>
+
+</Rules>
+
+## Nullability
+
+A column is `| null` unless Reylo infers it never is. On Postgres, Reylo reads the catalog and the statement:
+
+- **A table's column** is non-null where its `NOT NULL` is valid and holds in every table that inherits from it. A `NOT NULL` added `NOT VALID` tells Reylo nothing, since rows written before it may hold `NULL`.
+- **An outer join** makes the joined table's columns nullable: the right side of a `left join`, the left side of a `right join`, both sides of a `full join`.
+- **A test in the `where`** that fails on `NULL` makes the column non-null, and a later inner join's `on` shows the joined row exists: `where o.total > 0`, `where email is not null`, `where lower(email) = :email`.
+- **An expression** is non-null when Reylo's rules infer it:
+  - a literal, a cast, `count`, `exists` and `is null`;
+  - concatenation with `||`, a comparison and arithmetic over non-null operands;
+  - a built-in function that returns `NULL` only for a `NULL` argument (`length`, `lower`, `round`, …);
+  - a `coalesce` with a non-null argument;
+  - a `case` whose branches and `else` are all non-null.
+- **An aggregate** other than `count` is `NULL` over no rows, so it is nullable without a `group by`. With one, every group has a row:
+  - the aggregates that write a `NULL` into what they build, `array_agg`, `json_agg`, `jsonb_agg` and `jsonb_object_agg`, are non-null;
+  - those that skip a `NULL`, `sum`, `max`, `string_agg` and the others, are non-null where their argument is;
+  - an aggregate with a `filter` stays nullable, since the filter can leave a group no rows.
+- **A table's whole row** (`select e`, `jsonb_agg(e)`) is never `NULL` unless an outer join nulls it, and keeps its columns' `NOT NULL` and their `CHECK` lists.
+- **A scalar subquery** is non-null only when it is an aggregate without a `group by` over a non-null value, as `(select count(*) …)` is.
+- **A column of a `union`** is non-null when it is in every arm.
+- **An operator, function or cast your database defines**, or an extension does, tells Reylo nothing: the rules stand down wherever Postgres could pick one of those over the built-in.
+
+```ts twoslash tab="main.ts"
+import userTotals from "./pg_user_totals.sql";
+
+const rows = await userTotals.run(db);
+//    ^?
+```
+
+```sql tab="pg_user_totals.sql"
+select u.name, o.total, coalesce(o.paid, false) as paid
+from users u
+left join orders o on o.user_id = u.id
+```
+
+A test in the `where` shows the joined row exists, so its columns are non-null; a window function is typed like any other, `lag` nullable on the first row:
+
+```ts twoslash tab="main.ts"
+import paidOrders from "./pg_paid_orders.sql";
+
+const rows = await paidOrders.run(db);
+//    ^?
+```
+
+```sql tab="pg_paid_orders.sql"
+select u.name, o.total, o.placed_at
+from users u
+left join orders o on o.user_id = u.id
+where o.paid
+```
+
+```ts twoslash tab="main.ts"
+import orderGaps from "./pg_order_gaps.sql";
+
+const rows = await orderGaps.run(db);
+//    ^?
+```
+
+```sql tab="pg_order_gaps.sql"
+select id, placed_at,
+  placed_at - lag(placed_at) over (order by placed_at) as since_previous,
+  row_number() over (order by placed_at) as n
+from orders
+```
+
+Where you know more than Reylo can infer, say it in the statement: `coalesce(x, …)` gives a default, and a `where x is not null` test both filters and makes the column non-null.
+
+## Row counts
+
+How many rows `.run()` resolves to comes from what Reylo infers the statement can return:
+
+| Resolves to | `cardinality` | On Postgres, when the statement |
+| --- | --- | --- |
+| `Row` | `one` | is an aggregate without a `group by`, or inserts one row with `values (…)` and has `returning`, an `on conflict do update` included |
+| `Row \| null` | `maybeOne` | matches every column of a primary key or unique index with `=`, through joins on the joined table's key; has `limit 1` or `fetch first 1 row only`; is a `distinct` or `group by` over values the `where` pins; is an `update` or `delete` by key with `returning`; or inserts one row with `on conflict do nothing` and `returning` |
+| `void` | `none` | is an `insert`, `update`, `delete` or `merge` without `returning` |
+| `Row[]` | `many` | is anything else |
+
+A unique index on an expression counts when the statement compares the same expression, and a partial unique index when the `where` holds its predicate:
+
+```ts twoslash tab="main.ts"
+import userByEmail from "./pg_user_by_email.sql";
+
+const user = await userByEmail.run(db, { email: "Ada@example.com" });
+//    ^?
+```
+
+```sql tab="pg_user_by_email.sql"
+select id, name from users where lower(email) = lower(:email)
+```
+
+- The expression is matched as Postgres stores it in the index. An index over a domain column stores a cast, `lower((email)::text)`, and the statement must write it the same way to match.
+- A partial unique index without its predicate in the `where` counts for nothing: `where slug = :slug` over an index on `slug` `where not deleted` is `Row[]`.
+- Part of a composite key counts for nothing, and neither does a `having`, or an `insert … select … returning`.
+- At run time a `Row` statement throws unless it gets exactly one row, and a `Row | null` statement throws when it gets more than one.
+
+## Parameters
+
+### Placeholders
+
+Write each parameter as `:name`. Reylo sends `$1`, `$2`, … and `.run()` takes an object keyed by name. A statement may use Postgres's own `$1` instead, never beside `:name`, and the object's keys are then the numbers, `{ 1: 42 }`.
+
+- Each parameter appears once in a statement, so that one place types it. To use a value twice, select it once in a `with` and read it from there.
+- A `$name` is no placeholder on Postgres: Reylo's error says to write `:name`.
+
+### What a parameter takes
+
+Every value `.run()` returns goes back in as a parameter of its type, on every driver, so a row can be passed straight to the next statement:
+
+| SQL type | A parameter takes |
+| --- | --- |
+| `smallint`, `integer` | `number` |
+| `bigint` | `number`, `bigint` or a string of digits |
+| `numeric` | `string` |
+| `boolean` | `boolean` |
+| `date`, `timestamp`, `time` | `string` |
+| `timestamptz` | a `string` that names its zone |
+| `json`, `jsonb` | any JSON value, or what the column's JSON Schema admits |
+| `bytea` | `Uint8Array` |
+| An array | an array of its element's parameter type or `null` |
+| An enum | the union of its labels |
+
+- The parameters of `limit :n` and `offset :n` are `bigint`, so they take a `number` too.
+- A `timestamptz` parameter takes the text of an instant that names its zone, as `.run()` returns it: `"2026-10-12T19:06:48Z"`, `"2026-10-12 19:06:48+09"`, `"2026-10-12 19:06:48 Asia/Tokyo"`, or `infinity`, `-infinity`, `epoch` and `now`. Pass a `Date` as `date.toISOString()`.
+- Text without a zone is refused by `.run()` before the statement runs, since the server would read it in the session's time zone.
+- A `timestamp` or a `date` parameter refuses a `Date`: drivers write a `Date`'s time in different zones, the app's, the server's or UTC.
+- Postgres refuses the extended years a `timestamptz` comes back with, `+010000-…` and `0000`, so Reylo writes them as `10000-…` and `… BC`, and the value goes back in.
+- A JSON parameter reaches the database as its JSON text on every driver, so a string is a JSON string: `'{"a":1}'` is stored as the string `"{\"a\":1}"`. To pass JSON text you already hold, cast it from text: `:data::text::jsonb`.
+- A typed JSON parameter, `:events::jsonb('…')`, reaches Postgres as `$1::jsonb` (or `$1::json`) holding its JSON text, after `.run()` has filled in its schema's defaults and checked the value against the schema.
+- An array's elements take `null`, which binds `NULL`, so an array that comes back with `NULL` elements goes back in.
+
+### Parameters without a type
+
+Postgres types every parameter from where the statement uses it:
+
+- the column it is compared with or written to;
+- the function it is passed to;
+- the cast around it.
+
+A bare `select :x` is `text`, so a `string`. Where nothing types it, as in `select :x is null` or `concat(:x, '!')`, Postgres refuses the statement, "could not determine data type of parameter" (42P18), until a cast types it: `:x::text`.
+
+### Parameters that may be null
+
+A parameter is `| null` only where the statement lets it be:
+
+- where it tests it for null or coalesces it;
+- where it writes it whole to a column that may hold `NULL`.
+
+A test for null needs a cast, since `:role is null` alone gives Postgres nothing to type, and the parameter appears once, so select it in a `with`:
+
+```ts twoslash tab="main.ts"
+import usersByRole from "./pg_users_by_role.sql";
+
+const users = await usersByRole.run(db, { role: null });
+//                                        ^?
+```
+
+```sql tab="pg_users_by_role.sql"
+with input as (select :role::user_role as role)
+select u.id, u.name from users u, input
+where input.role is null or u.role = input.role
+```
+
+The one-line form is `where u.role = coalesce(:role, u.role)`.
+
+### Casts
+
+A `::` cast is Postgres's own, and Reylo sends it as written: `:n::int8`, `:tags::text[]`, `:at::timestamptz`. So is `cast(:n as int8)`. A cast types a parameter wherever its context does not, and the parameter takes what its cast's type takes.
+
+### How the text is read
+
+Reylo reads the statement as Postgres does: a `:name` is a placeholder only outside single-quoted strings (with `''`), `E''` strings (with backslashes), dollar-quoted strings (`$$…$$`, `$tag$…$tag$`), double-quoted names, and line and nested block comments, and a `::` is a cast.
+
+## Drivers
+
+Each driver reads Postgres's protocol as it always does, and Reylo makes only the choice per type that follows, for its own query, on the client you pass. A parser or option you set for your own queries does not reach Reylo's, and none of Reylo's reaches yours.
+
+| Driver | How Reylo reads its values | Refused | Lost before Reylo sees it |
+| --- | --- | --- | --- |
+| `pg` | A decoder table with each query that answers every type | `binary: true` | |
+| `pg-promise` | The same table, through `.result()` | A `receive` event that rewrites results | |
+| Neon, Vercel Postgres | The same table, with each query | | |
+| PGlite | A parser table with each query, naming the statement's types | | |
+| postgres.js | Each value's text (`.raw()`), the row built with the query's own column names | A `transform.row` | |
+| `Bun.sql` | Bun's own values, converted | | A `timestamp`'s and a `timestamptz`'s microseconds, and a value before 1 AD; it throws on a `NULL` inside an `int4[]` or `float4[]`, and on two array shapes (below) |
+
+- A postgres.js `transform` that renames your columns does not rename Reylo's.
+- On `Bun.sql`, a statement with a parameter is read over the binary protocol and one without as text. So a `real` is its exact float, `1.100000023841858`, only with a parameter, and a `timestamp` or a `timestamptz` before 1 AD is refused only without one; a `date` before 1 AD is refused either way.
+- Bun fails with its own error, "Failed to read data", before Reylo sees the value, on a two-dimensional `int[]` in a statement with a parameter and on an array with explicit bounds in one without.
+- The `@vercel/postgres` package is deprecated on npm: Reylo's types accept its client, and its tests do not run it.
+- Each driver takes its transactions and connections too: `pg`'s Pool, Client and PoolClient; postgres.js's and `Bun.sql`'s `.begin()`, `.savepoint()` and `.reserve()`; PGlite's `.transaction()`; Neon's Pool and Client; and `pg-promise`'s `.task()` and `.tx()`.
+
+The type check reads the schema through postgres.js or `pg`, so an app on PGlite, Neon, `Bun.sql`, `pg-promise` or `@vercel/postgres` adds one of them as a dev dependency.
+
+## Limits
+
+The edges of what Reylo types on Postgres, each with what to write instead:
+
+- **A function's body.** A SQL-language function is typed from its declaration (`returns`), never from its body, and a PL/pgSQL body is not read at all. Declare the result you return.
+- **An array's dimensions and elements.** An `int[]` is `number[]` however many dimensions it holds, and its elements are typed without `null` unless the statement builds it. Keep an array one-dimensional, or build it with `array_agg`.
+- **A row value outside JSON.** It is its text. Select its fields as columns, or build an object with `to_jsonb` or `jsonb_build_object`.
+- **A parameter in place of a name.** A parameter is a value: `select * from :table` is Postgres's syntax error, and `order by :column` sorts by a constant. Choose a column with `case :sort when 'name' then name end`.
+- **A statement nested past 1,000 levels** of the parse tree (about 496 terms of `a + b + …`, or 164 nested subqueries), which Reylo types from the server's description alone: any number of rows, every column nullable.
+- **One statement per file.** A file holds one `select`, `insert`, `update`, `delete`, `merge`, `values` or `table`. A file of several statements or of DDL, such as a migration, is an error in the type check.

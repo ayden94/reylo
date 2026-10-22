@@ -193,7 +193,8 @@ const expected: Record<Dialect, { syntax: ErrorExpectation; dup: ErrorExpectatio
     dup: { codes: ["ER_DUP_ENTRY", 1062, "1062"], message: /errno 1062|Duplicate entry/i },
   },
   sqlite: {
-    syntax: { codes: [/^(ERR_)?SQLITE_ERROR$/, 1], message: /syntax error/i },
+    // Turso's engine 0.4 words its syntax error "unexpected token 'selec' at offset 0".
+    syntax: { codes: [/^(ERR_)?SQLITE_ERROR$/, 1], message: /syntax error|unexpected token/i },
     dup: { codes: [/SQLITE_CONSTRAINT/, 19, 1555, 2067], message: /UNIQUE constraint failed|SQLITE_CONSTRAINT/i },
   },
 };
@@ -291,7 +292,29 @@ export function queries(d: Dialect, typed = true) {
     syntax: q(`selec 1`, [], "many"),
     // The columns a build step writes for the statement (src/loader.ts, src/values.ts).
     typed: q(`select ${Object.keys(TYPED[d]).join(", ")} from ${t("typed")} where id = 1`, [], "one", { columns: TYPED_COLUMNS[d] }),
+    // Each column of the `typed` row compared with a parameter, with the types the engine gives
+    // those parameters (src/render.ts's round-trip table): the row `typed` returns goes back in.
+    roundTrip: q(
+      `select ${Object.keys(ROUND_TRIP[d]).map((c) => `${ROUND_TRIP_SQL[d](c)} as ${c}`).join(", ")} from ${t("typed")} where id = :id`,
+      [...Object.keys(ROUND_TRIP[d]), "id"],
+      "one",
+      { inputs: Object.fromEntries([...Object.entries(ROUND_TRIP[d]), ["id", { kind: "scalar", name: "int4" }]].map(([c, type]) => [c, { type }])), columns: Object.keys(ROUND_TRIP[d]).map((c) => [c, "bool"]) },
+    ),
+    // An instant past 9999 and one before 1, which come back as `+010000-…Z` and `-000001-…Z`.
+    farInstants: q(`select '10000-01-01 00:00:00+00'::timestamptz as far, '0002-01-01 00:00:00+00 BC'::timestamptz as bc`, [], "one", { columns: [["far", "timestamptz"], ["bc", "timestamptz"]] }),
+    farBack: q(`select :far::timestamptz = '10000-01-01 00:00:00+00'::timestamptz as far, :bc::timestamptz = '0002-01-01 00:00:00+00 BC'::timestamptz as bc`, ["far", "bc"], "one", { inputs: { far: { type: { kind: "scalar", name: "timestamptz" } }, bc: { type: { kind: "scalar", name: "timestamptz" } } }, columns: [["far", "bool"], ["bc", "bool"]] }),
     typedBig: q(`select id, big from ${t("typed")} where id = 1`, [], "one", { columns: [["id", "int"], ["big", d === "sqlite" ? "int" : "int8"]] }),
+    // SQLite's column declared BIGINT, which the engine types int8.
+    typedWide: q(`select id, wide from ${t("typed")} where id = 1`, [], "one", { columns: [["id", "int"], ["wide", "int8"]] }),
+    // SQLite: JSON the statement builds, with the kinds the loader writes from the engine's types
+    // (tests/representation.test.ts pins those types): `json` for each column a constructor
+    // builds, `text` for one that holds JSON text the statement did not build.
+    builtJson: q(
+      `select json_object('user', json_object('id', p.id, 'name', p.name), 'scores', (select json_group_array(json_object('id', s.id, 'score', s.score)) from people s where s.active = 1), 'none', (select json_group_array(s.id) from people s where s.id < 0)) as profile, json_array(p.id, p.name, p.score) as pair, json_object('n', p.name) || '' as glued, t.doc as doc from people p, typed t where p.id = 1`,
+      [],
+      "one",
+      { columns: [["profile", "json"], ["pair", "json"], ["glued", "text"], ["doc", "text"]] },
+    ),
     dup: q(`insert into ${t("uniq")} (k) values (:k)`, ["k"], "none"),
   };
 }
@@ -314,6 +337,24 @@ const TYPED_COLUMNS: Record<Dialect, [string, string][]> = {
   mysql: [["id", "int"], ["big", "int8"], ["ubig", "int8"], ["amount", "decimal"], ["day", "date"], ["at", "timestamp"], ["doc", "json"], ["bit1", "bool"], ["raw", "bytes"], ["tags", "text"], ["kind", "text"], ["flag", "bool"], ["yr", "int"], ["f8", "float"], ["tm", "text"], ["s", "text"]],
   // A SQLite JSON column and truth value as the engine types them where it can tell, a column with no type unknown.
   sqlite: [["id", "int"], ["n", "int"], ["r", "float"], ["s", "text"], ["b", "bytes"], ["doc", "json"], ["flag", "bool"], ["x", "unknown"]],
+};
+
+const sc = (name: string) => ({ kind: "scalar", name });
+const enumArray = { kind: "array", of: { kind: "enum", name: "mood", labels: ["ok", "sad"] } };
+/** The parameter types the engine gives `c = :c` for each `typed` column (tests/render.test.ts, ROUND_TRIPS): on MySQL by the column (engine/mysql `column_types`), on SQLite by the column's affinity. */
+const ROUND_TRIP: Record<Dialect, Record<string, unknown>> = {
+  postgres: {
+    big: sc("int8"), amount: sc("numeric"), day: sc("date"), at: sc("timestamp"), stamp: sc("timestamptz"), doc: { kind: "json" }, docb: { kind: "json" }, raw: sc("bytea"), flag: sc("bool"), f8: sc("float8"),
+    tags: { kind: "array", of: sc("text") }, ints: { kind: "array", of: sc("int4") }, moods: enumArray, span: sc("interval"), uid: sc("uuid"),
+  },
+  mysql: { big: sc("int8"), ubig: sc("int8"), amount: sc("numeric"), day: sc("date"), at: sc("timestamp"), doc: { kind: "json" }, bit1: sc("bool|int4"), raw: sc("bytea"), tags: sc("text"), kind: sc("text"), flag: sc("bool|int4"), yr: sc("int4"), f8: sc("float8"), tm: sc("time"), s: sc("text") },
+  sqlite: { n: sc("integer"), r: sc("real"), s: sc("text"), b: sc("blob"), flag: sc("numeric"), x: { kind: "unknown" } },
+};
+/** The comparison for each column: Postgres's json has no `=`, and MySQL's JSON column is compared with json_extract of the JSON parameter. */
+const ROUND_TRIP_SQL: Record<Dialect, (c: string) => string> = {
+  postgres: (c) => (c === "doc" ? `doc::jsonb = :doc::jsonb` : `${c} = :${c}`),
+  mysql: (c) => (c === "doc" ? `doc = json_extract(:doc, '$')` : `${c} = :${c}`),
+  sqlite: (c) => `${c} = :${c}`,
 };
 
 /** A value with its JavaScript type spelled out, so that 1 and "1", or a Buffer and a Uint8Array of the same bytes, compare as they are. */
@@ -489,7 +530,7 @@ export const SCENARIOS: Scenario[] = [
     },
   },
   {
-    id: "S1h date and time params: a Date into timestamptz is its instant; timestamp and date take text, and a Date for them is refused before the driver is called",
+    id: "S1h date and time params: a timestamptz takes its zoned text, timestamp and date their text, and a Date for any of them is refused before the driver is called",
     on: "client",
     dialects: ["postgres", "mysql"],
     async run(ctx, client, q) {
@@ -498,18 +539,24 @@ export const SCENARIOS: Scenario[] = [
       // postgres.js read a date or time string through new Date(): the timestamp moved by the
       // app's offset, and the zone name failed with "Invalid time value".
       const at = "2026-01-02 03:04:05.006";
-      const row = await call(ctx, q.times, client, { tz: new Date(Date.UTC(2026, 0, 2, 3, 4, 5, 6)), named: "2026-01-02 12:04:05.006 Asia/Tokyo", at, day: "2026-01-02" });
+      const row = await call(ctx, q.times, client, { tz: "2026-01-02T03:04:05.006Z", named: "2026-01-02 12:04:05.006 Asia/Tokyo", at, day: "2026-01-02" });
       eq({ ...row, tz: Boolean(Number(row.tz)) }, { tz: true, at: ctx.job.dialect === "postgres" ? at : `${at}000`, day: "2026-01-02" }, "row");
-      const sent = spy(client);
-      let refused: unknown = null;
-      try {
-        await call(ctx, q.times, client, { tz: new Date(0), named: "2026-01-02T03:04:05Z", at, day: new Date(Date.UTC(2026, 0, 2)) });
-      } catch (e) {
-        refused = e;
+      // A Date is refused for a date and, since the maintainer's answer of 2026-10-20, for a
+      // timestamptz too, which takes the zoned text run returns for one.
+      const refusals: [Record<string, unknown>, RegExp][] = [[{ tz: "1970-01-01T00:00:00Z", named: "2026-01-02T03:04:05Z", at, day: new Date(Date.UTC(2026, 0, 2)) }, /^Parameter "day" is a date without a time zone/]];
+      if (ctx.job.dialect === "postgres") refusals.push([{ tz: new Date(0), named: "2026-01-02T03:04:05Z", at, day: "2026-01-02" }, /^Parameter "tz" is a timestamptz, .*not a Date: pass date\.toISOString\(\)/]);
+      for (const [params, message] of refusals) {
+        const sent = spy(client);
+        let refused: unknown = null;
+        try {
+          await call(ctx, q.times, client, params);
+        } catch (e) {
+          refused = e;
+        }
+        const called = sent.stop();
+        if (!(refused instanceof TypeError) || !message.test(refused.message)) throw new Violation(`a Date was not refused with reylo's TypeError ${message}: ${describe(refused)}`);
+        if (!called.startsWith("no method") && !called.startsWith("the client as a function")) throw new Violation(`reylo called ${called} before refusing the Date`);
       }
-      const called = sent.stop();
-      if (!(refused instanceof TypeError) || !/^Parameter "day" is a date without a time zone/.test(refused.message)) throw new Violation(`a Date for a date parameter was not refused with reylo's TypeError: ${describe(refused)}`);
-      if (!called.startsWith("no method") && !called.startsWith("the client as a function")) throw new Violation(`reylo called ${called} before refusing the Date`);
     },
   },
   {
@@ -518,7 +565,7 @@ export const SCENARIOS: Scenario[] = [
     dialects: ["postgres"],
     async run(ctx, client, q) {
       // postgres.js types an array by its first element, and Bun.sql binds none.
-      const row = await call(ctx, q.typedArrays, client, { b: [true, false], d: [new Date(Date.UTC(2026, 0, 2, 3, 4, 5, 6))], x: [Uint8Array.of(1, 2), Uint8Array.of(255)] });
+      const row = await call(ctx, q.typedArrays, client, { b: [true, false], d: ["2026-01-02T03:04:05.006Z"], x: [Uint8Array.of(1, 2), Uint8Array.of(255)] });
       eq(row, { b: "{t,f}", d: "1767323045.006000", x: "{0102,ff}" }, "row");
     },
   },
@@ -809,6 +856,20 @@ export const SCENARIOS: Scenario[] = [
         typedEq(await call(ctx, q.typedBig, client), { id: 1, big: TYPED[d].big }, "an int8 past 2^53");
         return;
       }
+      // A column declared BIGINT is a BigInt, exact past 2^53 where the driver reads the integer
+      // itself (Reylo's own statement on better-sqlite3, node:sqlite, bun:sqlite and Turso's
+      // engine); where the driver rounds it first, Reylo's error naming the column; libSQL's own
+      // error at its default intMode.
+      const rounds = /^(sqlite3|sqlite|miniflare D1|Bun\.sql)\b/.test(ctx.job.pkg);
+      try {
+        const r = await call(ctx, q.typedWide, client);
+        if (rounds || ctx.job.pkg.startsWith("@libsql")) throw new Mismatch(`expected the BIGINT past 2^53 to be refused, got ${oneLine(safeJson(r))}`);
+        typedEq(r, { id: 1, wide: 9007199254740993n }, "a BIGINT past 2^53");
+      } catch (e) {
+        if (e instanceof Mismatch || e instanceof Violation) throw e;
+        const refused = (rounds && e instanceof TypeError && /^Column "wide" is a 64-bit integer, and the driver already rounded its value to 9007199254740992/.test(e.message)) || (ctx.job.pkg.startsWith("@libsql") && e instanceof RangeError && /cannot be safely represented/.test(e.message));
+        if (!refused) throw new Mismatch(`not the BIGINT past 2^53 read exactly or refused as rounded: ${describe(e)}`);
+      }
       // An INTEGER past 2^53, which a number cannot hold: Reylo's error naming the column, or libSQL's own at its default intMode.
       try {
         const r = await call(ctx, q.typedBig, client);
@@ -819,6 +880,44 @@ export const SCENARIOS: Scenario[] = [
         if (e instanceof RangeError && /cannot be safely represented/.test(e.message)) return `libSQL's own: ${e.message}`;
         throw new Mismatch(`not the refusal of an integer past 2^53: ${describe(e)}`);
       }
+    },
+  },
+  {
+    id: "S10j built JSON: SQLite's text of the JSON a statement builds is parsed into the object its type says, other JSON text stays a string",
+    on: "client",
+    params: false,
+    dialects: ["sqlite"],
+    async run(ctx, client, q) {
+      typedEq(
+        await call(ctx, q.builtJson, client),
+        { profile: { user: { id: 1, name: "ada" }, scores: [{ id: 1, score: 10 }, { id: 3, score: 30 }], none: [] }, pair: [1, "ada", 10], glued: '{"n":"ada"}', doc: '{"a":[1,2]}' },
+        "row",
+      );
+    },
+  },
+  {
+    id: "S11 round trip: the row S10 returns goes back in as the parameters it came from, every column equal",
+    on: "client",
+    async run(ctx, client, q) {
+      const d = ctx.job.dialect;
+      // What run returns for each type, which the parameter of that type takes (src/render.ts):
+      // a BIGINT's BigInt, a TINYINT(1)'s and a BIT(1)'s boolean on MySQL, a SQLite truth value
+      // (bound as 1 or 0), an int8, a numeric's text, a timestamptz's UTC text, parsed JSON, bytes.
+      const row = (await call(ctx, q.typed, client)) as Record<string, unknown>;
+      const params = Object.fromEntries([...Object.keys(ROUND_TRIP[d]).map((c) => [c, row[c]]), ["id", 1]]);
+      eq(await call(ctx, q.roundTrip, client, params), Object.fromEntries(Object.keys(ROUND_TRIP[d]).map((c) => [c, true])), "each column equal to the value it returned");
+    },
+  },
+  {
+    id: "S11b round trip: an instant past 9999 and one before 1 go back in",
+    on: "client",
+    dialects: ["postgres"],
+    async run(ctx, client, q) {
+      // They come back as `+010000-…Z` and `-000001-…Z`, which Postgres refuses as input
+      // ("time zone displacement out of range"); Reylo writes them as `10000-…` and `0002-… BC`.
+      const far = (await call(ctx, q.farInstants, client)) as Record<string, unknown>;
+      eq(far, { far: "+010000-01-01T00:00:00Z", bc: "-000001-01-01T00:00:00Z" }, "the instants past 9999 and before 1");
+      eq(await call(ctx, q.farBack, client, far), { far: true, bc: true }, "the same instants passed back");
     },
   },
   {

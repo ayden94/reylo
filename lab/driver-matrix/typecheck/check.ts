@@ -57,6 +57,14 @@ import type * as ls017 from "libsql-017";
 import type * as ls018 from "libsql-018";
 import type * as ls015 from "libsql-015";
 import type * as ls014 from "libsql-014";
+import type * as tu08 from "turso-08";
+import type * as tu08c from "turso-08/compat";
+import type * as tu07 from "turso-07";
+import type * as tu07c from "turso-07/compat";
+import type * as tu06 from "turso-06";
+import type * as tu06c from "turso-06/compat";
+import type * as tu04 from "turso-04";
+import type * as tu04c from "turso-04/compat";
 import type * as s3v5 from "sqlite3-5";
 import type * as s3v6 from "sqlite3-6";
 import type { Database as SqliteDatabase } from "sqlite";
@@ -122,6 +130,11 @@ sq("bun:sqlite (bun-types 1.3.14)", "Database", "BunDatabase", true);
 for (const [ns, v] of [["ls017", "0.17.4"], ["ls018", "0.18.0"], ["ls015", "0.15.15"], ["ls014", "0.14.0"]]) {
   sq(`@libsql/client@${v}`, "Client", `${ns}.Client`);
   sq(`@libsql/client@${v}`, "Transaction", `${ns}.Transaction`);
+}
+for (const [ns, v] of [["tu08", "0.8.3"], ["tu07", "0.7.2"], ["tu06", "0.6.1"], ["tu04", "0.4.4"]]) {
+  sq(`@tursodatabase/database@${v}`, "Database (connect())", `${ns}.Database`);
+  if (ns === "tu08" || ns === "tu07") sq(`@tursodatabase/database@${v}`, "Transaction (transactionAsync())", `${ns}.Transaction`);
+  sq(`@tursodatabase/database@${v}`, "compat Database", `${ns}c.Database`, true);
 }
 sq("sqlite3@5.1.7", "Database", "s3v5.Database");
 sq("sqlite3@6.0.1", "Database", "s3v6.Database");

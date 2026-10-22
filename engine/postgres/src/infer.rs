@@ -135,6 +135,10 @@ pub const POSTGRES_GROUPED: &[&str] = &["sum", "avg", "min", "max", "bit_and", "
 /// Postgres aggregates that answer NULL only over no rows: a group's `array_agg` is an array,
 /// NULL elements and all.
 pub const POSTGRES_GROUPED_NEVER_NULL: &[&str] = &["array_agg"];
+/// Postgres's JSON aggregates, which answer NULL only over no rows too: a group's `json_agg` is a
+/// JSON array, a NULL input written as a JSON null, and its `json_object_agg` an object, a NULL
+/// value written as a JSON null (a NULL key is an error).
+pub const POSTGRES_GROUPED_JSON: &[&str] = &["json_agg", "jsonb_agg", "json_object_agg", "jsonb_object_agg"];
 
 /// Every function name a Postgres rule reads, which is what a host asks the catalog about: a
 /// name a user or an extension has also defined is shadowed, and its rule proves nothing
@@ -142,7 +146,7 @@ pub const POSTGRES_GROUPED_NEVER_NULL: &[&str] = &["array_agg"];
 pub fn postgres_function_names() -> Vec<&'static str> {
     let mut names: Vec<&'static str> = Vec::new();
     let typed = POSTGRES_TOTAL_FOR.iter().map(|(name, _)| *name).collect::<Vec<_>>();
-    for list in [FUNCTIONS, POSTGRES_TOTAL, &typed, POSTGRES_NEVER_NULL, POSTGRES_FIRST_ARG, POSTGRES_ANY, POSTGRES_GROUPED, POSTGRES_GROUPED_NEVER_NULL, POSTGRES_STRICT, POSTGRES_WINDOW, crate::jsonshape::POSTGRES_FUNCTIONS] {
+    for list in [FUNCTIONS, POSTGRES_TOTAL, &typed, POSTGRES_NEVER_NULL, POSTGRES_FIRST_ARG, POSTGRES_ANY, POSTGRES_GROUPED, POSTGRES_GROUPED_NEVER_NULL, POSTGRES_GROUPED_JSON, POSTGRES_STRICT, POSTGRES_WINDOW, crate::jsonshape::POSTGRES_FUNCTIONS] {
         for name in list {
             if !names.contains(name) {
                 names.push(name);
@@ -835,8 +839,10 @@ impl Reader<'_> {
             // Under a plain GROUP BY every group has a row, so an aggregate that is NULL only over
             // no rows or only NULLs follows its argument. A FILTER can leave it no rows, a window
             // frame can be empty, and SQLite's sum of `1e999` and `-1e999` is NaN, stored as NULL.
-            (Dialect::Postgres, n, 1 | 2) if self.grouped && f.over.is_none() && f.agg_filter.is_none() && self.trust.builtin(n) && (POSTGRES_GROUPED.contains(&n) || POSTGRES_GROUPED_NEVER_NULL.contains(&n)) => {
-                if POSTGRES_GROUPED_NEVER_NULL.contains(&n) {
+            (Dialect::Postgres, n, 1 | 2) if self.grouped && f.over.is_none() && f.agg_filter.is_none() && self.trust.builtin(n) && (POSTGRES_GROUPED.contains(&n) || POSTGRES_GROUPED_NEVER_NULL.contains(&n) || POSTGRES_GROUPED_JSON.contains(&n)) => {
+                if POSTGRES_GROUPED_JSON.contains(&n) {
+                    Expr::NonNull(None)
+                } else if POSTGRES_GROUPED_NEVER_NULL.contains(&n) {
                     Expr::Array { non_null: true, items: f.args.iter().take(1).map(|a| self.read(a)).collect() }
                 } else {
                     Expr::Every(f.args.iter().take(1).map(|a| self.read(a)).collect(), Ty::Unknown)
@@ -2029,6 +2035,42 @@ mod tests {
         assert!(!first(&pg("SELECT sum(views) AS total FROM posts")).non_null);
         assert!(!resolve(pg("SELECT sum(views) AS total FROM posts GROUP BY ROLLUP (user_id)").head[0].as_ref().unwrap(), Some(&views)).non_null);
         assert!(!resolve(lite("SELECT sum(views) AS total FROM posts GROUP BY user_id").head[0].as_ref().unwrap(), Some(&views)).non_null);
+    }
+
+    #[test]
+    fn a_json_aggregate_under_a_group_by_is_never_null() {
+        // A group has a row, and a JSON aggregate writes a NULL input as a JSON null: the value is
+        // there whatever its argument holds, so no leaf is asked about.
+        for sql in [
+            "SELECT kind, jsonb_agg(payload ORDER BY id) AS payloads FROM events GROUP BY kind",
+            "SELECT kind, json_agg(note) AS notes FROM events GROUP BY kind",
+            "SELECT kind, jsonb_object_agg(id, note) AS notes FROM events GROUP BY kind",
+            "SELECT kind, json_object_agg(id, payload) AS by_id FROM events GROUP BY kind",
+        ] {
+            assert_eq!(pg(sql).head[1], Some(Expr::NonNull(None)), "{sql}");
+        }
+        // A FILTER can leave a group no rows, a window frame can be empty, and without a GROUP BY,
+        // or with a grouping set (`GROUP BY ()` over no rows is one row), there may be no rows.
+        for sql in [
+            "SELECT kind, jsonb_agg(payload) FILTER (WHERE id > 1) AS payloads FROM events GROUP BY kind",
+            "SELECT kind, jsonb_agg(payload) OVER (ROWS BETWEEN 1 FOLLOWING AND 1 FOLLOWING) AS next FROM events GROUP BY kind, payload",
+            "SELECT 1, jsonb_agg(payload) AS payloads FROM events",
+            "SELECT kind, jsonb_agg(payload) AS payloads FROM events GROUP BY ROLLUP (kind)",
+            "SELECT kind, jsonb_agg(payload) AS payloads FROM events GROUP BY GROUPING SETS ((kind), ())",
+        ] {
+            let p = pg(sql);
+            assert!(p.head[1].as_ref().is_none_or(|e| !resolve(e, Some(&[col(false, oid::JSONB), col(false, oid::JSONB)])).non_null), "{sql}");
+        }
+        // A user's function of the name may return NULL.
+        let shadowed = Trust { shadowed: ["jsonb_agg".to_string()].into_iter().collect(), ..Default::default() };
+        assert_ne!(plan("SELECT kind, jsonb_agg(payload) FROM events GROUP BY kind", Dialect::Postgres, &shadowed).head[1], Some(Expr::NonNull(None)));
+        // `string_agg` and `max` skip NULLs, so a group of NULLs is NULL: they follow the argument.
+        let p = pg("SELECT kind, string_agg(note, ', ') AS notes, max(note) AS top FROM events GROUP BY kind");
+        assert!(!resolve(p.head[1].as_ref().unwrap(), Some(&[col(true, oid::TEXT)])).non_null);
+        assert!(resolve(p.head[1].as_ref().unwrap(), Some(&[col(false, oid::TEXT)])).non_null);
+        assert!(!resolve(p.head[2].as_ref().unwrap(), Some(&[col(true, oid::TEXT), col(true, oid::TEXT)])).non_null);
+        // Inside a scalar subquery the aggregate may be the outer query's.
+        assert!(!first(&pg("SELECT (SELECT jsonb_agg(e.id) FROM events e GROUP BY e.kind LIMIT 1) AS ids")).non_null);
     }
 
     #[test]

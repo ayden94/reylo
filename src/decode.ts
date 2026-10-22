@@ -3,7 +3,7 @@
 // up its driver (the maintainer, 2026-10-20; the representation is src/values.ts). It never opens
 // a connection, never mutates the app's object, and never changes the app's other queries. Every
 // driver but Bun.sql hands over each value as the server's text, and only the per-type choice that
-// follows is Reylo's (docs/driver-decoding/spike/postgres.md):
+// follows is Reylo's (wiki/driver-decoding/spike/postgres.md):
 //
 // - pg's Client, PoolClient and Pool, pg-promise, Neon's Pool and Client, @vercel/postgres and
 //   Neon's neon() take a decoder table per query (`{ text, values, types }`). Reylo's answers every

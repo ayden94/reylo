@@ -1,7 +1,7 @@
 //! The MySQL analysis. The server's prepare metadata is the type source: every result column's
 //! type and NOT NULL flag (the server's own analysis, expressions included) and, since 8.0.22, a
 //! type per `?` from its context. The engine takes those as they are (see
-//! docs/mysql-sources.md). MySQL has no RETURNING and no server surface for the row count, so a
+//! wiki/mysql-sources.md). MySQL has no RETURNING and no server surface for the row count, so a
 //! data-modifying statement returns no rows, and a SELECT's row count is the unique-key proof
 //! over a `sqlparser` tree with the keys read from `information_schema.statistics`.
 //!
@@ -281,10 +281,28 @@ pub fn analyze(sql: &str, lexed: &Lexed, text: Option<MysqlText>, host: &Host) -
         Some(statement) => crate::mysql_params::nullable(statement, &names, host)?,
         None => HashSet::new(),
     };
+    // A parameter's type from the column it is written to or compared with, where the prepare's
+    // says less (`mysql_params::column_types`).
+    let column_typed = match &parsed {
+        Some(statement) => crate::mysql_params::column_types(statement, &names, host)?,
+        None => HashMap::new(),
+    };
     // JSON shapes: the constructors' value expressions, prepared as columns of their own statements.
     let mut shaped: Vec<(String, Type, bool)> = Vec::new();
     let mut outer_not_null: Vec<usize> = Vec::new();
+    // What the WHERE proves (`mysql_nulls`): the columns it tests, and the statement with the outer
+    // joins inner whose null-extended rows it rejects, which every probe below reads in its place.
+    let tested: Vec<usize> = match &parsed {
+        Some(Statement::Query(q)) => crate::mysql_nulls::tested(q),
+        _ => Vec::new(),
+    };
+    let reduced: Option<Query> = match &parsed {
+        Some(Statement::Query(q)) => crate::mysql_nulls::reduce(q),
+        _ => None,
+    };
+    let mut reduced_not_null: Vec<usize> = Vec::new();
     if let Some(Statement::Query(q)) = &parsed {
+        let q: &Query = reduced.as_ref().unwrap_or(q);
         // Whose an aggregate in a scalar subquery is can turn on the columns of the subquery's
         // tables, which the plan asks for by naming them; the probes are the same either way.
         let mut plan = crate::mysql_shape::plan(q, &Default::default());
@@ -326,6 +344,14 @@ pub fn analyze(sql: &str, lexed: &Lexed, text: Option<MysqlText>, host: &Host) -
                     outcomes.push(None);
                     documents.push(Vec::new());
                 }
+            }
+        }
+        // The flags of the statement with its outer joins reduced, by position.
+        if let Some(reduced) = &reduced {
+            match host.describe(&reduced.to_string()) {
+                Some(Ok(d)) if d.columns.len() == raw.columns.len() => reduced_not_null.extend(d.columns.iter().enumerate().filter(|(_, c)| c.flags & 1 != 0).map(|(i, _)| i)),
+                Some(_) => {}
+                None => pending = true,
             }
         }
         // The outer columns' flags without the subquery items' pessimism, by projection position.
@@ -382,7 +408,7 @@ pub fn analyze(sql: &str, lexed: &Lexed, text: Option<MysqlText>, host: &Host) -
             let truth = computed || flag_column(c, views.as_ref());
             let ty = if truth && !matches!(ty, Type::Json { .. }) { Type::Scalar { name: "bool".into() } } else { ty };
             let name = if computed { "boolean" } else { name };
-            let not_null = c.flags & 1 != 0 || outer_not_null.contains(&position);
+            let not_null = c.flags & 1 != 0 || outer_not_null.contains(&position) || reduced_not_null.contains(&position) || tested.contains(&position);
             let shape = shaped.iter().enumerate().find(|(i, (n, _, _))| n == &c.name && !shapes_used[*i]);
             match shape {
                 // A constructor never returns SQL NULL, whatever the server's flag says; an
@@ -412,6 +438,11 @@ pub fn analyze(sql: &str, lexed: &Lexed, text: Option<MysqlText>, host: &Host) -
             let (ty, type_name) = match index.and_then(|i| raw.params.get(i)) {
                 Some(p) => param_type(p.r#type, p.charset),
                 None => (Type::Unknown, ""),
+            };
+            // Only an integer or a BIT context is narrowed: those are the ones the prepare describes alike for every column.
+            let ty = match (&ty, column_typed.get(name)) {
+                (Type::Scalar { name: server }, Some(column)) if server == "int4" || server == "bool|bytea" => Type::Scalar { name: (*column).to_string() },
+                _ => ty,
             };
             Param { name: name.clone(), ty, type_name: type_name.to_string(), nullable: nullable.contains(name), schema: None, cast: None }
         })
@@ -878,14 +909,23 @@ fn opens_without_result_sets(sql: &str) -> bool {
     matches!(first, Some(Some(Keyword::DELETE | Keyword::UPDATE | Keyword::INSERT | Keyword::REPLACE | Keyword::SELECT | Keyword::WITH)))
 }
 
-/// Parse with the depth bound the Postgres parser has ([`crate::stack::MAX_DEPTH`] messages, about
-/// 500 levels of expression) in place of sqlparser's default of 50, so a statement nests as deeply
-/// on MySQL as on Postgres before only the server's describe is left. sqlparser's bound counts
-/// only its own recursion, and it reads a chain of operators (`a + b + …`, `x = 1 or x = 2 or …`)
-/// in a loop into a tree as deep as the chain, which every walk of the engine and the tree's drop
-/// then recurse through: so a statement with more operators than the bound is refused before it
-/// is read. That counts operators in separate expressions together, and only ever leaves a
-/// statement to the describe that a deeper bound would have read.
+/// Parse with a depth bound of a fifth of [`crate::stack::MAX_DEPTH`] in place of sqlparser's
+/// default of 50: 200 levels of its recursion, which are 196 nested function calls (`coalesce`,
+/// `abs`, `json_object`), 195 nested `CASE`s, or 97 nested subqueries, which spend two levels each.
+/// It is less than the Postgres parser's 500 levels because in the WebAssembly engine sqlparser's
+/// recursion runs on the JavaScript engine's own stack, which a host shares (`core/src/stack.rs`),
+/// at about twice libpg_query's cost a level: a nested function call is eight frames of the parser,
+/// some 2 kB of Node's stack once V8 has optimized them, so under the Postgres bound 496 nested
+/// `coalesce`s needed two thirds of Node's stack before V8 optimized the engine and, on Node 24,
+/// more than all of it after. At 200 the deepest statement of every shape needs at most 42% of it,
+/// as on Postgres, whatever V8 has compiled the engine to (measured on Node 24 and 26, 2026-10-21).
+/// sqlparser's bound counts only its own recursion, and it reads a chain of operators (`a + b + …`,
+/// `x = 1 or x = 2 or …`) in a loop into a tree as deep as the chain, which every walk of the
+/// engine and the tree's drop then recurse through: so a statement with more operators than half of
+/// [`crate::stack::MAX_DEPTH`] is refused before it is read, a bound of its own, since those walks
+/// cost a fraction of the parser's recursion (501 terms need 15% of the stack). That counts
+/// operators in separate expressions together, and only ever leaves a statement to the describe
+/// that a deeper bound would have read.
 ///
 /// MySQL's compound interval units (`interval '1:30' minute_second`, `extract(day_hour from d)`)
 /// are not sqlparser's (0.63 refuses the statement), so each is read as its smallest part, the
@@ -897,7 +937,6 @@ fn opens_without_result_sets(sql: &str) -> bool {
 fn parse(dialect: &dyn sqlparser::dialect::Dialect, sql: &str) -> Result<Vec<Statement>, sqlparser::parser::ParserError> {
     use sqlparser::keywords::Keyword;
     use sqlparser::tokenizer::{Token, Word};
-    let bound = crate::stack::MAX_DEPTH / 2;
     let mut tokens = sqlparser::tokenizer::Tokenizer::new(dialect, sql).tokenize_with_location()?;
     for t in tokens.iter_mut() {
         let Token::Word(w) = &t.token else { continue };
@@ -925,10 +964,10 @@ fn parse(dialect: &dyn sqlparser::dialect::Dialect, sql: &str) -> Result<Vec<Sta
             t => !matches!(t.to_string().chars().next(), Some('\'' | '"' | '`' | 'X' | 'x' | 'N' | 'B' | 'b')),
         })
         .count();
-    if operators > bound {
+    if operators > crate::stack::MAX_DEPTH / 2 {
         return Err(sqlparser::parser::ParserError::RecursionLimitExceeded);
     }
-    Parser::new(dialect).with_recursion_limit(bound).with_tokens_with_locations(tokens).parse_statements()
+    Parser::new(dialect).with_recursion_limit(crate::stack::MAX_DEPTH / 5).with_tokens_with_locations(tokens).parse_statements()
 }
 
 /// What may reach each item of a probe's select list. A probe is the engine's own text, where a
@@ -968,7 +1007,7 @@ fn other_width(c: &crate::api::MysqlColumn) -> Option<&'static str> {
 /// Whether a column's prepare says it is one digit or one bit wide: a TINYINT(1), which MySQL's
 /// BOOLEAN is, or a BIT(1). MySQL 8 reports a TINYINT's display width only where it is 1 (every
 /// other TINYINT reports 4), and a BIT's width is its own (measured on 8.4.11 and 9.7.2,
-/// docs/driver-decoding.md).
+/// wiki/driver-decoding.md).
 fn flag_width(c: &crate::api::MysqlColumn) -> bool {
     matches!((c.r#type, c.length), (1 | 16, Some(1)))
 }
@@ -1012,10 +1051,14 @@ fn column_type(code: u32, charset: u32) -> (Type, &'static str) {
 }
 
 /// A parameter's type from the server's context guess. Every integer context comes back as
-/// LONGLONG, whatever the column's width, so an integer parameter is a plain number.
+/// LONGLONG, whatever the column's width, so an integer parameter is a plain number (the run
+/// time's parameter types widen it to the BIGINT and TINYINT(1) values a row returns). A BIT
+/// context comes back as BIT with the length 64, whatever the column's, and a BIT(1) column is a
+/// truth value where a row holds it, so the parameter is either.
 fn param_type(code: u32, charset: u32) -> (Type, &'static str) {
     match code {
         1 | 2 | 3 | 8 | 9 | 13 => (Type::Scalar { name: "int4".into() }, "int"),
+        16 => (Type::Scalar { name: "bool|bytea".into() }, "bit"),
         _ => column_type(code, charset),
     }
 }
@@ -1719,7 +1762,7 @@ pub(crate) fn aggregate_where(e: &Expr, counts: &mut dyn FnMut(&ast::Function) -
 mod tests {
     #[test]
     fn a_json_schema_check_as_information_schema_prints_it() {
-        // `CHECK_CLAUSE` as MySQL 8.4.11 printed the CHECKs of docs/json-schema-checks/mysql/catalog.ts.
+        // `CHECK_CLAUSE` as MySQL 8.4.11 printed the CHECKs of wiki/json-schema-checks/mysql/catalog.ts.
         let schema = r#"{"type":"object","properties":{"a":{"type":"string"}},"required":["a"]}"#;
         let at = |clause: &str| check_documents(clause).into_iter().map(|(c, s)| (c, serde_json::from_str::<Value>(&s).unwrap())).collect::<Vec<_>>();
         let doc = vec![("doc".to_string(), serde_json::from_str::<Value>(schema).unwrap())];
@@ -1737,7 +1780,7 @@ mod tests {
     #[test]
     fn a_check_clause_reads_back_through_its_escapes_and_its_double_encoding() {
         // Quotes, backslashes, a JSON escape, non-ASCII and four-byte text, as 8.4.11 printed them.
-        let catalog = include_str!("../../../docs/json-schema-checks/mysql/out/catalog-mysql-8.4.txt");
+        let catalog = include_str!("../../../wiki/json-schema-checks/mysql/out/catalog-mysql-8.4.txt");
         let line = catalog.lines().find_map(|l| l.strip_prefix("c_esc_default ")).unwrap();
         let clause: String = serde_json::from_str(line).unwrap();
         let found = check_documents(&clause);
@@ -1927,13 +1970,14 @@ mod tests {
     }
 
     #[test]
-    fn statements_nest_as_deeply_as_on_postgres() {
-        // sqlparser's own bound is 50; the engine's is the Postgres parser's. A chain of operators
-        // counts every operator (`id = 0 or (…)` is two a level), and a statement past the bound is
-        // an error to parse, left to the server's describe, never an overflow of the stack.
+    fn statements_nest_to_the_engines_bound() {
+        // sqlparser's own bound is 50; the engine's is 200 levels of its recursion, which a
+        // parenthesized operand (`id = 0 or (…)`) and a subquery each spend two of, and 500
+        // operators in all. A statement past either is an error to parse, left to the server's
+        // describe, never an overflow of the stack.
         let deepest = |shape: &str| crate::stack::run(|| (1..1_000).take_while(|&n| parse(&MySqlDialect {}, &crate::stack::nested(shape, n)).is_ok()).last().unwrap_or(0));
         let found: Vec<(&str, usize)> = ["sum", "and_or", "case", "coalesce", "subquery"].into_iter().map(|shape| (shape, deepest(shape))).collect();
-        assert_eq!(found, vec![("sum", 501), ("and_or", 248), ("case", 495), ("coalesce", 496), ("subquery", 247)]);
+        assert_eq!(found, vec![("sum", 501), ("and_or", 98), ("case", 195), ("coalesce", 196), ("subquery", 97)]);
         for shape in ["sum", "case", "or", "and_or"] {
             assert!(crate::stack::run(|| parse(&MySqlDialect {}, &crate::stack::nested(shape, 100_000)).is_err()), "{shape}");
         }
@@ -2016,6 +2060,15 @@ mod tests {
     }
 
     #[test]
+    fn a_bit_context_parameter_is_a_truth_value_or_bytes() {
+        // MySQL 8.4 describes `bit1 = ?` as BIT (16) of length 64, a BIT(1) column's and a BIT(8)'s alike.
+        let described = json!({ "columns": [{ "name": "id", "type": 3, "flags": 1 }], "params": [{ "type": 16 }, { "type": 253, "charset": 63 }, { "type": 8 }] });
+        let (analysis, _) = analyzed("select id from users where bit1 = :b and raw = :r and big = :n", described, "STRICT_TRANS_TABLES");
+        let types: Vec<String> = analysis.params.iter().map(|p| format!("{}={:?}", p.name, p.ty)).collect();
+        assert_eq!(types, ["b=Scalar { name: \"bool|bytea\" }", "r=Scalar { name: \"bytea\" }", "n=Scalar { name: \"int4\" }"]);
+    }
+
+    #[test]
     fn placeholders_are_read_as_the_session_reads_strings() {
         let by_id = json!({ "columns": [{ "name": "id", "type": 3, "flags": 1 }], "params": [{ "type": 3 }] });
         let default = "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION";
@@ -2095,7 +2148,7 @@ mod tests {
 
     #[test]
     fn a_truth_value_is_a_boolean_by_the_statement_and_a_flag_column_by_the_prepare() {
-        // Each column as the prepare on 8.4.11 and 9.7.2 reports it (docs/driver-decoding.md).
+        // Each column as the prepare on 8.4.11 and 9.7.2 reports it (wiki/driver-decoding.md).
         let column = |ty: u32, length: u32, table: &str, name: &str| json!({ "name": "c", "type": ty, "flags": 0, "length": length, "org_table": table, "org_name": name });
         let types = |sql: &str, columns: Vec<Value>| {
             let described = json!({ "columns": columns, "params": [] });
@@ -2161,5 +2214,57 @@ mod tests {
         let raw: MysqlDescribe = serde_json::from_value(json!({ "columns": [column(3, 11, "users")], "params": [] })).unwrap();
         let lexed = lex::lex("select 1", Dialect::Mysql).unwrap();
         assert_eq!(settle("select 1", &lexed, &lex::rewrite("select 1", &lexed, Target::Question), None, &raw, None), vec![Some(Type::Scalar { name: "int4|int8".into() })]);
+    }
+
+    /// Analyzes with a host that describes each statement as `describe` says, answers the mode
+    /// query with the default mode and any other query with no rows.
+    fn analyzed_by(sql: &str, describe: &dyn Fn(&str) -> Value) -> Analysis {
+        let mut answers: HashMap<String, crate::api::Answer> = HashMap::new();
+        for _ in 0..16 {
+            let host = Host::new(&answers);
+            if let Some(analysis) = analyze_text(sql, &host) {
+                return analysis;
+            }
+            for need in host.needs() {
+                let (id, answer) = match need {
+                    crate::api::Need::Describe { id, sql } => (id, json!({ "mysql": describe(&sql) })),
+                    crate::api::Need::Query { id, sql, .. } if sql == SQL_MODE_QUERY => (id, json!({ "rows": [["ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION"]] })),
+                    crate::api::Need::Query { id, .. } => (id, json!({ "rows": [] })),
+                };
+                answers.insert(id, serde_json::from_value(answer).unwrap());
+            }
+        }
+        panic!("the analysis never settled")
+    }
+
+    #[test]
+    fn a_strict_where_proves_the_joined_row_and_the_column_it_tests() {
+        // As 8.4 describes it: `title` is NOT NULL only where the join is inner, and `published_at`
+        // is a nullable column either way.
+        let describe = |sql: &str| {
+            let title = if sql.contains("INNER JOIN") { 1 } else { 0 };
+            json!({ "columns": [{ "name": "name", "type": 253, "flags": 1 }, { "name": "title", "type": 253, "flags": title }, { "name": "published_at", "type": 12, "flags": 0 }], "params": [] })
+        };
+        let nullable = |sql: &str| analyzed_by(sql, &describe).columns.iter().map(|c| c.nullable).collect::<Vec<_>>();
+        let select = "select u.name, p.title, p.published_at from users u left join posts p on p.user_id = u.id where";
+        assert_eq!(nullable(&format!("{select} p.published_at is not null")), [false, false, false]);
+        assert_eq!(nullable(&format!("{select} p.id > 0")), [false, false, true]);
+        // A test NULL can pass proves nothing.
+        assert_eq!(nullable(&format!("{select} p.published_at is not null or u.email is not null")), [false, true, true]);
+        assert_eq!(nullable(&format!("{select} coalesce(p.published_at, now()) > '2000-01-01'")), [false, true, true]);
+        assert_eq!(nullable(&format!("{select} p.id is null")), [false, true, true]);
+    }
+
+    #[test]
+    fn json_arrayagg_under_a_plain_group_by_is_never_null() {
+        let describe = |sql: &str| {
+            let column = if sql.starts_with("SELECT title") { json!({ "name": "title", "type": 253, "flags": 1 }) } else { json!({ "name": "titles", "type": 245, "flags": 0 }) };
+            json!({ "columns": [column], "params": [] })
+        };
+        let nullable = |sql: &str| analyzed_by(sql, &describe).columns[0].nullable;
+        assert!(!nullable("select json_arrayagg(title) as titles from posts group by user_id"));
+        assert!(nullable("select json_arrayagg(title) as titles from posts"));
+        assert!(nullable("select json_arrayagg(title) as titles from posts group by user_id with rollup"));
+        assert!(nullable("select json_arrayagg(title) over (rows between 1 following and 1 following) as titles from posts group by title"));
     }
 }

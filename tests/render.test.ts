@@ -94,8 +94,70 @@ test("SQLite: an INTEGER is a number, exact or an error; a NUMERIC whichever the
   assert.equal(renderType(scalar("blob"), false, "sqlite"), "Uint8Array");
   assert.equal(renderType(scalar("bool"), false, "sqlite"), "boolean");
   assert.equal(renderType({ kind: "unknown" }, false, "sqlite"), "unknown");
-  // The driver binds a number for an INTEGER.
+  // The driver binds a number for an INTEGER, and the run time a truth value as 1 or 0.
   assert.equal(renderParamType(scalar("integer"), "sqlite"), "number");
+  assert.equal(renderParamType(scalar("numeric"), "sqlite"), "number | string | boolean");
+});
+
+// Each column type beside the type the engine gives a parameter compared with that column, as
+// the engine reported them on 2026-10-20 against Postgres 18.6, MySQL 8.4.11 and SQLite for the
+// driver matrix's `typed` fixture (`select c from typed` and `select id from typed where c = :v`).
+// MySQL describes every integer context as a BIGINT and a BIT one as BIT, so the engine types a
+// parameter by the column it is compared with (engine/mysql `column_types`), and keeps the
+// prepare's (`int4`, `bool|bytea`) for an expression; SQLite types a parameter by the column's
+// affinity, a BOOLEAN column's being NUMERIC.
+const array = (of: EngineType): EngineType => ({ kind: "array", of });
+const composite: EngineType = { kind: "composite", name: "user_in", fields: [{ name: "name", type: scalar("text"), nullable: true }] };
+const ROUND_TRIPS: Record<"postgres" | "mysql" | "sqlite", [column: EngineType, param: EngineType][]> = {
+  postgres: [
+    ...["int2", "int4", "int8", "float4", "float8", "numeric", "bool", "text", "uuid", "interval", "time", "money", "date", "timestamp", "timestamptz", "bytea"].map((n): [EngineType, EngineType] => [scalar(n), scalar(n)]),
+    [{ kind: "json" }, { kind: "json" }],
+    [{ kind: "enum", name: "mood", labels: ["ok", "sad"] }, { kind: "enum", name: "mood", labels: ["ok", "sad"] }],
+    ...["int4", "int8", "text", "bool", "timestamptz", "date", "bytea", "numeric"].map((n): [EngineType, EngineType] => [array(scalar(n)), array(scalar(n))]),
+    [array({ kind: "enum", name: "mood", labels: ["ok", "sad"] }), array({ kind: "enum", name: "mood", labels: ["ok", "sad"] })],
+    [array(composite), array(composite)],
+    [array(scalar("record")), array(scalar("record"))],
+    // An array the statement builds from values that may be NULL (`array_agg` over a left join).
+    [{ kind: "array", of: scalar("text"), nullable_items: true }, array(scalar("text"))],
+    [{ kind: "array", of: scalar("int8"), nullable_items: true }, array(scalar("int8"))],
+  ],
+  mysql: [
+    [scalar("int8"), scalar("int8")],
+    [scalar("int4"), scalar("int4")],
+    [scalar("int2"), scalar("int4")],
+    [scalar("bool"), scalar("bool|int4")],
+    [scalar("bool"), scalar("bool|bytea")],
+    [scalar("bytea"), scalar("bool|bytea")],
+    [scalar("bytea"), scalar("bytea")],
+    ...["numeric", "float8", "text", "date", "timestamp", "time"].map((n): [EngineType, EngineType] => [scalar(n), scalar(n)]),
+    [{ kind: "json" }, { kind: "json" }],
+  ],
+  sqlite: [
+    ...["integer", "int8", "real", "text", "blob", "numeric"].map((n): [EngineType, EngineType] => [scalar(n), scalar(n)]),
+    [scalar("bool"), scalar("numeric")],
+    [{ kind: "unknown" }, { kind: "unknown" }],
+  ],
+};
+
+/** An array type's element type, `(a | b)[]` as `a | b`; undefined for any other type. */
+const element = (ts: string) => (ts.endsWith("[]") ? ts.slice(0, -2).replace(/^\((.*)\)$/, "$1") : undefined);
+
+/** Whether every value of the column's type is one the parameter's type takes, member by member of the union, element by element of an array. */
+function admits(column: EngineType, param: EngineType, dialect: "postgres" | "mysql" | "sqlite"): boolean {
+  const returned = renderType(column, false, dialect);
+  const taken = renderParamType(param, dialect);
+  const members = (ts: string) => ts.split(" | ");
+  const [returnedElement, takenElement] = [element(returned), element(taken)];
+  if (returnedElement !== undefined && takenElement !== undefined) return members(returnedElement).every((m) => members(takenElement).includes(m) || members(takenElement).includes("unknown"));
+  return members(taken).includes("unknown") || members(returned).every((member) => members(taken).includes(member));
+}
+
+test("a parameter takes every value run returns for the column it is compared with, on every dialect: the round-trip rule", () => {
+  for (const [dialect, pairs] of Object.entries(ROUND_TRIPS) as ["postgres" | "mysql" | "sqlite", [EngineType, EngineType][]][]) {
+    for (const [column, param] of pairs) {
+      assert.ok(admits(column, param, dialect), `${dialect}: a column of ${JSON.stringify(column)} returns ${renderType(column, false, dialect)}, which a parameter of ${JSON.stringify(param)}, typed ${renderParamType(param, dialect)}, does not take`);
+    }
+  }
 });
 
 test("parameters take what every driver binds, whatever Reylo returns", () => {
@@ -111,13 +173,13 @@ test("parameters take what every driver binds, whatever Reylo returns", () => {
   assert.equal(renderType(inner, false, "postgres"), "{ b: string; n: number }");
 });
 
-test("a timestamptz parameter takes a Date or a string; a timestamp or a date, which has no zone, a string", () => {
-  assert.equal(renderParamType(scalar("timestamptz"), "postgres"), "Date | string");
-  assert.equal(renderParamType({ kind: "array", of: scalar("timestamptz") }, "postgres"), "(Date | string)[]");
+test("every date and time parameter takes a string: a timestamptz one the text that names its zone, which run returns, and no Date", () => {
+  assert.equal(renderParamType(scalar("timestamptz"), "postgres"), "string");
+  assert.equal(renderParamType({ kind: "array", of: scalar("timestamptz") }, "postgres"), "(string | null)[]");
   for (const name of ["timestamp", "date"]) {
     assert.equal(renderParamType(scalar(name), "postgres"), "string");
     assert.equal(renderParamType(scalar(name), "mysql"), "string");
-    assert.equal(renderParamType({ kind: "array", of: scalar(name) }, "postgres"), "string[]");
+    assert.equal(renderParamType({ kind: "array", of: scalar(name) }, "postgres"), "(string | null)[]");
   }
   // What MySQL answers by what is bound for a placeholder compared with a DATE and a DATETIME.
   assert.equal(renderParamType(scalar("date|timestamp"), "mysql"), "string");
@@ -133,7 +195,7 @@ test("an array's elements are nullable only where the statement builds it from a
   assert.equal(renderType(texts(true), true), "(string | null)[]");
   assert.equal(renderType({ kind: "array", of: { kind: "enum", name: "mood", labels: ["ok", "sad"] }, nullable_items: true }), `("ok" | "sad" | null)[]`);
   // A parameter's elements are the caller's to pass.
-  assert.equal(renderParamType(texts()), "string[]");
+  assert.equal(renderParamType(texts()), "(string | null)[]");
 });
 
 test("a JSON column a CHECK holds to a JSON Schema is the type of the values the schema admits", () => {

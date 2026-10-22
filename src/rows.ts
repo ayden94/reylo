@@ -1,12 +1,15 @@
-// Structured parameters at run time (docs/structured-params.md): the value of a `:events::rows(…)`
-// or `:user::row(…)` parameter is checked against its column list before the statement runs,
-// written as the JSON the statement reads, and an insert's column lists are written again
-// without the keys a call leaves out, so that each of those columns takes its default (the
-// maintainer, 2026-10-15). Nothing here changes a value: a value the database would round,
-// truncate or read in a zone nobody chose is refused (the maintainer, 2026-10-15: "Never, except
-// defaults").
+// Structured parameters at run time (wiki/structured-params.md): the value of a `:events::rows(…)`
+// or `:user::row(…)` parameter is checked against its column list before the statement runs, and
+// written as the JSON the statement reads. A key a row leaves out takes its column's default: on
+// Postgres and SQLite the statement holds each such default, copied from the catalog, so it is one
+// text whatever keys the rows give (the maintainer, 2026-10-20: "copy the default from the catalog
+// on the databases where it can be done with high fidelity"); on MySQL an insert's column lists are
+// written again without the keys a call leaves out, so every row of a call gives the same keys.
+// Nothing here changes a value: a value the database would round, truncate or read in a zone
+// nobody chose is refused (the maintainer, 2026-10-15: "Never, except defaults").
 import type { EngineType } from "./engine-type.ts";
 import { validate, withDefaults } from "./json-schema.ts";
+import { postgresYear } from "./values.ts";
 
 type Dialect = "postgres" | "mysql" | "sqlite";
 export type RowsType = Extract<EngineType, { kind: "rows" }>;
@@ -37,7 +40,7 @@ const INTEGERS: Record<string, readonly [bigint, bigint]> = {
 /**
  * A 64-bit integer, which JSON carries as digits: a string on Postgres, which reads one exactly, and
  * a bare number elsewhere (MySQL's `CAST(… AS SIGNED)` wraps a string out of range;
- * docs/structured-params/verify.md). A Postgres or MySQL `int8` takes a number, a BigInt or a string
+ * wiki/structured-params/verify.md). A Postgres or MySQL `int8` takes a number, a BigInt or a string
  * of digits, as its parameter type says; SQLite's `integer` takes a number or a BigInt (src/render.ts).
  */
 const WIDE = new Set(["int8", "integer"]);
@@ -53,8 +56,9 @@ class Raw {
 /**
  * Checks a structured parameter's value against its column list, and gives the value to bind:
  * on Postgres the JSON value, which the run time binds as it binds every JSON parameter, and on
- * MySQL and SQLite its JSON text. `inserted` is a parameter whose rows an insert writes, whose
- * keys are the same in every row; `present` is the keys they carry.
+ * MySQL and SQLite its JSON text. `inserted` is a parameter whose rows a MySQL insert writes, whose
+ * lists the run time writes again, so its keys are the same in every row; `present` is the keys
+ * they carry.
  */
 export function prepareRows(name: string, type: RowsType, value: unknown, dialect: Dialect, inserted: boolean): { value: unknown; present: ReadonlySet<string> } {
   const fail = (message: string): never => {
@@ -88,7 +92,7 @@ export function prepareRows(name: string, type: RowsType, value: unknown, dialec
         continue;
       }
       const checked = check(f.type, f.written, v, dialect, (message) => fail(`${where}"${f.name}" ${message}`));
-      // A JSON member's schema fills its defaults and checks the value (docs/typed-json-params.md).
+      // A JSON member's schema fills its defaults and checks the value (wiki/typed-json-params.md).
       if (f.schema !== undefined) {
         const filled = withDefaults(f.schema, checked);
         const failure = validate(f.schema, filled);
@@ -96,9 +100,9 @@ export function prepareRows(name: string, type: RowsType, value: unknown, dialec
         written[f.name] = filled;
       } else written[f.name] = checked;
     }
-    // One statement inserts every row of a call, so its column list is the same for each: a key
-    // one row leaves out and another gives cannot have its default in one and its value in the
-    // other.
+    // One statement inserts every row of a call, so on MySQL, which copies no default, its column
+    // list is the same for each: a key one row leaves out and another gives cannot have its
+    // default in one and its value in the other.
     if (inserted) {
       if (present === undefined) {
         present = keys;
@@ -156,7 +160,7 @@ function scalar(name: string, written: string, v: unknown, dialect: Dialect, fai
   }
   const range = INTEGERS[name];
   if (range) {
-    const n = integer(range, name === "int8", written, v, fail);
+    const n = integer(range, name === "int8", written, v, fail, dialect !== "postgres");
     if (!WIDE.has(name)) return Number(n);
     return dialect === "postgres" ? n.toString() : new Raw(n.toString());
   }
@@ -187,16 +191,14 @@ function scalar(name: string, written: string, v: unknown, dialect: Dialect, fai
       if (typeof v === "string" && /^\{?[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}\}?$/i.test(v)) return v;
       return fail(`is ${written}, a UUID in hexadecimal; got ${describe(v)}.`);
     case "timestamptz":
-      if (v instanceof Date) {
-        if (Number.isNaN(v.getTime())) fail(`is ${written}, and the Date is invalid.`);
-        return v.toISOString();
-      }
-      if (typeof v === "string" && zoned.test(v.trim())) return v;
-      return fail(`is ${written}, an instant: a Date, or a string that names its zone ("2026-10-12T19:06:48.282Z", "2026-10-12 19:06:48+09"); got ${describe(v)}, which the server would read in the session's time zone.`);
+      // A string that names its zone, as `.run()` returns one; no Date (the maintainer, 2026-10-20).
+      if (v instanceof Date) return fail(`is ${written}, which takes the instant as a string that names its zone, not a Date: pass date.toISOString() ("2026-10-12T19:06:48.282Z").`);
+      if (typeof v === "string" && zoned.test(v.trim())) return dialect === "postgres" ? postgresYear(v) : v;
+      return fail(`is ${written}, an instant: a string that names its zone ("2026-10-12T19:06:48.282Z", "2026-10-12 19:06:48+09"); got ${describe(v)}, which the server would read in the session's time zone.`);
     case "timestamp":
     case "date":
-      if (typeof v === "string") return v;
-      return fail(`is ${written}, a wall-clock reading with no zone, which takes its text ("2026-10-12 19:06:48.282", "2026-10-12"), not a Date: drivers write a Date's time in different zones.${v instanceof Date ? " A timestamptz takes a Date." : ` Got ${describe(v)}.`}`);
+      if (typeof v === "string") return dialect === "postgres" ? postgresYear(v) : v;
+      return fail(`is ${written}, a wall-clock reading with no zone, which takes its text ("2026-10-12 19:06:48.282", "2026-10-12"), not a Date: drivers write a Date's time in different zones.${v instanceof Date ? "" : ` Got ${describe(v)}.`}`);
     case "bytea":
     case "blob": {
       // Binary data travels as hexadecimal text: Postgres's own `\x` form, and bare digits that
@@ -217,9 +219,14 @@ function scalar(name: string, written: string, v: unknown, dialect: Dialect, fai
 }
 
 /** An integer in `range`, as a number, a BigInt or, where `digits`, a string of its digits. */
-function integer(range: readonly [bigint, bigint], digits: boolean, written: string, v: unknown, fail: (message: string) => never): bigint {
+/**
+ * `truth`: MySQL and SQLite, where a truth value is an integer, and a TINYINT(1), BIT(1) or BOOLEAN
+ * column returns a boolean, which goes back in as 1 or 0 (the round-trip rule, src/render.ts).
+ */
+function integer(range: readonly [bigint, bigint], digits: boolean, written: string, v: unknown, fail: (message: string) => never, truth = false): bigint {
   let n: bigint;
   if (typeof v === "bigint") n = v;
+  else if (typeof v === "boolean" && truth) n = BigInt(v ? 1 : 0);
   else if (typeof v === "number" && Number.isInteger(v)) {
     if (!Number.isSafeInteger(v)) fail(`is ${written}; ${v} is past 2^53 - 1, where a number stops being exact, so pass it as a BigInt${digits ? " or a string of digits" : ""}.`);
     n = BigInt(v);
@@ -259,7 +266,7 @@ export function checkCast(name: string, written: string, type: EngineType, v: un
   const signed = dialect === "sqlite" ? (/int/i.test(base) ? INTEGERS.integer : undefined) : MYSQL_INTEGERS[base.replace(/\s*unsigned$/, "") || "bigint"];
   if (signed) {
     const range: readonly [bigint, bigint] = dialect === "mysql" && base.endsWith("unsigned") ? [BigInt(0), signed[1] * BigInt(2) + BigInt(1)] : signed;
-    integer(range, dialect === "mysql" && range[1] >= INTEGERS.int8![1], written, v, fail);
+    integer(range, dialect === "mysql" && range[1] >= INTEGERS.int8![1], written, v, fail, true);
     return;
   }
   if (base === "uuid") {
@@ -349,7 +356,7 @@ function write(v: unknown): string {
   return JSON.stringify(v);
 }
 
-/** The statement with each list of a structured parameter written again for the keys present: an entry stays when its key is required or present. */
+/** The statement with each list of a structured parameter written again for the keys present (MySQL): an entry stays when its key is required or present. */
 export function variant(text: string, structured: Structured, fields: readonly RowField[], present: ReadonlySet<string>): string {
   const lists = [...structured.lists].sort((a, b) => b.start - a.start);
   let out = text;

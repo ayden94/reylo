@@ -157,12 +157,12 @@ function Card({ x, y }: { x: number; y: number }) {
 }
 
 /**
- * The figure at the text column's width (640px, the 40rem column, at a 1440px window), drawn at
+ * The figure at the text column's width (672px, the 42rem column, at a 1440px window), drawn at
  * that size so its text is the size it was drawn at: the nodes stacked on the left and the
  * statement with its types beside them, on the right, so the figure meets both edges of the column.
  */
 function Wide() {
-  const w = 640;
+  const w = 672;
   return (
     <Figure w={w} h={stackHeight + 1}>
       <Stack w={w - 328 - 16} />
@@ -188,18 +188,18 @@ function Narrow() {
 
 /**
  * The diagram under How it works: a `.sql` import through TypeScript, Reylo and the database, and
- * the type that comes back. A container query picks the form: the wide one from a 560px column
- * (drawn for the page's 640px, where its text is the size it was drawn at, and no smaller than
- * 10.5px at 560px), and the stacked one below that, kept to 400px so that it does not grow larger
+ * the type that comes back. A container query picks the form: the wide one from a 588px column
+ * (drawn for the page's 672px, where its text is the size it was drawn at, and no smaller than
+ * 10.5px at 588px), and the stacked one below that, kept to 400px so that it does not grow larger
  * than the page's text on a small tablet.
  */
 export function HowItWorksDiagram() {
   return (
     <figure className="@container my-8">
-      <div className="hidden @min-[560px]:block">
+      <div className="hidden @min-[588px]:block">
         <Wide />
       </div>
-      <div className="max-w-[400px] @min-[560px]:hidden">
+      <div className="max-w-[400px] @min-[588px]:hidden">
         <Narrow />
       </div>
     </figure>

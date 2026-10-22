@@ -1,6 +1,5 @@
-// The scripts `DocsRoot` (./root.tsx) puts inline in the document's head, in a module of their own:
-// a string exported from a 'use client' module reaches a server component as a client reference,
-// not as the string.
+// The scripts `DocsDocument` (./document.tsx) puts inline in the document's head, in a module of
+// their own.
 
 /**
  * Puts each saved tab choice right before Fumadocs' tabs read it. Fumadocs' tabs take the value
@@ -34,17 +33,25 @@ export function tabsRestoreScript(groups: Record<string, readonly string[]>): st
  * turns every saved choice in storage into CSS that shows the saved panel and marks its trigger, on
  * groups not yet marked `data-tabs-ready`, for any `groupId`, with no list of groups. Radix gives
  * each panel the id `…-content-<value>` and each trigger `…-trigger-<value>`; a group with no panel
- * for the saved value is left alone (`:has`), as Fumadocs then selects nothing.
+ * for the saved value is left alone (`:has`), as Fumadocs then selects nothing. A `<VariantSwitch>`
+ * (`data-dk-switch`), which has no panels, gets its saved choice drawn as the chosen trigger.
+ *
+ * It also makes a tab pressed before its group hydrates switch at once. The page hydrates late: on
+ * Reylo's, 14,800 elements took 0.45s after the scripts arrived in the built site and several
+ * seconds under the dev server, and a press on a tab in that time did nothing until React caught up
+ * (the maintainer, 2026-10-21: "After I hard refresh the page and then I click on the
+ * get_author.sql tab on the very first code block, there's a weirdly long delay before it changes
+ * tabs").
  */
 export const TABS_PREPAINT_SCRIPT = `(() => { try {
   const q = (s) => '"' + String(s).replace(/["\\\\]/g, '\\\\$&').replace(/\\n/g, ' ') + '"';
   const rules = [];
-  const add = (key, value, persistOnly) => {
+  // The rules that show \`value\`'s panel and mark its trigger in every tabs root \`root\` selects.
+  const show = (root, value) => {
     if (!value || value.length > 100) return;
-    const group = '[data-tab-group=' + q(key) + ']' + (persistOnly ? '[data-tab-persist]' : '') + ':not([data-tabs-ready])';
     const panel = '[role=tabpanel][id$=' + q('-content-' + value) + ']';
     const trigger = '[role=tablist] > [role=tab][id$=' + q('-trigger-' + value) + ']';
-    const g = group + ':has(> ' + panel + ')';
+    const g = root + ':has(> ' + panel + ')';
     rules.push(
       g + ' > [role=tabpanel] { display: none !important }',
       g + ' > ' + panel + ' { display: block !important }',
@@ -53,18 +60,53 @@ export const TABS_PREPAINT_SCRIPT = `(() => { try {
       g + ' > ' + trigger + ' { color: var(--color-fd-primary) !important; border-color: var(--color-fd-primary) !important }',
       g + ' > ' + trigger + ' > div { background: var(--color-fd-primary) !important }',
     );
+    // A <VariantSwitch> has no panels: its saved choice is the trigger drawn as chosen.
+    const chosen = '[role=tab][id$=' + q('-trigger-' + value) + ']';
+    const s = '[data-dk-switch]' + root + ':has(' + chosen + ')';
+    rules.push(
+      s + ' [role=tab] { color: var(--color-fd-muted-foreground) !important; background: transparent !important }',
+      s + ' ' + chosen + ' { color: var(--color-fd-primary) !important; background: var(--dk-switch-on) !important }',
+    );
   };
+  const group = (key, persistOnly) => '[data-tab-group=' + q(key) + ']' + (persistOnly ? '[data-tab-persist]' : '') + ':not([data-tabs-ready])';
   const keys = new Set([...Object.keys(sessionStorage), ...Object.keys(localStorage)]);
   for (const key of keys) {
     const session = sessionStorage.getItem(key);
-    if (session !== null) add(key, session, false);
-    else add(key, localStorage.getItem(key), true);
+    if (session !== null) show(group(key, false), session);
+    else show(group(key, true), localStorage.getItem(key));
   }
-  if (!rules.length) return;
   const style = document.createElement('style');
   style.id = 'dk-tabs-prepaint';
-  style.textContent = rules.join('\\n');
+  const flush = () => { style.textContent = rules.join('\\n'); };
+  flush();
   document.head.appendChild(style);
+  // A tab pressed before its group has hydrated (Radix selects on mousedown) shows at once. A
+  // choice of a saved group is saved, as Fumadocs saves it, and shown in every group of its id;
+  // another group's is shown in that group, and kept for the group to hand to React as it
+  // hydrates (usePrepaintReady, ./prepaint.tsx).
+  const pending = (window.__dkTabsPending = new Map());
+  addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    const tab = e.target.closest && e.target.closest('[role=tab]');
+    const list = tab && tab.parentElement;
+    const root = list && list.getAttribute('role') === 'tablist' ? list.parentElement : null;
+    if (!root || root.hasAttribute('data-tabs-ready') || !root.matches('.dk-code-tabs, .dk-variant-tabs, .dk-variant-switch')) return;
+    const at = tab.id.lastIndexOf('-trigger-');
+    if (at < 0) return;
+    const value = tab.id.slice(at + 9);
+    const key = root.getAttribute('data-tab-group');
+    if (key) {
+      try {
+        sessionStorage.setItem(key, value);
+        if (root.hasAttribute('data-tab-persist')) localStorage.setItem(key, value);
+      } catch {}
+      show(group(key, false), value);
+    } else {
+      pending.set(root, tab.id);
+      show(':not([data-tabs-ready]):has(> [role=tablist] > [id=' + q(tab.id) + '])', value);
+    }
+    flush();
+  }, true);
 } catch {} })();`;
 
 /**

@@ -8,7 +8,7 @@ delete_by_key.sql: none (id: int4) -> {  }
 delete_join.sql: none (v: text) -> {  }
 delete_limit.sql: none (score: int4, n: int4) -> {  }
 generated_column.sql: many (n: int4) -> { g: int4?, more: int8|float8|numeric? }
-insert_all_types.sql: none (tiny: int4?, big: int4?, ubig: int4?, price: numeric?, f: float8?, v: text?, vb: bytea?, kind: text?, day: date?, at: timestamp?, ts: timestamp?, t: time?, y: int4?, doc: json?, bits: bytea?, flag: int4) -> {  }
+insert_all_types.sql: none (tiny: int4?, big: int8?, ubig: int8?, price: numeric?, f: float8?, v: text?, vb: bytea?, kind: text?, day: date?, at: timestamp?, ts: timestamp?, t: time?, y: int4?, doc: json?, bits: bytea?, flag: bool|int4) -> {  }
 insert_ignore.sql: none (id: int4, body: text) -> {  }
 insert_on_duplicate.sql: none (id: int4, body: text, bump: int4) -> {  }
 insert_select.sql: none (n: int4) -> {  }
@@ -47,13 +47,13 @@ param_in.sql: many (a: int4, b: int4) -> { id: int4 }
 param_in_insert_select.sql: none (suffix: text, fallback: int4, bump: int4) -> {  }
 param_in_json.sql: one (n: int4, s: text, h: int4) -> { o: { n: int8|float8|numeric?, s: text?, half: numeric|int8|float8? } }
 param_in_json_array.sql: one (a: text, b: int4) -> { a: json? }
-param_in_where_arithmetic.sql: many (n: int4, m: int4) -> { id: int4, whole: int4? }
+param_in_where_arithmetic.sql: many (n: int4, m: int4) -> { id: int4, whole: int4 }
 param_integer.sql: many (n: int4) -> { id: int4 }
-param_integer_types.sql: many (a: int4, b: int4, c: int4, d: int4, e: int4, f: int4, g: int4, h: int4) -> { id: int4 }
+param_integer_types.sql: many (a: int4, b: int4, c: int4, d: int8, e: int4, f: int8, g: bool|int4, h: int4) -> { id: int4 }
 param_json.sql: many (doc: json) -> { id: int4 }
 param_json_candidate.sql: many (candidate: text) -> { id: int4 }
 param_json_extract.sql: one (doc: json, doc2: json, doc3: json) -> { a: json?, b: text?, n: int8? }
-param_json_path.sql: many (path: text) -> { id: int4, found: json? }
+param_json_path.sql: many (path: text) -> { id: int4, found: json }
 param_json_text.sql: many (a: text) -> { id: int4 }
 param_like.sql: many (pattern: text) -> { id: int4 }
 param_limit.sql: many (n: int4, skip: int4) -> { id: int4 }

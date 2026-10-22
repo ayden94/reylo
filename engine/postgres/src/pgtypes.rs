@@ -77,6 +77,10 @@ pub struct TypeRegistry {
     /// JSON column of a composite's relation ([`crate::schema_type`]), which a stored row of it
     /// holds ([`TypeRegistry::render_row`]).
     pub documents: HashMap<(u32, i32), serde_json::Value>,
+    /// By relation and attribute, the strings a CHECK keeps a string column of a composite's
+    /// relation to, which a stored row of it holds ([`TypeRegistry::render_row`]) as a bare read of
+    /// the column does.
+    pub values: HashMap<(u32, i32), Vec<String>>,
 }
 
 /// Whether every row a scan of relation `$rel` reads has a value in the column named `$col`, as
@@ -347,17 +351,28 @@ impl TypeRegistry {
     /// The JSON columns of the relation whose row type `oid` is, by relation and attribute: the
     /// ones whose CHECKs a stored row of it was held to.
     pub fn row_json_columns(&self, oid: u32) -> Vec<(u32, i32)> {
+        self.row_columns(oid, &[oid::JSON, oid::JSONB])
+    }
+
+    /// The string columns of the relation whose row type `oid` is, by relation and attribute: the
+    /// ones a CHECK may keep to a list of strings ([`TypeRegistry::values`]).
+    pub fn row_string_columns(&self, oid: u32) -> Vec<(u32, i32)> {
+        self.row_columns(oid, &[oid::TEXT, oid::VARCHAR])
+    }
+
+    fn row_columns(&self, oid: u32, types: &[u32]) -> Vec<(u32, i32)> {
         // An array of stored rows holds rows of its element's relation.
         let oid = self.get(oid).filter(|t| t.kind == TypeKind::Array).and_then(|t| t.elem).unwrap_or(oid);
         let Some(t) = self.get(oid).filter(|t| t.kind == TypeKind::Composite) else { return Vec::new() };
         let Some(relid) = t.relid else { return Vec::new() };
-        t.fields.iter().filter(|f| f.attnum > 0 && matches!(self.resolve_domain(f.type_oid), oid::JSON | oid::JSONB)).map(|f| (relid, f.attnum)).collect()
+        t.fields.iter().filter(|f| f.attnum > 0 && types.contains(&self.resolve_domain(f.type_oid))).map(|f| (relid, f.attnum)).collect()
     }
 
     /// The type model of a stored row of the relation whose row type `oid` is (`d` of `from docs
     /// d`): the table's constraints held it, so a column is non-null where its `NOT NULL` is valid,
-    /// and a JSON column a CHECK holds to a JSON Schema is the values it admits
-    /// ([`TypeRegistry::documents`]). A row value of the same type that a statement builds
+    /// a JSON column a CHECK holds to a JSON Schema is the values it admits
+    /// ([`TypeRegistry::documents`]), and a string column a CHECK keeps to a list of strings is
+    /// their union ([`TypeRegistry::values`]). A row value of the same type that a statement builds
     /// (`row(…)::docs`), or that another table's column holds, met none of them, and renders as
     /// [`TypeRegistry::render`] does.
     pub fn render_row(&self, oid: u32) -> crate::types::Type {
@@ -390,9 +405,11 @@ impl TypeRegistry {
                         .map(|f| {
                             let ty = self.render_at(f.type_oid, depth + 1, false);
                             let document = t.relid.filter(|_| stored).and_then(|r| self.documents.get(&(r, f.attnum)));
-                            let ty = match (ty, document) {
-                                (Type::Json { schema: None }, Some(schema)) => Type::Json { schema: Some(schema.clone()) },
-                                (ty, _) => ty,
+                            let values = t.relid.filter(|_| stored).and_then(|r| self.values.get(&(r, f.attnum)));
+                            let ty = match (ty, document, values) {
+                                (Type::Json { schema: None }, Some(schema), _) => Type::Json { schema: Some(schema.clone()) },
+                                (Type::Scalar { name }, _, Some(values)) if (name == "text" || name == "varchar") && !values.is_empty() => Type::Enum { name, labels: values.clone() },
+                                (ty, _, _) => ty,
                             };
                             Field { name: f.name.clone(), ty, nullable: !(stored && f.not_null) }
                         })

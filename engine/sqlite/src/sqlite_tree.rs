@@ -211,7 +211,10 @@ pub struct Node {
     pub name: Option<String>,
     pub value: Option<String>,
     pub agg: bool,
+    /// A window call, or an aggregate with a FILTER, which SQLite holds as a window as well.
     pub window: bool,
+    /// A window call: one with an OVER clause.
+    pub over: bool,
     pub distinct: bool,
     pub infix: bool,
     pub args: Vec<Node>,

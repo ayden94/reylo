@@ -66,11 +66,12 @@ test("SQLite: a cast is SQLite's own, a date's to TEXT, JSON's through json(), a
     const born = await built(root, url, "born", "select name from users where born > :since::date order by born");
     assert.equal(born.text, "select name from users where born > CAST(? AS TEXT) order by born");
     assert.deepEqual(plain(await born.query.run(db, { since: "1900-01-01" })), [{ name: "Grace" }, { name: "Alan" }]);
-    // json() makes the text a JSON value inside SQLite's JSON functions, where text alone is a string.
+    // json() makes the text a JSON value inside SQLite's JSON functions, where text alone is a
+    // string; the object json_object builds comes back parsed.
     const doc = await built(root, url, "doc", "select json_extract(:doc::json, '$.a') as a, json_object('d', :inner::json, 's', :text) as d");
     assert.equal(doc.text, "select json_extract(json(?), '$.a') as a, json_object('d', json(?), 's', ?) as d");
     assert.match(doc.code, /"doc":\{"type":\{"kind":"json"/);
-    assert.deepEqual({ ...(await doc.query.run(db, { doc: { a: 5 }, inner: [1], text: "[1]" })) }, { a: 5, d: '{"d":[1],"s":"[1]"}' });
+    assert.deepEqual({ ...(await doc.query.run(db, { doc: { a: 5 }, inner: [1], text: "[1]" })) }, { a: 5, d: { d: [1], s: "[1]" } });
     const short = await built(root, url, "short", "select :s::varchar(3) as s, :x::real * 2 as x");
     await assert.rejects(short.query.run(db, { s: "abcd", x: 1 }), /Parameter "s" is varchar\(3\), at most 3 characters; got 4/);
     await assert.rejects(short.query.run(db, { s: "abc", x: "2" }), /Parameter "x" is real, a finite number; got "2"/);
@@ -82,7 +83,7 @@ test("SQLite: a cast is SQLite's own, a date's to TEXT, JSON's through json(), a
   }
 });
 
-test("MySQL: a cast is MySQL's own, LIMIT takes the bare placeholder, and a value the cast would change is refused", { skip: mysqlLive }, async () => {
+test("MySQL: a cast is MySQL's own, LIMIT and a text cast take the bare placeholder, and a value the cast would change is refused", { skip: mysqlLive }, async () => {
   const require = createRequire(join(DRIVERS, "mysql2", "package.json"));
   const mysql = require("mysql2/promise");
   const server = new URL(MYSQL!);
@@ -119,8 +120,61 @@ test("MySQL: a cast is MySQL's own, LIMIT takes the bare placeholder, and a valu
     assert.equal(doc.text, "select json_extract(CAST(? AS JSON), '$.a') as a, CAST(? AS UNSIGNED) as id");
     assert.deepEqual({ ...(await doc.query.run(db, { doc: { a: [1, 2] }, id: 7 })) }, { a: [1, 2], id: 7n });
     await assert.rejects(doc.query.run(db, { doc: {}, id: -1 }), /Parameter "id" is bigint unsigned, from 0 to 18446744073709551615; got -1/);
+    // A text cast is the bare placeholder: a CAST to CHAR would take the connection's collation
+    // (utf8mb4_unicode_ci under mysql2), which a utf8mb4_0900_ai_ci column refuses to compare with
+    // ("Illegal mix of collations"), while a bare placeholder takes the column's.
+    await db.query("create table people (id bigint primary key, name varchar(50) collate utf8mb4_0900_ai_ci not null, code char(3) collate utf8mb4_0900_ai_ci not null, uid char(36) collate utf8mb4_0900_ai_ci not null)");
+    await db.query("insert into people values (1, 'Ada', 'ADA', '6f1c1a8e-7a43-4c39-9d0c-3c1f8e3b8a01'), (2, 'Alan', 'ALN', '0b7e3f52-1d2c-4e8a-9f0e-5a6b7c8d9e02'), (3, 'Grace', 'GRC', 'c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e03')");
+    await assert.rejects(db.execute("select name from people where name like concat(cast(? as char), '%')", ["A"]), /Illegal mix of collations/);
+    const prefix = await built(root, url.href, "prefix", "select name from people where name like concat(:prefix::text, '%') and code <> :code::char(3) and uid <> :uid::uuid order by id");
+    assert.equal(prefix.text, "select name from people where name like concat(?, '%') and code <> ? and uid <> ? order by id");
+    // MySQL types the bare placeholder as a string, and the parameter keeps its cast.
+    assert.match(prefix.code, /"prefix":\{"type":\{"kind":"scalar","name":"text"\},"cast":"text"\}/);
+    const alone = await built(root, url.href, "alone", "select :p::varchar(5) as p");
+    assert.equal(alone.text, "select ? as p");
+    assert.match(alone.code, /"p":\{"type":\{"kind":"scalar","name":"text"\},"cast":"varchar\(5\)"\}/);
+    assert.deepEqual({ ...(await alone.query.run(db, { p: "abc" })) }, { p: "abc" });
+    assert.deepEqual(plain(await prefix.query.run(db, { prefix: "A", code: "ALN", uid: "c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e03" })), [{ name: "Ada" }]);
+    // The run time still checks the value against the cast.
+    await assert.rejects(prefix.query.run(db, { prefix: 1, code: "ALN", uid: "c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e03" }), /Parameter "prefix" is text, a string; got 1/);
+    await assert.rejects(prefix.query.run(db, { prefix: "A", code: "ALAN", uid: "c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e03" }), /Parameter "code" is char\(3\), at most 3 characters; got 4/);
+    await assert.rejects(prefix.query.run(db, { prefix: "A", code: "ALN", uid: "not-a-uuid" }), /Parameter "uid" is uuid, a UUID in hexadecimal/);
     await assert.rejects(built(root, url.href, "flag", "select :b::bool as b"), /MySQL has no boolean type/);
     await assert.rejects(built(root, url.href, "zone", "select :t::timestamptz as t"), /drops the zone/);
+  } finally {
+    await closeAll();
+    await db.end();
+    await admin.query(`drop database if exists ${name}`);
+    await admin.end();
+  }
+});
+
+test("MySQL: a window frame's bound, NTILE's argument and the offset of LAG and LEAD take the bare placeholder, and the value is checked", { skip: mysqlLive }, async () => {
+  const require = createRequire(join(DRIVERS, "mysql2", "package.json"));
+  const mysql = require("mysql2/promise");
+  const server = new URL(MYSQL!);
+  const connect = (database?: string) => mysql.createConnection({ host: server.hostname, port: Number(server.port), user: decodeURIComponent(server.username) || "root", password: decodeURIComponent(server.password), database });
+  const admin = await connect();
+  const name = `reylo_window_casts_${process.pid}`;
+  await admin.query(`drop database if exists ${name}`);
+  await admin.query(`create database ${name}`);
+  const url = new URL(MYSQL!);
+  url.pathname = `/${name}`;
+  const db = await connect(name);
+  const root = project("mysql2");
+  try {
+    await db.query("create table t (id int primary key, n int not null)");
+    await db.query("insert into t values (1, 10), (2, 20), (3, 30)");
+    // MySQL takes only a literal or `?` in each, and refused `CAST(? AS SIGNED)` with a syntax error.
+    const w = await built(root, url.href, "window", "select id, sum(n) over (order by id rows between :back::int preceding and current row) as s, ntile(:tiles::int) over (order by id) as b, lag(n, :lag::int) over (order by id) as p, lead(n, :lead::int) over (order by id) as q from t order by id");
+    assert.equal(w.text, "select id, sum(n) over (order by id rows between ? preceding and current row) as s, ntile(?) over (order by id) as b, lag(n, ?) over (order by id) as p, lead(n, ?) over (order by id) as q from t order by id");
+    assert.deepEqual(plain(await w.query.run(db, { back: 1, tiles: 2, lag: 1, lead: 1 })).map((r) => Object.values(r).map(String)), [["1", "10", "1", "null", "20"], ["2", "30", "1", "10", "30"], ["3", "50", "2", "20", "null"]]);
+    await assert.rejects(w.query.run(db, { back: "1", tiles: 2, lag: 1, lead: 1 }), /Parameter "back" is int, an integer; got "1"/);
+    // A frame over a RANGE takes a number of any kind.
+    const range = await built(root, url.href, "range", "select id, count(*) over (order by n range between :k::numeric preceding and current row) as c from t order by id");
+    assert.equal(range.text, "select id, count(*) over (order by n range between ? preceding and current row) as c from t order by id");
+    assert.deepEqual(plain(await range.query.run(db, { k: 10 })).map((r) => Object.values(r).map(String)), [["1", "1"], ["2", "2"], ["3", "2"]]);
+    await assert.rejects(built(root, url.href, "tiles", "select ntile(:k::text) over (order by id) from t"), /NTILE's argument and the offset of LAG and LEAD take an integer/);
   } finally {
     await closeAll();
     await db.end();

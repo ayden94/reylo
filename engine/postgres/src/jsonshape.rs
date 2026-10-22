@@ -122,7 +122,10 @@ fn plan_with(sql: &str, dialect: Dialect, trust: &Trust, columns: &Columns, ahea
         _ => None,
     };
     let withs = vec![Withs::default().with(with.as_ref(), columns)];
-    let mut builder = Builder { stack: vec![(0, from, filter)], dialect, trust, columns, withs, rows: Rows::of(top), ahead, next_ctx: 0, drafts: Vec::new(), overflowed: false };
+    // A plain GROUP BY: every group has a row. A grouping set can make one of none (`GROUP BY ()`
+    // over no rows is one row), so it is no plain one.
+    let grouped = matches!(top, NodeEnum::SelectStmt(s) if !s.group_clause.is_empty() && !s.group_clause.iter().any(|g| matches!(g.node, Some(NodeEnum::GroupingSet(_)))));
+    let mut builder = Builder { stack: vec![(0, from, filter)], dialect, trust, columns, withs, rows: Rows::of(top), ahead, next_ctx: 0, drafts: Vec::new(), overflowed: false, grouped };
     let mut columns: Vec<(String, Shape)> = Vec::new();
     for target in &targets {
         let Some(NodeEnum::ResTarget(rt)) = target.node.as_ref() else { continue };
@@ -214,6 +217,8 @@ struct Builder<'a> {
     drafts: Vec<Draft>,
     /// Set once the probe budget is spent, which abandons the statement's inference.
     overflowed: bool,
+    /// Whether the top statement is a SELECT with a plain `GROUP BY`, where no group is empty.
+    grouped: bool,
 }
 
 struct Draft {
@@ -254,7 +259,12 @@ impl Builder<'_> {
                     if f.args.len() != 1 {
                         return Shape::Unknown;
                     }
-                    let non_null = TOTAL_AGG_FNS.contains(&name.as_str());
+                    // Under a plain GROUP BY every group has a row, so an aggregate of the top
+                    // statement's own is an array there, NULL inputs and all, unless a FILTER or a
+                    // window frame leaves it none. One inside a subquery may be the outer query's
+                    // ([`crate::levels`]), which says nothing of its rows.
+                    let grouped = self.dialect == Dialect::Postgres && self.grouped && self.stack.len() == 1 && f.over.is_none() && f.agg_filter.is_none();
+                    let non_null = TOTAL_AGG_FNS.contains(&name.as_str()) || grouped;
                     // Only rows its FILTER passes reach an aggregate: its argument is read in a
                     // context of its own whose probe filters by it too, so `FILTER (WHERE p.id IS
                     // NOT NULL)` over a LEFT JOIN reads `p` as a row that exists.
@@ -594,7 +604,7 @@ impl ResolveCtx<'_> {
             Shape::Column { probe, index } => match self.probes.get(*probe).and_then(|o| o.as_ref()).and_then(|o| o.columns.get(*index)) {
                 Some(col) if col.type_oid != oid::UNKNOWN => {
                     let ty = if col.whole_row { self.registry.render_row(col.type_oid) } else { self.registry.render(col.type_oid) };
-                    (crate::postgres::with_document(ty, col.document.as_ref()), !col.nullable)
+                    (crate::postgres::with_document(crate::postgres::with_values(ty, col.values.as_deref()), col.document.as_ref()), !col.nullable)
                 }
                 _ => {
                     unresolved.push(display_path(path));
@@ -612,7 +622,7 @@ impl ResolveCtx<'_> {
                                 Type::Unknown
                             } else {
                                 let ty = if col.whole_row { self.registry.render_row(col.type_oid) } else { self.registry.render(col.type_oid) };
-                                crate::postgres::with_document(ty, col.document.as_ref())
+                                crate::postgres::with_document(crate::postgres::with_values(ty, col.values.as_deref()), col.document.as_ref())
                             };
                             Field { name: col.name.clone(), ty, nullable: col.nullable }
                         })
@@ -816,6 +826,31 @@ mod tests {
                 non_null: true,
             }
         );
+    }
+
+    #[test]
+    fn an_aggregate_under_a_plain_group_by_is_an_array() {
+        let non_null = |sql: &str| match &shapes(sql).columns[0].1 {
+            Shape::Array { non_null, .. } => *non_null,
+            shape => panic!("{sql}: {shape:?}"),
+        };
+        // Every group has a row, and a NULL input is a JSON null in the array.
+        assert!(non_null("SELECT jsonb_agg(p.title ORDER BY p.id) AS titles FROM posts p GROUP BY p.author_id"));
+        assert!(non_null("SELECT json_agg(p) AS rows FROM users u LEFT JOIN posts p ON p.author_id = u.id GROUP BY u.id"));
+        // Nested in an object of the grouped statement's own, the aggregate is still its own.
+        let p = shapes("SELECT jsonb_build_object('titles', jsonb_agg(p.title)) AS o FROM posts p GROUP BY p.author_id");
+        let Shape::Object { fields, .. } = &p.columns[0].1 else { panic!() };
+        assert!(matches!(fields[0].1, Shape::Array { non_null: true, .. }));
+        // A FILTER can leave a group no rows, a window frame can be empty, a grouping set's row
+        // may aggregate none, and without a GROUP BY there may be no rows at all.
+        assert!(!non_null("SELECT jsonb_agg(p.title) FILTER (WHERE p.id > 1) AS titles FROM posts p GROUP BY p.author_id"));
+        assert!(!non_null("SELECT jsonb_agg(p.title) OVER (ROWS BETWEEN 1 FOLLOWING AND 1 FOLLOWING) AS next FROM posts p GROUP BY p.title"));
+        assert!(!non_null("SELECT jsonb_agg(p.title) AS titles FROM posts p GROUP BY ROLLUP (p.author_id)"));
+        assert!(!non_null("SELECT jsonb_agg(p.title) AS titles FROM posts p GROUP BY GROUPING SETS ((p.author_id), ())"));
+        assert!(!non_null("SELECT jsonb_agg(p.title) AS titles FROM posts p"));
+        // Inside a subquery the aggregate may be the outer query's, and a grouped subquery may
+        // find no group.
+        assert!(!non_null("SELECT (SELECT jsonb_agg(c.body) FROM comments c WHERE c.post_id = p.id GROUP BY c.post_id) AS bodies FROM posts p GROUP BY p.id"));
     }
 
     #[test]

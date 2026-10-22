@@ -63,7 +63,7 @@ function located(text: string, start: number, length: number): { at: string; fra
 
 // A file that holds DDL or several statements is not a query: a migration or a schema file, which
 // nothing imports. The engine says so (or the server refuses to prepare several commands).
-const NOT_A_QUERY = /^only SELECT, .* statements are typed|^expected exactly one statement|^cannot insert multiple commands into a prepared statement/;
+const NOT_A_QUERY = /^A typed \.sql file holds one .* and this one holds (several|another kind), |^cannot insert multiple commands into a prepared statement/;
 
 async function generate(args: string[]): Promise<number> {
   const force = args.includes("--force");
@@ -118,7 +118,10 @@ async function generate(args: string[]): Promise<number> {
     const here = session.root === process.cwd() ? "" : `${shown(session.root)}: `;
     console.log(paint("dim", `${here}${project.dialect} at ${session.where()} (${project.urlSource})`));
     // A project that cannot be used at all is said once, above its files.
-    let unusable = project.error ?? (project.url ? undefined : `No database URL: set DATABASE_URL in the environment, .env.local or .env, or "url" in .reylo.yaml.`);
+    let unusable = project.error ?? (project.url ? undefined : project.missingUrl);
+    // A file that sets `url` alone is told once, under the line that names the connection used
+    // instead; where there is none, the error says it.
+    if (project.notice && project.url) console.log(paint("yellow", project.notice));
     let offline = false;
     if (!unusable) {
       const schema = await session.schema();

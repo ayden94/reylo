@@ -22,7 +22,7 @@ const json: Record<string, string> = {
   hstore: "string", ltree: "string", lquery: "string", ltxtquery: "string",
   record: "string",
 };
-const sqliteJson: Record<string, string> = { integer: "number", real: "number", numeric: "number | string", text: "string", bool: "boolean" };
+const sqliteJson: Record<string, string> = { integer: "number", int8: "number", real: "number", numeric: "number | string", text: "string", bool: "boolean" };
 
 export const ident = (name: string) => (/^[A-Za-z_$][\w$]*$/.test(name) ? name : JSON.stringify(name));
 
@@ -165,22 +165,37 @@ export function declaredType(t: EngineType, declared: unknown): string | undefin
 }
 
 /**
- * The type a parameter accepts, which is what every driver binds rather than what Reylo returns:
- * every Postgres and MySQL driver binds a number, a BigInt or a digit string for a 64-bit integer,
- * so `limit :n` takes a number. A `timestamptz` is an instant, which every Postgres driver binds a
- * `Date` as; a string for it must name its zone (`src/execute.ts`). A `timestamp` or a `date`
- * (MySQL's DATETIME and TIMESTAMP are the engine's `timestamp`) is a wall-clock reading with no
- * zone, and the drivers write a `Date`'s in different zones, the app's (pg, mysql2), the server's
- * (postgres.js) or UTC (PGlite, Bun.sql), so it takes the text alone (the maintainer, 2026-10-12).
+ * The type a parameter accepts: what `run` returns for its SQL type, so that a row goes back in as
+ * it came out (the round-trip rule, the maintainer, 2026-10-20), and what else every driver binds
+ * the same way. Every Postgres and MySQL driver binds a number, a BigInt or a digit string for a
+ * 64-bit integer, so `limit :n` takes a number. On MySQL the engine types a parameter by the
+ * column it is written to or compared with (engine/mysql `column_types`), since the prepare
+ * describes every integer context as a BIGINT and every BIT one alike: a BIGINT column's is
+ * `int8`, a TINYINT(1)'s or a BIT(1)'s `bool|int4`, which takes the truth value the row returns;
+ * a SQLite BOOLEAN column's is NUMERIC, which takes it too, and `src/execute.ts` binds it as 1 or 0. A `timestamptz` is
+ * an instant, which `run` returns as its ISO 8601 text in UTC, and takes that text, or any that
+ * names its zone (`src/execute.ts`), and no `Date`, which `date.toISOString()` writes as such a
+ * string (the maintainer, 2026-10-20: "for now, let's just keep it as strings"). A `timestamp` or a `date` (MySQL's DATETIME and TIMESTAMP are the engine's
+ * `timestamp`) is a wall-clock reading with no zone, and the drivers write a `Date`'s in different
+ * zones, the app's (pg, mysql2), the server's (postgres.js) or UTC (PGlite, Bun.sql), so it takes
+ * the text alone (the maintainer, 2026-10-12). An array's elements take NULL, which the run time
+ * binds, since an array a statement builds comes back with NULL elements (`array_agg` over a
+ * left join is `(string | null)[]`).
  */
 export function renderParamType(t: EngineType, dialect: Dialect = "postgres"): string {
   if (t.kind === "scalar" && dialect !== "sqlite") {
     if (t.name === "int8") return "number | bigint | string";
-    if (t.name === "timestamptz") return "Date | string";
     if (t.name.split("|").every((name) => name === "timestamp" || name === "timestamptz" || name === "date")) return "string";
   }
-  // A SQLite driver binds a number for an INTEGER.
+  // A SQLite driver binds a number for an INTEGER. A BOOLEAN column has NUMERIC affinity, so a
+  // parameter written to or compared with one is NUMERIC, and takes the truth value the column
+  // returns, which the run time binds as 1 or 0.
+  // A column declared BIGINT's parameter keeps an INTEGER's type for now.
   if (t.kind === "scalar" && dialect === "sqlite" && t.name === "integer") return "number";
+  // A BIGINT, INT8 or UNSIGNED BIG INT column comes back as a bigint, which its parameter takes.
+  if (t.kind === "scalar" && dialect === "sqlite" && t.name === "int8") return "number | bigint";
+  if (t.kind === "scalar" && dialect === "sqlite" && t.name === "numeric") return "number | string | boolean";
+  if (t.kind === "scalar" && dialect === "sqlite" && t.name === "bool") return "boolean | number";
   // Every driver binds a Uint8Array (a Buffer is one) for a binary value, mariadb and Neon's
   // neon() before 0.10 once `execute` has converted it, a digit string for a decimal, and any
   // JSON value for a JSON parameter.
@@ -195,8 +210,10 @@ export function renderParamType(t: EngineType, dialect: Dialect = "postgres"): s
     return t.one ? row : `readonly ${row}[]`;
   }
   if (t.kind === "array") {
-    const inner = renderParamType(t.of, dialect);
-    return /[|&]/.test(inner) ? `(${inner})[]` : `${inner}[]`;
+    // An array of row values comes back as the text Postgres prints, which the parameter takes back
+    // beside an array of each row's own text.
+    if ((t.of.kind === "scalar" && t.of.name === "record") || t.of.kind === "composite") return "string | string[]";
+    return `(${renderParamType(t.of, dialect)} | null)[]`;
   }
   return renderType(t, false, dialect);
 }

@@ -6,7 +6,7 @@ import { parseArray } from "../src/decode.ts";
 import type { Columns } from "../src/values.ts";
 
 // Fakes of the Postgres drivers that decode as the real ones do (checked against
-// lab/drivers/node_modules and docs/driver-decoding/spike/postgres.md): a result asks a types
+// lab/drivers/node_modules and wiki/driver-decoding/spike/postgres.md): a result asks a types
 // table (the query's own, else the client's) for one parser per field and applies it to the
 // field's text. The app's own parsers are hostile here: an int8 its text, a timestamptz tagged,
 // an interval an object, an enum upper-cased. Reylo's rows must not see any of them.

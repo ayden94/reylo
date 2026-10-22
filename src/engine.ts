@@ -27,10 +27,10 @@ export type Analysis = {
   style: "none" | "named" | "positional" | "mixed";
   diagnostics: Diagnostic[];
   unresolved: string[];
-  /** Each structured parameter in insert position, with the lists of `rewritten.sql` (UTF-8 byte offsets) the run time writes again for a call that leaves keys out. */
+  /** Each structured parameter in a MySQL insert, with the lists of `rewritten.sql` (UTF-8 byte offsets) the run time writes again for a call that leaves keys out; a Postgres or SQLite insert copies its defaults into the statement instead. */
   structured?: { name: string; lists: { start: number; end: number; entries: string[] }[] }[];
   /** The catalog facts the analysis relied on, and the query that reads them (engine/core/src/fresh.rs). */
-  fresh?: { query: string; rows: string[][]; inserts: string[] };
+  fresh?: { query: string; rows: string[][]; inserts: string[]; defaults?: string[][] };
 };
 
 export type Lexed = {

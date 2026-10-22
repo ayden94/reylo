@@ -140,6 +140,11 @@ test("SQLite: `sql` is the compiled statement and `raw` the file, at run time an
       `export declare const raw: "select id, name, email from users where id = :id\\n";`,
       `declare const query: Query<…> & { readonly sql: typeof sql; readonly raw: typeof raw };`,
     ]);
+    // The parameters are one object type, with no tuple beside it (the maintainer, 2026-10-20).
+    const lines = declared["get_user.sql"]!.split("\n");
+    assert.ok(lines.includes("export type Params = { id: number };"), declared["get_user.sql"]!);
+    assert.ok(!lines.some((line) => line.startsWith("export type Values")), declared["get_user.sql"]!);
+    assert.match(lines.find((line) => line.startsWith("declare const query:"))!, /^declare const query: Query<\{ id: number \}, \{ id: number; name: string; email: string \| null \}, "maybeOne", "sqlite"> & /);
     assert.deepEqual(texts(declared["doc.sql"]!).slice(0, 2), [`export declare const sql: ${JSON.stringify(json.default.sql)};`, `export declare const raw: ${JSON.stringify(doc)};`]);
   } finally {
     db.close();

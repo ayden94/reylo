@@ -1,5 +1,5 @@
 -- The Postgres JSON Schema validators besides pg_jsonschema (json_schema_checks), each read as
--- it was measured (docs/json-schema-checks/postgres/): the engine knows a validator by the
+-- it was measured (wiki/json-schema-checks/postgres/): the engine knows a validator by the
 -- extension that defines the function a CHECK calls, never by the function's name, since
 -- theory's (formerly Tembo's) `jsonschema` defines pg_jsonschema's very names, and a function of
 -- that name from no extension proves nothing. scripts/gates.sh installs them all.

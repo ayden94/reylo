@@ -141,7 +141,7 @@ test("a query without inputs, defined by hand or built before them, binds every 
   assert.deepEqual(seen, [['{"2"}']]);
 });
 
-test("a Date for a timestamp or date parameter, and a string without its zone for a timestamptz one, is refused before the statement runs", async () => {
+test("a Date for any date or time parameter, and a string without its zone for a timestamptz one, is refused before the statement runs", async () => {
   const time = (name: string) => ({ type: { kind: "scalar" as const, name } });
   const q: QueryModule<"postgres"> = {
     dialect: "postgres",
@@ -151,13 +151,16 @@ test("a Date for a timestamp or date parameter, and a string without its zone fo
   };
   const seen: unknown[][] = [];
   const client = { query: async (_: string, values?: unknown[]) => (seen.push(values!), { rows: [] }) };
-  const ok = { at: "2026-10-12 19:06:48.282", day: "2026-10-12", tz: new Date(0), tzs: ["2026-10-12T19:06:48.282Z", "2026-10-12 19:06:48+09", "2026-10-12 19:06:48.5-07:30", "2026-10-12 19:06 America/Los_Angeles", "2026-10-12 19:06:48 UTC", "infinity", "-infinity", "0001-01-01 00:00:00+00 BC", null, new Date(0)], days: [["2026-10-12"]] };
+  const ok = { at: "2026-10-12 19:06:48.282", day: "2026-10-12", tz: "1970-01-01T00:00:00Z", tzs: ["2026-10-12T19:06:48.282Z", "2026-10-12 19:06:48+09", "2026-10-12 19:06:48.5-07:30", "2026-10-12 19:06 America/Los_Angeles", "2026-10-12 19:06:48 UTC", "infinity", "-infinity", "0001-01-01 00:00:00+00 BC", null, "+010000-01-01T00:00:00Z"], days: [["2026-10-12"]] };
   await execute(client, q, ok);
   assert.equal(seen.length, 1);
   const refused = async (values: Record<string, unknown>, message: RegExp) => assert.rejects(Promise.resolve().then(() => execute(client, q, { ...ok, ...values })), (e: Error) => e instanceof TypeError && message.test(e.message));
   await refused({ at: new Date() }, /^Parameter "at" is a timestamp without a time zone, so it takes the wall-clock text/);
   await refused({ day: new Date() }, /^Parameter "day" is a date without a time zone/);
   await refused({ days: [[new Date()]] }, /^Parameter "days" is a date/);
+  // A timestamptz takes the string `.run()` returns for one, and a Date nowhere (the maintainer, 2026-10-20).
+  await refused({ tz: new Date(0) }, /^Parameter "tz" is a timestamptz, which takes the instant as a string that names its zone, as `\.run\(\)` returns one, not a Date: pass date\.toISOString\(\)/);
+  await refused({ tzs: ["2026-10-12T00:00:00Z", new Date(0)] }, /^Parameter "tzs" is a timestamptz, .*not a Date/);
   for (const tz of ["2026-10-12 19:06:48", "2026-10-12T19:06:48.282", "2026-10-12"]) await refused({ tz }, /^Parameter "tz" is a timestamptz, an instant, so a string for it names its zone/);
   await refused({ tzs: ["2026-10-12T00:00:00Z", "2026-10-12 19:06"] }, /^Parameter "tzs" is a timestamptz/);
   assert.equal(seen.length, 1);
@@ -169,7 +172,7 @@ test("a Date for a timestamp or date parameter, and a string without its zone fo
 test("postgres: postgres.js, which binds a date or time string through new Date(), gets one declared unknown; Bun.sql gets the string", async () => {
   const time = (name: string) => ({ type: { kind: "scalar" as const, name } });
   const q: QueryModule<"postgres"> = { dialect: "postgres", sql: "select :at::timestamp, :day::date, :tz::timestamptz, :d::timestamptz, :name::text", params: ["at", "day", "tz", "d", "name"], inputs: { at: time("timestamp"), day: time("date"), tz: time("timestamptz"), d: time("timestamptz"), name: time("text") } };
-  const values = { at: "2026-01-02 03:04:05.006", day: "infinity", tz: "2026-01-02 03:04:05 America/New_York", d: new Date(0), name: "ada" };
+  const values = { at: "2026-01-02 03:04:05.006", day: "infinity", tz: "2026-01-02 03:04:05 America/New_York", d: "1970-01-01T00:00:00Z", name: "ada" };
   const seen: unknown[][] = [];
   const unsafe = async (_: string, v?: unknown[]) => (seen.push(v!), []);
   const typed = (value: unknown, type: number) => ({ value, type });
@@ -178,9 +181,39 @@ test("postgres: postgres.js, which binds a date or time string through new Date(
   const bun = { unsafe, typed, commitDistributed: async () => {} };
   await execute(bun, q, values);
   assert.deepEqual(seen, [
-    [{ value: "2026-01-02 03:04:05.006", type: 705 }, { value: "infinity", type: 705 }, { value: "2026-01-02 03:04:05 America/New_York", type: 705 }, new Date(0), "ada"],
-    ["2026-01-02 03:04:05.006", "infinity", "2026-01-02 03:04:05 America/New_York", new Date(0), "ada"],
+    [{ value: "2026-01-02 03:04:05.006", type: 705 }, { value: "infinity", type: 705 }, { value: "2026-01-02 03:04:05 America/New_York", type: 705 }, { value: "1970-01-01T00:00:00Z", type: 705 }, "ada"],
+    ["2026-01-02 03:04:05.006", "infinity", "2026-01-02 03:04:05 America/New_York", "1970-01-01T00:00:00Z", "ada"],
   ]);
+});
+
+test("what run returns goes back in: a SQLite truth value as 1 or 0, a Postgres extended or BC year in Postgres's own form", async () => {
+  const s = (name: string) => ({ type: { kind: "scalar" as const, name } });
+  // SQLite: better-sqlite3 refuses a boolean and libSQL binds it as the REAL 1.0.
+  const lq: QueryModule<"sqlite"> = { dialect: "sqlite", sql: "select :a as a, :b as b, :n as n", params: ["a", "b", "n"], inputs: { a: s("numeric"), b: s("integer"), n: s("integer") } };
+  const seen: unknown[][] = [];
+  await execute({ execute: async (st: { args: unknown[] }) => (seen.push(st.args), { rows: [] }), executeMultiple: async () => {} }, lq, { a: true, b: false, n: 7 });
+  assert.deepEqual([...seen], [[1, 0, 7]]);
+  // MySQL's drivers bind a boolean as 1 themselves.
+  const mq: QueryModule<"mysql"> = { dialect: "mysql", sql: "select :f as f", params: ["f"], inputs: { f: s("int4") } };
+  seen.length = 0;
+  await execute({ execute: async (_: string, v?: unknown[]) => (seen.push(v!), [[], []] as [unknown, unknown]) }, mq, { f: true });
+  assert.deepEqual([...seen], [[true]]);
+  // Postgres refuses `+010000` and the year 0000, which run returns for years past 9999 and 1 BC.
+  const pq: QueryModule<"postgres"> = {
+    dialect: "postgres",
+    sql: "select :far::timestamptz, :bc::timestamptz, :zero::date, :now::timestamptz, :days::date[]",
+    params: ["far", "bc", "zero", "now", "days"],
+    inputs: { far: s("timestamptz"), bc: s("timestamptz"), zero: s("date"), now: s("timestamptz"), days: { type: { kind: "array", of: { kind: "scalar", name: "date" } } } },
+  };
+  const values = { far: "+010000-01-01T00:00:00Z", bc: "-000001-06-01T12:00:00.5Z", zero: "0000-01-01", now: "2026-10-20T10:00:00Z", days: ["+010000-01-01", "2026-10-20"] };
+  seen.length = 0;
+  await execute({ query: async (_: string, v?: unknown[]) => (seen.push(v!), { rows: [] }) }, pq, values);
+  assert.deepEqual([...seen], [["10000-01-01T00:00:00Z", "0002-06-01T12:00:00.5Z BC", "0001-01-01 BC", "2026-10-20T10:00:00Z", '{"10000-01-01","2026-10-20"}']]);
+  // Without inputs, as defined by hand, every value goes as it is.
+  const { inputs: _, ...bare } = lq;
+  seen.length = 0;
+  await execute({ execute: async (st: { args: unknown[] }) => (seen.push(st.args), { rows: [] }), executeMultiple: async () => {} }, bare, { a: true, b: false, n: 7 });
+  assert.deepEqual([...seen], [[true, false, 7]]);
 });
 
 test("arrayLiteral writes a Postgres array literal as pg does: nesting, NULL, quotes, backslashes, binary, dates, the empty array", () => {
@@ -381,6 +414,73 @@ test("sqlite: @libsql/client and its transactions take execute({ sql, args }) â†
   assert.deepEqual(calls, [{ sql: "select ? as id, ? as name, ? as again", args: [1, "ada", 1] }]);
 });
 
+test("sqlite: Turso's @tursodatabase/database, its Database in every release and its Transaction, takes prepare(sql).all(...values) â†’ a promise of rows; its compat Database answers at once", async () => {
+  const calls: unknown[] = [];
+  // Its statement, as every release from 0.4 has it: safeIntegers(), a promise from all(), close().
+  const statement = (sql: string) => {
+    const st = {
+      safe: undefined as boolean | undefined,
+      closed: false,
+      safeIntegers: (on: boolean) => ((st.safe = on), st),
+      all: async (...values: unknown[]) => (calls.push({ sql, values, safe: st.safe }), [row]),
+      close: () => void (st.closed = true),
+      get reader(): boolean {
+        throw new Error("not implemented"); // 0.4's
+      },
+    };
+    return st;
+  };
+  const statements: ReturnType<typeof statement>[] = [];
+  const prepare = (sql: string) => (statements.push(statement(sql)), statements.at(-1)!);
+  const common = { connect: async () => {}, maxWriteReplicationIndex: () => {}, exec: async () => {}, prepare };
+  // 0.4: no all() on the database, so it looked synchronous; 0.6 and later: all() and exec(), so it looked like sqlite3's.
+  const v04 = { ...common };
+  const v08 = { ...common, all: async () => [], batch: async () => [], transactionAsync: () => {} };
+  const tx = { prepare, exec: async () => {}, all: async () => [], batch: async () => [], run: async () => ({}) };
+  for (const client of [v04, v08, tx]) {
+    const pending = execute(client as never, lite, { id: 1, name: "ada" });
+    assert.ok(pending instanceof Promise);
+    assert.deepEqual(await pending, [row]);
+  }
+  assert.deepEqual(calls, Array(3).fill({ sql: "select ? as id, ? as name, ? as again", values: [1, "ada", 1], safe: true }), "a statement whose columns are not typed reads integers exact");
+  assert.ok(statements.every((st) => st.closed), "each statement is closed after its run");
+  // A module whose every column is typed reads numbers, as better-sqlite3's statement does.
+  await execute(v08 as never, { ...lite, columns: [["id", "int"], ["name", "text"], ["again", "int"]] }, { id: 1, name: "ada" });
+  assert.equal((calls.at(-1) as { safe: boolean }).safe, false);
+  await assert.rejects(Promise.resolve().then(() => defineQuery<{}, unknown, "many", "sqlite">({ dialect: "sqlite", sql: "select 1", params: [] }).runSync(v08 as never)), /runSync takes a synchronous SQLite client .*answers through a promise/);
+  // The compat Database (@tursodatabase/database/compat) has batch() as D1 does, and answers at once.
+  // It gets a statement per call, closed after it (0.4's, run a second time, lost a subquery's rows).
+  let prepared = 0;
+  let closed = 0;
+  const compat = {
+    prepare: (sql: string) => (prepared++, { reader: true, safeIntegers: () => {}, all: (...values: unknown[]) => (calls.push({ sql, values }), [row]), close: () => void closed++ }),
+    batch: () => [],
+    exec: () => {},
+    maxWriteReplicationIndex: () => {},
+  };
+  const q = defineQuery<{ id: number; name: string }, unknown, "many", "sqlite">({ dialect: "sqlite", sql: lite.sql, params: lite.params });
+  assert.deepEqual(q.runSync(compat, { id: 2, name: "bo" }), [row]);
+  assert.deepEqual(q.runSync(compat, { id: 2, name: "bo" }), [row]);
+  assert.deepEqual(calls.at(-1), { sql: "select ? as id, ? as name, ? as again", values: [2, "bo", 2] });
+  assert.deepEqual([prepared, closed], [2, 2]);
+});
+
+test("sqlite: sqlite3 and the sqlite package, which bind a BigInt as NULL, get one a number holds as that number, a larger one its digits where the parameter is a BIGINT column's, and is refused elsewhere", async () => {
+  const seen: unknown[][] = [];
+  const sqlite3 = { all: (_: string, v: unknown[], cb: (e: Error | null, rows: unknown[]) => void) => (seen.push(v), cb(null, [])), exec: () => {} };
+  const sqlite = { all: async (_: string, v?: unknown[]) => (seen.push(v!), []), getDatabaseInstance: () => ({}) };
+  await execute(sqlite3, lite, { id: BigInt(7), name: "ada" });
+  await execute(sqlite, lite, { id: BigInt(-7), name: "ada" });
+  assert.deepEqual([...seen], [[7, "ada", 7], [-7, "ada", -7]]);
+  for (const client of [sqlite3, sqlite]) await assert.rejects(Promise.resolve().then(() => execute(client, lite, { id: BigInt("9007199254740993"), name: "ada" })), /^TypeError: sqlite3 binds a BigInt as NULL, and 9007199254740993 is past 2\^53 - 1/);
+  assert.equal(seen.length, 2);
+  // A BIGINT column's parameter (the engine's int8), whose INTEGER affinity reads the digits as that integer.
+  const big: QueryModule<"sqlite"> = { ...lite, inputs: { id: { type: { kind: "scalar", name: "int8" } }, name: { type: { kind: "scalar", name: "text" } } } };
+  await execute(sqlite3, big, { id: BigInt("9007199254740993"), name: "ada" });
+  await execute(sqlite, big, { id: BigInt("-9007199254740993"), name: "ada" });
+  assert.deepEqual([...seen].slice(2), [["9007199254740993", "ada", "9007199254740993"], ["-9007199254740993", "ada", "-9007199254740993"]]);
+});
+
 test("sqlite: sqlite3's callback all(), its errors, and the sqlite package's promise all()", async () => {
   const failure = Object.assign(new Error("SQLITE_ERROR: near \"selec\": syntax error"), { code: "SQLITE_ERROR" });
   const sqlite3 = {
@@ -416,7 +516,7 @@ test("an unsupported client rejects, naming what it has and what reylo takes", a
   await assert.rejects(() => execute({ query: async () => ({ rows: [] }) } as never, lite) as Promise<unknown>, /sqlite statement on an object with query/);
 });
 
-test("parameters may be an array: element i binds params[i], for a named and a positional statement on every dialect", async () => {
+test("positional placeholders take an object keyed by number, bound by number on every dialect", async () => {
   const seen: [string, unknown[]][] = [];
   const pgClient = { query: async (text: string, values: unknown[]) => (seen.push([text, values]), { rows: [] }) };
   const mysqlPool = { query: async () => [[], []] as [unknown, unknown], execute: async (options: { sql: string }, values: unknown[]) => (seen.push([options.sql, values]), [[], []] as [unknown, unknown]) };
@@ -426,32 +526,47 @@ test("parameters may be an array: element i binds params[i], for a named and a p
     mysql: { dialect: "mysql", sql: "select ? as id, ? as name", params: ["1", "2"] },
     sqlite: { dialect: "sqlite", sql: "select ?1 as id, ?2 as name, ?1 as again", params: ["1", "2"] },
   };
-  for (const [client, named, dialect] of [[pgClient, pg, "postgres"], [mysqlPool, my, "mysql"], [d1, lite, "sqlite"]] as const) {
-    seen.length = 0;
-    await execute(client as never, named, [1, "ada"]);
-    await execute(client as never, named, { id: 1, name: "ada" });
-    assert.deepEqual(seen[0], seen[1], `${dialect}: [1, "ada"] binds as { id: 1, name: "ada" }`);
-    seen.length = 0;
-    await execute(client as never, positional[dialect]!, [1, "ada"]);
-    await execute(client as never, positional[dialect]!, { 1: 1, 2: "ada" });
-    assert.deepEqual(seen[0], seen[1], `${dialect}: [1, "ada"] binds as { 1: 1, 2: "ada" }`);
-  }
-  assert.deepEqual(seen.at(-1), ["select ? as id, ? as name, ? as again", [1, "ada", 1]]);
+  for (const [client, dialect] of [[pgClient, "postgres"], [mysqlPool, "mysql"], [d1, "sqlite"]] as const) await execute(client as never, positional[dialect]!, { 1: 1, 2: "ada" });
+  assert.deepEqual(seen, [
+    ["select $2::text as name, $1::int as id", [1, "ada"]],
+    ["select ? as id, ? as name", [1, "ada"]],
+    ["select ? as id, ? as name, ? as again", [1, "ada", 1]],
+  ]);
   // The mapper's rewritten statement binds by `order`, which names params.
   const unsafe: unknown[][] = [];
-  await execute({ unsafe: async (_: string, values: unknown[]) => (unsafe.push(values), []) }, { ...pg, text: "select $1, $2, $1", order: ["name", "id", "name"] }, [1, "ada"]);
+  await execute({ unsafe: async (_: string, values: unknown[]) => (unsafe.push(values), []) }, { ...pg, text: "select $1, $2, $1", order: ["name", "id", "name"] }, { id: 1, name: "ada" });
   assert.deepEqual(unsafe, [["ada", 1, "ada"]]);
-  // runSync takes an array too.
-  assert.deepEqual((execute(new DatabaseSync(":memory:"), lite, [1, "ada"]) as unknown[]).map((r) => ({ ...(r as object) })), [row]);
 });
 
-test("an array shorter than params binds NULL for the rest; a longer one is a TypeError naming both lengths", async () => {
-  const seen: unknown[][] = [];
-  await execute({ unsafe: async (_: string, values: unknown[]) => (seen.push(values), []) }, pg, [1]);
-  assert.deepEqual(seen, [[1, null]]);
-  await assert.rejects(() => execute({ unsafe: async () => [] }, pg, [1, "ada", true]) as Promise<unknown>, (e: TypeError) => e instanceof TypeError && /takes 2 parameters \("id", "name"\); got an array of 3 values/.test(e.message));
-  assert.throws(() => execute(new DatabaseSync(":memory:"), { dialect: "sqlite", sql: "select 1", params: [] }, [1]), /takes 0 parameters \(none\); got an array of 1 value\./);
-  await assert.rejects(() => execute({ unsafe: async () => [] }, pg, "ada" as never) as Promise<unknown>, /must be an object .* or an array .*; got ada/);
+test("an array of parameters is refused before anything runs, with a TypeError that says to pass an object (the maintainer, 2026-10-20)", async () => {
+  const calls: unknown[] = [];
+  const client = { unsafe: async (...args: unknown[]) => (calls.push(args), []) };
+  const named = /^TypeError: The parameters must be an object keyed by parameter name, or by number for positional placeholders \(\{ 1: \.\.\., 2: \.\.\. \}\); got an array\. This statement takes \{ id: \.\.\., name: \.\.\. \}\.$/;
+  const refused = (re: RegExp) => (e: Error) => e instanceof TypeError && re.test(String(e));
+  // A freshness check would be a round trip: the array is refused before it too.
+  await assert.rejects(() => execute(client, { ...pg, fresh: { query: "select 1", rows: [], inserts: [] } }, [1, "ada"] as never) as Promise<unknown>, refused(named));
+  const positional: QueryModule<"postgres"> = { dialect: "postgres", sql: "select $1::int, $2::text", params: ["1", "2"] };
+  await assert.rejects(() => execute(client, positional, [1, "ada"] as never) as Promise<unknown>, refused(/got an array\. This statement takes \{ 1: \.\.\., 2: \.\.\. \}\.$/));
+  await assert.rejects(() => execute(client, pg, "ada" as never) as Promise<unknown>, refused(/positional placeholders \(\{ 1: \.\.\., 2: \.\.\. \}\); got ada\. This statement takes \{ id: \.\.\., name: \.\.\. \}\.$/));
+  await assert.rejects(() => execute(client, pg, null as never) as Promise<unknown>, refused(/got null\./));
+  assert.deepEqual(calls, []);
+  // On a synchronous SQLite client the TypeError is thrown.
+  const db = new DatabaseSync(":memory:");
+  assert.throws(() => execute(db, lite, [1, "ada"] as never), refused(named));
+  assert.throws(() => execute(db, { dialect: "sqlite", sql: "select 1", params: [] }, [] as never), refused(/got an array\. This statement takes none: leave them out\.$/));
+  // Through the query object: run and with reject, runSync throws, and the types refuse it too.
+  const q = defineQuery<{ id: number; name: string }, { id: number; name: string; again: number }, "one", "sqlite">({ dialect: "sqlite", sql: lite.sql, params: lite.params, cardinality: "one" });
+  // @ts-expect-error the parameters are an object, never an array
+  await assert.rejects(() => q.run(db, [1, "ada"]), refused(named));
+  // @ts-expect-error the parameters are an object, never an array
+  await assert.rejects(() => q.with(db)([1, "ada"]), refused(named));
+  // @ts-expect-error the parameters are an object, never an array
+  assert.throws(() => q.runSync(db, [1, "ada"]), refused(named));
+  assert.deepEqual({ ...(q.runSync(db, { id: 1, name: "ada" }) as object) }, row);
+  const p = defineQuery<{ 1: number; 2: string }, { id: number }, "one", "postgres">({ dialect: "postgres", sql: positional.sql, params: positional.params, cardinality: "one" });
+  // @ts-expect-error positional placeholders take an object keyed by number
+  await assert.rejects(() => p.run(client, [1, "ada"]), refused(/This statement takes \{ 1: \.\.\., 2: \.\.\. \}\./));
+  db.close();
 });
 
 test("runSync: on a synchronous client the value comes back at once and an error is thrown, so db.transaction(fn) rolls back", () => {

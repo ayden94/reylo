@@ -2,7 +2,7 @@
 // `ts twoslash` block of the docs imports, written to lib/sql-modules.json, which
 // lib/remark-mapper.ts hides above each block's `// ---cut---` at build time.
 //
-//   nub run capture                          every page under content/docs
+//   nub run capture                          every page: content/docs, with content/sections
 //   nub run capture -- content/drafts/x.mdx  those pages too
 //   nub run capture -- --schema mysql=f.sql  a dialect's schema, for a page that shows none
 //
@@ -15,24 +15,36 @@
 // renders the module exactly as src/mapper.ts does, with each typed JSON parameter's type computed
 // from its schema (scripts/schema-type.ts) where the loader still says `unknown`. An error in a
 // statement a block imports fails the run; one in a statement nothing imports is a warning.
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+//
+// Each error example (a `sql` block marked `errors`, lib/sql-errors.ts) goes to the content mapper
+// itself, `src/mapper.ts` started as TypeScript starts it (scripts/mapper-diagnostics.ts), on the
+// same schema, and the errors it gives the file, where the editor and `tsc` place them, are written
+// to lib/sql-errors.json; an example the mapper finds no error in fails the run.
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { createProcessor } from '@mdx-js/mdx';
-import { remarkCodeTab } from 'fumadocs-core/mdx-plugins';
 import postgres from 'postgres';
 import mysql from 'mysql2/promise';
 import { Session } from '../../src/analyze.ts';
 import { ident, renderParamType, renderType } from '../../src/render.ts';
 import type { Analysis } from '../../src/engine.ts';
-import { collect, plan, isStatement, DIALECT_NAME, SCHEMA_FILE, type Block, type Dialect, type MdNode, type Modules } from '../lib/remark-mapper.ts';
+import { collectFiles, plan, isStatement, DIALECT_NAME, SCHEMA_FILE, type Block, type Dialect, type Modules } from '../lib/remark-mapper.ts';
+import { sitePages } from '../lib/page-files.ts';
+import { isErrorExample, type Errors } from '../lib/sql-errors.ts';
 import { schemaType } from './schema-type.ts';
+import { openMapper, positionOf } from './mapper-diagnostics.ts';
 
 const site = path.resolve(import.meta.dirname, '..');
 const URLS: Record<Exclude<Dialect, 'sqlite'>, string> = {
   postgres: process.env.REYLO_CAPTURE_POSTGRES ?? 'postgres://postgres@localhost:54329/reylo_capture',
   mysql: process.env.REYLO_CAPTURE_MYSQL ?? 'mysql://root@127.0.0.1:54336/reylo_capture',
+};
+/** The scratch database an `<Inferred>` card's own schema is built in, on the same server: made again for each card. */
+const cardUrl = (url: string) => {
+  const u = new URL(url);
+  u.pathname = `/${decodeURIComponent(u.pathname.slice(1))}_card`;
+  return u.href;
 };
 // The driver each scratch project names, whose defaults the types follow, as for a project with
 // that driver: postgres.js, mysql2, and node:sqlite (no package).
@@ -56,36 +68,22 @@ for (let i = 0; i < args.length; i++) {
   } else if (arg.startsWith('-')) fail(`unknown option ${arg}`);
   else files.push(path.resolve(arg));
 }
-const docs = path.join(site, 'content', 'docs');
-const pages = [...new Set([...mdxFiles(docs), ...files])];
-
-function mdxFiles(dir: string): string[] {
-  return readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? mdxFiles(path.join(dir, e.name)) : e.name.endsWith('.mdx') ? [path.join(dir, e.name)] : []));
-}
+// The site's pages (lib/page-files.ts): the main page is its files together, the opening with the
+// schema and then a file per section, whose imports resolve across all of them; every other file
+// of content/docs, and each file named on the command line, is a page by itself.
+const ownPages = sitePages(site);
+const known = new Set(ownPages.flat());
+const pages: string[][] = [...ownPages, ...files.filter((file) => !known.has(file)).map((file) => [file])];
 
 function fail(message: string): never {
   console.error(`capture: ${message}`);
   process.exit(1);
 }
 
-// ---- The page, as the build reads it ----
-
-/** The page's tree as Fumadocs has it when lib/remark-mapper.ts runs: MDX parsed, then code tabs grouped. */
-function parse(file: string): MdNode {
-  // fumadocs-mdx takes the frontmatter off before it parses; blank lines keep the line numbers.
-  const text = readFileSync(file, 'utf8').replace(/^---\n[\s\S]*?\n---\n/, (m) => '\n'.repeat(m.split('\n').length - 1));
-  const processor = createProcessor();
-  const tree = processor.parse(text) as unknown as MdNode;
-  (remarkCodeTab as unknown as (this: unknown) => (tree: MdNode) => void).call(processor)(tree);
-  return tree;
-}
-
 // ---- The syntax the engine does not build yet ----
 
 const NAME = String.raw`:[A-Za-z_]\w*`;
 const SCHEMA_STRING = String.raw`'((?:[^']|'')*)'`;
-/** A cast's target type on MySQL and SQLite: `int`, `unsigned`, `char(10)`, `decimal(10, 2)`. */
-const TARGET = String.raw`[A-Za-z_]\w*(?:\s*\(\s*\d+(?:\s*,\s*\d+)?\s*\))?`;
 
 /** Each typed JSON parameter of the statement as written: its name and its schema. */
 function jsonParams(sql: string): { name: string; schema: unknown }[] {
@@ -101,16 +99,14 @@ function jsonParams(sql: string): { name: string; schema: unknown }[] {
 
 /**
  * The statement the engine reads: Postgres `:x::jsonb('…')` → `:x::jsonb`; MySQL `(:x)::json('…')`
- * → `cast(:x as json)` and `(:x)::type` → `cast(:x as type)`; SQLite `:x::json('…')` → `:x` and
- * `(:x)::type` → `cast(:x as type)` (each with or without the parentheses).
+ * → `cast(:x as json)`; SQLite `:x::json('…')` → `:x` (each with or without the parentheses). A
+ * plain `::type` stays as written: since 2026-10-20 the engine writes it as MySQL's or SQLite's own
+ * cast, `CAST(? AS CHAR)` for `::text` on MySQL, which a rewrite to `cast(:x as text)` here broke.
  */
 function compile(sql: string, dialect: Dialect): string {
   if (dialect === 'postgres') return sql.replace(new RegExp(String.raw`::(jsonb?)\(${SCHEMA_STRING}\)`, 'g'), '::$1');
   const json = new RegExp(String.raw`\(?(${NAME})\)?::json\(${SCHEMA_STRING}\)`, 'g');
-  const cast = new RegExp(String.raw`\((${NAME})\)::(${TARGET})|(${NAME})::(${TARGET})(?![\w(])`, 'g');
-  return sql
-    .replace(json, dialect === 'mysql' ? 'cast($1 as json)' : '$1')
-    .replace(cast, (_, a: string | undefined, at: string | undefined, b: string, bt: string) => `cast(${a ?? b} as ${at ?? bt})`);
+  return sql.replace(json, dialect === 'mysql' ? 'cast($1 as json)' : '$1');
 }
 
 // ---- The module, as src/mapper.ts renders it ----
@@ -122,23 +118,22 @@ function compile(sql: string, dialect: Dialect): string {
  * One change: a typed JSON parameter takes the type computed from its schema (`json`), where the
  * loader says `unknown`.
  */
-async function render(session: Session, written: string, sql: string, json: Map<string, string>): Promise<{ text: string; analysis: Analysis } | { error: string }> {
+async function render(session: Session, written: string, sql: string, json: Map<string, string>, strict = session.project.strictParams): Promise<{ text: string; analysis: Analysis } | { error: string }> {
   const project = session.project;
   const paramType = (q: Analysis['params'][number], rendered: string): string => {
     if (json.has(q.name)) return json.get(q.name)!;
     if (q.type.kind === 'unknown') return 'unknown';
     return q.nullable ? `${rendered} | null` : rendered;
   };
-  const emit = (compiled: string, paramsType: string, rowType: string, cardinality: string, names: string[], valuesType = 'unknown[]') =>
+  const emit = (compiled: string, paramsType: string, rowType: string, cardinality: string, names: string[]) =>
     [
       `import type { Query } from "reylo";`,
       `export type Params = ${paramsType};`,
-      `export type Values = ${valuesType};`,
       `export type Row = ${rowType};`,
       `export declare const sql: ${JSON.stringify(compiled)};`,
       `export declare const raw: ${JSON.stringify(written)};`,
       `export declare const params: readonly [${names.map((n) => JSON.stringify(n)).join(', ')}];`,
-      `declare const query: Query<${paramsType}, ${rowType}, ${JSON.stringify(cardinality)}, ${JSON.stringify(project.dialect)}, ${valuesType}> & { readonly sql: typeof sql; readonly raw: typeof raw };`,
+      `declare const query: Query<${paramsType}, ${rowType}, ${JSON.stringify(cardinality)}, ${JSON.stringify(project.dialect)}> & { readonly sql: typeof sql; readonly raw: typeof raw };`,
       `export default query;`,
       ``,
     ].join('\n');
@@ -153,9 +148,9 @@ async function render(session: Session, written: string, sql: string, json: Map<
   if (dialect === 'mysql') names = analysis.params.map((q) => q.name);
   // The mapper places these in the file as errors; a statement on the page must have none.
   if (analysis.diagnostics.length) return { error: analysis.diagnostics.map((d) => d.message).join('; ') };
-  if (project.strict) {
+  if (strict) {
     const untyped = analysis.params.filter((q) => q.type.kind === 'unknown' && !json.has(q.name));
-    if (untyped.length) return { error: `strict: nothing types ${untyped.map((q) => `:${q.name}`).join(', ')}` };
+    if (untyped.length) return { error: `strict_params: nothing types ${untyped.map((q) => `:${q.name}`).join(', ')}` };
   }
   const inferred = analysis.cardinality;
   const order = names;
@@ -163,11 +158,7 @@ async function render(session: Session, written: string, sql: string, json: Map<
   const columns = analysis.columns.map((c) => `${ident(c.name)}: ${renderType(c.type, false, dialect)}${c.nullable ? ' | null' : ''}`);
   const typed = analysis.params.map((q) => [q.name, paramType(q, renderParamType(q.type, dialect))] as const);
   const paramTypes = typed.map(([name, type]) => `${ident(name)}: ${type}`);
-  const types = new Map(typed);
-  const labels = order.map((n) => (/^\d+$/.test(n) ? `$${n}` : n));
-  const labeled = labels.every((l) => /^[A-Za-z_$][\w$]*$/.test(l));
-  const valuesType = `[${order.map((n, i) => `${labeled ? `${labels[i]}: ` : ''}${types.get(n) ?? 'unknown'}`).join(', ')}]`;
-  return { text: emit(analysis.rewritten.sql, paramTypes.length ? `{ ${paramTypes.join('; ')} }` : 'Record<never, never>', columns.length ? `{ ${columns.join('; ')} }` : 'never', inferred, order, valuesType), analysis };
+  return { text: emit(analysis.rewritten.sql, paramTypes.length ? `{ ${paramTypes.join('; ')} }` : 'Record<never, never>', columns.length ? `{ ${columns.join('; ')} }` : 'never', inferred, order), analysis };
 }
 
 // ---- The scratch databases ----
@@ -180,8 +171,8 @@ function scratch(url: string): { db: string; admin: URL } {
   return { db, admin: u };
 }
 
-async function buildPostgres(schema: string): Promise<string> {
-  const { db, admin } = scratch(URLS.postgres);
+async function buildPostgres(schema: string, url = URLS.postgres): Promise<string> {
+  const { db, admin } = scratch(url);
   admin.pathname = '/postgres';
   const server = postgres(admin.href, { max: 1, onnotice: () => {} });
   try {
@@ -190,17 +181,17 @@ async function buildPostgres(schema: string): Promise<string> {
   } finally {
     await server.end();
   }
-  const sql = postgres(URLS.postgres, { max: 1, onnotice: () => {} });
+  const sql = postgres(url, { max: 1, onnotice: () => {} });
   try {
     await sql.unsafe(schema).simple();
   } finally {
     await sql.end();
   }
-  return URLS.postgres;
+  return url;
 }
 
-async function buildMysql(schema: string): Promise<string> {
-  const { db, admin } = scratch(URLS.mysql);
+async function buildMysql(schema: string, url = URLS.mysql): Promise<string> {
+  const { db, admin } = scratch(url);
   admin.pathname = '/';
   const conn = await mysql.createConnection({ uri: admin.href, multipleStatements: true });
   try {
@@ -211,7 +202,7 @@ async function buildMysql(schema: string): Promise<string> {
   } finally {
     await conn.end();
   }
-  return URLS.mysql;
+  return url;
 }
 
 function buildSqlite(dir: string, schema: string): string {
@@ -228,8 +219,8 @@ function buildSqlite(dir: string, schema: string): string {
  * A project of its own per dialect, as an app using Reylo has: its `package.json` names the driver
  * (which picks the types' defaults), and the driver resolves from the site's node_modules.
  */
-function project(root: string, dialect: Dialect): string {
-  const dir = path.join(root, dialect);
+function project(root: string, dialect: Dialect, name: string = dialect): string {
+  const dir = path.join(root, name);
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
   const driver = DRIVER[dialect];
@@ -241,6 +232,7 @@ function project(root: string, dialect: Dialect): string {
 // ---- The run ----
 
 const modules: Modules = {};
+const failures: Errors = {};
 const errors: string[] = [];
 const warnings: string[] = [];
 const root = mkdtempSync(path.join(tmpdir(), 'reylo-capture-'));
@@ -249,12 +241,14 @@ let analyzed = 0;
 
 try {
   for (const page of pages) {
-    const shown = path.relative(site, page).startsWith('..') ? page : path.relative(site, page);
+    const shown = path.relative(site, page[0]!).startsWith('..') ? page[0]! : path.relative(site, page[0]!);
     let blocks: Block[];
     let needed: Set<Block>;
     try {
-      blocks = collect(parse(page));
+      blocks = collectFiles(page, site);
       needed = new Set(plan(blocks).flatMap((p) => p.variants.flatMap((v) => v.needs.map((n) => n.block))));
+      // An <Inferred> card shows its statement's types, so its module is kept whether or not a block imports it.
+      for (const block of blocks) if (block.inferred) needed.add(block);
     } catch (e) {
       errors.push(`${shown}: ${(e as Error).message}`);
       continue;
@@ -269,12 +263,47 @@ try {
     for (const dialect of ORDER) {
       const mine = statements.filter((b) => b.dialect === dialect);
       if (!mine.length) continue;
-      const report = (block: Block, message: string) => (needed.has(block) ? errors : warnings).push(`${shown}:${block.line}: ${DIALECT_NAME[dialect]} ${block.name}: ${message}\n${indent(block.node.value)}`);
+      const report = (block: Block, message: string) => (needed.has(block) ? errors : warnings).push(`${block.file ?? shown}:${block.line}: ${DIALECT_NAME[dialect]} ${block.name}: ${message}\n${indent(block.node.value)}`);
       const schema = schemas[dialect];
       if (schema === undefined) {
         for (const block of mine) report(block, `the page has no ${DIALECT_NAME[dialect]} ${SCHEMA_FILE} block to build its schema from; add one, or pass --schema ${dialect}=<file>`);
         continue;
       }
+      // One statement's module, from a session on the schema it is analyzed against.
+      const analyze = async (session: Session, block: Block) => {
+        const written = block.node.value;
+        let sql: string;
+        const json = new Map<string, string>();
+        try {
+          sql = compile(written, dialect);
+          for (const p of jsonParams(written)) json.set(p.name, schemaType(p.schema as never, dialect, `:${p.name}`));
+        } catch (e) {
+          report(block, (e as Error).message);
+          return;
+        }
+        // A block that shows what `strict_params: false` gives says so with `strict="false"`, and is
+        // analyzed as such a project would be; every other block must type each parameter.
+        const strict = !/(?:^|\s)strict="false"(?:\s|$)/.test(block.node.meta ?? '') && session.project.strictParams;
+        const result = await render(session, `${written}\n`, `${sql}\n`, json, strict);
+        if ('error' in result) {
+          report(block, result.error);
+          return;
+        }
+        analyzed++;
+        if (!needed.has(block)) {
+          console.log(`${DIALECT_NAME[dialect].padEnd(8)} ${block.name}: ${summary(result.text)}  (nothing imports it)`);
+          return;
+        }
+        const slot = ((modules[dialect] ??= {})[block.name!] ??= {});
+        if (slot[block.hash] === result.text) return;
+        if (slot[block.hash] !== undefined) {
+          errors.push(`${block.file ?? shown}:${block.line}: ${DIALECT_NAME[dialect]} ${block.name}: another page has the same statement with other types (another schema); give one of them another file name`);
+          return;
+        }
+        slot[block.hash] = result.text;
+        captured++;
+        console.log(`${DIALECT_NAME[dialect].padEnd(8)} ${block.name}: ${summary(result.text)}`);
+      };
       const dir = project(root, dialect);
       let url: string;
       try {
@@ -286,42 +315,59 @@ try {
       const session = await Session.open(dir, { DATABASE_URL: url });
       try {
         const done = new Set<string>();
-        for (const block of mine) {
+        for (const block of mine.filter((b) => b.schema === undefined)) {
           const key = `${block.name}\0${block.hash}`;
           if (done.has(key) && !needed.has(block)) continue;
           done.add(key);
-          const written = block.node.value;
-          let sql: string;
-          const json = new Map<string, string>();
-          try {
-            sql = compile(written, dialect);
-            for (const p of jsonParams(written)) json.set(p.name, schemaType(p.schema as never, dialect, `:${p.name}`));
-          } catch (e) {
-            report(block, (e as Error).message);
-            continue;
-          }
-          const result = await render(session, `${written}\n`, `${sql}\n`, json);
-          if ('error' in result) {
-            report(block, result.error);
-            continue;
-          }
-          analyzed++;
-          if (!needed.has(block)) {
-            console.log(`${DIALECT_NAME[dialect].padEnd(8)} ${block.name}: ${summary(result.text)}  (nothing imports it)`);
-            continue;
-          }
-          const slot = ((modules[dialect] ??= {})[block.name!] ??= {});
-          if (slot[block.hash] === result.text) continue;
-          if (slot[block.hash] !== undefined) {
-            errors.push(`${shown}:${block.line}: ${DIALECT_NAME[dialect]} ${block.name}: another page has the same statement with other types (another schema); give one of them another file name`);
-            continue;
-          }
-          slot[block.hash] = result.text;
-          captured++;
-          console.log(`${DIALECT_NAME[dialect].padEnd(8)} ${block.name}: ${summary(result.text)}`);
+          await analyze(session, block);
         }
       } finally {
         await session.close();
+      }
+      // The page's error examples in this dialect, each sent to the content mapper as a file of the
+      // project, on the page's schema.
+      const failing = blocks.filter((b) => b.dialect === dialect && isErrorExample(b.node));
+      if (failing.length) {
+        const mapper = await openMapper(dir, { DATABASE_URL: url });
+        try {
+          for (const block of failing) {
+            if (!block.name?.endsWith('.sql')) {
+              errors.push(`${block.file ?? shown}:${block.line}: an error example needs a file name ending in .sql (tab="<name>.sql")`);
+              continue;
+            }
+            const content = `${block.node.value}\n`;
+            const found = await mapper.diagnostics(block.name, content);
+            // The project's own problems (no database, no engine, a bad .reylo.yaml) are the capture's, not the example's.
+            const setup = found.find((d) => [4, 5, 9, 11].includes(d.code));
+            if (setup || !found.length) {
+              errors.push(`${block.file ?? shown}:${block.line}: ${DIALECT_NAME[dialect]} ${block.name}: ${setup ? `the content mapper could not analyze it: ${setup.messageText}` : 'the content mapper finds no error in this error example'}\n${indent(block.node.value)}`);
+              continue;
+            }
+            ((failures[dialect] ??= {})[block.name] ??= {})[block.hash] = found.map((d) => ({ start: positionOf(content, d.start), end: positionOf(content, d.start + d.length), source: `reylo(${d.code})`, message: d.messageText }));
+            console.log(`${DIALECT_NAME[dialect].padEnd(8)} ${block.name}: ${found.map((d) => `reylo${d.code}: ${d.messageText}`).join('; ')}  (error example)`);
+          }
+        } finally {
+          await mapper.close();
+        }
+      }
+      // A statement of an <Inferred> card that shows its own schema is analyzed against that schema,
+      // built for it alone: in a scratch database made again for each card, beside the page's, and
+      // a project of its own, so no session or cache of the page's schema answers for it.
+      for (const [i, block] of mine.filter((b) => b.schema !== undefined).entries()) {
+        const own = project(root, dialect, `${dialect}-card-${i}`);
+        let cardDb: string;
+        try {
+          cardDb = dialect === 'postgres' ? await buildPostgres(block.schema!, cardUrl(URLS.postgres)) : dialect === 'mysql' ? await buildMysql(block.schema!, cardUrl(URLS.mysql)) : buildSqlite(own, block.schema!);
+        } catch (e) {
+          report(block, `the card's schema fails: ${(e as Error).message}`);
+          continue;
+        }
+        const cardSession = await Session.open(own, { DATABASE_URL: cardDb });
+        try {
+          await analyze(cardSession, block);
+        } finally {
+          await cardSession.close();
+        }
       }
     }
   }
@@ -342,7 +388,7 @@ function summary(module: string): string {
 for (const w of warnings) console.warn(`warning: ${w}`);
 if (errors.length) {
   for (const e of errors) console.error(`error: ${e}`);
-  console.error(`capture: ${errors.length} error${errors.length === 1 ? '' : 's'}; lib/sql-modules.json is unchanged.`);
+  console.error(`capture: ${errors.length} error${errors.length === 1 ? '' : 's'}; lib/sql-modules.json and lib/sql-errors.json are unchanged.`);
   process.exit(1);
 }
 
@@ -352,4 +398,7 @@ const sorted = Object.fromEntries(
 );
 const out = path.join(site, 'lib', 'sql-modules.json');
 writeFileSync(out, JSON.stringify({ $comment: 'Written by `nub run capture` (scripts/capture-types.ts); read by lib/remark-mapper.ts. Never edit by hand.', ...sorted }, null, 2) + '\n');
+const byName = <T,>(entries: Record<string, T>) => Object.fromEntries(Object.entries(entries).sort(([a], [b]) => a.localeCompare(b)));
+const failed = Object.fromEntries(ORDER.filter((d) => failures[d]).map((d) => [d, byName(Object.fromEntries(Object.entries(failures[d]!).map(([name, byHash]) => [name, byName(byHash)])))]));
+writeFileSync(path.join(site, 'lib', 'sql-errors.json'), JSON.stringify({ $comment: 'Written by `nub run capture` (scripts/capture-types.ts): the errors the content mapper gives each error example. Read by lib/sql-errors.ts. Never edit by hand.', ...failed }, null, 2) + '\n');
 console.log(`capture: ${analyzed} statement${analyzed === 1 ? '' : 's'} analyzed on ${pages.length} page${pages.length === 1 ? '' : 's'}; ${captured} module${captured === 1 ? '' : 's'} imported → ${path.relative(site, out)}`);

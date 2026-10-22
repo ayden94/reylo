@@ -125,12 +125,12 @@ impl Validator {
 
 /// Reylo's own check of a schema a statement writes in a parameter's column list (`meta
 /// json('…')`): 2020-12, as the specification says, whatever `$schema` says, since the decision of
-/// 2026-10-12 takes JSON Schema 2020-12 in its entirety (`docs/typed-json-params.md`).
+/// 2026-10-12 takes JSON Schema 2020-12 in its entirety (`wiki/typed-json-params.md`).
 pub const REYLO: Validator = Validator { fallback: &[Draft::Twenty], ..SPEC };
 
 /// MySQL's `JSON_SCHEMA_VALID` (8.0.17 and later): RapidJSON's draft 4 validator, whatever `$schema`
 /// says. It leaves a pointer with a `$` in it unresolved, and reads a root `openapi` or `swagger`
-/// key as OpenAPI (measured on 8.0.46, 8.4.11, 9.7.2 and 26.7.0: `docs/json-schema-checks/mysql/`).
+/// key as OpenAPI (measured on 8.0.46, 8.4.11, 9.7.2 and 26.7.0: `wiki/json-schema-checks/mysql/`).
 pub const MYSQL: Validator = Validator { fallback: &[Draft::Four], dollar_pointers: false, openapi_roots: true, ..SPEC };
 
 /// The `$schema` values the Rust `jsonschema` crate recognizes without its 2019-09 and 2020-12
@@ -147,7 +147,7 @@ const DRAFTS_4_6_7: &[(&str, Draft)] = &[
 pub const JSONSCHEMA_0_17: Validator = Validator { known: DRAFTS_4_6_7, fallback: &[Draft::Seven], ..SPEC };
 
 /// sqlite-jsonschema 0.2.3's `jsonschema_matches` (the only SQLite JSON Schema validator; it
-/// has not changed since 2023-08): the crate 0.16.1 (measured: `docs/json-schema-checks/sqlite/`).
+/// has not changed since 2023-08): the crate 0.16.1 (measured: `wiki/json-schema-checks/sqlite/`).
 pub const SQLITE_JSONSCHEMA: Validator = JSONSCHEMA_0_17;
 
 /// The `jsonschema` crate 0.37 as pg_jsonschema 0.3.4 calls it: 2020-12 by default, each draft by
@@ -174,7 +174,7 @@ pub const JSONSCHEMA_0_37: Validator = Validator {
 
 /// Supabase's pg_jsonschema, at any version: the crate 0.17's reading or 0.37's. The version the
 /// catalog records does not say which code runs (Supabase's images point every version at one
-/// library), so a schema is read both ways (measured: `docs/json-schema-checks/postgres/`).
+/// library), so a schema is read both ways (measured: `wiki/json-schema-checks/postgres/`).
 pub const PG_JSONSCHEMA: &[&Validator] = &[&JSONSCHEMA_0_17, &JSONSCHEMA_0_37];
 
 /// Tembo's (now theory's) `jsonschema` extension, the boon crate: the draft a `$schema` names, and

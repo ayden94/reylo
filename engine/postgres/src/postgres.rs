@@ -26,6 +26,9 @@ use serde_json::{json, Value};
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+/// The statements the Postgres analysis types (`analyze.rs`), as its refusal names them.
+const KINDS: &[&str] = &["select", "insert", "update", "delete", "merge"];
+
 /// How many statements one analysis may synthesize to settle its columns: one per set-operation
 /// arm, one per statement whose expressions read a column, one per JSON constructor context.
 const MAX_PROBES: usize = 8;
@@ -309,10 +312,18 @@ impl<'a> Engine<'a> {
         let parsed = match analyze::analyze(&rewritten.sql) {
             Ok(p) => Some(p),
             // A statement the engine does not type (a cursor, a DO block, DDL) says so on the
-            // whole statement, rather than coming back as `unknown` with no word.
-            Err(e @ analyze::AnalyzeError::UnsupportedStatement) => {
-                diagnostics.push(diag(e.to_string(), 0, sql.trim_end().len(), 10));
+            // whole statement, rather than coming back as `unknown` with no word, and so does a
+            // file of several statements, which the server would refuse to describe; each says
+            // what a typed file holds and how to leave a migration out of the type check, as on
+            // the other databases. `AnalyzeError` words both for Reylo Framework, which has no
+            // tsconfig.json to leave a file out of.
+            Err(analyze::AnalyzeError::UnsupportedStatement) => {
+                diagnostics.push(diag(lex::not_a_query(KINDS), 0, sql.trim_end().len(), 10));
                 None
+            }
+            Err(analyze::AnalyzeError::NotOneStatement(n)) if n > 1 => {
+                diagnostics.push(diag(lex::several_statements(), 0, sql.trim_end().len(), 10));
+                return Some(bare(sql, lexed, Dialect::Postgres, diagnostics));
             }
             Err(_) => None,
         };
@@ -398,13 +409,23 @@ impl<'a> Engine<'a> {
             jsonshape::oids(shape, &outcomes, &raw.params, &mut shape_oids);
         }
         self.types(&shape_oids)?;
-        // A stored row inside a JSON document keeps the JSON Schema a CHECK holds its JSON columns
-        // to, as a bare read of them does.
+        // A stored row, read whole or inside a JSON document, keeps the JSON Schema a CHECK holds
+        // its JSON columns to and the strings a CHECK keeps its string columns to, as a bare read
+        // of them does. The strings only where `=` is the built-in one a CHECK resolved to.
         let stored: Vec<u32> = outcomes.iter().flatten().flat_map(|o| o.columns.iter()).chain(&described.columns).filter(|c| c.whole_row).map(|c| c.type_oid).collect();
-        let rows: Vec<(u32, i32)> = stored.iter().flat_map(|o| self.registry.borrow().row_json_columns(*o)).collect();
+        let mut rows: Vec<(u32, i32)> = stored.iter().flat_map(|o| self.registry.borrow().row_json_columns(*o)).collect();
+        if trust.builtin("=") {
+            for key in stored.iter().flat_map(|o| self.registry.borrow().row_string_columns(*o)) {
+                if !rows.contains(&key) {
+                    rows.push(key);
+                }
+            }
+        }
         if !rows.is_empty() {
             let checks = self.check_rows(&rows)?;
-            self.registry.borrow_mut().documents.extend(checks.documents);
+            let mut registry = self.registry.borrow_mut();
+            registry.documents.extend(checks.documents);
+            registry.values.extend(checks.values);
         }
 
         let registry = self.registry.borrow();
@@ -681,10 +702,11 @@ impl<'a> Engine<'a> {
     /// they hold it to ([`check_documents`]). The describe names a column's table and attribute
     /// only for a bare reference (through a view or a subquery too), so an expression over the
     /// column is never one. Nothing under a set operation, whose provenance names the leftmost
-    /// arm only.
-    fn checks(&self, raw: &RawDescribe, parsed: Option<&Parsed>, written: &[(u32, i32)], json_only: bool) -> Lazy<Checks> {
+    /// arm only. With `checked_only`, only the JSON and string columns, the ones a CHECK says
+    /// something of.
+    fn checks(&self, raw: &RawDescribe, parsed: Option<&Parsed>, written: &[(u32, i32)], checked_only: bool) -> Lazy<Checks> {
         let usable = parsed.is_some_and(|p| !p.has_set_op);
-        let json = |oid: u32| !json_only || jsonshape::is_json(&self.registry.borrow(), oid);
+        let json = |oid: u32| !checked_only || jsonshape::is_json(&self.registry.borrow(), oid) || matches!(self.registry.borrow().resolve_domain(oid), crate::pgtypes::oid::TEXT | crate::pgtypes::oid::VARCHAR);
         let mut pairs: Vec<(u32, i32)> = raw.columns.iter().filter(|c| usable && c.table != 0 && c.attnum > 0 && json(c.oid)).map(|c| (c.table, c.attnum)).collect();
         pairs.extend(written.iter().filter(|p| !pairs.contains(p)).copied().collect::<Vec<_>>());
         self.check_rows(&pairs)
@@ -856,12 +878,18 @@ impl<'a> Engine<'a> {
             .columns
             .iter()
             .map(|col| {
+                // A whole-row reference (attribute 0) of the relation whose row type the column is.
+                let own_row = col.table != 0 && col.attnum == 0 && !degraded && registry.get(col.oid).and_then(|t| t.relid) == Some(col.table);
                 let nullable = if col.table != 0 && col.attnum > 0 && !degraded {
                     let own = match view_columns.get(&col.table) {
                         Some(columns) => columns.as_ref().and_then(|c| c.get(col.attnum as usize - 1)).is_none_or(|c| c.nullable),
                         None => !not_null.contains(&(col.table, col.attnum)),
                     };
                     own || nulled_rels.contains(&col.table)
+                } else if own_row && known.contains_key(&col.table) {
+                    // A row the scan read is a row, whatever its columns hold: NULL only where an
+                    // outer join nulls the relation, which the statement names, so its name says.
+                    nulled_rels.contains(&col.table)
                 } else {
                     true
                 };
@@ -877,7 +905,7 @@ impl<'a> Engine<'a> {
                     Some(Some(columns)) if col.attnum > 0 && !degraded => columns.get(col.attnum as usize - 1).is_some_and(|c| c.whole_row),
                     _ => false,
                 };
-                let whole_row = from_view || (col.table != 0 && col.attnum == 0 && !degraded && registry.get(col.oid).and_then(|t| t.relid) == Some(col.table));
+                let whole_row = from_view || own_row;
                 DescribedColumn { name: col.name.clone(), type_oid: col.oid, type_name: registry.name(col.oid), nullable, nullable_items: None, values: None, document, whole_row }
             })
             .collect();
@@ -1068,12 +1096,16 @@ impl<'a> Engine<'a> {
         let mut oids: Vec<u32> = raw.columns.iter().map(|c| c.oid).collect();
         oids.extend(raw.params.iter().copied());
         let types = self.types(&oids);
-        // A JSON column a JSON constructor reads keeps the schema its CHECKs hold it to.
+        // A JSON column a JSON constructor reads keeps the schema its CHECKs hold it to, and a
+        // string column the strings they keep it to.
         let checks = self.checks(&raw, parsed.as_ref(), &[], true);
         let settled = self.settle(sql, &raw, parsed.as_ref(), trust);
         let (Some(()), Some(mut described), Some(checks)) = (types, settled, checks) else { return None };
         self.stored_sublinks(sql, &mut described);
         for (col, raw) in described.columns.iter_mut().zip(&raw.columns) {
+            if trust.builtin("=") {
+                col.values = checks.values.get(&(raw.table, raw.attnum)).cloned();
+            }
             if let Some(document) = checks.documents.get(&(raw.table, raw.attnum)) {
                 col.document = Some(document.clone());
             }
@@ -1742,6 +1774,22 @@ mod tests {
     }
 
     #[test]
+    fn a_migration_says_what_a_typed_file_holds_and_how_to_leave_it_out() {
+        // Several statements are refused before the server is asked, which would refuse to
+        // describe them; one statement of another kind is refused on its whole text.
+        let sql = "create table users (id integer primary key);\ncreate table posts (id integer primary key);\n";
+        let none = HashMap::new();
+        let host = Host::new(&none);
+        let a = analyze(sql, &host).expect("refused without a round trip");
+        assert!(host.needs().is_empty());
+        assert_eq!(a.diagnostics.iter().map(|d| (d.code, d.start, d.length)).collect::<Vec<_>>(), [(10, 0, sql.trim_end().len())]);
+        assert_eq!(a.diagnostics[0].message, "A typed .sql file holds one statement and this one holds several, so if it is a migration or a schema file, leave it out of the type check with \"exclude\" in tsconfig.json, as in \"exclude\": [\"db/**\"].");
+        let a = replay("create table tags (id integer primary key)");
+        assert_eq!(a.diagnostics.iter().map(|d| d.code).collect::<Vec<_>>(), [10]);
+        assert_eq!(a.diagnostics[0].message, "A typed .sql file holds one SELECT, INSERT, UPDATE, DELETE or MERGE statement and this one holds another kind, so if it is a migration or a schema file, leave it out of the type check with \"exclude\" in tsconfig.json, as in \"exclude\": [\"db/**\"].");
+    }
+
+    #[test]
     fn a_subquery_whose_one_target_is_a_tables_whole_row_returns_its_stored_rows() {
         let targets = |sql: &str| sublink_rows(sql).map(|r| r.targets);
         let row = |table: &str, name: &str, array: bool| Some((table.to_string(), name.to_string(), array));
@@ -1765,7 +1813,7 @@ mod tests {
 
     #[test]
     fn a_check_holds_a_json_column_to_the_schema_it_prints() {
-        // As PostgreSQL 18 printed the CHECKs of docs/json-schema-checks/postgres/catalog.sql.
+        // As PostgreSQL 18 printed the CHECKs of wiki/json-schema-checks/postgres/catalog.sql.
         let schema = r#"{"type": "object", "properties": {"name": {"type": "string", "pattern": "^\\d+$", "description": "it's café é"}}, "required": ["name"]}"#;
         let printed = r#"'{"type": "object", "properties": {"name": {"type": "string", "pattern": "^\\d+$", "description": "it''s café é"}}, "required": ["name"]}'::json"#;
         let call = |f: &str| vec![(f.to_string(), vec![CheckArg::Schema(schema.into()), CheckArg::Column])];
@@ -1931,6 +1979,53 @@ mod tests {
     }
 
     #[test]
+    fn a_cast_parameter_is_as_nullable_as_the_bare_one() {
+        // A server with one table, `users (id int primary key, name text not null, email text,
+        // score numeric, n int, doc jsonb, meta json not null)`, describing every statement with no
+        // result column and every parameter as text.
+        let columns = [("id", true), ("name", true), ("email", false), ("score", false), ("n", false), ("doc", false), ("meta", true)];
+        let nullable = |sql: &str| {
+            let mut answers: HashMap<String, Answer> = HashMap::new();
+            for _ in 0..64 {
+                let host = Host::new(&answers);
+                if let Some(a) = analyze(sql, &host) {
+                    assert!(a.diagnostics.is_empty(), "{sql}: {:?}", a.diagnostics);
+                    return a.params.iter().map(|p| format!("{}{}", p.name, if p.nullable { "?" } else { "" })).collect::<Vec<_>>().join(" ");
+                }
+                for need in host.needs() {
+                    match need {
+                        crate::api::Need::Describe { id, sql } => {
+                            let count = lex::lex(&sql, Dialect::Postgres).map(|l| l.placeholders.len()).unwrap_or(0);
+                            answers.insert(id, Answer::Describe { describe: RawDescribe { params: vec![25; count], columns: vec![] } });
+                        }
+                        crate::api::Need::Query { id, sql, .. } => {
+                            let rows = match sql.as_str() {
+                                RELATION_COLUMNS_QUERY => columns.iter().enumerate().map(|(i, (name, not_null))| vec![json!(16400), json!("users"), json!(i + 1), json!(not_null), Value::Null, json!(name), json!(not_null)]).collect(),
+                                cardinality::UNIQUE_KEYS_QUERY => vec![vec![json!("users"), json!(["id"]), json!([null]), Value::Null], vec![json!("users"), json!(["email"]), json!([null]), Value::Null]],
+                                _ => vec![],
+                            };
+                            answers.insert(id, Answer::Rows { rows });
+                        }
+                    }
+                }
+            }
+            panic!("the replay did not converge");
+        };
+        // Written whole to a column, under any cast: as nullable as the column, in an INSERT's
+        // rows, an UPDATE's SET and an upsert's, a row value's elements included.
+        assert_eq!(nullable("INSERT INTO users (name, email) VALUES (:name::text, :email::text) ON CONFLICT (email) DO UPDATE SET name = excluded.name RETURNING id"), "name email?");
+        assert_eq!(nullable("INSERT INTO users (name, email, score, n, doc, meta) VALUES (:name::text, :email::text, :score::numeric, :n::int, :doc::jsonb, :meta::json), (:a, :b, :c, :d, :e, :f)"), "name email? score? n? doc? meta a b? c? d? e? f");
+        assert_eq!(nullable("UPDATE users SET email = :email::text, name = :name::text, n = :n::int, doc = :doc::json::jsonb, meta = :meta::json WHERE id = :id::int"), "email? name n? doc? meta id");
+        assert_eq!(nullable("UPDATE users SET (name, email) = (:name::text, :email::text) WHERE id = :id::int"), "name email? id");
+        assert_eq!(nullable("UPDATE users SET (name, email) = (:name, :email) WHERE id = :id"), "name email? id");
+        assert_eq!(nullable("INSERT INTO users (name) VALUES ('a') ON CONFLICT (id) DO UPDATE SET email = :email::text, name = :name::text"), "email? name");
+        // Coalesced or tested for NULL, under a cast; a SELECT's column is no value written whole.
+        assert_eq!(nullable("UPDATE users SET n = coalesce(:n::int, n), doc = coalesce(:doc::jsonb, doc) WHERE id = :id::int"), "n? doc? id");
+        assert_eq!(nullable("SELECT id FROM users WHERE (:doc::json IS NULL OR n = :x::int)"), "doc? x");
+        assert_eq!(nullable("INSERT INTO users (name, email) SELECT :name::text, :email::text"), "name email");
+    }
+
+    #[test]
     fn returning_with_names_for_the_old_and_the_new_row_is_typed_as_old_and_new_are() {
         let nullable = |a: &Analysis| a.columns.iter().map(|c| c.nullable).collect::<Vec<_>>();
         // PostgreSQL 18's clause parses, so the write by key is at most one row, and both rows of
@@ -2045,5 +2140,96 @@ mod tests {
         // `b` starts NULL and `a` takes it over: the fixed point proves neither.
         let pair = replay("WITH RECURSIVE pair(a, b) AS (SELECT 1, NULL::int UNION ALL SELECT b, b FROM pair WHERE a < 3) SELECT a, b FROM pair");
         assert_eq!(pair.columns.iter().map(|c| c.nullable).collect::<Vec<_>>(), vec![true, true]);
+    }
+
+    /// A server with the docs' tables, `users (id int primary key, name text not null)`, `posts (id
+    /// int primary key, user_id int, title text not null)` and `events (id int primary key, kind
+    /// text not null check (kind in ('click', 'key')), note text)`, that describes a statement by
+    /// its text: `describe` gives each result column's name, type and provenance.
+    fn replay_docs(sql: &str, describe: &dyn Fn(&str) -> Vec<RawColumn>) -> Analysis {
+        let mut answers: HashMap<String, Answer> = HashMap::new();
+        let composite = |oid: u32, name: &str, rel: u32, fields: &[(&str, u32, bool)]| {
+            vec![
+                json!(oid), json!(name), json!("c"), json!(0), json!(0), Value::Null, json!(name),
+                json!(fields.iter().map(|f| f.0).collect::<Vec<_>>()), json!(fields.iter().map(|f| f.1).collect::<Vec<_>>()), json!(fields.iter().map(|f| f.2).collect::<Vec<_>>()),
+                json!(rel), json!((1..=fields.len() as i32).collect::<Vec<_>>()),
+            ]
+        };
+        let tables: [(u32, u32, &str, Vec<(&str, u32, bool)>); 3] = [
+            (16400, 90001, "users", vec![("id", 23, true), ("name", 25, true)]),
+            (16410, 90002, "posts", vec![("id", 23, true), ("user_id", 23, false), ("title", 25, true)]),
+            (16420, 90003, "events", vec![("id", 23, true), ("kind", 25, true), ("note", 25, false)]),
+        ];
+        for _ in 0..64 {
+            let host = Host::new(&answers);
+            if let Some(analysis) = analyze(sql, &host) {
+                assert!(analysis.diagnostics.is_empty(), "{sql}: {:?}", analysis.diagnostics);
+                return analysis;
+            }
+            for need in host.needs() {
+                match need {
+                    crate::api::Need::Describe { id, sql } => {
+                        answers.insert(id, Answer::Describe { describe: RawDescribe { params: vec![], columns: describe(&sql) } });
+                    }
+                    crate::api::Need::Query { id, sql, .. } => {
+                        let rows = match sql.as_str() {
+                            RELATION_COLUMNS_QUERY => tables
+                                .iter()
+                                .flat_map(|(rel, _, name, fields)| fields.iter().enumerate().map(move |(i, f)| vec![json!(rel), json!(name), json!(i + 1), json!(f.2), Value::Null, json!(f.0), json!(f.2)]))
+                                .collect(),
+                            TYPE_QUERY | RELATION_TYPES_QUERY => tables.iter().map(|(rel, oid, name, fields)| composite(*oid, name, *rel, fields)).collect(),
+                            CHECKS_QUERY => vec![vec![json!(16420), json!(2), json!("kind"), json!("kind = ANY (ARRAY['click'::text, 'key'::text])"), Value::Null, Value::Null, Value::Null]],
+                            _ => vec![],
+                        };
+                        answers.insert(id, Answer::Rows { rows });
+                    }
+                }
+            }
+        }
+        panic!("the replay did not converge");
+    }
+
+    #[test]
+    fn a_tables_whole_row_is_a_row_unless_an_outer_join_nulls_it() {
+        let column = |name: &str, oid: u32, table: u32, attnum: i32| RawColumn { name: name.into(), oid, table, attnum };
+        // The probes select the whole row as `a0`; the statement itself has one JSON column.
+        let describe = |sql: &str| -> Vec<RawColumn> {
+            if sql.contains(" e AS a0") {
+                vec![column("a0", 90003, 16420, 0)]
+            } else if sql.contains(" p AS a0") {
+                vec![column("a0", 90002, 16410, 0)]
+            } else if sql.contains(" u AS a0") {
+                vec![column("a0", 90001, 16400, 0)]
+            } else if sql.starts_with("SELECT e,") || sql == "SELECT e FROM events e" {
+                vec![column("e", 90003, 16420, 0)]
+            } else {
+                vec![column("rows", 3802, 0, 0)]
+            }
+        };
+        let items = |sql: &str| -> (Type, bool) {
+            let a = replay_docs(sql, &describe);
+            match &a.columns[0].ty {
+                Type::List { of, nullable_items } => ((**of).clone(), *nullable_items),
+                other => panic!("{sql}: {other:?}"),
+            }
+        };
+        // A row of a table no outer join nulls is never NULL, and keeps its CHECK's union.
+        let (row, nullable) = items("SELECT jsonb_agg(e ORDER BY e.id) AS rows FROM events e");
+        assert!(!nullable);
+        let Type::Composite { fields, .. } = row else { panic!("{row:?}") };
+        assert_eq!(fields[1].ty, Type::Enum { name: "text".into(), labels: vec!["click".into(), "key".into()] });
+        assert!(!fields[1].nullable && fields[2].nullable);
+        // The preserved side of an outer join is a row; the nulled side is NULL where nothing matched,
+        // unless a strict test of the WHERE rejects those rows.
+        assert!(!items("SELECT jsonb_agg(u) AS rows FROM users u LEFT JOIN posts p ON p.user_id = u.id").1);
+        assert!(items("SELECT jsonb_agg(p) AS rows FROM users u LEFT JOIN posts p ON p.user_id = u.id").1);
+        assert!(!items("SELECT jsonb_agg(p) AS rows FROM users u LEFT JOIN posts p ON p.user_id = u.id WHERE p.title > ''").1);
+        assert!(items("SELECT jsonb_agg(p) AS rows FROM users u LEFT JOIN posts p ON p.user_id = u.id WHERE p.title > '' OR u.id = 1").1);
+        assert!(items("SELECT jsonb_agg(u) AS rows FROM users u FULL JOIN posts p ON p.user_id = u.id").1);
+        // A bare read of the row keeps the union too.
+        let a = replay_docs("SELECT e FROM events e", &describe);
+        assert!(!a.columns[0].nullable);
+        let Type::Composite { fields, .. } = &a.columns[0].ty else { panic!("{:?}", a.columns[0].ty) };
+        assert_eq!(fields[1].ty, Type::Enum { name: "text".into(), labels: vec!["click".into(), "key".into()] });
     }
 }

@@ -4,14 +4,14 @@
 import { createHash } from "node:crypto";
 import { dirname } from "node:path";
 import { serve } from "./rpc.ts";
-import { anyEngine, type Analysis } from "./engine.ts";
-import { declaredType, ident, renderParamType, renderType } from "./render.ts";
+import { anyEngine, type Lexed } from "./engine.ts";
+import { moduleTypes } from "./module-types.ts";
 import { resolveProject, type Dialect } from "./project.ts";
 import { Session } from "./analyze.ts";
 
 type Project = {
   dialect: Dialect;
-  strict: boolean;
+  strictParams: boolean;
   session: Promise<Session>;
 };
 const projects = new Map<string, Project>();
@@ -20,10 +20,24 @@ function diag(messageText: string, start: number, length: number, code = 1) {
   return { messageText, start, length, code };
 }
 
-/** A parameter's TypeScript type: `unknown` when nothing in the statement types it (a CAST does), with `| null` where the statement lets the caller pass null. */
-function paramType(q: Analysis["params"][number], rendered: string): string {
-  if (q.type.kind === "unknown") return "unknown";
-  return q.nullable ? `${rendered} | null` : rendered;
+/**
+ * The span map TypeScript reads as `mappings`: `[virtualStart, virtualLength, originalStart,
+ * originalLength, kind, features]`, in UTF-8 bytes, the encoding `initialize` chose. One atom takes the
+ * whole module to the statement, so go-to-definition on anything the module declares (the import's
+ * path, the query, a column, a parameter) opens the `.sql` file at its statement. TypeScript maps a
+ * definition only when its whole range lies in one segment, and the import's path goes to the range
+ * of the module from its first token to its end, which a map by name would cut into pieces. No hover,
+ * references or rename, which would land on the whole statement or write the TypeScript into it.
+ */
+function mapToStatement(text: string, sql: string): number[][] {
+  const bytes = Buffer.from(sql, "utf8");
+  let start = 0;
+  let end = bytes.length;
+  while (start < end && /\s/.test(String.fromCharCode(bytes[start]!))) start++;
+  while (end > start && /\s/.test(String.fromCharCode(bytes[end - 1]!))) end--;
+  const ATOM = 1;
+  const DEFINITION = 8, TYPE_DEFINITION = 16, IMPLEMENTATION = 32;
+  return [[0, Buffer.byteLength(text), start, end - start, ATOM, DEFINITION | TYPE_DEFINITION | IMPLEMENTATION]];
 }
 
 serve({
@@ -39,8 +53,8 @@ serve({
     // Every setting lives in the project file, which PorgREST and Reylo Framework read too.
     const optionDiagnostics = Object.keys(p.options ?? {}).map((key) => ({ path: [key], messageText: `reylo reads its settings from .reylo.yaml, not from the content mapper's options; move "${key}" there.`, code: 104 }));
     const resolved = resolveProject(await anyEngine(projectDir), projectDir);
-    projects.set(p.projectHandle, { dialect: resolved.dialect, strict: resolved.strict, session: Session.open(projectDir) });
-    const configIdentity = createHash("sha1").update(JSON.stringify([resolved.file ?? null, resolved.dialect, resolved.strict, resolved.url ?? null, resolved.error ?? null, p.options ?? null])).digest("hex");
+    projects.set(p.projectHandle, { dialect: resolved.dialect, strictParams: resolved.strictParams, session: Session.open(projectDir) });
+    const configIdentity = createHash("sha1").update(JSON.stringify([resolved.file ?? null, resolved.dialect, resolved.strictParams, resolved.url ?? null, resolved.error ?? null, p.options ?? null])).digest("hex");
     return { configIdentity, watchedFiles: resolved.watched, optionDiagnostics };
   },
   async transform(params) {
@@ -52,18 +66,15 @@ serve({
       // A transform for a project this process never opened: answer, never throw, so the file
       // keeps its default export instead of becoming an empty module.
       diagnostics.push(diag(`The content mapper has no project for this file; restart the TypeScript server.`, 0, 1, 9));
-      return { extension: ".ts" as const, diagnostics, text: `import type { Query } from "reylo";\nexport type Params = unknown;\nexport type Values = unknown[];\nexport type Row = unknown;\ndeclare const query: Query<unknown, unknown, "many", "postgres">;\nexport default query;\n` };
+      const text = `import type { Query } from "reylo";\nexport type Params = unknown;\nexport type Row = unknown;\ndeclare const query: Query<unknown, unknown, "many", "postgres">;\nexport default query;\n`;
+      return { extension: ".ts" as const, diagnostics, text, mappings: mapToStatement(text, sql) };
     }
     // `compiled` is the statement as Reylo sends it to the database (the engine's rewritten text),
     // which an analysis that failed has not given: then `sql` is any string.
-    const emit = (compiled: string | undefined, paramsType: string, rowType: string, cardinality: string, names: string[], valuesType = "unknown[]") => ({
-      extension: ".ts" as const,
-      diagnostics,
-      text: [
+    const emit = (compiled: string | undefined, paramsType: string, rowType: string, cardinality: string, names: string[]) => {
+      const text = [
         `import type { Query } from "reylo";`,
         `export type Params = ${paramsType};`,
-        // The same parameters as an array, in the order of `params`, for `run(client, [1, "ada"])`.
-        `export type Values = ${valuesType};`,
         `export type Row = ${rowType};`,
         `export declare const sql: ${compiled === undefined ? "string" : JSON.stringify(compiled)};`,
         `export declare const raw: ${JSON.stringify(sql)};`,
@@ -72,68 +83,32 @@ serve({
         // hover shows the row's shape (`{ id: number; ... } | null`) and not `Row | null`. The two
         // texts go in by `typeof`, so a hover over the query names them and one over its `sql`
         // shows the statement.
-        `declare const query: Query<${paramsType}, ${rowType}, ${JSON.stringify(cardinality)}, ${JSON.stringify(project.dialect)}, ${valuesType}> & { readonly sql: typeof sql; readonly raw: typeof raw };`,
+        `declare const query: Query<${paramsType}, ${rowType}, ${JSON.stringify(cardinality)}, ${JSON.stringify(project.dialect)}> & { readonly sql: typeof sql; readonly raw: typeof raw };`,
         `export default query;`,
         ``,
-      ].join("\n"),
-    });
+      ].join("\n");
+      return { extension: ".ts" as const, diagnostics, text, mappings: mapToStatement(text, sql) };
+    };
 
     // The engine's lexer names the parameters. A statement it cannot read (a placeholder form the
     // dialect would misread, named and positional mixed) comes back from the analysis as an error
     // at its place; until then nothing is proved, so the row count is `many`.
-    let names: string[] = [];
-    let placeholders: { name: string; start: number; end: number }[] = [];
     const session = await project.session;
+    let lexed: Lexed | undefined;
     try {
-      ({ params: names, placeholders } = session.lex(sql));
+      lexed = session.lex(sql);
     } catch {}
-    const cardinality = "many";
-    // `strict: true`: a parameter nothing in the statement types is an error at its first use.
-    const strict = (analysis: Analysis) => {
-      if (!project.strict) return;
-      for (const q of analysis.params) {
-        if (q.type.kind !== "unknown") continue;
-        const at = placeholders.find((h) => h.name === q.name);
-        // The engine's offsets are UTF-8 bytes, as the diagnostics' are.
-        const written = at ? Buffer.from(sql, "utf8").subarray(at.start, at.end).toString("utf8") : `:${q.name}`;
-        diagnostics.push(diag(`Nothing in the statement gives the parameter ${written} a type; cast it, as in cast(${written} as integer), or remove strict: true from .reylo.yaml.`, at?.start ?? 0, at ? at.end - at.start : 1, 12));
-      }
-    };
     const outcome = await session.analyze(sql);
     if (!outcome.ok) {
       diagnostics.push(diag(outcome.message, 0, 1, outcome.code));
-      return emit(undefined, "unknown", "unknown", cardinality, names);
+      return emit(undefined, "unknown", "unknown", "many", lexed?.params ?? []);
     }
     const { analysis } = outcome;
-    const dialect = project.dialect;
-    // A MySQL session reads its strings by its sql_mode, which the analysis asked for and the
-    // lexer alone does not know: the placeholders are the ones the analysis read.
-    if (dialect === "mysql") {
-      names = analysis.params.map((q) => q.name);
-      placeholders = analysis.rewritten.spans.map(([start, end], k) => ({ name: analysis.rewritten.order[k]!, start, end }));
-    }
-    diagnostics.push(...analysis.diagnostics.map((d) => diag(d.message, d.start, d.length, d.code)));
-    strict(analysis);
-    const inferred = analysis.cardinality;
-    // The declared names are the lexer's, in order of first use: the module's `params` at run time,
-    // which an array of values follows. Each parameter appears once in a statement; a second use is
-    // the engine's diagnostic (code 3), placed above.
-    const order = names;
-    if (analysis.diagnostics.some((d) => d.code === 6) || (dialect === "postgres" && analysis.kind === "")) return emit(analysis.rewritten.sql, "unknown", "unknown", inferred, order);
-    const columns = analysis.columns.map((c) => `${ident(c.name)}: ${renderType(c.type, false, dialect)}${c.nullable ? " | null" : ""}`);
-    // A parameter is typed from its context (a column it is compared with or written to, a CAST);
-    // one no context types is `unknown`.
-    const typed = analysis.params.map((q) => [q.name, paramType(q, declaredType(q.type, q.schema) ?? renderParamType(q.type, dialect))] as const);
-    // A typed JSON parameter whose schema has a `default` may be left out (docs/typed-json-params.md).
-    const optional = new Set(analysis.params.filter((q) => q.schema !== null && typeof q.schema === "object" && "default" in q.schema).map((q) => q.name));
-    const paramTypes = typed.map(([name, type]) => `${ident(name)}${optional.has(name) ? "?" : ""}: ${type}`);
-    // The array form names each element after its parameter (`$1` for a positional one), when
-    // every name can be a label.
-    const types = new Map(typed);
-    const labels = order.map((n) => (/^\d+$/.test(n) ? `$${n}` : n));
-    const labeled = labels.every((l) => /^[A-Za-z_$][\w$]*$/.test(l));
-    const valuesType = `[${order.map((n, i) => `${labeled ? `${labels[i]}: ` : ""}${types.get(n) ?? "unknown"}${optional.has(n) ? " | undefined" : ""}`).join(", ")}]`;
-    return emit(analysis.rewritten.sql, paramTypes.length ? `{ ${paramTypes.join("; ")} }` : "Record<never, never>", columns.length ? `{ ${columns.join("; ")} }` : "never", inferred, order, valuesType);
+    // The types, the diagnostics the analysis gives and the untyped parameters' are one function
+    // the docs site's playground shares (src/module-types.ts).
+    const types = moduleTypes(sql, analysis, project.dialect, lexed, project.strictParams);
+    diagnostics.push(...types.diagnostics.map((d) => diag(d.message, d.start, d.length, d.code)));
+    return emit(analysis.rewritten.sql, types.params, types.row, types.cardinality, types.names);
   },
   async closeProject(params) {
     const handle = (params as { projectHandle: string }).projectHandle;

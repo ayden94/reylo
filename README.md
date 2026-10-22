@@ -16,7 +16,7 @@ group by u.id
 import postgres from "postgres";
 import getAuthor from "./get_author.sql";
 
-const db = postgres(process.env.DATABASE_URL!);
+const db = postgres(process.env.DATABASE_URL);
 
 const author = await getAuthor.run(db, { id: 1 });
 //    ^? { id: number; name: string; post_count: number } | null
@@ -68,7 +68,7 @@ npm install -D @reylosql/postgres  # or @reylosql/mysql, @reylosql/sqlite
 npm install -D typescript@beta
 ```
 
-`reylo` is the content mapper, the run time, the bundler plugins, the preload and the CLI. The engine that reads your database's statements is a package of its own, one per database, at Reylo's version: install the one for each database the project uses. A development dependency does, since a built module carries its analysis; a program run under the preload analyzes as it imports, and needs it installed. Without it, a `.sql` import reports what to install: `postgres statements need @reylosql/postgres: npm install -D @reylosql/postgres`.
+The `reylo` package is the content mapper, the run time, the bundler plugins, the preload and the CLI. The engine that reads your database's statements is a package of its own, one per database, at Reylo's version: install the one for each database the project uses. A development dependency does, since a built module carries its analysis; a program run under the preload analyzes as it imports, and needs it installed. Without it, a `.sql` import reports what to install: `postgres statements need @reylosql/postgres: npm install -D @reylosql/postgres`.
 
 Name Reylo in `tsconfig.json`, and type-check with `--runExternalCode`, the flag that lets `tsc` run content mappers:
 
@@ -110,8 +110,8 @@ node --env-file=.env --import reylo/register main.ts
 | nub | `"preload": ["reylo/register"]` in `nub.jsonc` |
 | Vite, Vitest | `import reylo from "reylo/vite"`, then `reylo()` in `plugins` |
 | esbuild, `Bun.build` | `import reylo from "reylo/esbuild"`, then `reylo()` in `plugins` |
-| webpack, Rspack | `{ test: /\.sql$/, use: "reylo/webpack-loader" }` in `module.rules` |
-| Next.js | `reylo/webpack-loader`, on the server, for Turbopack and webpack ([setup](https://reylo.dev/#setup-nextjs)) |
+| webpack, Rspack | `{ test: /\.sql$/, use: "reylo/webpack" }` in `module.rules` |
+| Next.js | `import { withReylo } from "reylo/next"`, then `export default withReylo(nextConfig)`: the loader on the server for Turbopack and webpack, and the type check inside `next build` ([setup](https://reylo.dev/#setup-nextjs)) |
 | Jest | `transform: { "\\.sql$": "reylo/jest" }` ([setup](https://reylo.dev/#setup-jest)) |
 
 In VS Code or Cursor, install the **TypeScript 7** extension (`TypeScriptTeam.native-preview`) and point it at your project's TypeScript, since the extension bundles TypeScript 7.0:
@@ -124,11 +124,11 @@ In VS Code or Cursor, install the **TypeScript 7** extension (`TypeScriptTeam.na
 }
 ```
 
-Then trust the workspace, and click **Allow** when the extension asks to use the workspace's TypeScript. The editor does not see your shell's environment, so keep `DATABASE_URL` in `.env`. Zed takes a few more settings: see [Editors](https://reylo.dev/#editors).
+Then trust the workspace, and click **Allow** when the extension asks to use the workspace's TypeScript. Missed it? It waits under the bell in the status bar, or **Developer: Reload Window** asks again. The editor does not see your shell's environment, so keep `DATABASE_URL` in `.env`. Zed takes a few more settings: see [Editors](https://reylo.dev/#editors).
 
 ## Usage
 
-Write one statement per `.sql` file, with a `:name` for each parameter, and import it. `run` takes a client from your own driver, here `db`, and the parameters.
+Write one statement per `.sql` file, with a `:name` for each parameter, and import it. The `.run()` method takes a client from your own driver, here `db`, and the parameters.
 
 <details>
 <summary>The schema behind the examples</summary>
@@ -168,7 +168,7 @@ const user = await getUser.run(db, { id: 1 });
 //    ^? { id: number; name: string; email: string | null } | null
 ```
 
-`id` is the primary key, so the result is one row or `null`, and `email` is a nullable column. An insert with `returning` resolves to the row it wrote:
+The `id` column is the primary key, so the result is one row or `null`, and `email` is a nullable column. An insert with `returning` resolves to the row it wrote:
 
 ```sql
 -- create_user.sql
@@ -199,9 +199,9 @@ const admins = await listUsers.run(db, { role: "admin" });
 //    ^? { id: number; name: string; role: "admin" | "member"; created_at: string }[]
 ```
 
-What `run` resolves to follows from how many rows Reylo proves the statement can return, and `run` checks the count when it runs:
+What `.run()` resolves to follows from how many rows Reylo proves the statement can return, and `.run()` checks the count when it runs:
 
-| The statement | `run` resolves to |
+| The statement | What `.run()` resolves to |
 | --- | --- |
 | A match on a primary or unique key, or `limit 1` | `Row \| null` |
 | An aggregate without `group by`, or a one-row `insert … returning` | `Row` |
@@ -285,7 +285,7 @@ await addUsers.run(db, { names: ["Grace", "Edsger"] });
 
 ### Transactions
 
-`run` takes a transaction, a savepoint or a connection from your driver as its client:
+The `.run()` method takes a transaction, a savepoint or a connection from your driver as its client:
 
 ```ts
 import createUser from "./create_user.sql";
@@ -297,11 +297,11 @@ await db.begin(async (tx) => {
 });
 ```
 
-On better-sqlite3, `node:sqlite` and `bun:sqlite`, `runSync` runs a statement synchronously and returns its result, for code that cannot await, such as the function that better-sqlite3's `db.transaction` takes.
+On better-sqlite3, `node:sqlite` and `bun:sqlite`, `.runSync()` runs a statement synchronously and returns its result, for code that cannot await, such as the function that better-sqlite3's `db.transaction` takes.
 
 ### The imported query
 
-Besides `run`, an imported query carries its statement, as Reylo sends it to the database (`sql`) and as written (`raw`), both typed as string literals, and its schemas, and the module exports its types:
+Besides `.run()`, an imported query carries its statement, as Reylo sends it to the database (`sql`) and as written (`raw`), both typed as string literals, and its schemas, and the module exports its types:
 
 ```ts
 import getUser, { type Params, type Row } from "./get_user.sql";
@@ -317,17 +317,17 @@ getUser.outputSchema;          // the result, as JSON Schema
 
 ## Supported drivers
 
-Reylo is bring-your-own-driver: `run` takes a client from any of these, or a transaction, savepoint or connection taken from one.
+Reylo is bring-your-own-driver: `.run()` takes a client from any of these, or a transaction, savepoint or connection taken from one.
 
 | Database | Drivers |
 | --- | --- |
 | Postgres | `pg`, postgres.js, Bun.sql, PGlite, Neon, pg-promise, `@vercel/postgres` |
-| MySQL | mysql2, mariadb, PlanetScale 1.x, Bun.sql |
-| SQLite | better-sqlite3, `node:sqlite`, `bun:sqlite`, libSQL, Cloudflare D1, sqlite3, sqlite, Bun.sql |
+| MySQL | mysql2, PlanetScale 1.x, Bun.sql |
+| SQLite | better-sqlite3, `node:sqlite`, `bun:sqlite`, libSQL, Turso's engine (`@tursodatabase/database`), Cloudflare D1, sqlite3, sqlite, Bun.sql |
 
 The type check reads the schema through `pg` or postgres.js on Postgres and through mysql2 on MySQL, so an app on another driver adds one of those as a dev dependency.
 
-Every driver gives Reylo's queries the same values, however your app set it up: Reylo decodes each value of its own queries itself, on your client, and leaves your other queries alone. A 64-bit integer is a `bigint`, a decimal its exact text, an instant (`timestamptz`) the ISO 8601 text of the instant in UTC (`"2026-10-20T08:00:00.123456Z"`, which `Temporal.Instant.from` reads), a date or a time without a zone the text the database wrote (`"2026-10-20"`, `"2026-10-20T10:00:00.123"`), a truth value a `boolean` (MySQL's `BOOLEAN`, which is a `TINYINT(1)`, and a comparison too), JSON is parsed and binary data is a `Uint8Array`; on SQLite an integer past 2^53 is an error naming its column, never a rounded number.
+Every driver gives Reylo's queries the same values, however your app set it up: Reylo decodes each value of its own queries itself, on your client, and leaves your other queries alone. A 64-bit integer is a `bigint`, a decimal its exact text, an instant (`timestamptz`) the ISO 8601 text of the instant in UTC (`"2026-10-20T08:00:00.123456Z"`, which `Temporal.Instant.from` reads), a date or a time without a zone the text the database wrote (`"2026-10-20"`, `"2026-10-20T10:00:00.123"`), a truth value a `boolean` (MySQL's `BOOLEAN`, which is a `TINYINT(1)`, and a comparison too), JSON is parsed and binary data is a `Uint8Array`; on SQLite a column declared `BIGINT` is a `bigint` too, and any other integer past 2^53 is an error naming its column, never a rounded number.
 
 ## Configuration
 
@@ -335,7 +335,7 @@ Reylo needs no configuration when the database is `DATABASE_URL`. Settings go in
 
 ```yaml
 url: ${DATABASE_URL}  # the default
-strict: true          # a parameter nothing in the statement types is an error
+strict_params: false  # a parameter nothing in the statement types is unknown, not an error
 ```
 
 ## Documentation

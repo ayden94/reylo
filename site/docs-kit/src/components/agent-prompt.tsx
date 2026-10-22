@@ -1,6 +1,7 @@
 'use client';
 
-import { useRef, useState, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
+import { Callout } from './callout';
 
 /** The selector of an agent card (its `data-agent-prompt`), by which `<CopyAgentPrompt>` finds the card it copies. */
 export const AGENT_PROMPT_SELECTOR = '[data-agent-prompt]';
@@ -18,9 +19,12 @@ export function agentPromptText(card: Element): string {
 /**
  * The instructions a coding agent follows to set the product up in a project, as the maintainer
  * asked on 2026-10-20 for Reylo's Setup: "some kind of complete, copyable instruction block for
- * agents that's visually obvious". A card with one Copy button, which copies the whole prompt (the
- * code block given as children, as plain text), and the prompt below it, folded to its first lines
- * until it is opened.
+ * agents that's visually obvious". A standard callout (./callout.tsx) titled for the product, a note,
+ * then the prompt, an ordinary code block, copied with the code block's own copy icon or with
+ * `<CopyAgentPrompt>` at the top of the page; the code block shows six lines and scrolls (style.css).
+ * It was a card of its own until the maintainer, 2026-10-21: "this prompt for the agent ... doesn't
+ * look like a normal callout. Is this a custom component? You should just use a standard callout
+ * component." The wrapper carries `data-agent-prompt`, by which `<CopyAgentPrompt>` finds it.
  */
 export function AgentPrompt({
   title,
@@ -31,38 +35,12 @@ export function AgentPrompt({
   note?: string;
   children: ReactNode;
 }) {
-  const body = useRef<HTMLDivElement>(null);
-  const [open, setOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
-
-  async function copy() {
-    if (!body.current) return;
-    await navigator.clipboard.writeText(agentPromptText(body.current));
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1600);
-  }
-
   return (
-    <section className="dk-agent not-prose" aria-label="Setup instructions for a coding agent" data-agent-prompt="">
-      <div className="dk-agent-head">
-        <div>
-          <p className="dk-agent-title">{title}</p>
-          <p className="dk-agent-note">{note}</p>
-        </div>
-        {/* Both labels share one grid cell, the other one hidden, so the button keeps the width of the
-            longer: a narrower "Copied" moved the button by 72px and, on a phone, rewrapped the note. */}
-        <button type="button" className="dk-agent-copy" onClick={copy}>
-          <span data-shown={!copied || undefined}>Copy instructions</span>
-          <span data-shown={copied || undefined}>Copied</span>
-        </button>
-      </div>
-      <div ref={body} className="dk-agent-body" data-open={open || undefined}>
+    <div className="dk-agent" aria-label="Setup instructions for a coding agent" data-agent-prompt="">
+      <Callout title={title}>
+        <p>{note}</p>
         {children}
-      </div>
-      {/* Kept under the pointer when it folds the instructions above it (KEEP_IN_PLACE_SCRIPT). */}
-      <button type="button" className="dk-agent-toggle" onClick={() => setOpen(!open)} aria-expanded={open} data-keep-in-place={open || undefined}>
-        {open ? 'Show less' : 'Show the instructions'}
-      </button>
-    </section>
+      </Callout>
+    </div>
   );
 }

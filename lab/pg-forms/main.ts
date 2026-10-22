@@ -151,9 +151,9 @@ const cteDml4: CteDmlParams = null! as { uid: number; title: string };
 // ---------------------------------------------------------------------------
 // 6. DECLARE: a cursor statement and a DO block
 // ---------------------------------------------------------------------------
-// Neither is a statement reylo types, and the engine says so on the statement (`reylo10: only
-// SELECT, INSERT, UPDATE, DELETE and MERGE statements are typed`) rather than handing back
-// `unknown` in silence. A mapper error stops the type check, so the two files live in
+// Neither is a statement reylo types, and the engine says so on the statement (reylo10, which
+// says that a typed file holds one SELECT, INSERT, UPDATE, DELETE or MERGE statement and how to
+// leave a migration out of the type check) rather than handing back `unknown` in silence. A mapper error stops the type check, so the two files live in
 // `untyped/`, a project of their own whose check must fail with exactly those two errors.
 
 // ---------------------------------------------------------------------------
@@ -278,9 +278,10 @@ import paramAny from "./param_any.sql";
 import type { Params as ParamAnyParams } from "./param_any.sql";
 const paramAny1: { id: number; name: string }[] = null! as Awaited<ReturnType<typeof paramAny.run>>;
 const paramAny2: Awaited<ReturnType<typeof paramAny.run>> = null! as { id: number; name: string }[];
-const paramAny3: { names: string[] } = null! as ParamAnyParams;
-const paramAny4: ParamAnyParams = null! as { names: string[] };
-// Right: `= any(:names)` types the parameter as the array of the column's type.
+const paramAny3: { names: (string | null)[] } = null! as ParamAnyParams;
+const paramAny4: ParamAnyParams = null! as { names: (string | null)[] };
+// Right: `= any(:names)` types the parameter as the array of the column's type, whose elements
+// take NULL, as an array a statement builds comes back with.
 
 import paramLimit from "./param_limit.sql";
 import type { Params as ParamLimitParams } from "./param_limit.sql";
@@ -370,9 +371,9 @@ type CastsRow = {
 };
 const casts1: CastsRow | null = null! as Awaited<ReturnType<typeof casts.run>>;
 const casts2: Awaited<ReturnType<typeof casts.run>> = null! as CastsRow | null;
-// A cast types its parameter: `:since::timestamptz` takes a Date or its text.
-const casts3: { since: Date | string; id: number } = null! as CastsParams;
-const casts4: CastsParams = null! as { since: Date | string; id: number };
+// A cast types its parameter: `:since::timestamptz` takes the text that names its zone, as run returns it.
+const casts3: { since: string; id: number } = null! as CastsParams;
+const casts4: CastsParams = null! as { since: string; id: number };
 
 // ---------------------------------------------------------------------------
 // 13. Types no driver parses

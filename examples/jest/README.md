@@ -20,18 +20,18 @@ Each test runs inside a transaction that it rolls back, so `app.db` stays as `se
 
 ## How Reylo is wired in
 
-- `package.json`
-  - `reylo` in `dependencies`: the runtime each query module imports, and the transformer `reylo/jest`.
-  - `@reylosql/sqlite` and `typescript` (`7.1.0-beta`) in `devDependencies`: the SQLite engine that the type check and the transformer analyze each statement with, and the first TypeScript with content mappers.
-  - `test` runs `node --experimental-vm-modules node_modules/jest/bin/jest.js`: Jest runs ES modules only behind that Node flag, and passing it to `node` directly works in every shell, with no `NODE_OPTIONS=` prefix or `cross-env`. `--env-file-if-exists=.env` gives the tests `DATABASE_URL`; one set in the environment wins.
-  - `test:cjs` runs Jest without the flag, with `jest.cjs.config.js`.
-  - `typecheck` runs `tsc --noEmit --runExternalCode`, which lets `tsc` run the content mapper.
-- `tsconfig.json`: `contentMappers` hands `.sql` imports to `reylo`. `include` covers `src`, where the tests sit beside the code they test, and `setup.ts`, so the type check covers the tests too; it leaves out `setup.sql`, a schema rather than one query, which the type check would report. `erasableSyntaxOnly` and `verbatimModuleSyntax` keep the TypeScript to what Node and Jest can run by stripping types, and `allowImportingTsExtensions` lets the files import each other as `./db.ts`, as Node needs.
-- `jest.config.js`, the ES module run: `transform` sends `.sql` files to `reylo/jest`, since Jest loads tests through its own runtime, which no preload reaches. `extensionsToTreatAsEsm` lists `.sql` beside `.ts`, so a query's module is an ES module like the test that imports it. No transform claims the `.ts` files, so Jest strips their types itself, through Node.
-- `jest.cjs.config.js`, the CommonJS run: the same transformer, which writes CommonJS when Jest asks for it; `babel-jest` for `.js` as well as `.ts`, because a CommonJS run must compile the tests' `import`s and Reylo's runtime, an ES module; and `transformIgnorePatterns`, which lets Babel compile `reylo` inside `node_modules`. Its Babel presets are preset-env, which compiles ES modules only when Jest asks for CommonJS (see Notes), and preset-typescript.
-- `queries/`: one statement per `.sql` file. `src/blog.ts` imports them, and so does `src/blog.test.ts`, which also calls one directly. A CommonJS test written by hand reads a query as `require("../queries/get_user.sql").default`; Babel writes that for the TypeScript tests here.
-- `.env`: `DATABASE_URL=file:./app.db`, a path that starts at `package.json`. The type check and the transformer analyze each statement against it, and `src/db.ts` opens the same file.
-- `.vscode/` and `.zed/`: the editor settings from [reylo.dev/#editors](https://reylo.dev/#editors), which run the project's TypeScript with content mappers on.
+- In `package.json`:
+  - In `dependencies`, `reylo` is the runtime each query module imports, and the transformer `reylo/jest`.
+  - In `devDependencies`, `@reylosql/sqlite` and `typescript` (`7.1.0-beta`) are the SQLite engine that the type check and the transformer analyze each statement with, and the first TypeScript with content mappers.
+  - The `test` script runs `node --experimental-vm-modules node_modules/jest/bin/jest.js`: Jest runs ES modules only behind that Node flag, and passing it to `node` directly works in every shell, with no `NODE_OPTIONS=` prefix or `cross-env`. The flag `--env-file-if-exists=.env` gives the tests `DATABASE_URL`; one set in the environment wins.
+  - The `test:cjs` script runs Jest without the flag, with `jest.cjs.config.js`.
+  - The `typecheck` script runs `tsc --noEmit --runExternalCode`, which lets `tsc` run the content mapper.
+- In `tsconfig.json`, `contentMappers` hands `.sql` imports to `reylo`. The `include` option covers `src`, where the tests sit beside the code they test, and `setup.ts`, so the type check covers the tests too; it leaves out `setup.sql`, a schema rather than one query, which the type check would report. The options `erasableSyntaxOnly` and `verbatimModuleSyntax` keep the TypeScript to what Node and Jest can run by stripping types, and `allowImportingTsExtensions` lets the files import each other as `./db.ts`, as Node needs.
+- In `jest.config.js`, the ES module run, `transform` sends `.sql` files to `reylo/jest`, since Jest loads tests through its own runtime, which no preload reaches. The `extensionsToTreatAsEsm` option lists `.sql` beside `.ts`, so a query's module is an ES module like the test that imports it. No transform claims the `.ts` files, so Jest strips their types itself, through Node.
+- The CommonJS run, `jest.cjs.config.js`, has the same transformer, which writes CommonJS when Jest asks for it; `babel-jest` for `.js` as well as `.ts`, because a CommonJS run must compile the tests' `import`s and Reylo's runtime, an ES module; and `transformIgnorePatterns`, which lets Babel compile `reylo` inside `node_modules`. Its Babel presets are preset-env, which compiles ES modules only when Jest asks for CommonJS (see Notes), and preset-typescript.
+- The `queries/` directory holds one statement per `.sql` file. The module `src/blog.ts` imports them, and so does `src/blog.test.ts`, which also calls one directly. A CommonJS test written by hand reads a query as `require("../queries/get_user.sql").default`; Babel writes that for the TypeScript tests here.
+- The `.env` file sets `DATABASE_URL=file:./app.db`, a path that starts at `package.json`. The type check and the transformer analyze each statement against it, and `src/db.ts` opens the same file.
+- The `.vscode/` and `.zed/` directories hold the editor settings from [reylo.dev/#editors](https://reylo.dev/#editors), which run the project's TypeScript with content mappers on.
 
 ## In your own project
 
@@ -41,9 +41,9 @@ Each test runs inside a transaction that it rolls back, so `app.db` stays as `se
 
 ## Notes
 
-- better-sqlite3, which the docs' SQLite examples use: version 13 carries prebuilt binaries inside the package, so it installs on Node 24 and 26 without a compiler or an install script. `node:sqlite` also works inside Jest's sandbox, without `db.transaction`.
+- better-sqlite3, which the docs' SQLite examples use: version 13 carries prebuilt binaries inside the package, so it installs on Node 24 and 26 without a compiler or an install script. The built-in `node:sqlite` also works inside Jest's sandbox, without `db.transaction`.
 - The TypeScript tests need no transform in the ES module run: Jest 30.5 strips the types of a `.ts` file that no transform claims, with Node's `module.stripTypeScriptTypes`. ts-jest does not run on TypeScript 7: it calls TypeScript's JavaScript API, which `typescript@7.1.0-beta` does not ship, and ts-jest 29.4 asks for `typescript <7`. So the CommonJS run compiles with babel-jest, the TypeScript setup in Jest's own docs. Neither checks types: `nub run typecheck` does.
-- Under `--experimental-vm-modules`, Jest 30.5 on Node 24.9 or later loads an ES module that a CommonJS file requires as an ES module, and it fails with `ReferenceError: exports is not defined` when Babel has already compiled that module to CommonJS. `@babel/plugin-transform-modules-commonjs` always compiles, so the CommonJS run takes preset-env, which compiles only when Jest asks for CommonJS. nub starts every Node with that flag, so `nub run test:cjs` loads Reylo's runtime natively and `npm run test:cjs` compiles it; both pass.
+- Under `--experimental-vm-modules`, Jest 30.5 on Node 24.9 or later loads an ES module that a CommonJS file requires as an ES module, and it fails with `ReferenceError: exports is not defined` when Babel has already compiled that module to CommonJS. The plugin `@babel/plugin-transform-modules-commonjs` always compiles, so the CommonJS run takes preset-env, which compiles only when Jest asks for CommonJS. nub starts every Node with that flag, so `nub run test:cjs` loads Reylo's runtime natively and `npm run test:cjs` compiles it; both pass.
 - A statement the database refuses fails the test file that imports it, at the `.sql` file's line and column: `queries/get_user.sql:1:12: no such column: nmae`.
 - Node prints `ExperimentalWarning: VM Modules is an experimental feature` on the ES module run.
 - Jest 30.5 prints only the summary lines when it sees a coding agent's environment (`AI_AGENT`, `CLAUDECODE`); `--json` lists every test.

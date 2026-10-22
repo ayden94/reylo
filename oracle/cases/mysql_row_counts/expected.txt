@@ -57,7 +57,7 @@ key_view.sql: many (id: int4) -> { id: int4|int8 }
 key_window.sql: maybeOne (id: int4) -> { id: int4, r: int8 }
 key_with.sql: many (id: int4) -> { id: int4 }
 key_with_shadows_in_subquery.sql: one () -> { n: int8 }
-key_with_shadows_recursive.sql: many (id: int4) -> { id: int8|int4? }
+key_with_shadows_recursive.sql: many (id: int4) -> { id: int8|int4 }
 key_with_shadows_table.sql: many (id: int4) -> { id: int8|int4 }
 lateral.sql: many (id: int4) -> { id: int4, n: int8 }
 no_from.sql: one () -> { one: int8|int4 }

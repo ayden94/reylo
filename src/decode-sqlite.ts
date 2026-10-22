@@ -4,38 +4,52 @@
 // rounded past 2^53, an error, a BigInt, or libSQL's string) and a BLOB (a Buffer, a Uint8Array, an
 // ArrayBuffer or D1's array of numbers). And only the analysis knows that a TEXT holds JSON or that
 // an INTEGER is a truth value. So Reylo normalizes the driver's rows, by each column's kind where the
-// module carries it (docs/driver-decoding/spike/sqlite.md):
+// module carries it (wiki/driver-decoding/spike/sqlite.md):
 //
 // - better-sqlite3, node:sqlite and bun:sqlite: Reylo prepares its own statement on the app's
 //   database, once per database and text (a WeakMap keyed by the database), and sets that
 //   statement's own integer mode, whatever the database's, and no other statement of the app's
 //   changes. node:sqlite's statement, and better-sqlite3's and bun:sqlite's where a column has no
-//   type the module knows, read every INTEGER as a BigInt: each is then a number, or an error naming
-//   its column past 2^53. Where every column is typed, better-sqlite3's and bun:sqlite's read numbers
-//   (a BigInt per integer cost +70% on 10,000 rows), and a number past 2^53 in a column that may hold
-//   an INTEGER can only be a rounded one, which is refused. bun:sqlite's statement comes from
+//   type the module knows or is a BIGINT's (`int8`, a BigInt), read every INTEGER as a BigInt: an
+//   INTEGER's is then a number, or an error naming its column past 2^53. Where every column is
+//   typed and none is a BIGINT's, better-sqlite3's and bun:sqlite's read numbers (a BigInt per
+//   integer cost +70% on 10,000 rows when `exactInteger` compared BigInts, and +17 to 20% since it
+//   converts first, which is also what a five-column row costs with one of its INTEGER columns
+//   declared BIGINT), and a number past 2^53 in a column that may hold an INTEGER can only be a
+//   rounded one, which is refused. bun:sqlite's statement comes from
 //   `prepare`, never `query`, whose cache by text would carry Reylo's mode into the app's statement.
+// - Turso's new engine (@tursodatabase/database): Reylo prepares its statement and sets its integer
+//   mode as on better-sqlite3, per call and closed after it, since a Transaction's statements end
+//   with it and a 0.4 statement run twice could lose its rows; the promise API's statement is
+//   awaited, the compat Database's answers at once. Its BLOB is a Buffer and its BOOLEAN 0 or 1, as
+//   on better-sqlite3; at its defaults an INTEGER past 2^53 comes back rounded, with no error.
 // - sqlite3 and the sqlite wrapper, libSQL, D1 and Bun.SQL's SQLite: the rows the driver gives,
 //   normalized. sqlite3 and sqlite are not cached: a statement left open makes the app's close()
 //   fail with SQLITE_BUSY. An INTEGER the driver already rounded (sqlite3, sqlite, D1, Bun.SQL
-//   without safeIntegers) is refused in an INTEGER column, where a number past 2^53 can only be one.
+//   without safeIntegers) is refused in an INTEGER or BIGINT column, where a number past 2^53 can
+//   only be one; a BIGINT's number within 2^53, or libSQL's BigInt or digits, is its BigInt.
 import { bigInteger, coerce, exactInteger, refuseTruth, truth, type Columns, type Kind } from "./values.ts";
 
 type AnyClient = Record<string, any>;
 type Statement = AnyClient;
 
-/** Reylo's statement, and whether it reads every INTEGER as a BigInt (a driver of the three). */
-type Kept = { st: Statement; exact: boolean };
+/** Reylo's statement, whether it reads every INTEGER as a BigInt, and whether it is kept for the next call. */
+type Kept = { st: Statement; exact: boolean; kept: boolean };
 const statements = new WeakMap<object, Map<string, Kept>>();
 /** How many statements Reylo keeps per database: more distinct texts than that drop the oldest. */
 const KEPT = 500;
 
-/** Reylo's own statement for `text` on the app's database, with integers read as BigInts. */
+/**
+ * Reylo's own statement for `text` on the app's database, with integers read as BigInts. Turso's
+ * compat Database (maxWriteReplicationIndex()) gets a new statement per call, closed after it: on
+ * 0.4 a statement with a subquery run a second time returned no rows.
+ */
 function statementFor(db: AnyClient, text: string, typed: boolean): Kept {
+  const keep = typeof db.maxWriteReplicationIndex !== "function";
   let kept = statements.get(db);
-  if (!kept) statements.set(db, (kept = new Map()));
+  if (!kept && keep) statements.set(db, (kept = new Map()));
   const key = `${typed ? "n" : "b"}${text}`;
-  const found = kept.get(key);
+  const found = kept?.get(key);
   if (found) return found;
   const st = db.prepare(text) as Statement;
   let exact = false;
@@ -48,24 +62,31 @@ function statementFor(db: AnyClient, text: string, typed: boolean): Kept {
     st.safeIntegers(!typed);
     exact = !typed;
   }
+  const entry = { st, exact, kept: keep };
+  if (!kept) return entry;
   if (kept.size >= KEPT) kept.delete(kept.keys().next().value!);
-  const entry = { st, exact };
   kept.set(key, entry);
   return entry;
 }
 
 /**
- * Runs `text` on a synchronous SQLite database (better-sqlite3, node:sqlite, bun:sqlite) and returns
- * its normalized rows; a statement that answers through a promise (no such database) gives the
- * promise, which `runSync` refuses.
+ * Runs `text` on a synchronous SQLite database (better-sqlite3, node:sqlite, bun:sqlite, Turso's
+ * compat Database) and returns its normalized rows; a statement that answers through a promise (no
+ * such database) gives the promise, which `runSync` refuses.
  */
 export function runSyncSqlite(db: AnyClient, text: string, values: unknown[], columns: Columns | undefined): unknown[] | Promise<unknown[]> {
-  // Every column typed: a number past 2^53 in one can be told as rounded (src/values.ts). A column
-  // read as a BigInt (`int8`) needs the statement's integers exact.
-  const typed = columns !== undefined && columns.length > 0 && !columns.some(([, kind]) => kind === "unknown" || kind.split("|").includes("int8"));
-  const { st, exact } = statementFor(db, text, typed);
+  const entry = statementFor(db, text, everyColumnTyped(columns));
+  if (entry.kept) return runStatement(entry, values, columns);
+  try {
+    return runStatement(entry, values, columns);
+  } finally {
+    entry.st.close?.();
+  }
+}
+
+function runStatement({ st, exact }: Kept, values: unknown[], columns: Columns | undefined): unknown[] | Promise<unknown[]> {
   // better-sqlite3 refuses all() on a statement that returns no rows.
-  if (st.reader === false) {
+  if (reader(st) === false) {
     st.run(...values);
     return [];
   }
@@ -78,6 +99,39 @@ export function runSyncSqlite(db: AnyClient, text: string, values: unknown[], co
     rows = (rows as unknown[][]).map((r) => Object.fromEntries(names.map((n, i) => [n, r[i]])));
   }
   return normalize(rows, columns, { exact });
+}
+
+// Whether the statement returns rows: undefined where it cannot say, as Turso 0.4's compat statement,
+// whose `reader` throws "not implemented" and whose all() runs any statement.
+function reader(st: Statement): boolean | undefined {
+  try {
+    return st.reader;
+  } catch {
+    return undefined;
+  }
+}
+
+// Every column typed: a number past 2^53 in one can be told as rounded (src/values.ts). A column
+// read as a BigInt (`int8`) needs the statement's integers exact.
+function everyColumnTyped(columns: Columns | undefined): boolean {
+  return columns !== undefined && columns.length > 0 && !columns.some(([, kind]) => kind === "unknown" || kind.split("|").includes("int8"));
+}
+
+/**
+ * Runs `text` on Turso's promise API (a Database from `connect()`, or the Transaction
+ * `transactionAsync()` hands its callback) and returns its normalized rows. Its prepare() returns
+ * the statement (its types say a promise of it from 0.6, so it is awaited), whose all() runs a
+ * statement that returns no rows as well; the statement is closed after its one run.
+ */
+export async function runTurso(db: AnyClient, text: string, values: unknown[], columns: Columns | undefined): Promise<unknown[]> {
+  const typed = everyColumnTyped(columns);
+  const st = (await db.prepare(text)) as Statement;
+  try {
+    if (typeof st.safeIntegers === "function") st.safeIntegers(!typed);
+    return normalize(await st.all(...values), columns, { exact: !typed });
+  } finally {
+    if (typeof st.close === "function") st.close();
+  }
 }
 
 type Plan = {
@@ -99,16 +153,30 @@ type Plan = {
  */
 function plan(name: string, kind: Kind, exact: boolean): Plan {
   if (kind === "bool") return { name, big: (v) => truth(v, name), num: (v) => truth(v, name), str: (v) => truth(v, name), blob: () => refuseTruth(name, "a BLOB") };
-  // An INTEGER as a BigInt, were the table to say so: a number past 2^53 is a rounded one where the
-  // driver did not read integers exact; a number is a REAL where it did.
+  // A column declared BIGINT, INT8 or UNSIGNED BIG INT, and what passes one through: a BigInt. A
+  // number past 2^53 is a rounded one where the driver did not read integers exact (sqlite3, D1,
+  // libSQL's intMode "number"), and is refused; a number is a REAL where it did.
   if (kind === "int8") return { name, big: (v) => v, num: exact ? undefined : (v) => bigInteger(v, name), str: (v) => bigInteger(v, name) };
   if (kind === "json") return { name, big: (v) => exactInteger(v, name), num: undefined, str: (v) => JSON.parse(v) };
   if (kind === "text") return { name, big: String, num: undefined, str: undefined };
   if (kind === "int") return { name, big: (v) => exactInteger(v, name), num: exact ? undefined : (v) => exactInteger(v, name), str: (v) => coerce(kind, v, name) };
+  // libSQL under intMode "string" hands an INTEGER over as its digits, and says nothing of the storage
+  // class or of its mode. Where the column is a REAL's, or a NUMERIC's, those digits can only be an
+  // INTEGER's: SQLite stores text that reads as an integer as that integer in a column of REAL or
+  // NUMERIC affinity, and a REAL reaches JavaScript as a number. So they are the integer, exact or
+  // refused. In a column with no type, or one built from what may be TEXT, the digits may be a
+  // TEXT's, and stay as the driver gave them (wiki/driver-decoding.md).
+  const kinds = kind.split("|");
+  const digits = kinds.includes("int") || kinds.includes("float") ? (v: string) => (/^[+-]?\d+$/.test(v) ? exactInteger(BigInt(v), name) : v) : undefined;
   // A NUMERIC's either: read as numbers, one past 2^53 may be a rounded INTEGER, which is refused.
-  if (!exact && kind.split("|").includes("int")) return { name, big: (v) => exactInteger(v, name), num: (v) => (Number.isInteger(v) ? exactInteger(v, name) : v), str: undefined };
-  // A REAL, a BLOB, a column with no type: an integer is exact or refused, a number is as it is.
-  return { name, big: (v) => exactInteger(v, name), num: undefined, str: undefined };
+  if (!exact && kinds.includes("int")) return { name, big: (v) => exactInteger(v, name), num: (v) => (Number.isInteger(v) ? exactInteger(v, name) : v), str: numericOnly(kinds) ? digits : undefined };
+  // A REAL, a NUMERIC read exact, a BLOB, a column with no type: an integer is exact or refused, a number is as it is.
+  return { name, big: (v) => exactInteger(v, name), num: undefined, str: numericOnly(kinds) ? digits : undefined };
+}
+
+/** A REAL's, an INTEGER's or a NUMERIC's column (`int|float|text`, the one kind a NUMERIC has), where integer digits can only be an INTEGER's. */
+function numericOnly(kinds: string[]): boolean {
+  return kinds.every((k) => k === "int" || k === "float") || (kinds.length === 3 && kinds.includes("int") && kinds.includes("float") && kinds.includes("text"));
 }
 
 /**

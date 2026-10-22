@@ -1,16 +1,10 @@
-import { defineDocs } from 'fumadocs-mdx/macro';
+import { docs } from 'collections/server';
 import { loader } from 'fumadocs-core/source';
 
-// The site is one page, content/docs/index.mdx, at /. Its MDX options are lib/mdx-options.ts,
-// imported inside the options, which the macro runs only at build time, so the app never bundles
-// them or TypeScript.
-const docs = defineDocs({
-  dir: 'content/docs',
-  docs: {
-    mdxOptions: async (environment) => (await import('./mdx-options')).mdxOptions(environment),
-  },
-});
-
+// The site's pages are content/docs: the main page, index.mdx, at /, and a reference page per
+// dialect, postgres.mdx, mysql.mdx and sqlite.mdx, at /postgres, /mysql and /sqlite. The main page
+// goes on in content/sections/, a file per h2 section (lib/page-files.ts). Read at build time only,
+// by the routes' loaders; the browser loads each page's files itself (lib/content.ts).
 export const source = loader({
   baseUrl: '/',
   source: docs.toFumadocsSource(),

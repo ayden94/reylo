@@ -148,8 +148,9 @@ pub struct Analysis {
     /// Paths inside JSON columns the engine could not type, for a message.
     pub unresolved: Vec<String>,
     /// Each structured parameter in insert position, with the lists of `rewritten` the run time
-    /// writes again for a call that leaves keys out ([`crate::structured`]).
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    /// writes again for a call that leaves keys out ([`crate::structured`]); on the wire only
+    /// those that have lists (MySQL's), since a Postgres or SQLite statement copies its defaults.
+    #[serde(skip_serializing_if = "crate::structured::none_rewritten", serialize_with = "crate::structured::rewritten_only")]
     pub structured: Vec<crate::structured::Info>,
     /// The facts the analysis relied on, which a deployed query checks against its database
     /// ([`crate::fresh`]).

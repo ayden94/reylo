@@ -56,8 +56,10 @@ const o: ExpectedNested | null = await nested.run(conn, { id: 1 });
 import positional from "./positional.sql";
 const pos1: { name: string } | null = null! as Awaited<ReturnType<typeof positional.run>>;
 const pos2: Awaited<ReturnType<typeof positional.run>> = null! as { name: string } | null;
-const pos3: { 1: number; 2: string } = null! as Exclude<Parameters<typeof positional.run>[1], readonly unknown[]>;
-const pos4: Exclude<Parameters<typeof positional.run>[1], readonly unknown[]> = null! as { 1: number; 2: string };
+const pos3: { 1: number; 2: string } = null! as Parameters<typeof positional.run>[1];
+const pos4: Parameters<typeof positional.run>[1] = null! as { 1: number; 2: string };
+// @ts-expect-error positional placeholders take an object keyed by number, never an array
+await positional.run(conn, [1, "ada"]);
 // A backslash escapes the quote after it and `#` starts a comment, so `:not` and `:nobody` are text.
 import escaped, * as esc from "./escaped.sql";
 const esc1: { id: number; said: string; path: string } | null = await escaped.run(conn, { id: 1 });

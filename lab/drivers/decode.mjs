@@ -65,7 +65,7 @@ function same(label, actual, expected) {
 /** Both forms of the query: by hand and as built. */
 async function both(label, client) {
   same(`${label} through run`, await q.run(client, { id: 1 }), declared);
-  same(`${label} through run, as built`, await built.run(client, [1]), declared);
+  same(`${label} through run, as built`, await built.run(client, { id: 1 }), declared);
 }
 
 const admin = new pg.Client(`${server}/postgres`);

@@ -7,8 +7,8 @@
 
 import { bunRows, neonCallable, postgresJs, queryPostgres } from "./decode.ts";
 import { mariadb, mysql2, planetscale } from "./decode-mysql.ts";
-import { normalize, runSyncSqlite } from "./decode-sqlite.ts";
-import type { Columns } from "./values.ts";
+import { normalize, runSyncSqlite, runTurso } from "./decode-sqlite.ts";
+import { postgresYear, type Columns } from "./values.ts";
 import type { EngineType } from "./engine-type.ts";
 import { lexPlaceholders } from "./lex.ts";
 import type { JsonSchema } from "./engine-type.ts";
@@ -65,9 +65,9 @@ export type MariadbCallbackClient = {
   batch(text: string, values: any, callback: (error: Error | null, result?: any) => void): void;
 };
 /**
- * better-sqlite3, node:sqlite's DatabaseSync and bun:sqlite's Database, which answer at once:
- * `runSync` takes them and returns the result itself, so it works inside their
- * `db.transaction(fn)`, whose function must not await.
+ * better-sqlite3, node:sqlite's DatabaseSync, bun:sqlite's Database and the Database of Turso's
+ * `@tursodatabase/database/compat`, which answer at once: `runSync` takes them and returns the
+ * result itself, so it works inside their `db.transaction(fn)`, whose function must not await.
  */
 export type SyncSqliteClient = {
   prepare(sql: string): { all(...params: any[]): unknown[] };
@@ -82,6 +82,18 @@ export type LibsqlClient = {
   /** mariadb's execute() takes an object with sql and resolves to any; executeMultiple() tells libSQL apart. */
   executeMultiple(sql: string): Promise<unknown>;
 };
+/**
+ * Turso's new engine, `@tursodatabase/database`: the Database `connect()` resolves to and the
+ * Transaction `transactionAsync()` hands its callback, whose statements answer through a promise:
+ * prepare(sql).all(...values) → rows. Its types say prepare() returns a promise of the statement
+ * from 0.6, and the statement itself before; it returns the statement itself in every release.
+ */
+export type TursoClient = {
+  prepare(sql: string): TursoStatement | PromiseLike<TursoStatement>;
+  /** postgres.js's transaction has a prepare(name) of any type too; exec() tells Turso's apart. */
+  exec(sql: string): Promise<unknown>;
+};
+type TursoStatement = { all(...params: any[]): Promise<unknown[]> };
 /** The sqlite3 package's callback Database: all(sql, params, callback). */
 export type Sqlite3Client = {
   all(sql: string, params: any[], callback: (error: Error | null, rows: any[]) => void): unknown;
@@ -97,7 +109,7 @@ export type PostgresClient = PgQueryClient | NeonHttpClient | UnsafeClient | Cal
 /** Every MySQL client `run` takes, or a transaction or connection taken from one. */
 export type MysqlClient = MysqlExecuteClient | Mysql2CallbackClient | MariadbClient | MariadbCallbackClient | BunSqlClient;
 /** Every SQLite client `run` takes, or a transaction taken from one. */
-export type SqliteClient = SyncSqliteClient | D1Client | LibsqlClient | Sqlite3Client | SqlitePromiseClient | BunSqlClient;
+export type SqliteClient = SyncSqliteClient | D1Client | LibsqlClient | TursoClient | Sqlite3Client | SqlitePromiseClient | BunSqlClient;
 
 // Each dialect's clients are one named union, so a hover over `run` reads
 // `run(client: PostgresClient, …)` rather than listing every client's shape.
@@ -132,7 +144,7 @@ export type QueryModule<D extends Dialect = Dialect> = {
  * Each parameter by name: `type` is the engine's type for it. The run time reads it where a
  * driver binds a value of one type wrong (an array to a SQL array on postgres.js and Bun.sql, to
  * JSON on pg); a query without it, defined by hand or built before 2026-10-12, binds every value
- * as it is. A typed JSON parameter (docs/typed-json-params.md) carries its schema beside it, and
+ * as it is. A typed JSON parameter (wiki/typed-json-params.md) carries its schema beside it, and
  * a parameter cast with `::` on MySQL or SQLite the type as written (src/rows.ts, `checkCast`).
  */
 export type Inputs = Readonly<Record<string, { readonly type: EngineType; readonly schema?: JsonSchema; readonly cast?: string }>>;
@@ -140,11 +152,11 @@ export type Inputs = Readonly<Record<string, { readonly type: EngineType; readon
 type AnyClient = Record<string, any> & ((...args: any[]) => any);
 
 /**
- * The parameters: an object keyed by name, or an array whose element i binds the query's
- * `params[i]` (for `$1` and `$2`, `params` is `["1", "2"]`), for callers that hold the values
- * in order already.
+ * The parameters: an object keyed by name, or by number for positional placeholders (`$1` and
+ * `?` give `{ 1: ..., 2: ... }`, and `params` is `["1", "2"]`). An array is refused, since
+ * 2026-10-20 (wiki/design.md §9).
  */
-export type ParamsInput = Record<string, unknown> | readonly unknown[];
+export type ParamsInput = Record<string, unknown>;
 
 /**
  * Runs the statement and returns its rows (an empty array for a statement that returns none).
@@ -164,7 +176,7 @@ export function execute<D extends Dialect>(
 /** The synchronous path alone, for `runSync`: any other client is refused before anything runs. */
 export function executeSync<D extends Dialect>(client: SyncClientFor<D>, query: QueryModule<D>, params: ParamsInput = {}): unknown[] {
   const c = client as unknown as AnyClient;
-  const refuse = (why: string) => new TypeError(`runSync takes a synchronous SQLite client (better-sqlite3, node:sqlite or bun:sqlite); ${why}. run takes every client.`);
+  const refuse = (why: string) => new TypeError(`runSync takes a synchronous SQLite client (better-sqlite3, node:sqlite, bun:sqlite or the Database of @tursodatabase/database/compat); ${why}. run takes every client.`);
   if (query.dialect !== "sqlite") throw refuse(`a ${query.dialect} statement has none`);
   if (!isSyncSqlite(c)) throw refuse("this client answers through a promise");
   const rows = executeSyncSqlite(c, query, params);
@@ -174,12 +186,13 @@ export function executeSync<D extends Dialect>(client: SyncClientFor<D>, query: 
 }
 
 function executeSyncSqlite(c: AnyClient, query: QueryModule, params: ParamsInput): unknown[] | Promise<unknown[]> {
+  checkParams(query, params);
   if (query.fresh && due(query)) {
     let rows: unknown[] | undefined;
     try {
       rows = c.prepare(query.fresh.query).all();
     } catch {}
-    const lines = (rows && differences(query.fresh, rows)) ?? [];
+    const lines = (rows && differences(query.fresh, rows, query.dialect)) ?? [];
     if (lines.length) throw staleError(query.source, lines);
     passed(query);
   }
@@ -188,20 +201,33 @@ function executeSyncSqlite(c: AnyClient, query: QueryModule, params: ParamsInput
 }
 
 // A SQLite client with prepare() whose statements answer at once. D1 (batch()), sqlite3 and
-// sqlite (all() on the database), libSQL (execute()) and Bun.sql (unsafe()) are asynchronous.
+// sqlite (all() on the database), libSQL (execute()), Bun.sql (unsafe()) and Turso's promise API
+// are asynchronous. Turso's compat Database has batch() as D1 does, and answers at once; its
+// maxWriteReplicationIndex(), which every Database of Turso's has, tells it from D1's.
 function isSyncSqlite(c: AnyClient | null | undefined): boolean {
   return (
     c != null &&
     typeof c.prepare === "function" &&
-    typeof c.batch !== "function" &&
+    (typeof c.batch !== "function" || typeof c.maxWriteReplicationIndex === "function") &&
     typeof c.all !== "function" &&
     typeof c.execute !== "function" &&
-    typeof c.unsafe !== "function"
+    typeof c.unsafe !== "function" &&
+    !isTurso(c)
   );
+}
+
+// Turso's promise API (@tursodatabase/database): a Database has connect() and
+// maxWriteReplicationIndex() in every release from 0.4 (0.4 has no all(), so it looked synchronous,
+// and from 0.6 its all() took it for sqlite3's, whose callback it never calls); the Transaction
+// that transactionAsync() hands its callback (0.7 and later) has all() beside batch(), which
+// sqlite3's database lacks. The compat Database has no connect().
+function isTurso(c: AnyClient): boolean {
+  return typeof c.prepare === "function" && ((typeof c.connect === "function" && typeof c.maxWriteReplicationIndex === "function") || (typeof c.all === "function" && typeof c.batch === "function"));
 }
 
 async function executeAsync(c: AnyClient | null | undefined, query: QueryModule, params: ParamsInput): Promise<unknown[]> {
   if (c == null || (typeof c !== "object" && typeof c !== "function")) throw unsupported(c, query.dialect);
+  checkParams(query, params);
   // The catalog facts the statement relied on, read again through the same client.
   if (query.fresh && due(query)) {
     const fresh = query.fresh;
@@ -209,7 +235,7 @@ async function executeAsync(c: AnyClient | null | undefined, query: QueryModule,
     try {
       rows = await executeAsync(c, { dialect: query.dialect, sql: fresh.query, params: [], text: fresh.query, order: [] }, {});
     } catch {}
-    const lines = (rows && differences(fresh, rows)) ?? [];
+    const lines = (rows && differences(fresh, rows, query.dialect)) ?? [];
     if (lines.length) throw staleError(query.source, lines);
     passed(query);
   }
@@ -270,10 +296,13 @@ async function executeAsync(c: AnyClient | null | undefined, query: QueryModule,
       const columns = query.columns;
       if (typeof c.unsafe === "function") return normalize(await c.unsafe(text, values), columns);
       if (typeof c.execute === "function") return normalize((await c.execute({ sql: text, args: values })).rows, columns);
-      if (typeof c.getDatabaseInstance === "function") return normalize(await c.all(text, values), columns);
+      if (isTurso(c)) return await runTurso(c, text, values, columns);
+      // The sqlite package wraps sqlite3, and sqlite3 binds a BigInt as NULL.
+      if (typeof c.getDatabaseInstance === "function") return normalize(await c.all(text, values.map((v, i) => sqlite3Value(v, type(i)))), columns);
       if (typeof c.all === "function" && typeof c.exec === "function") {
+        const bound = values.map((v, i) => sqlite3Value(v, type(i)));
         return normalize(
-          await new Promise<unknown[]>((resolve, reject) => c.all(text, values, (error: Error | null, rows: unknown[]) => (error ? reject(error) : resolve(rows)))),
+          await new Promise<unknown[]>((resolve, reject) => c.all(text, bound, (error: Error | null, rows: unknown[]) => (error ? reject(error) : resolve(rows)))),
           columns,
         );
       }
@@ -288,19 +317,20 @@ async function executeAsync(c: AnyClient | null | undefined, query: QueryModule,
   throw unsupported(c, query.dialect);
 }
 
+// The parameters are an object, refused before anything reaches the database otherwise: an
+// array, which `run` took in the order of `params` from 2026-10-03, was dropped on 2026-10-20
+// (wiki/design.md §9), so the call says which key each value binds.
+function checkParams(query: QueryModule, input: unknown): asserts input is Record<string, unknown> {
+  if (input !== null && typeof input === "object" && !Array.isArray(input)) return;
+  const keys = query.params.map((name) => `${/^(?:[A-Za-z_$][\w$]*|\d+)$/.test(name) ? name : JSON.stringify(name)}: ...`);
+  const takes = keys.length ? `This statement takes { ${keys.join(", ")} }.` : "This statement takes none: leave them out.";
+  throw new TypeError(`The parameters must be an object keyed by parameter name, or by number for positional placeholders ({ 1: ..., 2: ... }); got ${Array.isArray(input) ? "an array" : String(input)}. ${takes}`);
+}
+
 // The rows are bound positionally in every dialect. A value left out binds NULL, as pg,
 // PGlite, better-sqlite3 and Bun.sql already do; postgres.js, mysql2, node:sqlite and libSQL
-// would reject it instead. An array shorter than `params` leaves the rest out.
-function statement(query: QueryModule, input: ParamsInput) {
-  let params: Record<string, unknown>;
-  if (Array.isArray(input)) {
-    if (input.length > query.params.length) {
-      throw new TypeError(`The statement takes ${query.params.length} parameter${query.params.length === 1 ? "" : "s"} (${query.params.map((name) => JSON.stringify(name)).join(", ") || "none"}); got an array of ${input.length} value${input.length === 1 ? "" : "s"}.`);
-    }
-    params = Object.fromEntries(query.params.map((name, i) => [name, input[i]]));
-  } else if (input === null || typeof input !== "object") {
-    throw new TypeError(`The parameters must be an object keyed by parameter name (or by number, { 1: ... }, for positional placeholders), or an array in the order of the query's params; got ${String(input)}.`);
-  } else params = input as Record<string, unknown>;
+// would reject it instead.
+function statement(query: QueryModule, params: ParamsInput) {
   // The build step already compiled the statement; only the values need ordering.
   const compiled = compile(query);
   const bound: { text: string; values: unknown[]; names: readonly string[] } = { text: compiled.text, values: compiled.order.map((name) => value(params, name)), names: compiled.order };
@@ -308,7 +338,7 @@ function statement(query: QueryModule, input: ParamsInput) {
     const type = query.inputs?.[name]?.type;
     // A typed JSON parameter (`:p::jsonb('…')`): a value left out takes the schema's default, a
     // key under `properties` too, and the value is checked against the schema before the
-    // statement runs (docs/typed-json-params.md). Null is SQL NULL, whose type the statement says.
+    // statement runs (wiki/typed-json-params.md). Null is SQL NULL, whose type the statement says.
     const schema = query.inputs?.[name]?.schema;
     if (schema !== undefined) {
       let v = params[name];
@@ -335,6 +365,7 @@ function statement(query: QueryModule, input: ParamsInput) {
     const cast = query.inputs?.[name]?.cast;
     if (cast !== undefined && type !== undefined) checkCast(name, cast, type, bound.values[i], query.dialect);
     checkTime(type, name, bound.values[i]);
+    bound.values[i] = encode(type, bound.values[i], query.dialect);
   });
   // Every MySQL and SQLite driver binds JSON text as text, which the database reads as JSON (a
   // structured parameter's is written already).
@@ -363,7 +394,7 @@ const isJson = (kind: EngineType["kind"] | undefined) => kind === "json" || kind
 
 // A JSON parameter's value is a JavaScript value, which reaches the database as its JSON text
 // (JSON.stringify), so a string is a JSON string on every driver; null is SQL NULL. Each driver
-// left to itself did something else (docs/driver-decoding.md, 2026-10-12): pg wrote an array as
+// left to itself did something else (wiki/driver-decoding.md, 2026-10-12): pg wrote an array as
 // an array literal and a string as raw JSON text, mariadb expanded an array into a list, the
 // SQLite drivers refused an object, and mysql2 bound 5 as 5.0.
 function isJsonValue(query: QueryModule, name: string, v: unknown): boolean {
@@ -375,8 +406,10 @@ function isJsonValue(query: QueryModule, name: string, v: unknown): boolean {
 // statement runs. A `timestamp` or a `date` (MySQL's DATETIME and TIMESTAMP are the engine's
 // `timestamp`) takes no Date: pg and mysql2 wrote its wall-clock time in the app's zone,
 // postgres.js in the server's, PGlite and Bun.sql in UTC, and Bun.sql's `date` failed in every
-// zone. A string for a `timestamptz` names its zone: without one the server reads it in the
-// session's TimeZone, which the driver or the server sets.
+// zone. A `timestamptz` takes a string that names its zone, which is what `run` returns for one:
+// without a zone the server reads the text in the session's TimeZone, which the driver or the
+// server sets, and a Date is refused too, as every other type's value is but a string (the
+// maintainer, 2026-10-20), with the call that writes it as one.
 
 const isTime = (type: EngineType | undefined) => type?.kind === "scalar" && type.name.split("|").every((part) => part === "timestamp" || part === "timestamptz" || part === "date");
 
@@ -388,12 +421,40 @@ function checkTime(type: EngineType | undefined, name: string, v: unknown): void
   }
   if (type.kind !== "scalar") return;
   if (type.name === "timestamptz") {
+    if (v instanceof Date) {
+      throw new TypeError(`Parameter "${name}" is a timestamptz, which takes the instant as a string that names its zone, as \`.run()\` returns one, not a Date: pass date.toISOString() ("2026-10-12T19:06:48.282Z").`);
+    }
     if (typeof v === "string" && !zoned.test(v.trim())) {
-      throw new TypeError(`Parameter "${name}" is a timestamptz, an instant, so a string for it names its zone ("2026-10-12T19:06:48.282Z", "2026-10-12 19:06:48+09", "2026-10-12 19:06:48 America/Los_Angeles"); got ${JSON.stringify(v)}, which the server would read in the session's time zone. A Date is the instant it is.`);
+      throw new TypeError(`Parameter "${name}" is a timestamptz, an instant, so a string for it names its zone ("2026-10-12T19:06:48.282Z", "2026-10-12 19:06:48+09", "2026-10-12 19:06:48 America/Los_Angeles"); got ${JSON.stringify(v)}, which the server would read in the session's time zone.`);
     }
   } else if (v instanceof Date && type.name.split("|").every((part) => part === "timestamp" || part === "date")) {
-    throw new TypeError(`Parameter "${name}" is a ${type.name === "date" ? "date" : "timestamp"} without a time zone, so it takes the wall-clock text ("2026-10-12 19:06:48.282", "2026-10-12"), not a Date: drivers write a Date's time in different zones (the app's, the server's or UTC). A timestamptz parameter takes a Date.`);
+    throw new TypeError(`Parameter "${name}" is a ${type.name === "date" ? "date" : "timestamp"} without a time zone, so it takes the wall-clock text ("2026-10-12 19:06:48.282", "2026-10-12"), not a Date: drivers write a Date's time in different zones (the app's, the server's or UTC).`);
   }
+}
+
+// What `run` returns goes back in as the database reads it (the round-trip rule, src/render.ts):
+// on Postgres a date or time with an extended or BC year in Postgres's own form, which refuses
+// `+010000` and `0000`; on SQLite a truth value, which a BOOLEAN column returns, as 1 or 0, since
+// better-sqlite3 refuses a boolean ("SQLite3 can only bind numbers, strings, bigints, buffers, and
+// null") and libSQL binds `true` as the REAL 1.0. A query without `inputs` gets neither.
+function encode(type: EngineType | undefined, v: unknown, dialect: Dialect): unknown {
+  if (type === undefined || v == null) return v;
+  if (dialect === "sqlite") return typeof v === "boolean" ? (v ? 1 : 0) : v;
+  if (dialect !== "postgres") return v;
+  if (type.kind === "array") return Array.isArray(v) ? v.map((e) => encode(Array.isArray(e) ? type : type.of, e, dialect)) : v;
+  return typeof v === "string" && isTime(type) ? postgresYear(v) : v;
+}
+
+// sqlite3 6.0.1 binds a BigInt as NULL, with no error (`select cast(? as text)` with
+// 9007199254740993n gave null), where every other SQLite driver binds it exactly. A BigInt a
+// number holds exactly goes as that number. A larger one goes as its digits to a parameter of a
+// BIGINT column (the engine's int8), whose INTEGER affinity reads the text as that integer in an
+// insert and a comparison alike, and is refused anywhere else, where the text would stay text.
+function sqlite3Value(v: unknown, type: EngineType | undefined): unknown {
+  if (typeof v !== "bigint") return v;
+  if (v >= BigInt(Number.MIN_SAFE_INTEGER) && v <= BigInt(Number.MAX_SAFE_INTEGER)) return Number(v);
+  if (type?.kind === "scalar" && type.name === "int8") return String(v);
+  throw new TypeError(`sqlite3 binds a BigInt as NULL, and ${v} is past 2^53 - 1, where a number stops being exact: pass it as a string of digits, which SQLite stores as that integer in an INTEGER column, or run the statement on better-sqlite3, node:sqlite or libSQL, which bind a BigInt.`);
 }
 
 function asByteaHex(v: unknown) {
@@ -465,8 +526,8 @@ function indexOf(query: QueryModule, p: { name: string; start: number; end: numb
 
 const accepted: Record<Dialect, string> = {
   postgres: "query(text, values) as on pg, PGlite, Neon and pg-promise; unsafe(text, values) as on postgres.js and Bun.sql; or Neon's neon() function",
-  mysql: "execute(text, values) as on mysql2 and PlanetScale; query() and batch() as on mariadb; unsafe(text, values) as on Bun.sql; or a mysql2 callback pool or connection",
-  sqlite: "prepare(sql) as on better-sqlite3, node:sqlite, bun:sqlite and Cloudflare D1; execute({ sql, args }) as on @libsql/client; all(sql, params) as on sqlite3 and sqlite; or unsafe(text, values) as on Bun.sql",
+  mysql: "execute(text, values) as on mysql2 and PlanetScale; unsafe(text, values) as on Bun.sql; or a mysql2 callback pool or connection",
+  sqlite: "prepare(sql) as on better-sqlite3, node:sqlite, bun:sqlite, Turso's @tursodatabase/database and Cloudflare D1; execute({ sql, args }) as on @libsql/client; all(sql, params) as on sqlite3 and sqlite; or unsafe(text, values) as on Bun.sql",
 };
 
 function unsupported(c: unknown, dialect: Dialect): TypeError {

@@ -1,0 +1,86 @@
+# .github/workflows/test.yml
+
+name: test
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  # release.yml runs this same job before it stages anything, so the gate a release passes is the one every push passes
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # This file lives in the private working repository too, which `scripts/publish/publish.ts` copies it from; CI runs in the public one only.
+    if: ${{ !github.event.repository.private }}
+    name: Typecheck, test and build on Node 24
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Throwaway servers for the tests that run statements, on ports clear of the defaults: the loader's tests skip each database whose URL is unset, and this job fails on any skip.
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+        ports:
+          - 53306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 --silent"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 60
+    env:
+      REYLO_TEST_PG: postgres://postgres@127.0.0.1:55432/postgres
+      REYLO_TEST_MYSQL: mysql://root@127.0.0.1:53306
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: nubjs/setup-nub@c7b970ec04655a2f0a111cd436cc182a3b660e7a # v0.6.0
+        with:
+          nub-version: "0.9.6"
+          node-version: "24"
+      - run: nub install --frozen-lockfile
+      # The drivers the live tests load, and the Jest and Vitest projects the transformer's tests run.
+      - run: nub install --frozen-lockfile
+        working-directory: lab/drivers
+      - run: nub install --frozen-lockfile
+        working-directory: lab/jest
+      # Each lab reaches the package and its database's engine through links into this checkout, and its driver through lab/drivers (scripts/gates.sh, link_lab); nub install replaces node_modules, so the links come after it.
+      - name: Link the labs the tests load
+        run: |
+          link_lab () {
+            local dir="lab/$1" db="$2"
+            shift 2
+            mkdir -p "$dir/node_modules/@reylosql"
+            ln -sfn ../../.. "$dir/node_modules/reylo"
+            ln -sfn "../../../../packages/$db" "$dir/node_modules/@reylosql/$db"
+            for driver in "$@"; do ln -sfn "../../drivers/node_modules/$driver" "$dir/node_modules/$driver"; done
+          }
+          link_lab basic postgres postgres
+          link_lab mysql mysql mysql2
+          link_lab jest sqlite
+      - run: nub run typecheck
+      - name: Run the tests, none skipped
+        run: |
+          set -o pipefail
+          nub run test 2>&1 | tee "$RUNNER_TEMP/test.log"
+          grep -q '^ℹ skipped 0$' "$RUNNER_TEMP/test.log" || { echo "::error::a test was skipped"; exit 1; }
+      - run: nub run build

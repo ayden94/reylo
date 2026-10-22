@@ -1,6 +1,6 @@
-aggregates.sql: one () -> { n: integer, e: integer, names: text?, t: real, m: real?, first: text?, mean: real? }
+aggregates.sql: one () -> { n: integer, e: integer, names: text?, t: real?, m: real?, first: text?, mean: real? }
 dates.sql: one () -> { d: text, y: text, u: integer, jd: real, zero: text }
-json.sql: many () -> { a: unknown?, l: integer?, v: integer?, o: text, items: integer }
+json.sql: many () -> { a: unknown?, l: integer?, v: integer?, o: { n: text }, items: integer }
 math_missing.sql: many () -> {  } !! reylo6: no such function: acos on this database's SQLite
 math_missing_in_where.sql: many (s: unknown) -> {  } !! reylo6: no such function: sqrt on this database's SQLite
 operators.sql: many (p: text, a: integer, b: integer) -> { l: bool, g: bool, j: unknown?, k: unknown?, c: text, t: text, i: integer, e: text, ty: text, n: integer }

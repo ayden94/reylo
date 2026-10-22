@@ -92,6 +92,40 @@ test("reylo generate analyzes every .sql file of the project, and prints each fi
   assert.equal(reylo(root, "frobnicate").status, 2);
 });
 
+test("reylo generate says once that the type check does not read url, and names the connection it used", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "reylo-cli-url-")));
+  writeFileSync(join(root, "package.json"), "{}");
+  const db = new DatabaseSync(join(root, "app.db"));
+  db.exec("create table users (id integer primary key, name text not null)");
+  db.close();
+  writeFileSync(join(root, "a.sql"), "select id from users");
+  writeFileSync(join(root, "b.sql"), "select name from users");
+  // Reylo does not read url: the run reads DATABASE_URL, and says so once, not per file.
+  writeFileSync(join(root, ".reylo.yaml"), "url: postgres://prod-pooler/app\n");
+  const alone = reylo(root, "generate");
+  assert.equal(alone.status, 0, alone.err);
+  assert.equal(alone.out, [
+    `sqlite at ${join(root, "app.db")} (DATABASE_URL in the environment)`,
+    `.reylo.yaml: Reylo does not read url; set direct_url to the dev database Reylo reads your types from (it uses DATABASE_URL meanwhile)`,
+    `  a.sql  ✓`,
+    `  b.sql  ✓`,
+    ``,
+    `✓ 2 queries typed (_ s)`,
+    ``,
+  ].join("\n"));
+  // Without DATABASE_URL there is no connection, and the one error says why url is not one.
+  const none = spawnSync(process.execPath, [CLI, "generate", "--force"], { cwd: root, encoding: "utf8", env: { PATH: process.env.PATH } });
+  assert.equal(none.status, 1, none.stderr);
+  assert.match(none.stdout, /^No database URL: \.reylo\.yaml sets url, which Reylo does not read; set direct_url there, or DATABASE_URL in the environment, \.env\.local or \.env\.$/m);
+  assert.doesNotMatch(none.stdout, /it uses DATABASE_URL meanwhile/);
+  // direct_url beside url names Reylo's connection: the run reads direct_url and says nothing more.
+  writeFileSync(join(root, ".reylo.yaml"), "url: postgres://prod-pooler/app\ndirect_url: file:./app.db\n");
+  const both = reylo(root, "generate");
+  assert.equal(both.status, 0, both.err);
+  assert.match(both.out, /^sqlite at .*app\.db \("direct_url" in \.reylo\.yaml\)\n  a\.sql  ✓\n/);
+  assert.doesNotMatch(both.out, /does not read url/);
+});
+
 test("a program run under the reylo/register preload prints nothing on stderr: node:wasi's ExperimentalWarning is swallowed", () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "reylo-register-")));
   writeFileSync(join(root, "package.json"), `{ "type": "module" }`);

@@ -37,19 +37,19 @@ cp dist/server.mjs /tmp/app/ && cd /tmp/app
 DATABASE_URL=postgres://localhost:5432/reylo_esbuild PORT=3000 node server.mjs
 ```
 
-`PORT` picks the port (3000 by default), and `DATABASE_URL` in the environment wins over `.env`. `nub run setup` starts the tables over.
+The `PORT` variable picks the port (3000 by default), and `DATABASE_URL` in the environment wins over `.env`. Running `nub run setup` starts the tables over.
 
 Misspell a column in `queries/get_user.sql` and run `nub run typecheck` again: the error shows at that file's line and column, such as `queries/get_user.sql(1,12): error reylo6: column "nmae" does not exist (42703)`, and `nub run build` stops there.
 
 ## How Reylo is wired in
 
-- `package.json`: `reylo` is a dependency, because the bundle carries its run time (`defineQuery` and the driver adapters); esbuild, the Postgres engine `@reylosql/postgres` and `typescript` 7.1 are dev dependencies, used by the build and the type check only. `postgres` is the driver the server runs the queries with, and the type check reads the schema through it too.
-- `build.ts`: `plugins: [reylo()]` from `reylo/esbuild` turns each `.sql` import into a module that carries the statement, its parameters' order and types, and the row count Reylo proved, so the bundle reads no `.sql` file and asks the database nothing before it runs a query. `format: "esm"` is required for the top-level code of an ES module project; the build runs through `esbuild.build`, since esbuild runs plugins in `build` only and `buildSync` throws.
-- `package.json` scripts: `typecheck` is `tsc --noEmit --runExternalCode`, the flag that lets `tsc` run the content mapper. `build` runs that type check before `node build.ts`, because esbuild strips types without checking them; the plugin itself fails the build on a statement the database refuses, at its line and column. `dev` is `node --watch --env-file-if-exists=.env --import reylo/register src/server.ts`: the preload builds each `.sql` module as Node loads it, so development needs no build, and `--watch` restarts on a change to a `.sql` file too. `start` is `node --env-file-if-exists=.env dist/server.mjs`, with no preload.
-- `tsconfig.json`: `contentMappers` names `reylo` for `.sql`, which types each import from the database. `include` is `src`, `build.ts` and `setup.ts`, so `setup.sql`, a script rather than one query, stays out of the type check.
-- `.env`: `DATABASE_URL`, which Reylo reads for its analysis (the type check, the editor, the plugin and the preload) and the server reads through `--env-file-if-exists`.
-- `queries/*.sql`: one statement per file, with `:name` parameters, imported from `src/server.ts` with a relative path. `get_user.sql` resolves to a row or `null`, `list_posts.sql` to an array, and `create_post.sql`, an insert with `returning`, to the row it wrote.
-- `.vscode/settings.json` and `.vscode/extensions.json`: the TypeScript 7 extension, pointed at this project's TypeScript, so the editor shows the queries' types and errors ([Editors](https://reylo.dev/#editors)). `.zed/settings.json` does the same in Zed.
+- In `package.json`, `reylo` is a dependency, because the bundle carries its run time (`defineQuery` and the driver adapters); esbuild, the Postgres engine `@reylosql/postgres` and `typescript` 7.1 are dev dependencies, used by the build and the type check only. The `postgres` package is the driver the server runs the queries with, and the type check reads the schema through it too.
+- In `build.ts`, `plugins: [reylo()]` from `reylo/esbuild` turns each `.sql` import into a module that carries the statement, its parameters' order and types, and the row count Reylo proved, so the bundle reads no `.sql` file and asks the database nothing before it runs a query. The option `format: "esm"` is required for the top-level code of an ES module project; the build runs through `esbuild.build`, since esbuild runs plugins in `.build()` only and `.buildSync()` throws.
+- In the `package.json` scripts, `typecheck` is `tsc --noEmit --runExternalCode`, the flag that lets `tsc` run the content mapper. The `build` script runs that type check before `node build.ts`, because esbuild strips types without checking them; the plugin itself fails the build on a statement the database refuses, at its line and column. The `dev` script is `node --watch --env-file-if-exists=.env --import reylo/register src/server.ts`: the preload builds each `.sql` module as Node loads it, so development needs no build, and `--watch` restarts on a change to a `.sql` file too. The `start` script is `node --env-file-if-exists=.env dist/server.mjs`, with no preload.
+- In `tsconfig.json`, `contentMappers` names `reylo` for `.sql`, which types each import from the database. The `include` option is `src`, `build.ts` and `setup.ts`, so `setup.sql`, a script rather than one query, stays out of the type check.
+- The `.env` file sets `DATABASE_URL`, which Reylo reads for its analysis (the type check, the editor, the plugin and the preload) and the server reads through `--env-file-if-exists`.
+- The `queries/*.sql` files hold one statement per file, with `:name` parameters, imported from `src/server.ts` with a relative path. The query `get_user.sql` resolves to a row or `null`, `list_posts.sql` to an array, and `create_post.sql`, an insert with `returning`, to the row it wrote.
+- In `.vscode/settings.json` and `.vscode/extensions.json`, the TypeScript 7 extension is pointed at this project's TypeScript, so the editor shows the queries' types and errors ([Editors](https://reylo.dev/#editors)). In Zed, `.zed/settings.json` does the same.
 
 ## Build without a database
 
@@ -70,10 +70,11 @@ The type check and the plugin both read `.reylo/`, so both pass without the data
 ## In your own project
 
 - Install from npm instead of the `link:` dependencies: `npm install reylo postgres` and `npm install -D @reylosql/postgres esbuild typescript@beta @types/node`.
-- `.npmrc` (`minimumReleaseAge=0`) exists only because this machine holds fresh releases back; drop it.
+- The `.npmrc` file (`minimumReleaseAge=0`) exists only because this machine holds fresh releases back; drop it.
 
 ## Notes
 
+- Use `esbuild.build`: esbuild runs plugins in `build` only, and `buildSync` throws.
 - esbuild's default format on `platform: "node"` is CommonJS, which fails here twice over: esbuild refuses a top-level `await` in CommonJS, and Node reads a `.js` file in a `"type": "module"` project as an ES module, where `require` is not defined. So the build sets `format: "esm"` and writes `.mjs`.
 - postgres.js is an ES module and its bundle needs no `require`. A driver written in CommonJS, such as `pg`, does: bundled into ES module output it fails at run time with `Dynamic require of "events" is not supported` unless the build adds `banner: { js: 'import { createRequire } from "node:module"; const require = createRequire(import.meta.url);' }`.
 - The bundle holds none of Reylo's analysis: no engine, no WebAssembly. That stays in the build.

@@ -26,11 +26,11 @@ const e2: Row | null = await get({ id: 1, name: "ada" });
 // @ts-expect-error the function still checks the parameters
 await get({ id: 1 });
 const f: readonly ["id", "name"] = q.params;
-// The parameters may be an array in the order of `params`, typed and labeled per element.
-const values: [id: number, name: string] = null! as q.Values;
-const e3: Row | null = await query.run(pool, [1, "ada"]);
-// @ts-expect-error each element keeps its parameter's type
-await query.run(pool, ["1", "ada"]);
+// The parameters are always an object: an array is refused, in the types as at run time.
+// @ts-expect-error an array of the values in the order of `params`
+await query.run(pool, [1, "ada"]);
+// @ts-expect-error the module declares no tuple of the values
+type V = q.Values;
 const g: ExpectedRow | null = query["~standard"].types!.output;
 // As JSON: a BigInt is the integer it is (src/schema.ts).
 const h: { created_at: string; big: number | null } | null = query["~reylo"].json;

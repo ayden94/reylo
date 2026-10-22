@@ -1,5 +1,8 @@
 -- Nullability is the server's NOT NULL flag, which the engine takes as it is: sound where it is
--- set, and nullable for string and date functions and most casts of NOT NULL inputs. Every
+-- set, and nullable for string and date functions and most casts of NOT NULL inputs. Only what the
+-- statement proves narrows it: a strict test in the WHERE (`engine/mysql/src/mysql_nulls.rs`)
+-- proves the column it tests and the row of an outer join, and a GROUP BY's JSON_ARRAYAGG is
+-- never NULL. Every
 -- column here is NOT NULL but those named `maybe_`, and the edge state holds zero dates, the
 -- bounds of every integer and an empty string.
 create table t (

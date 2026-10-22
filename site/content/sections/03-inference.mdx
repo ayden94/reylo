@@ -1,0 +1,531 @@
+---
+title: "Inference"
+---
+
+## Inference
+
+Reylo lets you use the full power of SQL provided by your database. Postgres, SQLite, and MySQL are all supported.
+
+Reylo is a [content mapper](https://devblogs.microsoft.com/typescript/announcing-typescript-7-1-beta/#content-mappers), the kind of plugin [TypeScript 7.1](https://devblogs.microsoft.com/typescript/announcing-typescript-7-1-beta/) introduced for files that aren't TypeScript. Whenever the type checker meets a `.sql` import, in `tsc` or in your editor, it hands Reylo the file and takes back the module's types.
+
+<HowItWorksDiagram />
+
+To type a query, Reylo has your live database prepare it, without running it, and reads the catalog. From the answer, it learns:
+
+- the parameter types
+- the column types
+- nullability, from `NOT NULL` and outer joins
+- the cardinality, from keys, aggregates, `limit 1` and `returning`
+
+At run time, the [preload](#setup-node) or a bundler [plugin](#plugins) turns the same file into a module that runs the query through your driver.
+
+Reylo caches each answer in `.reylo/`, keyed by a fingerprint of the schema, so after a migration the next type check sees the new schema: a dropped column fails in the `.sql` file that names it, and in the code that reads it.
+
+<Details summary="Where each type comes from, in each dialect" id="sources">
+
+<DialectTabs>
+<Dialect value="Postgres">
+
+Reylo sends the query to the live database [prepared](https://www.postgresql.org/docs/current/sql-prepare.html) and reads back the database's own type information on its parameters and return type. This information is cross-referenced against the schema catalog, enabling high-fidelity type inference for any query.
+
+| What | Where it comes from |
+| --- | --- |
+| Parameter types | the server's description of the prepared statement |
+| Column types | the server's description; an enum as its labels, a domain as its base type, a JSON column as what its JSON Schema `CHECK` admits |
+| Nullability | the catalog's `NOT NULL`, outer joins, the expressions |
+| Cardinality | primary and unique keys, aggregates, `limit 1`, `returning` |
+| Nested JSON | built with `jsonb_build_object`, `jsonb_agg` or `to_jsonb` of a row, typed from their arguments |
+
+</Dialect>
+<Dialect value="MySQL">
+
+Reylo sends the query to the live database [prepared](https://dev.mysql.com/doc/refman/8.4/en/sql-prepared-statements.html) and reads back the database's own type information on its parameters and return type.
+
+Reylo adds which parameters may be null, the row count, and the shape of JSON the query builds.
+
+| What | Where it comes from |
+| --- | --- |
+| Parameter types | the prepared statement's metadata; whether one may be null, from the statement, as on Postgres |
+| Column types | the prepared statement's metadata; a JSON column read from its table as what its JSON Schema `CHECK` admits |
+| Nullability | the server's `NOT NULL` flag |
+| Cardinality | primary and unique keys, aggregates; a write is `void` |
+| Nested JSON | built with `json_object` and `json_arrayagg`, typed from their arguments |
+
+</Dialect>
+<Dialect value="SQLite">
+
+Reylo reads the schema from the database file and [prepares](https://sqlite.org/c3ref/prepare.html) the query in its own copy of SQLite, which reports where each column and parameter comes from.
+
+| What | Where it comes from |
+| --- | --- |
+| Parameter types | where SQLite places the parameter: a comparison with a column, an element of a row value, an `insert` or `update` column, a `cast`, `limit` and `offset` |
+| Column types | the declared type's affinity |
+| Nullability | the table's `NOT NULL`, outer joins, Reylo's table of SQLite's built-in functions |
+| Cardinality | unique indexes and `integer primary key` |
+| Nested JSON | built with `json_object` and `json_group_array`, typed from their arguments |
+
+</Dialect>
+</DialectTabs>
+
+</Details>
+
+<Details summary="In CI, and in builds without a database" id="in-ci">
+
+In CI, start the database, apply the migrations, and run `tsc --noEmit --runExternalCode` with `DATABASE_URL` set. Your tests need the database too, or a filled `.reylo/`.
+
+Every step that loads a `.sql` file (the type check, a plugin, the preload) keeps its analysis in `.reylo/`, and a later step reads it from there:
+
+- The `.reylo/` directory is a cache with its own `.gitignore`, so git skips it.
+- When the database answers, an entry made against another schema is analyzed again. An editor or a dev server checks the schema again at most every 5 seconds.
+- When the database is out of reach, the entries are used as they are, and a statement that `.reylo/` lacks is an error.
+
+A build that can't reach the database, such as a container build, reads the `.reylo/` a type check filled. Set the same database URL in the build, even though it can't connect: the entries are keyed by it.
+
+</Details>
+
+### Basics
+
+Each column comes back with its type:
+
+<Inferred>
+
+```sql file="inferred_users.sql" dialect="all"
+select id, name
+from users
+```
+
+</Inferred>
+
+<span id="naming" />
+
+For convenience, there is some Reylo-specific syntax that can be used inside your `.sql` files. This syntax is transpiled into the idiomatic form for your database's dialect.
+
+Name a parameter with a colon, and Reylo infers its type from where it's used:
+
+<Inferred>
+
+```sql file="inferred_rename_user.sql" dialect="all"
+update users
+set name = :name
+where id = :id
+```
+
+</Inferred>
+
+<span id="casts" />
+
+Where the query doesn't pin down a parameter's type, cast it. Reylo compiles the cast to each database's own:
+
+<Inferred>
+
+```sql file="inferred_search_users.sql" dialect="all"
+select id, name
+from users
+where name like concat('%', :q::text, '%')
+```
+
+</Inferred>
+
+<Details summary="When a parameter's type cannot be inferred" id="a-parameter-nothing-types">
+
+It's an error that says to [cast it](#casts), unless [`strict_params: false`](#strict_params) types it `unknown`.
+
+<DialectTabs>
+<Dialect value="Postgres">
+
+Postgres types a parameter from its context: a bare `select :x` is a `string`, and `select :x is null` is an error until a cast types it.
+
+</Dialect>
+<Dialect value="MySQL">
+
+MySQL types every parameter: one that nothing else types, such as a bare `select :x`, is a `string`.
+
+</Dialect>
+<Dialect value="SQLite">
+
+A bare `select :x`, or an argument of a table-valued function other than `json_each` and `json_tree`, has no type until a cast gives it one:
+
+```sql
+select length(:text::text) as n
+```
+
+A call to a function your application registers fails the type check, cast or not: Reylo prepares the statement in its own SQLite, which lacks it ("no such function"). Apply that function in TypeScript instead.
+
+</Dialect>
+</DialectTabs>
+
+</Details>
+
+### Nulls
+
+A left join makes the joined table's columns nullable:
+
+<Inferred>
+
+```sql file="inferred_user_titles.sql" dialect="all"
+select u.name, p.title
+from users u
+left join posts p on p.user_id = u.id
+```
+
+</Inferred>
+
+A null check on one joined column makes the whole joined row non-null:
+
+<Inferred>
+
+```sql file="inferred_published_titles.sql" dialect="all"
+select u.name, p.title
+from users u
+left join posts p on p.user_id = u.id
+where p.published_at is not null
+```
+
+</Inferred>
+
+Reylo infers which computed columns can never be null:
+
+<Inferred>
+
+```sql file="inferred_user_flags.sql" dialect="all"
+select u.name,
+  coalesce(u.email, '') as email,
+  exists (select 1 from posts p where p.user_id = u.id) as has_posts
+from users u
+```
+
+</Inferred>
+
+To accept null, wrap a parameter in coalesce:
+
+<Inferred>
+
+```sql file="inferred_posts_by_user.sql" dialect="all"
+select id, title
+from posts
+where user_id = coalesce(:user_id::int, user_id)
+```
+
+</Inferred>
+
+### Cardinality
+
+A query that matches a unique key returns one row or null:
+
+<Inferred>
+
+```sql schema dialect="postgres"
+create table users (
+  id serial primary key,
+  name text not null,
+  email text unique
+);
+```
+
+```sql schema dialect="mysql"
+create table users (
+  id int auto_increment primary key,
+  name text not null,
+  email varchar(255) unique
+);
+```
+
+```sql schema dialect="sqlite"
+create table users (
+  id integer primary key,
+  name text not null,
+  email text unique
+) strict;
+```
+
+```sql file="inferred_user_by_email.sql" dialect="all"
+select id, name
+from users
+where email = :email::text
+```
+
+</Inferred>
+
+<Details summary="Which matches count as a key, in each dialect" id="key-matches">
+
+<DialectTabs>
+<Dialect value="Postgres">
+
+Also a key match:
+
+- a join on the joined table's key
+- a unique index on an expression or with a `where`
+- a `distinct` or `group by` over values the `where` pins
+
+</Dialect>
+<Dialect value="MySQL">
+
+Only a match on one table's own primary or unique key counts, with or without a `distinct` or `group by`. These give `many`:
+
+- a joined table's key
+- a unique index on an expression
+- a `distinct` or `group by` over pinned values that are not a key
+
+</Dialect>
+<Dialect value="SQLite">
+
+Also a key match:
+
+- a join on the joined table's key
+- a `distinct` or `group by` over values the `where` pins
+
+A unique index on an expression or with a `where` gives `many`.
+
+</Dialect>
+</DialectTabs>
+
+</Details>
+
+An aggregate without a group by returns exactly one row:
+
+<Inferred>
+
+```sql file="inferred_post_count.sql" dialect="postgres"
+select count(*)::int as posts
+from posts
+where user_id = :user_id::int
+```
+
+```sql file="inferred_post_count.sql" dialect="mysql"
+select count(*) as posts
+from posts
+where user_id = :user_id::int
+```
+
+```sql file="inferred_post_count.sql" dialect="sqlite"
+select count(*) as posts
+from posts
+where user_id = :user_id::int
+```
+
+</Inferred>
+
+An insert that returns its row resolves to exactly that row:
+
+<Inferred>
+
+```sql file="inferred_create_user.sql" dialect="postgres"
+insert into users (name)
+values (:name::text)
+returning id
+```
+
+```sql file="inferred_create_user.sql" dialect="sqlite"
+insert into users (name)
+values (:name::text)
+returning id
+```
+
+</Inferred>
+
+### Unions
+
+A text column whose check constraint lists its values is a union of them:
+
+<Inferred>
+
+```sql schema dialect="postgres"
+create table events (
+  id serial primary key,
+  kind text not null check (kind in ('click', 'key'))
+);
+```
+
+```sql file="inferred_event_kinds.sql" dialect="postgres"
+select id, kind
+from events
+```
+
+</Inferred>
+
+### JSON
+
+Type information bubbles up through JSON aggregation:
+
+<Inferred>
+
+```sql file="inferred_user_posts.sql" dialect="postgres"
+select u.name,
+  jsonb_agg(jsonb_build_object('id', p.id, 'title', p.title)) as posts
+from users u
+join posts p on p.user_id = u.id
+group by u.id
+```
+
+```sql file="inferred_user_posts.sql" dialect="mysql"
+select u.name,
+  json_arrayagg(json_object('id', p.id, 'title', p.title)) as posts
+from users u
+join posts p on p.user_id = u.id
+group by u.id
+```
+
+```sql file="inferred_user_posts.sql" dialect="sqlite"
+select u.name,
+  json_group_array(json_object('id', p.id, 'title', p.title)) as posts
+from users u
+join posts p on p.user_id = u.id
+group by u.id
+```
+
+</Inferred>
+
+A JSON column with a JSON Schema check is typed by that schema:
+
+<Inferred>
+
+```sql schema dialect="postgres"
+create extension if not exists pg_jsonschema;
+
+create table events (
+  id serial primary key,
+  payload jsonb not null check (jsonb_matches_schema('{
+    "type": "object",
+    "properties": {
+      "x": { "type": "integer" },
+      "y": { "type": "integer" }
+    },
+    "required": ["x", "y"],
+    "additionalProperties": false
+  }', payload))
+);
+```
+
+```sql schema dialect="mysql"
+create table events (
+  id int auto_increment primary key,
+  payload json not null check (json_schema_valid('{
+    "type": "object",
+    "properties": {
+      "x": { "type": "integer" },
+      "y": { "type": "integer" }
+    },
+    "required": ["x", "y"],
+    "additionalProperties": false
+  }', payload))
+);
+```
+
+```sql file="inferred_event_payloads.sql" dialect="postgres"
+select id, payload
+from events
+```
+
+```sql file="inferred_event_payloads.sql" dialect="mysql"
+select id, payload
+from events
+```
+
+</Inferred>
+
+### Typed JSON
+
+When casting to `json` or `jsonb`, you can define a JSON Schema annotation:
+
+```sql tab="record_click.sql" dialect="all"
+insert into events (kind, payload)
+-- ::json('…') carries the parameter's JSON Schema
+values ('click', :payload::json('{
+  "type": "object",
+  "properties": {
+    "x": { "type": "integer" },
+    "y": { "type": "integer" },
+    "button": { "type": "string", "enum": ["left", "right"] }
+  },
+  "required": ["x", "y"]
+}'))
+```
+
+```ts twoslash tab="main.ts"
+import recordClick from "./record_click.sql";
+
+await recordClick.run(db, { payload: { x: 10, y: 20 } });
+//                          ^?
+```
+
+Reylo uses it to infer the parameter's type, and validates your input against the schema when you call `.run()`:
+
+```ts twoslash
+import recordClick from "./record_click.sql";
+
+await recordClick.run(db, { payload: { x: 10, y: 20, button: "left" } });
+//                          ^?
+
+// type-checks, but .run() rejects it: x must be an integer
+await recordClick.run(db, { payload: { x: 1.5, y: 20 } });
+```
+
+A schema can nest objects and arrays, and check every value in them:
+
+```sql tab="record_order.sql" dialect="all"
+insert into events (kind, payload)
+-- the schema types :order and checks it before the insert
+values ('order', :order::json('{
+  "type": "object",
+  "properties": {
+    "customer": { "type": "string", "format": "email" },
+    "items": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "properties": {
+          "sku": { "type": "string", "pattern": "^[A-Z]{3}-[0-9]{4}$" },
+          "qty": { "type": "integer", "minimum": 1 }
+        },
+        "required": ["sku", "qty"]
+      }
+    },
+    "shipping": { "enum": ["standard", "express"] }
+  },
+  "required": ["customer", "items"]
+}'))
+```
+
+```ts twoslash tab="main.ts"
+import recordOrder from "./record_order.sql";
+
+await recordOrder.run(db, {
+  order: {
+//^?
+    customer: "ada@example.com",
+    items: [{ sku: "ABC-1234", qty: 2 }],
+    shipping: "express",
+  },
+});
+```
+
+A JSON parameter written to a schema-checked column takes that schema as its type, with no cast:
+
+<Inferred>
+
+```sql schema dialect="postgres"
+create extension if not exists pg_jsonschema;
+
+create table events (
+  id serial primary key,
+  payload jsonb not null check (jsonb_matches_schema('{
+    "type": "object",
+    "properties": {
+      "x": { "type": "integer" },
+      "y": { "type": "integer" }
+    },
+    "required": ["x", "y"],
+    "additionalProperties": false
+  }', payload))
+);
+```
+
+```sql file="inferred_record_event.sql" dialect="postgres"
+insert into events (payload)
+values (:payload)
+```
+
+</Inferred>
+
+The [Advanced](#advanced) examples use JSON parameters to [insert many rows](#insert-many-rows), [insert related rows](#insert-related-rows) and [record events of several kinds](#record-events-of-several-kinds).

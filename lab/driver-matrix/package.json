@@ -41,6 +41,10 @@
     "sqlite": "5.1.1",
     "sqlite3-5": "npm:sqlite3@5.1.7",
     "sqlite3-6": "npm:sqlite3@6.0.1",
+    "turso-04": "npm:@tursodatabase/database@0.4.4",
+    "turso-06": "npm:@tursodatabase/database@0.6.1",
+    "turso-07": "npm:@tursodatabase/database@0.7.2",
+    "turso-08": "npm:@tursodatabase/database@0.8.3",
     "ws": "8.22.0"
   },
   "optionalDependencies": {

@@ -220,7 +220,13 @@ fn analyze_here(sql: &str) -> Result<Analysis, AnalyzeError> {
             let mut set = |targets: Option<&Value>| {
                 for target in targets.and_then(|t| t.as_array()).into_iter().flatten() {
                     let Some(rt) = target.get("node").and_then(|n| n.get("ResTarget")) else { continue };
-                    if let (Some(name), Some(n)) = (rt.get("name").and_then(|n| n.as_str()), rt.get("val").and_then(direct_param_number)) {
+                    // `SET (a, b) = ($1, $2)` is a target per column, each the `colno`th element
+                    // of the row (`MultiAssignRef`); a subquery's column is no value written whole.
+                    let val = match rt.get("val").and_then(|v| v.get("node")).and_then(|n| n.get("MultiAssignRef")) {
+                        Some(multi) => multi.get("colno").and_then(|c| c.as_i64()).and_then(|c| usize::try_from(c).ok()?.checked_sub(1)).and_then(|i| multi.get("source")?.get("node")?.get("RowExpr")?.get("args")?.as_array()?.get(i)),
+                        None => rt.get("val"),
+                    };
+                    if let (Some(name), Some(n)) = (rt.get("name").and_then(|n| n.as_str()), val.and_then(direct_param_number)) {
                         filled.push((n, relation.to_string(), Filled::Name(name.to_string())));
                     }
                 }
@@ -670,6 +676,13 @@ mod tests {
         let a = analyze("UPDATE notes SET body = $1, title = upper($2) WHERE id = $3").unwrap();
         assert_eq!(a.filled, vec![(1, "notes".into(), Name("body".into()))]);
         assert!(analyze("SELECT $1::text AS x").unwrap().filled.is_empty());
+        // Under every cast Reylo writes, as the bare parameter, and an element of a row value.
+        let a = analyze("INSERT INTO notes (a, b, c, d, e) VALUES ($1::int, $2::text, $3::numeric, $4::json, $5::jsonb::json) ON CONFLICT (a) DO UPDATE SET (b, c) = ($6::text, $7)").unwrap();
+        let named = |n: i32, column: &str| (n, "notes".to_string(), Name(column.to_string()));
+        assert_eq!(a.filled, vec![named(6, "b"), named(7, "c"), named(1, "a"), named(2, "b"), named(3, "c"), named(4, "d"), named(5, "e")]);
+        let a = analyze("UPDATE notes SET (title, body) = ($1, $2::text), done = $3::boolean WHERE id = $4::int").unwrap();
+        assert_eq!(a.filled, vec![named(1, "title"), named(2, "body"), named(3, "done")]);
+        assert!(analyze("UPDATE notes SET (title, body) = (SELECT $1::text, $2::text) WHERE id = 1").unwrap().filled.is_empty());
     }
 
     #[test]

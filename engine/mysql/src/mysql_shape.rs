@@ -54,7 +54,8 @@ pub struct Plan {
 pub fn plan(q: &Query, columns: &Columns) -> Plan {
     let SetExpr::Select(select) = q.body.as_ref() else { return Plan::default() };
     let with = q.with.as_ref().map(|w| format!("{w} ")).unwrap_or_default();
-    let mut b = Builder { stack: vec![(0, select.from.clone())], columns, ctes: with_names(q), wanted: Vec::new(), next_ctx: 0, drafts: Vec::new(), overflowed: false, booleans: Vec::new(), either: Vec::new(), reads: Reads::Itself };
+    let grouped = crate::mysql_nulls::grouped(&select.group_by);
+    let mut b = Builder { stack: vec![(0, select.from.clone())], columns, ctes: with_names(q), wanted: Vec::new(), next_ctx: 0, drafts: Vec::new(), overflowed: false, booleans: Vec::new(), either: Vec::new(), reads: Reads::Itself, grouped };
     let mut columns = Vec::new();
     for item in &select.projection {
         // The server names an unaliased expression by its text, which no build reproduces
@@ -186,6 +187,8 @@ struct Builder<'a> {
     either: Vec<(usize, usize)>,
     /// How the function that writes the value now walked reads a truth value.
     reads: Reads,
+    /// Whether the statement's SELECT has a plain GROUP BY, where no group is empty.
+    grouped: bool,
 }
 
 /// How a JSON function reads the value it writes, which decides whether a truth value is
@@ -312,12 +315,16 @@ impl Builder<'_> {
                         }
                         Shape::Object { fields, non_null: true }
                     }
-                    // An aggregate over no rows is NULL, so the array is non-null only under a guard.
+                    // An aggregate over no rows is NULL, so the array is non-null only under a
+                    // guard, or under a plain GROUP BY, where every group has a row, for an
+                    // aggregate of the statement's own SELECT that is no window function. One
+                    // inside a subquery may be the outer query's, which says nothing of its rows.
                     "json_arrayagg" => {
                         if args.len() != 1 {
                             return Shape::Unknown;
                         }
-                        Shape::Array { items: Box::new(self.walk_as(args[0], Reads::Copy)), non_null: false }
+                        let non_null = self.grouped && self.stack.len() == 1 && f.over.is_none();
+                        Shape::Array { items: Box::new(self.walk_as(args[0], Reads::Copy)), non_null }
                     }
                     // The value is the first argument that is not NULL. A constructor that is
                     // never NULL is the value whatever follows it; one that may be NULL keeps its

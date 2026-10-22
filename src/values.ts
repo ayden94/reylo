@@ -69,14 +69,16 @@ const SQL_KINDS: Readonly<Record<string, ScalarKind>> = {
 };
 
 /**
- * SQLite's: the engine names a column by its affinity. An INTEGER is a number, exact or an error
- * (`int8` here would make it a BigInt on every SQLite driver: src/decode-sqlite.ts reads either);
- * a NUMERIC holds whichever storage class the row stored; `bool` is a truth value or a column
- * declared BOOLEAN; a column with no declared type, or ANY in a STRICT table, is whatever the
- * driver gives.
+ * SQLite's: the engine names a column by its affinity, and a column declared BIGINT, INT8 or
+ * UNSIGNED BIG INT `int8`, since the declared width decides on every database (the maintainer,
+ * 2026-10-20). An INTEGER is a number, exact or an error; an `int8` a BigInt on every SQLite
+ * driver (src/decode-sqlite.ts reads either); a NUMERIC holds whichever storage class the row
+ * stored; `bool` is a truth value or a column declared BOOLEAN; a column with no declared type,
+ * or ANY in a STRICT table, is whatever the driver gives.
  */
 const SQLITE_KINDS: Readonly<Record<string, Kind>> = {
   integer: "int",
+  int8: "int8",
   real: "float",
   text: "text",
   blob: "bytes",
@@ -140,7 +142,7 @@ const timestamp: Decoder = (x) => x.replace(" ", "T");
 // timestamptz in DateStyle ISO: `2026-10-20 03:03:00.123456-07`, offsets with seconds before
 // standard time (`-07:52:58`), years past 9999, ` BC`. `new Date(text)`, which postgres.js and
 // PGlite use, returns Invalid Date for the last three and reads year 0001 as 2001
-// (docs/driver-decoding/spike/postgres.md); and a Date holds milliseconds, not the server's
+// (wiki/driver-decoding/spike/postgres.md); and a Date holds milliseconds, not the server's
 // microseconds. So Reylo moves the wall-clock time to UTC itself, in whole seconds on a day count,
 // and keeps the fraction as the server wrote it.
 const TSTZ = /^(\d{4,})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d)(\.\d{1,6})?([+-])(\d\d)(?::(\d\d))?(?::(\d\d))?( BC)?$/;
@@ -175,6 +177,20 @@ const pad = (n: number, width = 2) => String(n).padStart(width, "0");
  * digits, outside them (`+010000`, `-000001` for 2 BC), as `Temporal.Instant` reads and writes it.
  */
 const isoYear = (y: number) => (y >= 0 && y <= 9999 ? pad(y, 4) : `${y < 0 ? "-" : "+"}${pad(Math.abs(y), 6)}`);
+
+/**
+ * A date or time parameter's text as Postgres reads it, the inverse of `isoYear` for what `run`
+ * returns (the round-trip rule): Postgres 18 refuses an ISO 8601 extended year (`+010000-01-01`,
+ * "time zone displacement out of range") and the year 0000 ("date/time field value out of range"),
+ * and reads `10000-01-01` and a year before 1 as its own ` BC` form, year 1 − n, so `-000001` is
+ * `0002 … BC` and `0000` or `+000000` is `0001 … BC`. Any other text is left as it is.
+ */
+export function postgresYear(text: string): string {
+  const m = /^([+-]\d{6}|0000)(-.*)$/.exec(text);
+  if (m === null || /\sbc$/i.test(text)) return text;
+  const year = +m[1]!;
+  return year > 0 ? `${pad(year, 4)}${m[2]}` : `${pad(1 - year, 4)}${m[2]} BC`;
+}
 
 /**
  * A timestamptz's text as the instant's ISO 8601 text in UTC: `2026-10-20 10:00:00.123456+02` is
@@ -299,7 +315,7 @@ export function textDecoder(kind: Kind, delim = ","): Decoder {
 // The value of each kind from whatever a driver decoded it to: for the drivers that take no
 // decoder (Bun.sql; the SQLite drivers, whose JSON is text and whose truth values are integers),
 // and for the rare value a driver decoded before Reylo could name its type. Each converts the
-// forms a driver is measured to give (docs/driver-decoding/spike/) and leaves a value already in
+// forms a driver is measured to give (wiki/driver-decoding/spike/) and leaves a value already in
 // Reylo's form as it is.
 
 /** Why a value cannot be given its kind: Reylo's error, naming the column. */
@@ -310,8 +326,13 @@ const MAX_SAFE = Number.MAX_SAFE_INTEGER;
 /** An integer as a number, refused where a number cannot hold it exactly. */
 export function exactInteger(v: number | bigint, column: string): number {
   if (typeof v === "bigint") {
-    if (v > BigInt(MAX_SAFE) || v < -BigInt(MAX_SAFE)) throw outOfRange(String(v), column);
-    return Number(v);
+    // Exact: a BigInt past ±(2^53 - 1) converts to a number at least 2^53 in magnitude, since
+    // rounding keeps the order and 2^53 is a number. Comparing BigInts instead took a five-column
+    // row with a SQLite BIGINT, beside which better-sqlite3 reads every integer as a BigInt, from
+    // 3.3 to 5.2 ms per 10,000 rows.
+    const n = Number(v);
+    if (n > MAX_SAFE || n < -MAX_SAFE) throw outOfRange(String(v), column);
+    return n;
   }
   if (v > MAX_SAFE || v < -MAX_SAFE) throw outOfRange(String(v), column, true);
   return v;

@@ -1,0 +1,161 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { DatabaseSync } from "node:sqlite";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+// A parameter nothing in the statement types is error reylo12 in the type check unless the project
+// file says `strict_params: false` (the maintainer, 2026-10-20: "if something is not inferable. I
+// feel like we should throw an error. As opposed to just infering it as `unknown`"). The content
+// mapper runs as the type check runs it, through its own JSON-RPC process. Postgres and MySQL run
+// on throwaway servers (REYLO_TEST_PG, REYLO_TEST_MYSQL), each in a database of its own.
+const PG = process.env.REYLO_TEST_PG;
+const MYSQL = process.env.REYLO_TEST_MYSQL;
+const DRIVERS = fileURLToPath(new URL("../lab/drivers/node_modules", import.meta.url));
+const MAPPER = fileURLToPath(new URL("../src/mapper.ts", import.meta.url));
+const pgLive = !PG ? "REYLO_TEST_PG names no server" : !existsSync(join(DRIVERS, "postgres")) ? "lab/drivers is not installed" : false;
+const mysqlLive = !MYSQL ? "REYLO_TEST_MYSQL names no server" : !existsSync(join(DRIVERS, "mysql2")) ? "lab/drivers is not installed" : false;
+
+type Diagnostic = { messageText: string; start: number; length: number; code: number };
+
+function project(url: string, reylo: string | undefined, driver?: string): string {
+  const root = mkdtempSync(join(tmpdir(), "reylo-strict-"));
+  writeFileSync(join(root, "package.json"), "{}");
+  writeFileSync(join(root, ".env"), `DATABASE_URL=${url}\n`);
+  if (reylo !== undefined) writeFileSync(join(root, ".reylo.yaml"), reylo);
+  if (driver) {
+    mkdirSync(join(root, "node_modules"));
+    symlinkSync(join(DRIVERS, driver), join(root, "node_modules", driver));
+  }
+  return root;
+}
+
+/** What the content mapper answers for each file: its declaration and its diagnostics. */
+async function transform(root: string, files: Record<string, string>): Promise<Record<string, { text: string; diagnostics: Diagnostic[] }>> {
+  const child = spawn(process.execPath, [MAPPER], { cwd: root, stdio: ["pipe", "pipe", "inherit"] });
+  const pending = new Map<number, (result: unknown) => void>();
+  let buffer = Buffer.alloc(0);
+  child.stdout.on("data", (chunk: Buffer) => {
+    buffer = Buffer.concat([buffer, chunk]);
+    for (;;) {
+      const end = buffer.indexOf("\r\n\r\n");
+      if (end === -1) return;
+      const length = Number(/Content-Length:\s*(\d+)/i.exec(buffer.subarray(0, end).toString("ascii"))![1]);
+      if (buffer.length < end + 4 + length) return;
+      const message = JSON.parse(buffer.subarray(end + 4, end + 4 + length).toString("utf8"));
+      buffer = buffer.subarray(end + 4 + length);
+      pending.get(message.id)?.(message.error ? Promise.reject(new Error(message.error.message)) : message.result);
+    }
+  });
+  let id = 0;
+  const call = (method: string, params: unknown) =>
+    new Promise<any>((resolve) => {
+      pending.set(++id, resolve);
+      const body = Buffer.from(JSON.stringify({ jsonrpc: "2.0", id, method, params }), "utf8");
+      child.stdin.write(`Content-Length: ${body.length}\r\n\r\n`);
+      child.stdin.write(body);
+    });
+  try {
+    await call("initialize", { protocolVersion: 1 });
+    await call("openProject", { projectHandle: "p", configFileName: join(root, "tsconfig.json"), options: {} });
+    const out: Record<string, { text: string; diagnostics: Diagnostic[] }> = {};
+    for (const [name, content] of Object.entries(files)) {
+      const result = await call("transform", { fileName: join(root, name), content, projectHandle: "p" });
+      out[name] = { text: result.text, diagnostics: result.diagnostics };
+    }
+    await call("closeProject", { projectHandle: "p" });
+    return out;
+  } finally {
+    child.stdin.end();
+    await new Promise((resolve) => child.once("exit", resolve));
+  }
+}
+
+const message = (written: string) => `Nothing in the statement gives the parameter ${written} a type; cast it, as in ${written}::text, or set strict_params: false in .reylo.yaml.`;
+
+/** On MySQL every `::` cast types its parameter, through the server's describe of the cast. */
+const CASTS = {
+  "casts.sql": "select :a::int as a, :b::bigint unsigned as b, :c::numeric(10,2) as c, :d::double precision as d, :e::date as e, :f::time as f, :g::datetime as g, :h::varbinary(4) as h, :i::varchar(5) as i, :j::uuid as j from users limit :n::int\n",
+  "where.sql": "select name from users where id = :id::bigint and name like concat(:prefix::text, '%')\n",
+};
+const CAST_TYPES = /export type Params = \{ a: number; b: number; c: string; d: number; e: string; f: string; g: string; h: Uint8Array; i: string; j: string; n: number \}/;
+
+/** A JSON cast without a schema types its parameter as JSON, which is no `unknown`, so it is never flagged; the TypeScript type of any JSON value is `unknown` all the same. */
+async function jsonCast(url: string, json: string, driver?: string) {
+  const out = await transform(project(url, undefined, driver), { "json.sql": json, "cast.sql": "select :x::text as x\n" });
+  assert.deepEqual(out["json.sql"]!.diagnostics, []);
+  assert.deepEqual(out["cast.sql"]!.diagnostics, []);
+}
+
+test("SQLite: a parameter nothing types is an error by default, and strict_params: false keeps it unknown", async () => {
+  const root = mkdtempSync(join(tmpdir(), "reylo-strict-db-"));
+  const db = new DatabaseSync(join(root, "app.db"));
+  db.exec("create table users (id integer primary key)");
+  db.close();
+  const url = `file:${join(root, "app.db")}`;
+  // SQLite types no bare parameter in a select list: by default each is an error at its first use.
+  const sql = { "bare.sql": "select :x as x, :y as y\n" };
+  const strict = await transform(project(url, undefined), sql);
+  assert.deepEqual(strict["bare.sql"]!.diagnostics, [
+    { messageText: message(":x"), start: 7, length: 2, code: 12 },
+    { messageText: message(":y"), start: 16, length: 2, code: 12 },
+  ]);
+  // A project file without the key takes the default too, and so does `strict_params: true`.
+  for (const file of ["env: [.env]\n", "strict_params: true\n"]) {
+    assert.deepEqual((await transform(project(url, file), sql))["bare.sql"]!.diagnostics.map((d) => d.code), [12, 12], file);
+  }
+  // `strict_params: false` keeps such a parameter `unknown`, with no error.
+  const loose = await transform(project(url, "strict_params: false\n"), sql);
+  assert.deepEqual(loose["bare.sql"]!.diagnostics, []);
+  assert.match(loose["bare.sql"]!.text, /export type Params = \{ x: unknown; y: unknown \}/);
+  // A statement the engine refused keeps its own error alone: a parameter written twice is untyped
+  // because the analysis stopped there.
+  const repeated = await transform(project(url, undefined), { "repeated.sql": "select :q as a, :q as b\n" });
+  assert.deepEqual(repeated["repeated.sql"]!.diagnostics.map((d) => d.code), [3]);
+  // The cast the message suggests types it.
+  assert.deepEqual((await transform(project(url, undefined), { "cast.sql": "select :x::text as x\n" }))["cast.sql"]!.diagnostics, []);
+  await jsonCast(url, "select json_extract(:doc::json, '$.a') as a\n");
+});
+
+test("Postgres: a JSON cast without a schema is no untyped parameter", { skip: pgLive }, async () => {
+  const require = createRequire(join(DRIVERS, "postgres", "package.json"));
+  const postgres = require("postgres");
+  const admin = postgres(PG!, { max: 1, onnotice: () => {} });
+  const name = `reylo_strict_${process.pid}`;
+  await admin.unsafe(`drop database if exists ${name}`);
+  await admin.unsafe(`create database ${name}`);
+  const url = new URL(PG!);
+  url.pathname = `/${name}`;
+  try {
+    await jsonCast(url.href, "select :doc::jsonb ->> 'a' as a, :plain::json as plain\n", "postgres");
+  } finally {
+    await admin.unsafe(`drop database if exists ${name} with (force)`);
+    await admin.end();
+  }
+});
+
+test("MySQL: a JSON cast without a schema is no untyped parameter, and every cast types its parameter", { skip: mysqlLive }, async () => {
+  const require = createRequire(join(DRIVERS, "mysql2", "package.json"));
+  const mysql = require("mysql2/promise");
+  const server = new URL(MYSQL!);
+  const admin = await mysql.createConnection({ host: server.hostname, port: Number(server.port), user: decodeURIComponent(server.username) || "root", password: decodeURIComponent(server.password) });
+  const name = `reylo_strict_${process.pid}`;
+  await admin.query(`drop database if exists ${name}`);
+  await admin.query(`create database ${name}`);
+  const url = new URL(MYSQL!);
+  url.pathname = `/${name}`;
+  try {
+    await jsonCast(url.href, "select json_extract(:doc::json, '$.a') as a\n", "mysql2");
+    await admin.query(`create table ${name}.users (id bigint primary key, name varchar(50) not null)`);
+    const casts = await transform(project(url.href, undefined, "mysql2"), CASTS);
+    for (const file of Object.keys(CASTS)) assert.deepEqual(casts[file]!.diagnostics, [], file);
+    assert.match(casts["casts.sql"]!.text, CAST_TYPES);
+  } finally {
+    await admin.query(`drop database if exists ${name}`);
+    await admin.end();
+  }
+});

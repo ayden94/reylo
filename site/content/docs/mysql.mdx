@@ -1,0 +1,659 @@
+---
+title: MySQL
+description: How Reylo types and runs SQL on MySQL. Every type and the value it returns, nulls, row counts, parameters, drivers and limits.
+---
+
+<p className="dk-subheader">Every type, null, row count and parameter rule on MySQL</p>
+
+This page is the reference behind [the main docs](/) for MySQL: the place to look when a type, a `| null`, a row count or a parameter surprises you. [Postgres](/postgres) and [SQLite](/sqlite) have the same page, with every answer in the same place.
+
+| | |
+| --- | --- |
+| Versions | MySQL 8.0.22 or later, which types a parameter from its context; checked on MySQL 8.0, 8.4, 9.7 and 26.7 |
+| URL | A `mysql://` URL, in `DATABASE_URL` or [`direct_url`](/#direct_url) |
+| Type check | Reads the schema through `mysql2` |
+| Drivers | `mysql2`, PlanetScale and `Bun.sql` ([Drivers](#drivers)) |
+
+<Details summary="View the schema behind the examples" id="schema">
+
+```sql file="schema.sql" dialect="mysql"
+create table users (
+  id int auto_increment primary key,
+  name varchar(100) not null,
+  email varchar(255) unique,
+  role enum('admin', 'member') not null default 'member',
+  active boolean not null default true,
+  created_at datetime(3) not null default (utc_timestamp(3))
+);
+```
+
+```sql file="schema.sql" dialect="mysql"
+create table orders (
+  id bigint auto_increment primary key,
+  user_id int not null,
+  total decimal(12, 2) not null,
+  placed_at datetime(6) not null default (utc_timestamp(6)),
+  ships_on date,
+  receipt blob,
+  foreign key (user_id) references users (id)
+);
+```
+
+```sql file="schema.sql" dialect="mysql"
+create table events (
+  id int auto_increment primary key,
+  kind varchar(10) not null,
+  payload json not null check (json_schema_valid('{
+    "type": "object",
+    "properties": {
+      "x": { "type": "integer" },
+      "code": { "type": "string" }
+    },
+    "required": ["x"]
+  }', payload))
+);
+```
+
+</Details>
+
+## Data types
+
+Reylo decodes every value of its own queries itself, on every driver, so each SQL type has one TypeScript type and one form at run time. In each pair below, the SQL is a value and the JavaScript is what Reylo returns for it: `select <SQL> as v` gives the row `{ v: <JavaScript> }`.
+
+| SQL type | TypeScript | The value `.run()` returns |
+| --- | --- | --- |
+| `TINYINT`, `SMALLINT`, `MEDIUMINT`, `INT`, `YEAR` | `number` | `2026` |
+| `BIGINT`, `BIGINT UNSIGNED`, `COUNT(*)` | `bigint` | `9007199254740993n` |
+| `BOOLEAN` (a `TINYINT(1)`), `BIT(1)` | `boolean` | `true` |
+| A comparison, `IS NULL`, `IN`, `BETWEEN`, `LIKE`, `EXISTS`, `NOT`, `AND`, `OR` | `boolean` | `false` |
+| `DECIMAL`, `SUM(…)`, `AVG(…)`, `/` | `string` | `"12.50"` |
+| `FLOAT`, `DOUBLE` | `number` | `1.1` |
+| `CHAR`, `VARCHAR`, `TEXT` | `string` | `"Ada"` |
+| `ENUM` | `string` | `"member"` |
+| `SET` | `string` | `"a,c"` |
+| `DATE` | `string` | `"2026-10-20"` |
+| `DATETIME`, `TIMESTAMP` | `string` | `"2026-10-20T10:00:00.123"` |
+| `TIME` | `string` | `"10:00:00"` |
+| `JSON` | `unknown` | `{ a: 1 }` |
+| `JSON` a JSON Schema `CHECK` holds | what the schema admits | `{ x: 10 }` |
+| `json_object(…)`, `json_arrayagg(…)` | the object or array it builds | `{ total: 12.5 }` |
+| `BINARY`, `VARBINARY`, `BLOB`, `BIT` wider than 1 | `Uint8Array` | `Uint8Array.of(1, 2, 255)` |
+| `GEOMETRY` | `unknown` | its bytes, a `Uint8Array` |
+
+### Integers
+
+A `BIGINT`, signed or unsigned, is a JavaScript `bigint`, and so is `COUNT(*)`. MySQL computes most integer expressions as a `BIGINT` too, so `id + 1`, `length(name)`, `coalesce(n, 0)` and `lag(n) over (…)` are `bigint`. MySQL's `CAST` has no 32-bit integer, so cast to `double` where you want a `number`:
+
+```ts twoslash tab="main.ts"
+import countOrders from "./my_count_orders.sql";
+
+const counts = await countOrders.run(db);
+//    ^?
+```
+
+```sql tab="my_count_orders.sql" dialect="mysql"
+select count(*) as total, cast(count(*) as double) as total_number
+from orders
+```
+
+<Rules>
+
+**A type the parameter decides**
+
+An expression whose type depends on a bound value takes every type it may have: `:n + 1` is `bigint | number | string`, a `BIGINT`, a `DOUBLE` or a `DECIMAL` by what you pass and how the driver sends it.
+
+<Pairs>
+
+- `CAST(1 AS SIGNED) + 1` → `2n`
+- `CAST(1.5 AS DOUBLE) + 1` → `2.5`
+- `CAST(1.5 AS DECIMAL(2,1)) + 1` → `"2.5"`
+
+</Pairs>
+
+**A `YEAR`**
+
+A `YEAR` is a `number`.
+
+<Pairs>
+
+- `CAST(2026 AS YEAR)` → `2026`
+
+</Pairs>
+
+**Writing a `BIGINT` out**
+
+JavaScript's `JSON.stringify` refuses a `bigint`, so write one out of your API as its text, `String(v)`, or as the integer itself, `JSON.rawJSON(String(v))`, which is what `.outputSchema` describes.
+
+<Pairs>
+
+- `CAST(9007199254740993 AS SIGNED)` → `9007199254740993n`
+- `CAST(18446744073709551615 AS UNSIGNED)` → `18446744073709551615n`
+
+</Pairs>
+
+**Inside JSON the statement builds**
+
+A `BIGINT` is a JSON number, which `JSON.parse` rounds past 2^53 ([JSON](#json)).
+
+<Pairs>
+
+- `json_object('n', CAST(9007199254740993 AS SIGNED))` → `{ n: 9007199254740992 }`
+
+</Pairs>
+
+</Rules>
+
+### Decimals
+
+A `DECIMAL` is its exact text, `"12.50"`, with the column's scale. So are `SUM(…)` of any column, `AVG(…)` and a division, which MySQL computes as `DECIMAL`: `sum(total)` is `"19.75"`, and `id / 2` is `"0.5000"`.
+
+<Rules>
+
+**A `FLOAT`**
+
+A `FLOAT` is a 32-bit float. On `mysql2`, which reads the binary protocol, it is the float's exact value, as on `Bun.sql` in a statement with parameters. PlanetScale, and `Bun.sql` in a statement without them, read the text protocol and give the shorter text, `1.1`. A `DOUBLE` is the same on every driver.
+
+<Pairs>
+
+- `CAST(1.1 AS FLOAT)` → `1.100000023841858`
+- `CAST(1.1 AS DOUBLE)` → `1.1`
+
+</Pairs>
+
+**Inside JSON the statement builds**
+
+A `DECIMAL` is a JSON number, which `JSON.parse` reads as a double.
+
+<Pairs>
+
+- `json_object('d', CAST(12345678901234.123456 AS DECIMAL(20,6)))` → `{ d: 12345678901234.123 }`
+
+</Pairs>
+
+**A `DECIMAL` parameter**
+
+A `DECIMAL` parameter takes the text, `"12.50"` ([What a parameter takes](#what-a-parameter-takes)).
+
+</Rules>
+
+### Dates and times
+
+No value is a `Date`. Each is the text MySQL writes, with a `T` between the date and the time of a `DATETIME` or a `TIMESTAMP`, and as many fraction digits as the column keeps:
+
+```ts twoslash tab="main.ts"
+import orderDates from "./my_order_dates.sql";
+
+const order = await orderDates.run(db, { id: 1 });
+//    ^?
+```
+
+```sql tab="my_order_dates.sql" dialect="mysql"
+select placed_at, ships_on from orders where id = :id
+```
+
+Where your runtime has `Temporal`, `Temporal.PlainDateTime.from()` reads the time.
+
+<Rules>
+
+**Fractions of a second**
+
+The fraction has as many digits as the type keeps: a `DATETIME(3)` keeps three even when they are zero, and a `DATETIME` none.
+
+<Pairs>
+
+- `CAST('2026-10-20 10:00:00.123456' AS DATETIME(6))` → `"2026-10-20T10:00:00.123456"`
+- `CAST('2026-10-20 10:00:00' AS DATETIME(3))` → `"2026-10-20T10:00:00.000"`
+- `CAST('2026-10-20 10:00:00' AS DATETIME)` → `"2026-10-20T10:00:00"`
+
+</Pairs>
+
+**A `TIMESTAMP`'s zone**
+
+A `TIMESTAMP` stores an instant, and MySQL writes it in the session's `time_zone`, the server's own unless the connection sets another. Reylo cannot know that zone, so the text has none. Run `set time_zone = '+00:00'` on the connection to read UTC, or keep UTC in a `DATETIME`.
+
+**An offset in the text**
+
+MySQL keeps no zone in a `DATETIME` or a `TIMESTAMP`: it drops a `Z` from the text it reads, with a warning, and moves a `+00:00` into the session's zone, here `-07:00`. Keep UTC in a `DATETIME` written by `utc_timestamp()`, as the schema above does.
+
+<Pairs>
+
+- `CAST('2026-10-20 10:00:00Z' AS DATETIME)` → `"2026-10-20T10:00:00"`
+- `CAST('2026-10-20 10:00:00+00:00' AS DATETIME)` → `"2026-10-20T03:00:00"`
+
+</Pairs>
+
+**A `TIME`**
+
+A `TIME` is its text, with the fraction its type keeps.
+
+<Pairs>
+
+- `CAST('10:00:00' AS TIME)` → `"10:00:00"`
+- `CAST('10:00:00.5' AS TIME(1))` → `"10:00:00.5"`
+
+</Pairs>
+
+**Inside JSON the statement builds**
+
+A `DATETIME` is MySQL's text, with a space and six fraction digits.
+
+<Pairs>
+
+- `json_object('at', CAST('2026-10-20 10:00:00' AS DATETIME))` → `{ at: "2026-10-20 10:00:00.000000" }`
+
+</Pairs>
+
+**On `Bun.sql`**
+
+A `DATETIME` keeps its milliseconds, not its microseconds, and drops a fraction that is all zeros. In a statement with parameters, a `TIME` drops its fraction too ([Drivers](#drivers)).
+
+<Pairs>
+
+- `CAST('2026-10-20 10:00:00.123456' AS DATETIME(6))` → `"2026-10-20T10:00:00.123"`
+- `CAST('2026-10-20 10:00:00' AS DATETIME(3))` → `"2026-10-20T10:00:00"`
+
+</Pairs>
+
+</Rules>
+
+### Truth values
+
+MySQL has no boolean type: `BOOLEAN` is a `TINYINT(1)`, and a comparison is the integer 1 or 0. Reylo makes a table's `TINYINT(1)` and `BIT(1)` columns booleans, and every truth value the statement computes:
+
+```ts twoslash tab="main.ts"
+import userFlags from "./my_user_flags.sql";
+
+const rows = await userFlags.run(db);
+//    ^?
+```
+
+```sql tab="my_user_flags.sql" dialect="mysql"
+select id, active, role = 'admin' as is_admin from users
+```
+
+<Rules>
+
+**A table's column**
+
+A table's column is a boolean read straight from the table, or through a derived table or a `with` query, which MySQL traces to the table.
+
+**A truth value the statement computes**
+
+A truth value the statement computes is a comparison (`=`, `<>`, `<`, `<=`, `>`, `>=`, `<=>`), `IS [NOT] NULL`, `IS [NOT] TRUE`, `IS [NOT] FALSE`, `IN`, `BETWEEN`, `LIKE`, `REGEXP`, `EXISTS`, `NOT`, `AND`, `OR`, `XOR`, `TRUE`, `FALSE`, and a `CASE`, `IF`, `COALESCE`, `IFNULL`, `NULLIF` or scalar subquery whose every value is one.
+
+<Pairs>
+
+- `1 = 1` → `true`
+- `'Ada' LIKE 'B%'` → `false`
+- `IF(1 = 1, TRUE, FALSE)` → `true`
+- `(SELECT 1 = 1)` → `true`
+
+</Pairs>
+
+**Where MySQL hides the column**
+
+A number stays a number where MySQL hides the column: a view's column, an aggregate or arithmetic over a flag (`max(active)`, `active + 0`), and a truth value a derived table computes and the outer statement reads.
+
+<Pairs>
+
+- `TRUE + 0` → `1n`
+- `max(1 = 1)` → `1n`
+- `(SELECT b FROM (SELECT 1 = 1 AS b) d)` → `1n`
+
+</Pairs>
+
+**Values other than 0 and 1**
+
+A `TINYINT(1)` holds any number from −128 to 127. Reylo reads 0 and 1 as `false` and `true`, and refuses any other value, naming its column ([Values Reylo refuses](#values-reylo-refuses)).
+
+**Inside JSON the statement builds**
+
+A flag column is the number MySQL writes, `1`, and a comparison is `true`. Where MySQL may write a truth value as `1`, beside an aggregate or from a subquery, its type takes the number too.
+
+<Pairs>
+
+- `json_object('b', 1 = 1)` → `{ b: true }`
+- `json_object('b', max(1 = 1))` → `{ b: 1 }`
+
+</Pairs>
+
+</Rules>
+
+### JSON
+
+A `JSON` value is parsed, and typed `unknown`, unless a `JSON_SCHEMA_VALID` `CHECK` holds the column and the statement reads it straight from its table, or the statement builds the JSON:
+
+```ts twoslash tab="main.ts"
+import events from "./my_events.sql";
+
+const rows = await events.run(db);
+//    ^?
+```
+
+```sql tab="my_events.sql" dialect="mysql"
+select kind, payload from events
+```
+
+JSON the statement builds with `json_object` and `json_arrayagg` is typed from their arguments, each value as MySQL writes it in JSON:
+
+```ts twoslash tab="main.ts"
+import orderSummaries from "./my_order_summaries.sql";
+
+const rows = await orderSummaries.run(db);
+//    ^?
+```
+
+```sql tab="my_order_summaries.sql" dialect="mysql"
+select u.name,
+  json_object('total', o.total, 'placed_at', o.placed_at) as summary
+from orders o
+join users u on u.id = o.user_id
+```
+
+Through `json_arrayagg` the schema's type holds:
+
+```ts twoslash tab="main.ts"
+import eventsByKind from "./my_events_by_kind.sql";
+
+const groups = await eventsByKind.run(db);
+//    ^?
+```
+
+```sql tab="my_events_by_kind.sql" dialect="mysql"
+select kind, json_arrayagg(payload) as payloads
+from events
+group by kind
+```
+
+<Rules>
+
+**Where the schema's type reaches**
+
+The schema's type reaches a plain `select` of the column over tables named without a schema, and the column inside `json_object` or `json_arrayagg`.
+
+**Where the column is `unknown`**
+
+Through a derived table or a `with` query, under a `union`, or in an expression (`json_extract(payload, '$.x')`), the column is `unknown`, and so is a parameter written to it.
+
+**Draft 4**
+
+MySQL's validator reads every schema as draft 4, whatever its `$schema` says, so `const`, `if`, `prefixItems` and `contains` narrow nothing.
+
+**Values inside a document**
+
+Inside a document a value is what JSON writes: integers and `DECIMAL` are numbers, which `JSON.parse` rounds past 2^53 on every driver, and a date is MySQL's text.
+
+<Pairs>
+
+- `CAST('{"n": 9007199254740993}' AS JSON)` → `{ n: 9007199254740992 }`
+- `json_object('d', CAST('2026-10-20' AS DATE))` → `{ d: "2026-10-20" }`
+
+</Pairs>
+
+**Keys**
+
+MySQL stores a document with its keys sorted, and a key given twice holds its last value.
+
+<Pairs>
+
+- `CAST('{"b": 1, "a": 2, "b": 3}' AS JSON)` → `{ a: 2, b: 3 }`
+
+</Pairs>
+
+**An empty array as the fallback**
+
+A `coalesce(json_arrayagg(…), json_array())` keeps the array's type, as does any fallback that is an empty array.
+
+**A JSON parameter**
+
+A JSON parameter takes any JSON value, and a string is stored as a JSON string ([What a parameter takes](#what-a-parameter-takes)).
+
+</Rules>
+
+### Binary
+
+A `BINARY`, a `VARBINARY`, every `BLOB` and a `BIT` wider than 1 are a `Uint8Array`. The `mysql2` driver gives Reylo a `Buffer`, which is one, so `.run()` returns it as it is.
+
+<Rules>
+
+**A `GEOMETRY`**
+
+A `GEOMETRY` is `unknown`, and its value is MySQL's bytes, the SRID and the WKB, as a `Uint8Array`.
+
+<Pairs>
+
+- `ST_GeomFromText('POINT(1 2)')` → `<Buffer 00 00 00 00 01 01 00 00 00 00 00 00 00 00 00 f0 3f 00 00 00 00 00 00 00 40>`
+
+</Pairs>
+
+**A binary parameter**
+
+A binary parameter takes a `Uint8Array`, a `Buffer` or not, on every driver.
+
+</Rules>
+
+### ENUM and SET
+
+An `ENUM` is a `string`, its label, and a `SET` is a `string` of its members joined by commas, `"a,c"`, on every driver.
+
+<Rules>
+
+**A value that is no label**
+
+Compared with a value that is no label, an `ENUM` matches nothing, and an insert of one is MySQL's error in strict mode.
+
+</Rules>
+
+### Values Reylo refuses
+
+Each driver hands Reylo exact integers and dates as text, so one value is refused, with an error that names its column:
+
+<Rules>
+
+**A truth value other than 0 or 1**
+
+A `TINYINT(1)` column that Reylo types `boolean` and that holds 2 is refused, rather than read as `true`. Store 0 or 1 in it, or read the stored number with `active + 0`.
+
+</Rules>
+
+## Nullability
+
+A column is `| null` unless Reylo proves it never is. On MySQL the proof is the server's: it marks each result column `NOT NULL` or not, and Reylo reads that mark and adds what the statement's `where` and `group by` prove.
+
+- **A table's column** is non-null where the table says `NOT NULL`, exactly.
+- **An outer join** makes the joined table's columns nullable, unless a test in the `where` that fails on `NULL` proves the joined row exists, as `where p.published_at is not null` or `where p.id > 0` does, or a later inner join's `on` does.
+- **An expression** is non-null where the server says so: `coalesce` and `ifnull` with a non-null argument, `count`, `length`, arithmetic over non-null integers, comparisons.
+  - The server is cautious with string and date functions, most casts and division: `upper(name)`, `concat(name, '!')`, `date(created_at)`, `cast(id as char)` and `id / 2` are `| null` even when their input is `NOT NULL`.
+- **A test in the `where`** that fails on `NULL` proves the column it tests: `where email is not null`, `where email like '%@%'`, `where lower(email) = :email`. A test under an `or` whose other arm tests another column proves nothing, nor do `coalesce`, `ifnull` and `<=>`.
+- **The `json_arrayagg` aggregate** is `NULL` over no rows, and never under a `group by`, where every group has a row.
+- **A `WITH ROLLUP`** adds a row per level whose grouped columns are `NULL`, and the type says so.
+- **A correlated subquery** in the select list makes the server clear `NOT NULL` on the outer table's columns. Reylo asks again without the subquery and restores it.
+
+A test in the `where` proves the joined row, so its columns are non-null:
+
+```ts twoslash tab="main.ts"
+import shipped from "./my_shipped.sql";
+
+const rows = await shipped.run(db);
+//    ^?
+```
+
+```sql tab="my_shipped.sql" dialect="mysql"
+select u.name, o.total, o.ships_on
+from users u
+left join orders o on o.user_id = u.id
+where o.ships_on is not null
+```
+
+Where the server cannot see what you know, `coalesce` and `ifnull` give a default, and the column is non-null:
+
+```ts twoslash tab="main.ts"
+import shouts from "./my_shouts.sql";
+
+const rows = await shouts.run(db);
+//    ^?
+```
+
+```sql tab="my_shouts.sql" dialect="mysql"
+select upper(name) as shout, coalesce(upper(name), '') as shout_or_empty
+from users
+```
+
+## Row counts
+
+How many rows `.run()` resolves to comes from what Reylo proves the statement can return:
+
+| Resolves to | `cardinality` | On MySQL, when the statement |
+| --- | --- | --- |
+| `Row` | `one` | is an aggregate without a `group by`, or `values row(…)` of one row |
+| `Row \| null` | `maybeOne` | matches every column of one table's primary key or unique key with `=`, against a value of the key's own type; or has `limit 1` |
+| `void` | `none` | is an `insert`, `update`, `delete` or `replace`, `on duplicate key update` included |
+| `Row[]` | `many` | is anything else |
+
+MySQL has no `returning`, so a write resolves to nothing. Read a new id with `last_insert_id()`, on the same connection, since it is that connection's:
+
+```ts twoslash tab="main.ts"
+import mysql from "mysql2/promise";
+import lastInsertId from "./my_last_insert_id.sql";
+
+const db = mysql.createPool(process.env.DATABASE_URL);
+const conn = await db.getConnection();
+// … run an insert on conn, then:
+const { id } = await lastInsertId.run(conn);
+//      ^?
+conn.release();
+```
+
+```sql tab="my_last_insert_id.sql" dialect="mysql"
+select last_insert_id() as id
+```
+
+- A joined table's key proves nothing: `posts join users on users.id = posts.user_id where posts.id = :id` is `Row[]`.
+- A `distinct` or `group by` over values the `where` pins proves nothing unless they are the key.
+- A string key compared with a number proves nothing, since MySQL compares the two as doubles: `where email = 5` is `Row[]`.
+- A `TIMESTAMP` key proves nothing: where the clocks go back an hour, two instants show as one time.
+- A `WITH ROLLUP` adds rows, and a `with` query named like a table is not the table, so neither has a key.
+- A statement the server reads otherwise than its text, under the session's `sql_mode`, proves nothing ([How the text is read](#how-the-text-is-read)).
+- A multi-table `delete` or `update` resolves to nothing, and so does a `select … from … into @variable`.
+- At run time a `Row` statement throws unless it gets exactly one row, and a `Row | null` statement throws when it gets more than one.
+
+## Parameters
+
+### Placeholders
+
+Write each parameter as `:name`. Reylo sends `?` and `.run()` takes an object keyed by name. A statement may use MySQL's own `?` instead, never beside `:name`, and the object's keys are then the numbers, `{ 1: 42 }`.
+
+- Each parameter appears once in a statement, so that one place types it. To use a value twice, select it once in a `with` and read it from there.
+- An `@name` is a MySQL user variable, never a parameter.
+
+### What a parameter takes
+
+Every value `.run()` returns goes back in as a parameter of its type, on every driver, so a row can be passed straight to the next statement:
+
+| SQL type | A parameter takes |
+| --- | --- |
+| `TINYINT`, `SMALLINT`, `MEDIUMINT`, `INT`, `YEAR` | `number` |
+| A `BIGINT` column | `number`, `bigint` or a string of digits |
+| A `TINYINT(1)` or `BIT(1)` column | `boolean` or `number` |
+| `DECIMAL` | `string` |
+| `FLOAT`, `DOUBLE` | `number` |
+| `CHAR`, `VARCHAR`, `TEXT`, `ENUM`, `SET` | `string` |
+| `DATE`, `DATETIME`, `TIMESTAMP`, `TIME` | `string` |
+| `JSON` | any JSON value |
+| `BINARY`, `VARBINARY`, `BLOB` | `Uint8Array` |
+
+- MySQL describes every integer parameter as a `BIGINT`, and every `BIT` one alike. So where the statement names the column, Reylo types a parameter by the column it is compared with or written to:
+  - in a comparison such as `col = :p`, an `in` or a `between`;
+  - in an `insert`'s values and an `update`'s `set`.
+- Elsewhere Reylo takes what MySQL says: `where id = :id` on an `INT` column, and `limit :n`, take a `number`.
+- Reylo's MySQL drivers bind a `true` as 1.
+- A `DATE`, `DATETIME` or `TIMESTAMP` parameter takes the wall-clock text, `"2026-10-12 19:06:48"`, and refuses a `Date`: drivers write a `Date`'s time in different zones, the app's, the server's or UTC.
+- A JSON parameter reaches the database as its JSON text on every driver, so a string is a JSON string: `'{"a":1}'` is stored as the string `"{\"a\":1}"`.
+- A typed JSON parameter, `:events::json('…')`, reaches MySQL as `cast(? as json)` holding its JSON text, after `.run()` has filled in its schema's defaults and checked the value against the schema.
+
+### Parameters without a type
+
+MySQL types every parameter from where the statement uses it, since 8.0.22. One that nothing else types, such as a bare `select :x`, is a `string`.
+
+### Parameters that may be null
+
+A parameter is `| null` only where the statement lets it be:
+
+- where it tests it for null (`:p is null`, `:p is not null`, `isnull(:p)`, `:p <=> col`);
+- where it passes it first to `coalesce` or `ifnull`;
+- where it writes it whole to a column that may hold `NULL` (`values`, `insert … set`, `update … set`, `on duplicate key update`, `replace`), unless it also fills a `NOT NULL` column.
+
+```ts twoslash tab="main.ts"
+import usersByRole from "./my_users_by_role.sql";
+
+const users = await usersByRole.run(db, { role: null });
+//                                        ^?
+```
+
+```sql tab="my_users_by_role.sql" dialect="mysql"
+with input as (select :role as role)
+select users.id, users.name from users, input
+where input.role is null or users.role = input.role
+```
+
+The one-line form is `where role = coalesce(:role, role)`.
+
+### Casts
+
+MySQL has no `::`, so Reylo writes `:p::type` as MySQL's `CAST`, and checks the value against the type before the statement runs, since MySQL's `CAST` turns a value it cannot read into 0 or `NULL` instead of failing. MySQL's own `cast(:p as …)` works too.
+
+| You write | MySQL runs |
+| --- | --- |
+| `::int`, `::bigint`, `::smallint` | `CAST(? AS SIGNED)` |
+| `::int unsigned` | `CAST(? AS UNSIGNED)` |
+| `::numeric(10,2)`, `::decimal(10,2)` | `CAST(? AS DECIMAL(10,2))` |
+| `::real`, `::double precision` | `CAST(? AS FLOAT)`, `CAST(? AS DOUBLE)` |
+| `::text`, `::varchar(20)`, `::uuid` | `CAST(? AS CHAR)`, `CAST(? AS CHAR(20))`, `CAST(? AS CHAR(36))` |
+| `::date`, `::time`, `::datetime` | `CAST(? AS DATE)`, `CAST(? AS TIME)`, `CAST(? AS DATETIME(6))` |
+| `::json` | `CAST(? AS JSON)` |
+| `::bytea`, `::blob` | `CAST(? AS BINARY)` |
+
+- The check refuses an integer out of the type's range, a decimal with more digits than its scale keeps, and a date that does not exist (`"2026-02-30"`), before the statement runs.
+- In `limit` and `offset`, which take only a bare value on MySQL, `:n::int` is written as the bare `?`, and a cast to another type is an error.
+- A cast to `::timestamptz` or `::boolean` is an error: MySQL has no type for an instant with its zone, and no boolean to cast to.
+
+### How the text is read
+
+MySQL reads its text its own way, and Reylo reads it the same way:
+
+- A backslash in a string escapes the character after it, in single and double quotes: `'it\'s :not'` holds no placeholder.
+- A `#` starts a comment to the end of the line, and so does `-- ` with a space after it: `:a --:b` is `:a - (-:b)`. A block comment ends at its first `*/`.
+- Where `NO_BACKSLASH_ESCAPES` or `ANSI_QUOTES` would read a statement otherwise, Reylo asks for the session's `sql_mode` and reads the statement by it.
+- A `||` is `OR` unless the session sets `PIPES_AS_CONCAT`: `name || 'x'` is a number. Write `concat(name, 'x')`.
+- A built-in's name with a space before its parenthesis, `count (x)`, is a stored function's unless the session sets `IGNORE_SPACE`, as `mysql2` does.
+- Where the session reads the statement otherwise than its text, Reylo keeps the server's types and proves no row count and no JSON shape.
+- A `/*! … */` comment is SQL MySQL runs, so a statement with one is an error: write it as plain SQL.
+
+## Drivers
+
+Each driver reads MySQL's protocol as it always does, and Reylo makes only the choice per type that follows, for its own query, on the client you pass. A parser or option you set for your own queries does not reach Reylo's, and none of Reylo's reaches yours.
+
+| Driver | How Reylo reads its values | Refused | Lost before Reylo sees it |
+| --- | --- | --- | --- |
+| `mysql2` | Its `.execute()`, with Reylo's options with each query, so a `BIGINT` and a date come as their exact text | | |
+| PlanetScale | Reylo's `cast` with each query | 2.0, which binds no parameters | |
+| `Bun.sql` | Bun's own values, converted | | A `DATETIME`'s microseconds, an all-zero fraction, and, in a statement with parameters, a `TIME`'s fraction |
+
+- The `mysql2` driver runs on `.execute()`, the binary protocol, and its callback API through `.promise()`, both on the app's own pool or connection.
+- On `Bun.sql`, an expression that may be a `BIGINT` or a `DECIMAL` by what is bound (`round(:x)`) reads digits without a point as a `BIGINT`, since Bun gives both as text.
+- Each driver takes its transactions and connections too: `mysql2`'s promise or callback API, PlanetScale's `.transaction()`, and `Bun.sql`'s `.begin()`, `.savepoint()` and `.reserve()`.
+
+The type check reads the schema through `mysql2`, so an app on PlanetScale or `Bun.sql` adds `mysql2` as a dev dependency.
+
+## Limits
+
+The edges of what Reylo types on MySQL, each with what to write instead:
+
+- **What a write returns.** MySQL has no `returning`, so a write resolves to nothing: read a new id with `select last_insert_id()` on the same connection, and a changed row with a `select` after it.
+- **An `ENUM`'s labels.** An `ENUM` is a `string` ([ENUM and SET](#enum-and-set)).
+- **Where an error is.** A MySQL prepare error has no position, so the type check's error covers the whole statement.
+- **A statement Reylo's parser does not read.** Reylo reads the statement itself for row counts and JSON shapes. One it cannot read keeps the server's types and nullability, resolves to `Row[]`, and its JSON is `unknown`.
+- **A `with` before an `insert`.** MySQL 8.4 refuses `with … insert`, so a `with` follows `insert into … (…)`, as in the main docs' [JSON parameters](/#typed-json).
+- **A parameter in place of a name.** A parameter is a value: `select * from :table` is MySQL's syntax error, and `order by :column` sorts by a constant. Choose a column with `case :sort when 'name' then name end`.
+- **A statement with more than 500 operators** (`a + b + …`, `x = 1 or x = 2 or …`), or nested past 200 levels (196 nested function calls, 195 nested `case`s or 97 nested subqueries), which Reylo types from the server's description alone: any number of rows.
+- **One statement per file.** A file holds one `select`, `insert`, `update`, `delete`, `replace`, `values` or `table`. A `call` is an error in the type check, and so is a file of several statements or of DDL, such as a migration.
