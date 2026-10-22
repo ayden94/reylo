@@ -1,10 +1,22 @@
-# Reylo
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="site/public/readme-logo-dark.svg" />
+    <img src="site/public/readme-logo-light.svg" width="160" alt="Reylo" />
+  </picture>
+</h1>
 
-Import `.sql` files into your TypeScript code with full type inference.
+<p align="center">Import <code>.sql</code> files into your TypeScript code with full type inference</p>
 
-<br/>
+<p align="center">
+  <a href="https://github.com/colinhacks/reylo/actions/workflows/test.yml"><img src="https://github.com/colinhacks/reylo/actions/workflows/test.yml/badge.svg?branch=main" alt="test status" /></a>
+  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/github/license/colinhacks/reylo" alt="License: MIT" /></a>
+  <a href="https://www.npmjs.com/package/reylo"><img src="https://img.shields.io/npm/v/reylo" alt="npm" /></a>
+  <a href="https://github.com/colinhacks/reylo"><img src="https://img.shields.io/github/stars/colinhacks/reylo" alt="GitHub stars" /></a>
+</p>
 
-### [Read the docs →](https://reylo.dev)
+<div align="center">
+  <a href="https://reylo.dev">Read the docs →</a>
+</div>
 
 <br/>
 
