@@ -4,7 +4,7 @@ title: "Usage"
 
 ## Usage
 
-Write a query in a `.sql` file, import it, and run it with your database driver. Reylo uses your live dev database to compile the query and retrieve its types.
+Write a query in a `.sql` file, import it, and run it with your database driver. The query is your database's own SQL: any function, operator or syntax it supports works. Reylo uses your live dev database to compile the query and retrieve its types.
 
 ```ts twoslash tab="main.ts" dialect="postgres"
 import postgres from "postgres";

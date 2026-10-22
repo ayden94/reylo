@@ -342,7 +342,22 @@ Zed doesn't send `.sql` files to the language server, so an error inside one sho
 
 ### Database
 
-**Reylo reads your types from a live dev database.** It retrieves the types of each compiled query, its parameters and its columns, from the database itself. Reylo finds your dev database through the `DATABASE_URL` environment variable.
+**Reylo reads your types from a live dev database.** It retrieves the types of each compiled query, its parameters and its columns, from the database itself. Reylo finds your dev database through the `DATABASE_URL` environment variable, and the URL's scheme tells it which database you use:
+
+```sh title=".env" tab="Postgres" tab-group="dialect"
+# or postgresql://
+DATABASE_URL=postgres://localhost:5432/app
+```
+
+```sh title=".env" tab="MySQL" tab-group="dialect"
+# or mariadb://
+DATABASE_URL=mysql://root@localhost:3306/app
+```
+
+```sh title=".env" tab="SQLite" tab-group="dialect"
+# or sqlite:; the path starts at package.json
+DATABASE_URL=file:./app.db
+```
 
 To override this, create a `.reylo.yaml` file in your project root and set the `direct_url` field:
 

@@ -48,7 +48,7 @@ Reylo is powered by TypeScript [content mappers](https://github.com/microsoft/ty
 
 Reylo is the perfect option for the agent era:
 
-- 💪 **The full power of SQL** — any statement your database runs, in its own dialect.
+- 💪 **The full power of SQL** — any statement, function, operator or syntax your database supports, in its own dialect.
 - 🌵 **DRY** — the types come from the SQL itself: no hand-written row types, no schema file to keep in sync.
 - 🎯 **Checked against your database** — a misspelled column, a wrong parameter or a dropped table is a type error, in `tsc` and in your editor.
 - 🤖 **Agent-friendly** — each fact lives in one place, so an agent cannot leave a stale type behind, and the type check finds every caller it missed.
@@ -94,7 +94,7 @@ Then type-check with `--runExternalCode`, which lets `tsc` run content mappers:
 }
 ```
 
-Point Reylo at your dev database with `DATABASE_URL`, in your environment or in `.env`:
+Point Reylo at your dev database with `DATABASE_URL`, in your environment or in `.env`. Its scheme tells Reylo which database you use:
 
 ```sh
 # .env
