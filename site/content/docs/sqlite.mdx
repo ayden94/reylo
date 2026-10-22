@@ -622,20 +622,28 @@ The check rejects a non-integer for `::int`, and any value outside SQLite's 64-b
 
 ## Drivers
 
-Reylo decodes its query results itself, so settings on your database connection don't affect Reylo's queries, and Reylo's don't affect yours. Type checking needs no driver: it reads your schema with `node:sqlite`, built into Node since 22.5. Drivers differ in their transactions, `.runSync()` and integers past 2^53:
+Reylo decodes its query results itself, so settings on your database connection don't affect Reylo's queries, and Reylo's don't affect yours. Type checking needs no driver: it reads your schema with `node:sqlite`, built into Node since 22.5.
 
-| Driver | Transactions | `.runSync()` | An integer past 2^53 |
-| --- | --- | --- | --- |
-| `better-sqlite3` | `db.transaction(fn)` | Yes | Exact |
-| `node:sqlite` | `begin` and `commit` | Yes | Exact |
-| `bun:sqlite` | `db.transaction(fn)` | Yes | Exact |
-| Turso | `.transactionAsync()`; the compat `Database`'s `db.transaction(fn)` | On the compat `Database` | Exact |
-| libSQL | `.transaction()` | No | Exact with `intMode: "bigint"` or `"string"`; libSQL throws at its default |
-| `sqlite3`, `sqlite` | `begin` and `commit` | No | Rounded by the driver, so Reylo throws |
-| Cloudflare D1 | `.withSession()` | No | Rounded by the driver, so Reylo throws |
-| Durable Objects | `ctx.storage.transactionSync(fn)` | Yes, on `ctx.storage.sql` | Rounded by the driver, so Reylo throws |
-| `Bun.sql` | `.begin()`, `.savepoint()` | No | Rounded without `safeIntegers`, so Reylo throws |
-| Drizzle | `.transaction()`, over `better-sqlite3` or libSQL | Over `better-sqlite3` | As its driver |
+| Driver | Transactions | `.runSync()` |
+| --- | --- | --- |
+| `better-sqlite3` | `db.transaction(fn)` | Yes |
+| `node:sqlite` | `begin` and `commit` | Yes |
+| `bun:sqlite` | `db.transaction(fn)` | Yes |
+| Turso | `.transactionAsync()`; the compat `Database`'s `db.transaction(fn)` | On the compat `Database` |
+| libSQL | `.transaction()` | No |
+| `sqlite3`, `sqlite` | `begin` and `commit` | No |
+| Cloudflare D1 | `.withSession()` | No |
+| Durable Objects | `ctx.storage.transactionSync(fn)` | Yes, on `ctx.storage.sql` |
+| `Bun.sql` | `.begin()`, `.savepoint()` | No |
+| Drizzle | `.transaction()`, over `better-sqlite3` or libSQL | Over `better-sqlite3` |
+
+An integer past 2^53 comes back as follows:
+
+| Integer past 2^53 | Drivers |
+| --- | --- |
+| Exact | `better-sqlite3`, `node:sqlite`, `bun:sqlite`, Turso, and libSQL with `intMode: "bigint"` or `"string"` |
+| libSQL throws a `RangeError` | libSQL at its default `intMode` |
+| Rounded by the driver, so Reylo throws an error | `sqlite3`, `sqlite`, Cloudflare D1, Durable Objects, and `Bun.sql` without `safeIntegers` |
 
 On `sqlite3`, `sqlite` and Durable Objects, a `bigint` parameter past 2^53 is rejected unless it's written to a `BIGINT` column, since those drivers can't bind one. With libSQL's `intMode: "string"`, an integer in a column typed `unknown` comes back as a string of digits.
 
