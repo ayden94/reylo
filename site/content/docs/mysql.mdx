@@ -58,7 +58,7 @@ create table events (
 
 ## Data types
 
-Reylo decodes every value of its own queries itself, on every driver, so each SQL type has one TypeScript type and one form at run time:
+Reylo decodes every value of its own queries itself, on every driver, so each SQL type has one TypeScript type and one form at run time. In each pair below, the SQL is a value and the JavaScript is what Reylo returns for it: `select <SQL> as v` gives the row `{ v: <JavaScript> }`.
 
 | SQL type | TypeScript | The value `.run()` returns |
 | --- | --- | --- |
@@ -96,18 +96,85 @@ select count(*) as total, cast(count(*) as double) as total_number
 from orders
 ```
 
-- An expression whose type the bound value decides is either: `:n + 1` is `bigint | number | string`, a `BIGINT`, a `DOUBLE` or a `DECIMAL` by what you pass.
-- A `YEAR` is a `number`.
-- JavaScript's `JSON.stringify` refuses a `bigint`, so write one out of your API as its text, `String(v)`, or as the integer itself, `JSON.rawJSON(String(v))`, which is what `.outputSchema` describes.
-- Inside JSON the statement builds, a `BIGINT` is a JSON number, which `JSON.parse` rounds past 2^53 ([JSON](#json)).
+<Rules>
+
+**A type the parameter decides**
+
+An expression whose type depends on a bound value takes every type it may have: `:n + 1` is `bigint | number | string`, a `BIGINT`, a `DOUBLE` or a `DECIMAL` by what you pass and how the driver sends it.
+
+<Pairs>
+
+- `CAST(1 AS SIGNED) + 1` → `2n`
+- `CAST(1.5 AS DOUBLE) + 1` → `2.5`
+- `CAST(1.5 AS DECIMAL(2,1)) + 1` → `"2.5"`
+
+</Pairs>
+
+**A `YEAR`**
+
+A `YEAR` is a `number`.
+
+<Pairs>
+
+- `CAST(2026 AS YEAR)` → `2026`
+
+</Pairs>
+
+**Writing a `BIGINT` out**
+
+JavaScript's `JSON.stringify` refuses a `bigint`, so write one out of your API as its text, `String(v)`, or as the integer itself, `JSON.rawJSON(String(v))`, which is what `.outputSchema` describes.
+
+<Pairs>
+
+- `CAST(9007199254740993 AS SIGNED)` → `9007199254740993n`
+- `CAST(18446744073709551615 AS UNSIGNED)` → `18446744073709551615n`
+
+</Pairs>
+
+**Inside JSON the statement builds**
+
+A `BIGINT` is a JSON number, which `JSON.parse` rounds past 2^53 ([JSON](#json)).
+
+<Pairs>
+
+- `json_object('n', CAST(9007199254740993 AS SIGNED))` → `{ n: 9007199254740992 }`
+
+</Pairs>
+
+</Rules>
 
 ### Decimals
 
 A `DECIMAL` is its exact text, `"12.50"`, with the column's scale. So are `SUM(…)` of any column, `AVG(…)` and a division, which MySQL computes as `DECIMAL`: `sum(total)` is `"19.75"`, and `id / 2` is `"0.5000"`.
 
-- A `FLOAT` is a 32-bit float: `mysql2` and `Bun.sql`, which read the binary protocol, give its exact value, `1.100000023841858`, and a driver that reads MySQL's text protocol the shorter text's, `1.1`. A `DOUBLE` is the same on every driver.
-- Inside JSON the statement builds, a `DECIMAL` is a JSON number, which `JSON.parse` reads as a double: `12345678901234.123456` becomes `12345678901234.123`.
-- A `DECIMAL` parameter takes the text, `"12.50"` ([What a parameter takes](#what-a-parameter-takes)).
+<Rules>
+
+**A `FLOAT`**
+
+A `FLOAT` is a 32-bit float. On `mysql2`, which reads the binary protocol, it is the float's exact value, as on `Bun.sql` in a statement with parameters. PlanetScale, and `Bun.sql` in a statement without them, read the text protocol and give the shorter text, `1.1`. A `DOUBLE` is the same on every driver.
+
+<Pairs>
+
+- `CAST(1.1 AS FLOAT)` → `1.100000023841858`
+- `CAST(1.1 AS DOUBLE)` → `1.1`
+
+</Pairs>
+
+**Inside JSON the statement builds**
+
+A `DECIMAL` is a JSON number, which `JSON.parse` reads as a double.
+
+<Pairs>
+
+- `json_object('d', CAST(12345678901234.123456 AS DECIMAL(20,6)))` → `{ d: 12345678901234.123 }`
+
+</Pairs>
+
+**A `DECIMAL` parameter**
+
+A `DECIMAL` parameter takes the text, `"12.50"` ([What a parameter takes](#what-a-parameter-takes)).
+
+</Rules>
 
 ### Dates and times
 
@@ -126,12 +193,68 @@ select placed_at, ships_on from orders where id = :id
 
 Where your runtime has `Temporal`, `Temporal.PlainDateTime.from()` reads the time.
 
-- A `DATETIME(3)` keeps three digits even when they are zero, `"2026-10-20T10:00:00.000"`, and a `DATETIME` none, `"2026-10-20T10:00:00"`.
-- A `TIMESTAMP` stores an instant, and MySQL writes it in the session's `time_zone`, the server's own unless the connection sets another. Reylo cannot know that zone, so the text has none. Run `set time_zone = '+00:00'` on the connection to read UTC, or keep UTC in a `DATETIME`.
-- MySQL keeps no zone in a `DATETIME` or a `TIMESTAMP`: it drops a `Z` from the text it reads, with a warning, and moves a `+00:00` into the session's zone. Keep UTC in a `DATETIME` written by `utc_timestamp()`, as the schema above does.
-- A `TIME` is its text, `"10:00:00"`.
-- Inside JSON the statement builds, a `DATETIME` is MySQL's text with a space and six fraction digits, `"2026-10-20 10:00:00.000000"`.
-- On `Bun.sql`, a `DATETIME` keeps its milliseconds, not its microseconds, and drops a fraction that is all zeros, and a `TIME` drops its fraction ([Drivers](#drivers)).
+<Rules>
+
+**Fractions of a second**
+
+The fraction has as many digits as the type keeps: a `DATETIME(3)` keeps three even when they are zero, and a `DATETIME` none.
+
+<Pairs>
+
+- `CAST('2026-10-20 10:00:00.123456' AS DATETIME(6))` → `"2026-10-20T10:00:00.123456"`
+- `CAST('2026-10-20 10:00:00' AS DATETIME(3))` → `"2026-10-20T10:00:00.000"`
+- `CAST('2026-10-20 10:00:00' AS DATETIME)` → `"2026-10-20T10:00:00"`
+
+</Pairs>
+
+**A `TIMESTAMP`'s zone**
+
+A `TIMESTAMP` stores an instant, and MySQL writes it in the session's `time_zone`, the server's own unless the connection sets another. Reylo cannot know that zone, so the text has none. Run `set time_zone = '+00:00'` on the connection to read UTC, or keep UTC in a `DATETIME`.
+
+**An offset in the text**
+
+MySQL keeps no zone in a `DATETIME` or a `TIMESTAMP`: it drops a `Z` from the text it reads, with a warning, and moves a `+00:00` into the session's zone, here `-07:00`. Keep UTC in a `DATETIME` written by `utc_timestamp()`, as the schema above does.
+
+<Pairs>
+
+- `CAST('2026-10-20 10:00:00Z' AS DATETIME)` → `"2026-10-20T10:00:00"`
+- `CAST('2026-10-20 10:00:00+00:00' AS DATETIME)` → `"2026-10-20T03:00:00"`
+
+</Pairs>
+
+**A `TIME`**
+
+A `TIME` is its text, with the fraction its type keeps.
+
+<Pairs>
+
+- `CAST('10:00:00' AS TIME)` → `"10:00:00"`
+- `CAST('10:00:00.5' AS TIME(1))` → `"10:00:00.5"`
+
+</Pairs>
+
+**Inside JSON the statement builds**
+
+A `DATETIME` is MySQL's text, with a space and six fraction digits.
+
+<Pairs>
+
+- `json_object('at', CAST('2026-10-20 10:00:00' AS DATETIME))` → `{ at: "2026-10-20 10:00:00.000000" }`
+
+</Pairs>
+
+**On `Bun.sql`**
+
+A `DATETIME` keeps its milliseconds, not its microseconds, and drops a fraction that is all zeros. In a statement with parameters, a `TIME` drops its fraction too ([Drivers](#drivers)).
+
+<Pairs>
+
+- `CAST('2026-10-20 10:00:00.123456' AS DATETIME(6))` → `"2026-10-20T10:00:00.123"`
+- `CAST('2026-10-20 10:00:00' AS DATETIME(3))` → `"2026-10-20T10:00:00"`
+
+</Pairs>
+
+</Rules>
 
 ### Truth values
 
@@ -148,11 +271,53 @@ const rows = await userFlags.run(db);
 select id, active, role = 'admin' as is_admin from users
 ```
 
-- A table's column is a boolean read straight from the table, or through a derived table or a `with` query, which MySQL traces to the table.
-- A truth value the statement computes is a comparison (`=`, `<>`, `<`, `<=`, `>`, `>=`, `<=>`), `IS [NOT] NULL`, `IS [NOT] TRUE`, `IS [NOT] FALSE`, `IN`, `BETWEEN`, `LIKE`, `REGEXP`, `EXISTS`, `NOT`, `AND`, `OR`, `XOR`, `TRUE`, `FALSE`, and a `CASE`, `IF`, `COALESCE`, `IFNULL`, `NULLIF` or scalar subquery whose every value is one.
-- A number stays a number where MySQL hides the column: a view's column, an aggregate or arithmetic over a flag (`max(active)`, `active + 0`), and a truth value a derived table computes and the outer statement reads.
-- A `TINYINT(1)` holds any number from −128 to 127. Reylo reads 0 and 1 as `false` and `true`, and refuses any other value, naming its column ([Values Reylo refuses](#values-reylo-refuses)).
-- Inside JSON the statement builds, a flag column is the number MySQL writes, `1`, and a comparison is `true`. Where MySQL may write a truth value as `1`, beside an aggregate or from a subquery, its type takes the number too.
+<Rules>
+
+**A table's column**
+
+A table's column is a boolean read straight from the table, or through a derived table or a `with` query, which MySQL traces to the table.
+
+**A truth value the statement computes**
+
+A truth value the statement computes is a comparison (`=`, `<>`, `<`, `<=`, `>`, `>=`, `<=>`), `IS [NOT] NULL`, `IS [NOT] TRUE`, `IS [NOT] FALSE`, `IN`, `BETWEEN`, `LIKE`, `REGEXP`, `EXISTS`, `NOT`, `AND`, `OR`, `XOR`, `TRUE`, `FALSE`, and a `CASE`, `IF`, `COALESCE`, `IFNULL`, `NULLIF` or scalar subquery whose every value is one.
+
+<Pairs>
+
+- `1 = 1` → `true`
+- `'Ada' LIKE 'B%'` → `false`
+- `IF(1 = 1, TRUE, FALSE)` → `true`
+- `(SELECT 1 = 1)` → `true`
+
+</Pairs>
+
+**Where MySQL hides the column**
+
+A number stays a number where MySQL hides the column: a view's column, an aggregate or arithmetic over a flag (`max(active)`, `active + 0`), and a truth value a derived table computes and the outer statement reads.
+
+<Pairs>
+
+- `TRUE + 0` → `1n`
+- `max(1 = 1)` → `1n`
+- `(SELECT b FROM (SELECT 1 = 1 AS b) d)` → `1n`
+
+</Pairs>
+
+**Values other than 0 and 1**
+
+A `TINYINT(1)` holds any number from −128 to 127. Reylo reads 0 and 1 as `false` and `true`, and refuses any other value, naming its column ([Values Reylo refuses](#values-reylo-refuses)).
+
+**Inside JSON the statement builds**
+
+A flag column is the number MySQL writes, `1`, and a comparison is `true`. Where MySQL may write a truth value as `1`, beside an aggregate or from a subquery, its type takes the number too.
+
+<Pairs>
+
+- `json_object('b', 1 = 1)` → `{ b: true }`
+- `json_object('b', max(1 = 1))` → `{ b: 1 }`
+
+</Pairs>
+
+</Rules>
 
 ### JSON
 
@@ -200,32 +365,96 @@ from events
 group by kind
 ```
 
-- The schema's type reaches a plain `select` of the column over tables named without a schema, and the column inside `json_object` or `json_arrayagg`.
-- Through a derived table or a `with` query, under a `union`, or in an expression (`json_extract(payload, '$.x')`), the column is `unknown`, and so is a parameter written to it.
-- MySQL's validator reads every schema as draft 4, whatever its `$schema` says, so `const`, `if`, `prefixItems` and `contains` narrow nothing.
-- Inside a document a value is what JSON writes: integers and `DECIMAL` are numbers, which `JSON.parse` rounds past 2^53 on every driver; a date is MySQL's text.
-- MySQL stores a document with its keys sorted, and a key given twice holds its last value.
-- A `coalesce(json_arrayagg(…), json_array())` keeps the array's type, as does any fallback that is an empty array.
-- A JSON parameter takes any JSON value, and a string is stored as a JSON string ([What a parameter takes](#what-a-parameter-takes)).
+<Rules>
+
+**Where the schema's type reaches**
+
+The schema's type reaches a plain `select` of the column over tables named without a schema, and the column inside `json_object` or `json_arrayagg`.
+
+**Where the column is `unknown`**
+
+Through a derived table or a `with` query, under a `union`, or in an expression (`json_extract(payload, '$.x')`), the column is `unknown`, and so is a parameter written to it.
+
+**Draft 4**
+
+MySQL's validator reads every schema as draft 4, whatever its `$schema` says, so `const`, `if`, `prefixItems` and `contains` narrow nothing.
+
+**Values inside a document**
+
+Inside a document a value is what JSON writes: integers and `DECIMAL` are numbers, which `JSON.parse` rounds past 2^53 on every driver, and a date is MySQL's text.
+
+<Pairs>
+
+- `CAST('{"n": 9007199254740993}' AS JSON)` → `{ n: 9007199254740992 }`
+- `json_object('d', CAST('2026-10-20' AS DATE))` → `{ d: "2026-10-20" }`
+
+</Pairs>
+
+**Keys**
+
+MySQL stores a document with its keys sorted, and a key given twice holds its last value.
+
+<Pairs>
+
+- `CAST('{"b": 1, "a": 2, "b": 3}' AS JSON)` → `{ a: 2, b: 3 }`
+
+</Pairs>
+
+**An empty array as the fallback**
+
+A `coalesce(json_arrayagg(…), json_array())` keeps the array's type, as does any fallback that is an empty array.
+
+**A JSON parameter**
+
+A JSON parameter takes any JSON value, and a string is stored as a JSON string ([What a parameter takes](#what-a-parameter-takes)).
+
+</Rules>
 
 ### Binary
 
 A `BINARY`, a `VARBINARY`, every `BLOB` and a `BIT` wider than 1 are a `Uint8Array`. The `mysql2` driver gives Reylo a `Buffer`, which is one, so `.run()` returns it as it is.
 
-- A `GEOMETRY` is `unknown`, and its value is MySQL's bytes, the SRID and the WKB, as a `Uint8Array`.
-- A binary parameter takes a `Uint8Array`, a `Buffer` or not, on every driver.
+<Rules>
+
+**A `GEOMETRY`**
+
+A `GEOMETRY` is `unknown`, and its value is MySQL's bytes, the SRID and the WKB, as a `Uint8Array`.
+
+<Pairs>
+
+- `ST_GeomFromText('POINT(1 2)')` → `<Buffer 00 00 00 00 01 01 00 00 00 00 00 00 00 00 00 f0 3f 00 00 00 00 00 00 00 40>`
+
+</Pairs>
+
+**A binary parameter**
+
+A binary parameter takes a `Uint8Array`, a `Buffer` or not, on every driver.
+
+</Rules>
 
 ### ENUM and SET
 
 An `ENUM` is a `string`, its label, and a `SET` is a `string` of its members joined by commas, `"a,c"`, on every driver.
 
-- Compared with a value that is no label, an `ENUM` matches nothing, and an insert of one is MySQL's error in strict mode.
+<Rules>
+
+**A value that is no label**
+
+Compared with a value that is no label, an `ENUM` matches nothing, and an insert of one is MySQL's error in strict mode.
+
+</Rules>
 
 ### Values Reylo refuses
 
 Each driver hands Reylo exact integers and dates as text, so one value is refused, with an error that names its column:
 
-- **A truth value other than 0 or 1.** A `TINYINT(1)` or `BIT(1)` column that Reylo types `boolean` and that holds 2 is refused, rather than read as `true`. Store 0 or 1 in it, or read the stored number with `active + 0`.
+<Rules>
+
+**A truth value other than 0 or 1**
+
+A `TINYINT(1)` column that Reylo types `boolean` and that holds 2 is refused, rather than read as `true`. Store 0 or 1 in it, or read the stored number with `active + 0`.
+
+</Rules>
 
 ## Nullability
 
