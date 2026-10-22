@@ -1,5 +1,5 @@
 import { CopyAgentPrompt } from 'docs-kit/components';
-import type { ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { wordmark } from '@/components/wordmark';
 import { githubUrl } from '@/lib/layout.shared';
 
@@ -40,4 +40,38 @@ export function HeroActions() {
       <CopyAgentPrompt />
     </div>
   );
+}
+
+// The demo's markup as HTML: React leaves `muted` out of server-rendered HTML, and a browser
+// autoplays only a muted video, so a <video> rendered by React would sit still until hydration.
+// A phone takes the portrait cut (its media query matches app/global.css's breakpoint).
+const demoVideo =
+  '<video autoplay loop muted playsinline preload="auto" aria-label="An editor: hovering user in main.ts shows its type; the SQL in get_user.sql gains columns and loses its where clause, and the type follows">' +
+  '<source src="/demo/reylo-phone.mp4" type="video/mp4" media="(max-width: 767px)">' +
+  '<source src="/demo/reylo.mp4" type="video/mp4">' +
+  '</video>';
+
+/**
+ * Under the badges and "Copy agent prompt": a looping recording of an editor, the type of a query's
+ * result following its SQL as the SQL changes. Its box keeps the video's shape from the first paint
+ * (app/global.css, `.hero-demo`), so nothing moves when the video loads; a reader who asks for
+ * reduced motion gets its first frame, still.
+ */
+export function HeroDemo() {
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const video = box.current?.querySelector('video');
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)');
+    if (!video) return;
+    const apply = () => {
+      if (reduce.matches) {
+        video.pause();
+        video.currentTime = 0;
+      } else void video.play().catch(() => {});
+    };
+    apply();
+    reduce.addEventListener('change', apply);
+    return () => reduce.removeEventListener('change', apply);
+  }, []);
+  return <div ref={box} className="hero-demo not-prose" dangerouslySetInnerHTML={{ __html: demoVideo }} />;
 }

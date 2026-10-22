@@ -2,7 +2,7 @@ import { AgentPrompt, docsMdxComponents } from 'docs-kit/components';
 import type { MDXComponents } from 'mdx/types';
 import type { ReactNode } from 'react';
 import { Dialect, DialectSwitch, DialectTabs } from './dialect-tabs';
-import { HeroActions } from './hero';
+import { HeroActions, HeroDemo } from './hero';
 import { HowItWorksDiagram } from './how-it-works-diagram';
 import { Inferred, InferredRow, InferredTypes } from './inferred';
 import { Pairs, Rules } from './value-pairs';
@@ -19,6 +19,8 @@ export function getMDXComponents(components?: MDXComponents) {
     HowItWorksDiagram,
     // The badges and "Copy agent prompt" under the main page's subheader (components/hero.tsx).
     HeroActions,
+    // The looping editor recording under them (components/hero.tsx).
+    HeroDemo,
     // One dialect choice for the page: <DialectTabs> with a strip, <DialectTabs follow> without,
     // each holding <Dialect value="Postgres|MySQL|SQLite"> panels, in step with the code tabs
     // marked tab-group="dialect" (components/dialect-tabs.tsx).
