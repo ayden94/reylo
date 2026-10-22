@@ -123,6 +123,33 @@ test("a directory of migrations: in order by number, down migrations and down se
   assert.deepEqual(columns(posts), ["title text", "email text"]);
 });
 
+test("files numbered 1, 2 and 10 run in the order their tool runs them, and are refused where nothing shows the tool", () => {
+  // Each order is the one the tool itself applied, on Postgres 18 (src/schema-files.ts, `ordered`).
+  const order = (files: Record<string, string>, pattern: string) => {
+    const root = project([], files, false);
+    const found = schemaFiles(root, [pattern]);
+    return found.error ?? found.files.map((f) => f.slice(root.length + 1));
+  };
+  const each = (names: string[], file: (n: string) => [string, string][]) => Object.fromEntries(names.flatMap(file));
+  const NAMES = ["1_a", "2_b", "10_c"];
+  // By number: golang-migrate (and sqlx's reversible files), goose, node-pg-migrate.
+  assert.deepEqual(order(each(NAMES, (n) => [[`m/${n}.up.sql`, ""], [`m/${n}.down.sql`, ""]]), "m/*.sql"), ["m/1_a.up.sql", "m/2_b.up.sql", "m/10_c.up.sql"]);
+  assert.deepEqual(order(each(NAMES, (n) => [[`m/${n}.sql`, "-- +goose Up\n-- +goose Down\n"]]), "m/*.sql"), ["m/1_a.sql", "m/2_b.sql", "m/10_c.sql"]);
+  assert.deepEqual(order(each(NAMES, (n) => [[`m/${n}.sql`, "-- Up Migration\n-- Down Migration\n"]]), "m/*.sql"), ["m/1_a.sql", "m/2_b.sql", "m/10_c.sql"]);
+  // By name: dbmate, Atlas.
+  assert.deepEqual(order(each(NAMES, (n) => [[`m/${n}.sql`, "-- migrate:up\n-- migrate:down\n"]]), "m/*.sql"), ["m/10_c.sql", "m/1_a.sql", "m/2_b.sql"]);
+  assert.deepEqual(order({ ...each(NAMES, (n) => [[`m/${n}.sql`, ""]]), "m/atlas.sum": "" }, "m/*.sql"), ["m/10_c.sql", "m/1_a.sql", "m/2_b.sql"]);
+  // By the version's text: Supabase, Prisma.
+  assert.deepEqual(order(each(NAMES, (n) => [[`supabase/migrations/${n}.sql`, ""]]), "supabase/migrations/*.sql"), ["supabase/migrations/1_a.sql", "supabase/migrations/10_c.sql", "supabase/migrations/2_b.sql"]);
+  assert.deepEqual(order({ ...each(NAMES, (n) => [[`prisma/migrations/${n}/migration.sql`, ""]]), "prisma/migrations/migration_lock.toml": "" }, "prisma/migrations/*/migration.sql"), ["prisma/migrations/1_a/migration.sql", "prisma/migrations/10_c/migration.sql", "prisma/migrations/2_b/migration.sql"]);
+  // Flyway: by version, its repeatable migrations last, its undo migrations never.
+  assert.deepEqual(order({ "sql/V1__a.sql": "", "sql/V1_1__a1.sql": "", "sql/V2__b.sql": "", "sql/V10__c.sql": "", "sql/R__r.sql": "", "sql/U2__b.sql": "" }, "sql/*.sql"), ["sql/V1__a.sql", "sql/V1_1__a1.sql", "sql/V2__b.sql", "sql/V10__c.sql", "sql/R__r.sql"]);
+  // Nothing shows the tool (sqlx's plain files), and the tools disagree: refused, never guessed.
+  assert.equal(order(each(NAMES, (n) => [[`m/${n}.sql`, ""]]), "m/*.sql"), `"schema" in .reylo.yaml: m/10_c.sql comes before m/1_a.sql by name and after it by number, and migration tools disagree on which runs first. Name the files with versions of one width (timestamps, or zero-padded numbers), or list them in .reylo.yaml in the order they run`);
+  // Versions of one width, as the tools write them: every tool runs them in name order.
+  assert.deepEqual(order(each(["20261001090000_a", "20261002090000_b", "20261010090000_c"], (n) => [[`m/${n}.sql`, ""]]), "m/*.sql"), ["m/20261001090000_a.sql", "m/20261002090000_b.sql", "m/20261010090000_c.sql"]);
+});
+
 test("a SQLite .schema types queries in memory, and a change to the file is a new schema", async () => {
   const schema = "CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, bio TEXT);\nCREATE TABLE sqlite_sequence(name,seq);\nCREATE INDEX users_name ON users (name);\n";
   const root = project(["sqlite"], { ".reylo.yaml": "schema: schema.sql\n", "schema.sql": schema });
@@ -205,5 +232,9 @@ test("a script splits into statements at semicolons outside strings, comments, d
   assert.ok(parts[3]!.endsWith("select x; end;"));
   // What the tools write that no SQL loader reads: pg_dump's \restrict lines, SQLite's own table.
   assert.equal(schemaText("\\restrict abc\nselect 1;\n\\unrestrict abc\n", "postgres"), "\nselect 1;\n\n");
+  // Each tool's down section is cut: dbmate, goose, sql-migrate, node-pg-migrate, tern.
+  for (const marker of ["-- migrate:down", "-- +goose Down", "-- +migrate Down", "-- Down Migration", "---- create above / drop below ----"]) {
+    assert.equal(schemaText(`create table t (id int);\n${marker}\ndrop table t;\n`, "postgres"), "create table t (id int);\n");
+  }
   assert.equal(schemaText("CREATE TABLE t (id INTEGER PRIMARY KEY AUTOINCREMENT);\nCREATE TABLE sqlite_sequence(name,seq);\n", "sqlite"), "CREATE TABLE t (id INTEGER PRIMARY KEY AUTOINCREMENT);\n\n");
 });

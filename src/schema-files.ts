@@ -7,12 +7,13 @@
 // The files are read as the databases' own tools write them: a `pg_dump --schema-only` (its
 // `\restrict` lines, which no SQL loader reads, are dropped, and every setting it changes is reset
 // after each file), SQLite's `.schema` (its `sqlite_sequence` table, which SQLite makes itself, is
-// dropped), and migrations of the common tools (a file ending `.down.sql` is skipped, and a file
-// is cut where dbmate's, goose's, sql-migrate's or tern's down section starts).
+// dropped), and migrations of the common tools, in the order each tool applies them (`ordered`): a
+// down or undo file is skipped, and a file is cut where dbmate's, goose's, sql-migrate's,
+// node-pg-migrate's or tern's down section starts.
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { join, relative } from "node:path";
+import { basename, dirname, join, relative, sep } from "node:path";
 import { globSync, isDynamicPattern } from "tinyglobby";
 import { loadDriver, type Described } from "./describe.ts";
 import type { Dialect } from "./project.ts";
@@ -21,9 +22,9 @@ import type { Dialect } from "./project.ts";
 export type SchemaFiles = { files: string[]; error?: undefined } | { files: string[]; error: string };
 
 /**
- * The files `schema` names, in order: each pattern's files sorted by name, digits compared as
- * numbers (`2_add.sql` before `10_add.sql`), and a file named twice taken once, where it first
- * appears. A down migration is never applied.
+ * The files `schema` names, in order: a path where the list names it, and a glob's files in the
+ * order their migration tool applies them (`ordered`); a file named twice is taken once, where it
+ * first appears. A down or undo migration is never applied.
  */
 export function schemaFiles(root: string, patterns: readonly string[]): SchemaFiles {
   const files: string[] = [];
@@ -34,34 +35,74 @@ export function schemaFiles(root: string, patterns: readonly string[]): SchemaFi
       if (!files.includes(file)) files.push(file);
       continue;
     }
-    const found = globSync(pattern, { cwd: root, absolute: true, onlyFiles: true, ignore: ["**/node_modules/**"] })
-      .filter((f) => !/\.down\.sql$/i.test(f))
-      .sort((a, b) => natural(relative(root, a), relative(root, b)));
+    const found = globSync(pattern, { cwd: root, absolute: true, onlyFiles: true, ignore: ["**/node_modules/**"] }).filter((f) => !/\.down\.sql$/i.test(f) && !FLYWAY_UNDO.test(basename(f)));
     if (!found.length) return { files, error: `"schema" in .reylo.yaml names ${pattern}, which matches no file` };
-    for (const file of found) if (!files.includes(file)) files.push(file);
+    const order = ordered(root, found);
+    if ("error" in order) return { files, error: order.error };
+    for (const file of order.files) if (!files.includes(file)) files.push(file);
   }
   return { files };
 }
 
-/** Names compared as a person sorts them: runs of digits by their value. */
-function natural(a: string, b: string): number {
-  const x = a.match(/\d+|\D+/g) ?? [];
-  const y = b.match(/\d+|\D+/g) ?? [];
-  for (let i = 0; i < Math.min(x.length, y.length); i++) {
-    const p = x[i]!;
-    const q = y[i]!;
-    if (p === q) continue;
-    if (/^\d/.test(p) && /^\d/.test(q)) {
-      const d = BigInt(p) - BigInt(q);
-      if (d !== 0n) return d < 0n ? -1 : 1;
-    }
-    return p < q ? -1 : 1;
+// How the migration tools order their files, each run on Postgres 18 on 2026-10-22 with files
+// numbered 1, 2 and 10. With versions of one width (the timestamps or zero-padded numbers the tools
+// write) every tool applies them in the order of their names. With versions of several widths they
+// disagree: golang-migrate, goose, sqlx and node-pg-migrate go by number (1, 2, 10), dbmate and
+// Atlas by name (10, 1, 2), Supabase and Prisma by the version's text (1, 10, 2); Flyway goes by
+// version, `V1_1` after `V1`, its repeatable migrations last. So a glob's files are in name order
+// unless their numbers say otherwise, and then in the order of the tool the files show, or refused.
+const FLYWAY_VERSIONED = /^V(\d+(?:[._]\d+)*)__.*\.sql$/i;
+const FLYWAY_REPEATABLE = /^R__.*\.sql$/i;
+const FLYWAY_UNDO = /^U\d+(?:[._]\d+)*__.*\.sql$/i;
+const BY_NUMBER = /^[ \t]*--[ \t]*(?:\+goose[ \t]+up|up[ \t]+migration)\b/im;
+const BY_NAME = /^[ \t]*--[ \t]*migrate:up\b/im;
+
+/** `files` (one glob's) in the order their tool applies them, or why that cannot be told. */
+function ordered(root: string, files: string[]): { files: string[] } | { error: string } {
+  const names = files.map((f) => basename(f));
+  if (names.every((n) => FLYWAY_VERSIONED.test(n) || FLYWAY_REPEATABLE.test(n))) {
+    const version = (n: string) => FLYWAY_VERSIONED.exec(n)?.[1]?.split(/[._]/).map(BigInt);
+    return {
+      files: [...files].sort((a, b) => {
+        const x = version(basename(a));
+        const y = version(basename(b));
+        if (!x || !y) return x ? -1 : y ? 1 : byName(a, b);
+        for (let i = 0; i < Math.max(x.length, y.length); i++) {
+          const d = (x[i] ?? 0n) - (y[i] ?? 0n);
+          if (d !== 0n) return d < 0n ? -1 : 1;
+        }
+        return byName(a, b);
+      }),
+    };
   }
-  return x.length - y.length;
+  const byPath = [...files].sort((a, b) => byName(relative(root, a), relative(root, b)));
+  // The version is the leading number of the first part of the path that starts with one: the
+  // file's name, or Prisma's directory.
+  const version = (f: string) => relative(root, f).split(sep).map((part) => /^\d+/.exec(part)?.[0]).find((v) => v !== undefined);
+  const versions = byPath.map(version);
+  if (versions.some((v) => v === undefined) || new Set(versions.map((v) => v!.length)).size === 1) return { files: byPath };
+  const numeric = [...byPath].sort((a, b) => {
+    const d = BigInt(version(a)!) - BigInt(version(b)!);
+    return d === 0n ? 0 : d < 0n ? -1 : 1;
+  });
+  if (numeric.every((f, i) => f === byPath[i])) return { files: byPath };
+  const texts = files.map((f) => readFileSync(f, "utf8"));
+  const dir = dirname(files[0]!);
+  if (files.some((f) => /\.up\.sql$/i.test(f)) || texts.some((t) => BY_NUMBER.test(t))) return { files: numeric };
+  if (texts.some((t) => BY_NAME.test(t)) || existsSync(join(dir, "atlas.sum"))) return { files: byPath };
+  if (files.some((f) => /(^|[\\/])supabase[\\/]migrations[\\/]/.test(f)) || existsSync(join(dir, "..", "migration_lock.toml")) || existsSync(join(dir, "migration_lock.toml"))) {
+    return { files: [...byPath].sort((a, b) => byName(version(a)!, version(b)!)) };
+  }
+  const i = numeric.findIndex((f, i) => f !== byPath[i]);
+  const [first, second] = [byPath[i]!, numeric[i]!].map((f) => relative(root, f));
+  return { error: `"schema" in .reylo.yaml: ${first} comes before ${second} by name and after it by number, and migration tools disagree on which runs first. Name the files with versions of one width (timestamps, or zero-padded numbers), or list them in .reylo.yaml in the order they run` };
 }
 
-/** Where a migration's down section starts: dbmate, goose, sql-migrate, tern. */
-const DOWN = /^[ \t]*--[ \t]*(?:migrate:down|\+goose[ \t]+down|\+migrate[ \t]+down)\b.*$|^[ \t]*----[ \t]*create above[ \t]*\/[ \t]*drop below[ \t]*----/im;
+/** Byte order, as a tool that sorts file names does. */
+const byName = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+/** Where a migration's down section starts: dbmate, goose, sql-migrate, node-pg-migrate, tern. */
+const DOWN = /^[ \t]*--[ \t]*(?:migrate:down|\+goose[ \t]+down|\+migrate[ \t]+down|down[ \t]+migration)\b.*$|^[ \t]*----[ \t]*create above[ \t]*\/[ \t]*drop below[ \t]*----/im;
 
 /**
  * A file's text as the database is given it. A line is blanked rather than removed, so that a

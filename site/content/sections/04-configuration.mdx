@@ -63,7 +63,7 @@ npm install -D @electric-sql/pglite
 sqlite3 app.db .schema > db/schema.sql
 ```
 
-Or list your migrations. Reylo applies them in the order of their names and skips down migrations:
+Or list your migrations. Reylo applies them in the order your migration tool does, and skips down migrations:
 
 ```yaml title=".reylo.yaml"
 # on Prisma, prisma/migrations/*/migration.sql
