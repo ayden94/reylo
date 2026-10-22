@@ -7,9 +7,19 @@ description: Import .sql files into TypeScript with full type inference. A TypeS
 
 <HeroActions />
 
-Reylo lets you import `.sql` files with full type safety. It's powered by TypeScript [content mappers](https://github.com/microsoft/typescript-go/pull/4712), introduced in TypeScript 7.1 (currently [in beta](https://devblogs.microsoft.com/typescript/announcing-typescript-7-1-beta/)), an official mechanism for integrating external file types directly into TypeScript compilation.
+If you have a file like this:
 
-```ts twoslash tab="main.ts" dialect="postgres"
+```sql title="get_author.sql"
+select u.id, u.name, count(p.id)::int as post_count
+from users u
+left join posts p on p.user_id = u.id
+where u.id = :id::int
+group by u.id
+```
+
+You can import it directly from a TypeScript file like this:
+
+```ts twoslash title="main.ts" dialect="postgres"
 // @hover: getAuthor author
 import postgres from "postgres";
 import getAuthor from "./get_author.sql";
@@ -18,14 +28,6 @@ const db = postgres(process.env.DATABASE_URL);
 
 // hover over author to see its type
 const author = await getAuthor.run(db, { id: 1 });
-```
-
-```sql tab="get_author.sql"
-select u.id, u.name, count(p.id)::int as post_count
-from users u
-left join posts p on p.user_id = u.id
-where u.id = :id::int
-group by u.id
 ```
 
 <Details summary="View the schema" id="schema">
@@ -134,13 +136,21 @@ create table events (
 
 </Details>
 
+<Callout title="Content mappers">
+
+Reylo is powered by TypeScript [content mappers](https://github.com/microsoft/typescript-go/pull/4712), introduced in TypeScript 7.1 (currently [in beta](https://devblogs.microsoft.com/typescript/announcing-typescript-7-1-beta/)), which let you dynamically define static types for external file types and integrate them directly into TypeScript compilation.
+
+</Callout>
+
+Reylo is the perfect option for the agent era:
+
 <div className="dk-features">
 
-- 💪 **The full power of SQL.** Any statement your database runs, in its own dialect.
-- 🌵 **DRY.** The types come from the SQL itself: no hand-written row types, no schema file to keep in sync.
-- 🎯 **Checked against your database.** A misspelled column, a wrong parameter or a dropped table is a type error, in `tsc` and in your editor.
-- 🤖 **Agent-friendly.** Each fact lives in one place, so an agent cannot leave a stale type behind, and the type check finds every caller it missed.
-- 🧩 **Postgres, MySQL and SQLite.** Bring your own driver: `pg`, postgres.js, `mysql2`, `better-sqlite3`, Cloudflare D1 and [more](#supported-drivers).
-- ⚡ **No codegen.** The type checker asks Reylo directly: no generated files, no watcher.
+- 💪 **The full power of SQL** — any statement your database runs, in its own dialect.
+- 🌵 **DRY** — the types come from the SQL itself: no hand-written row types, no schema file to keep in sync.
+- 🎯 **Checked against your database** — a misspelled column, a wrong parameter or a dropped table is a type error, in `tsc` and in your editor.
+- 🤖 **Agent-friendly** — each fact lives in one place, so an agent cannot leave a stale type behind, and the type check finds every caller it missed.
+- 🧩 **Postgres, MySQL and SQLite** — bring your own driver: `pg`, postgres.js, `mysql2`, `better-sqlite3`, Cloudflare D1 and [more](#supported-drivers).
+- ⚡ **No codegen** — the type checker asks Reylo directly: no generated files, no watcher.
 
 </div>
