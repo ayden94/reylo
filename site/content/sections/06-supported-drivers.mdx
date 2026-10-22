@@ -4,7 +4,7 @@ title: "Supported drivers"
 
 ## Supported drivers
 
-Pass `.run()` a client from any of these drivers. Transactions and connections taken from a client work too ([an example](#run-statements-in-a-transaction)).
+Pass `.run()` a client from any of these drivers. Transactions and connections taken from a client work too ([an example](#transactions)).
 
 The type check reads your schema through `pg` or postgres.js on Postgres, and `mysql2` on MySQL. If your app uses another driver, add one of these as a dev dependency.
 
@@ -24,6 +24,15 @@ import postgres from "postgres";
 import getUser from "./get_user.sql";
 
 const db = postgres(process.env.DATABASE_URL);
+
+const user = await getUser.run(db, { id: 1 });
+```
+
+```ts twoslash tab="Bun.sql" dialect="postgres"
+import { SQL } from "bun";
+import getUser from "./get_user.sql";
+
+const db = new SQL(process.env.DATABASE_URL);
 
 const user = await getUser.run(db, { id: 1 });
 ```
@@ -85,6 +94,15 @@ const db = connect({ url: process.env.DATABASE_URL });
 const user = await getUser.run(db, { id: 1 });
 ```
 
+```ts twoslash tab="Bun.sql" dialect="mysql"
+import { SQL } from "bun";
+import getUser from "./get_user.sql";
+
+const db = new SQL(process.env.DATABASE_URL);
+
+const user = await getUser.run(db, { id: 1 });
+```
+
 ### SQLite
 
 ```ts twoslash tab="better-sqlite3" dialect="sqlite"
@@ -101,6 +119,15 @@ import { DatabaseSync } from "node:sqlite";
 import getUser from "./get_user.sql";
 
 const db = new DatabaseSync("app.db");
+
+const user = await getUser.run(db, { id: 1 });
+```
+
+```ts twoslash tab="Bun.sql" dialect="sqlite"
+import { SQL } from "bun";
+import getUser from "./get_user.sql";
+
+const db = new SQL({ adapter: "sqlite", filename: "app.db" });
 
 const user = await getUser.run(db, { id: 1 });
 ```

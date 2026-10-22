@@ -6,52 +6,65 @@ title: "Advanced"
 
 Each example runs against [the schema at the top of the page](#schema), and calls the client `db`.
 
-### Filter by a list
+### Subqueries
 
-Pass the list as one parameter.
+Run unrelated subqueries side by side, in one query and one round trip. With no `from`, the query returns exactly one row, and `.run()` resolves to it:
 
 ```ts twoslash tab="main.ts"
-import usersByIds from "./users_by_ids.sql";
+import dashboard from "./dashboard.sql";
 
-const users = await usersByIds.run(db, { ids: [1, 2, 3] });
-//                                       ^?
+const stats = await dashboard.run(db);
+//    ^?
 ```
 
-```sql tab="users_by_ids.sql (Postgres)" file="users_by_ids.sql" dialect="postgres"
-select id, name from users where id = any(:ids::int[])
+```sql tab="dashboard.sql (Postgres)" file="dashboard.sql" dialect="postgres"
+-- the five latest posts
+with recent as (select id, title from posts order by id desc limit 5)
+select
+  (select count(*)::int from users) as user_count,
+  (select count(*)::int from posts) as post_count,
+  (
+    select coalesce(jsonb_agg(jsonb_build_object(
+      'id', r.id,
+      'title', r.title
+    )), '[]')
+    from recent r
+  ) as recent_posts
 ```
 
-```sql tab="users_by_ids.sql (MySQL)" file="users_by_ids.sql" dialect="mysql"
--- MySQL has no array type, so the list is a JSON parameter
-with input as (
-  select :ids::json('{
-    "type": "array",
-    "items": { "type": "integer" }
-  }') as ids
-)
-select id, name from users
-where id in (
-  select j.id from input, json_table(input.ids, '$[*]' columns (
-    id int path '$'
-  )) as j
-)
+```sql tab="dashboard.sql (MySQL)" file="dashboard.sql" dialect="mysql"
+-- the five latest posts
+with recent as (select id, title from posts order by id desc limit 5)
+select
+  (select count(*) from users) as user_count,
+  (select count(*) from posts) as post_count,
+  (
+    select coalesce(json_arrayagg(json_object(
+      'id', r.id,
+      'title', r.title
+    )), json_array())
+    from recent r
+  ) as recent_posts
 ```
 
-```sql tab="users_by_ids.sql (SQLite)" file="users_by_ids.sql" dialect="sqlite"
--- SQLite has no array type, so the list is a JSON parameter
-with input as (
-  select :ids::json('{
-    "type": "array",
-    "items": { "type": "integer" }
-  }') as ids
-)
-select id, name from users
-where id in (select j.value from input, json_each(input.ids) as j)
+```sql tab="dashboard.sql (SQLite)" file="dashboard.sql" dialect="sqlite"
+-- the five latest posts
+with recent as (select id, title from posts order by id desc limit 5)
+select
+  (select count(*) from users) as user_count,
+  (select count(*) from posts) as post_count,
+  (
+    select json_group_array(json_object(
+      'id', r.id,
+      'title', r.title
+    ))
+    from recent r
+  ) as recent_posts
 ```
 
-### Nest related rows
+### Nested fetching
 
-Aggregate a subquery's rows into JSON, and Reylo types every field inside it:
+Fetch each row's related rows with an aggregated subquery: it collects them into JSON, and Reylo types every field inside it:
 
 ```ts twoslash tab="main.ts"
 import usersWithPosts from "./users_with_posts.sql";
@@ -126,7 +139,50 @@ select u.id, u.name,
 from users u
 ```
 
-### Insert many rows
+### Filtering by a list
+
+Pass the list as one parameter.
+
+```ts twoslash tab="main.ts"
+import usersByIds from "./users_by_ids.sql";
+
+const users = await usersByIds.run(db, { ids: [1, 2, 3] });
+//                                       ^?
+```
+
+```sql tab="users_by_ids.sql (Postgres)" file="users_by_ids.sql" dialect="postgres"
+select id, name from users where id = any(:ids::int[])
+```
+
+```sql tab="users_by_ids.sql (MySQL)" file="users_by_ids.sql" dialect="mysql"
+-- MySQL has no array type, so the list is a JSON parameter
+with input as (
+  select :ids::json('{
+    "type": "array",
+    "items": { "type": "integer" }
+  }') as ids
+)
+select id, name from users
+where id in (
+  select j.id from input, json_table(input.ids, '$[*]' columns (
+    id int path '$'
+  )) as j
+)
+```
+
+```sql tab="users_by_ids.sql (SQLite)" file="users_by_ids.sql" dialect="sqlite"
+-- SQLite has no array type, so the list is a JSON parameter
+with input as (
+  select :ids::json('{
+    "type": "array",
+    "items": { "type": "integer" }
+  }') as ids
+)
+select id, name from users
+where id in (select j.value from input, json_each(input.ids) as j)
+```
+
+### Bulk inserts
 
 Pass the rows as one [JSON parameter](#typed-json): the schema in its cast types them, and Reylo checks every row before the statement runs.
 
@@ -204,7 +260,7 @@ from input, json_each(input.users) as u
 returning id
 ```
 
-### Insert related rows
+### Nested inserts
 
 Users with their posts, in one parameter. The posts find their user by `email`, a unique key.
 
@@ -429,7 +485,7 @@ join json_each(u.value -> 'posts') as p
 </Dialect>
 </DialectTabs>
 
-### Record events of several kinds
+### Discriminated unions
 
 A `oneOf` types a JSON parameter as a union. Here a `const` key tells the members apart:
 
@@ -544,7 +600,7 @@ select e.value ->> 'kind', e.value
 from input, json_each(input.events) as e
 ```
 
-### Run statements in a transaction
+### Transactions
 
 A transaction, a savepoint or a connection taken from a client is a client too:
 

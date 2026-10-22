@@ -52,7 +52,7 @@ Reylo is the perfect option for the agent era:
 - 🌵 **DRY** — the types come from the SQL itself: no hand-written row types, no schema file to keep in sync.
 - 🎯 **Checked against your database** — a misspelled column, a wrong parameter or a dropped table is a type error, in `tsc` and in your editor.
 - 🤖 **Agent-friendly** — each fact lives in one place, so an agent cannot leave a stale type behind, and the type check finds every caller it missed.
-- 🧩 **Postgres, MySQL and SQLite** — bring your own driver: `pg`, postgres.js, `mysql2`, `better-sqlite3`, Cloudflare D1 and [more](#supported-drivers).
+- 🧩 **Postgres, MySQL and SQLite** — bring your own driver: `pg`, postgres.js, `mysql2`, `better-sqlite3`, `Bun.sql`, Cloudflare D1 and [more](#supported-drivers).
 - ⚡ **No codegen** — the type checker asks Reylo directly: no generated files, no watcher.
 
 ## Setup
@@ -153,9 +153,9 @@ Each has examples in [Inference](https://reylo.dev/#inference).
 
 Reylo is bring-your-own-driver. Pass `.run()` a client from any of these:
 
-- **Postgres** — `pg`, postgres.js, PGlite, Neon, `pg-promise`, `@vercel/postgres`
-- **MySQL** — `mysql2`, PlanetScale
-- **SQLite** — `better-sqlite3`, `node:sqlite`, libSQL, Turso, Cloudflare D1, `sqlite3`, `sqlite`
+- **Postgres** — `pg`, postgres.js, `Bun.sql`, PGlite, Neon, `pg-promise`, `@vercel/postgres`
+- **MySQL** — `mysql2`, PlanetScale, `Bun.sql`
+- **SQLite** — `better-sqlite3`, `node:sqlite`, `Bun.sql`, libSQL, Turso, Cloudflare D1, `sqlite3`, `sqlite`
 
 ## Documentation
 
