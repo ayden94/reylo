@@ -2,6 +2,12 @@
 
 Import `.sql` files into your TypeScript code with full type inference.
 
+<br/>
+
+### [Read the docs →](https://reylo.dev)
+
+<br/>
+
 If you have a file like this:
 
 ```sql
@@ -36,8 +42,6 @@ Reylo is the perfect option for the agent era:
 - 🤖 **Agent-friendly** — each fact lives in one place, so an agent cannot leave a stale type behind, and the type check finds every caller it missed.
 - 🧩 **Postgres, MySQL and SQLite** — bring your own driver: `pg`, postgres.js, `mysql2`, `better-sqlite3`, Cloudflare D1 and [more](#supported-drivers).
 - ⚡ **No codegen** — the type checker asks Reylo directly: no generated files, no watcher.
-
-The full documentation is at [reylo.dev](https://reylo.dev).
 
 ## Setup
 
