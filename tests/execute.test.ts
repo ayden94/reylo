@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { arrayLiteral, execute, type QueryModule } from "../src/execute.ts";
+import { arrayLiteral, execute, executeSync, type QueryModule } from "../src/execute.ts";
 import { defineQuery } from "../src/index.ts";
 
 // Each fake client records what execute handed it and answers the way its driver does; the
@@ -58,7 +58,7 @@ const typed: QueryModule<"postgres"> = {
 };
 const typedValues = { ids: [1, 3], name: "ada", data: [1, { a: "b" }] };
 
-test("postgres: every client gets an array for a SQL array parameter as its literal text; postgres.js and Bun.sql get a JSON parameter as an object they serialize to its JSON text", async () => {
+test("postgres: every client gets an array for a SQL array parameter as its literal text; Bun.sql gets a JSON parameter as an object it serializes to its JSON text, postgres.js as its JSON text declared unknown", async () => {
   const seen: unknown[][] = [];
   const unsafe = async (_: string, values?: unknown[]) => (seen.push(values!), []);
   const bun = { unsafe, commitDistributed: async () => {} };
@@ -72,6 +72,10 @@ test("postgres: every client gets an array for a SQL array parameter as its lite
     assert.ok(!Array.isArray(data));
     assert.equal(JSON.stringify(data), '[1,{"a":"b"}]');
   }
+  // postgres.js (typed() beside unsafe()), whose JSON serializer Drizzle replaces with one that passes the value through.
+  const postgresJs = { unsafe, typed: (value: unknown, type: number) => ({ value, type }) };
+  await execute(postgresJs, typed, typedValues);
+  assert.deepEqual(seen.at(-1), ['{"1","3"}', "ada", { value: '[1,{"a":"b"}]', type: 705 }]);
 });
 
 // Every kind of JSON value, null, and a jsonb[] parameter, whose elements are JSON values.
@@ -94,7 +98,11 @@ test("postgres: a JSON parameter's value is a JavaScript value, which every driv
   const bun = { unsafe, commitDistributed: async () => {} };
   await execute({ unsafe }, jsonQuery, jsonValues);
   await execute(bun, jsonQuery, jsonValues);
-  assert.equal(seen.length, 5);
+  // postgres.js gets each JSON value as its text declared unknown (705), and null as null.
+  const unwrap = (v: unknown) => (v !== null && typeof v === "object" ? (assert.equal((v as { type: number }).type, 705), (v as { value: unknown }).value) : v);
+  const postgresJs = { unsafe: async (_: string, values?: unknown[]) => (seen.push(values!.map(unwrap)), []), typed: (value: unknown, type: number) => ({ value, type }) };
+  await execute(postgresJs, jsonQuery, jsonValues);
+  assert.equal(seen.length, 6);
   for (const values of seen) assert.deepEqual(values, jsonTexts);
 });
 
@@ -199,7 +207,7 @@ test("what run returns goes back in: a SQLite truth value as 1 or 0, a Postgres 
   // MySQL's drivers bind a boolean as 1 themselves.
   const mq: QueryModule<"mysql"> = { dialect: "mysql", sql: "select :f as f", params: ["f"], inputs: { f: s("int4") } };
   seen.length = 0;
-  await execute({ execute: async (_: string, v?: unknown[]) => (seen.push(v!), [[], []] as [unknown, unknown]) }, mq, { f: true });
+  await execute({ query: async () => [[], []] as [unknown, unknown], execute: async (_: string, v?: unknown[]) => (seen.push(v!), [[], []] as [unknown, unknown]) }, mq, { f: true });
   assert.deepEqual([...seen], [[true]]);
   // Postgres refuses `+010000` and the year 0000, which run returns for years past 9999 and 1 BC.
   const pq: QueryModule<"postgres"> = {
@@ -510,13 +518,43 @@ test("the driver's own error comes through unchanged", async () => {
 
 test("an unsupported client rejects, naming what it has and what reylo takes", async () => {
   await assert.rejects(() => execute({ connect() {}, end() {} } as never, pg) as Promise<unknown>, (e: TypeError) => e instanceof TypeError && /postgres statement on an object with connect, end\. It takes a client with query\(text, values\)/.test(e.message));
-  await assert.rejects(() => execute({ $client: {}, select() {} } as never, pg) as Promise<unknown>, /pass db\.\$client/);
+  // An object with Drizzle's select() but no session over a client is no Drizzle database.
+  await assert.rejects(() => execute({ $client: {}, select() {} } as never, pg) as Promise<unknown>, /object with select\. .*or a Drizzle database over one of them\./);
+  // Kysely and Prisma decode their values themselves, so each is told to pass the driver's client.
+  class Kysely { selectFrom() {} executeQuery() {} transaction() {} }
+  await assert.rejects(() => execute(new Kysely() as never, pg) as Promise<unknown>, /object with selectFrom, executeQuery, transaction\. .* Kysely decodes the values of its queries itself: pass the pool or database its dialect was made with\.$/);
+  await assert.rejects(() => execute({ $queryRawUnsafe() {}, $transaction() {} } as never, my) as Promise<unknown>, / Prisma decodes the values of its queries itself: pass a client of your database's driver, such as the pool its driver adapter was made with\.$/);
+  // Inside their transactions, neither hands out the connection.
+  await assert.rejects(() => execute(Object.assign(new Kysely(), { isTransaction: true }) as never, pg) as Promise<unknown>, / Kysely decodes the values of its queries itself and does not hand out its transaction's connection: take the transaction from the driver's client instead\.$/);
+  await assert.rejects(() => execute({ $queryRawUnsafe() {} } as never, lite) as Promise<unknown>, / Prisma decodes the values of its queries itself and does not hand out its transaction's connection/);
   // node:sqlite's tag store has all() for templates; it is not sqlite3's database.
   const store = new DatabaseSync(":memory:").createTagStore();
   await assert.rejects(() => execute(store as never, lite, { id: 1, name: "ada" }) as Promise<unknown>, /sqlite statement on an object with .*pass its database, store\.db/);
   await assert.rejects(() => execute(null as never, my) as Promise<unknown>, /mysql statement on null/);
   // A pg pool handed to a SQLite statement matches no SQLite shape.
   await assert.rejects(() => execute({ query: async () => ({ rows: [] }) } as never, lite) as Promise<unknown>, /sqlite statement on an object with query/);
+});
+
+test("a Drizzle database or transaction runs on the driver client its session keeps", async () => {
+  // Drizzle's database and transaction objects: select() beside a session holding the dialect and the client.
+  const drizzle = <C>(client: C) => ({ $client: client, select() {}, execute() {}, session: { dialect: {}, client } });
+  const seen: unknown[][] = [];
+  const pgClient = { query: async (_: string, values: unknown[]) => (seen.push(values), { rows: [row] }) };
+  assert.deepEqual(await execute(drizzle(pgClient) as never, pg, { id: 1, name: "ada" }), [row]);
+  const mysqlPool = { query: async () => [[], []], execute: async (_: unknown, values: unknown[]) => (seen.push(values), [[row], []]) };
+  assert.deepEqual(await execute(drizzle(mysqlPool) as never, my, { id: 1, name: "ada" }), [row]);
+  assert.deepEqual(seen, [[1, "ada"], [1, "ada", 1]]);
+  const db = new DatabaseSync(":memory:");
+  assert.deepEqual(executeSync(drizzle(db) as never, lite, { id: 1, name: "ada" }), [row]);
+  // Inside a libSQL transaction the session keeps the base client on client and the transaction on tx.
+  const libsql = (name: string) => ({ execute: async () => (seen.push([name]), { rows: [row], columns: ["id", "name", "again"], columnTypes: [] }), batch: async () => [], transaction: async () => {} });
+  const tx = { select() {}, session: { dialect: {}, client: libsql("base"), tx: { ...libsql("tx"), commit: async () => {}, rollback: async () => {} } } };
+  await execute(tx as never, lite, { id: 1, name: "ada" });
+  assert.deepEqual(seen.at(-1), ["tx"]);
+  // A MySQL client whose execute() answers without PlanetScale's rows, as TiDB Cloud's transaction inside
+  // drizzle-orm/tidb-serverless answers with the rows themselves, is refused rather than read as no rows.
+  const tidb = { $client: {}, select() {}, rollback() {}, session: { dialect: {}, client: { execute: async () => [row] } } };
+  await assert.rejects(() => execute(tidb as never, my, { id: 1, name: "ada" }) as Promise<unknown>, /^TypeError: reylo ran this statement through execute\(\), as on PlanetScale's @planetscale\/database, and the client answered with an array rather than a result with rows\./);
 });
 
 test("positional placeholders take an object keyed by number, bound by number on every dialect", async () => {
