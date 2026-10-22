@@ -44,7 +44,15 @@ const user = await getUser.run(db, { id: 1 });
 //    ^?
 ```
 
-TypeScript checks both the parameters you pass and the result you get back.
+TypeScript checks both the parameters you pass and the result you get back. The file also exports their types by name, `Params` and `Row`:
+
+```ts twoslash
+import type { Row } from "./get_user.sql";
+
+function greet(user: Row) {
+  return `Hello, ${user.name}`;
+}
+```
 
 ### `.runSync()`
 
