@@ -10,7 +10,7 @@ on:
   #
   # Only `finish` can create a tag. The "Release tags" ruleset refuses tag creation, moves and deletions to everyone, admins and workflow tokens included, except deploy keys; the one deploy key is the `RELEASE_TAG_KEY` secret on `release-approval`, so a tag exists only after the maintainer approved the run.
   #
-  # This runs in the public repository, colinhacks/reylo, which `scripts/publish/publish.ts` writes from the private working one. npm's trusted publishers name that repository, this file and the `npm` environment, and provenance needs a public source repository.
+  # This runs in the public repository, colinhacks/reylo, whose history `scripts/public/sync.ts` keeps in step with the private working one, commit by commit. npm's trusted publishers name that repository, this file and the `npm` environment, and provenance needs a public source repository.
   workflow_dispatch:
     inputs:
       notes:
