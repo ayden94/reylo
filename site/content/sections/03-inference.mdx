@@ -141,7 +141,7 @@ Reylo reads the schema from the database file and [prepares](https://sqlite.org/
 
 </Details>
 
-### Basics
+### Column types
 
 Each column comes back with its type:
 
@@ -154,7 +154,7 @@ from users
 
 </Inferred>
 
-<span id="naming" />
+### Named parameters [#naming]
 
 For convenience, there is some Reylo-specific syntax that can be used inside your `.sql` files. This syntax is transpiled into the idiomatic form for your database's dialect.
 
@@ -170,7 +170,7 @@ where id = :id
 
 </Inferred>
 
-<span id="casts" />
+### Casts [#casts]
 
 Where the query doesn't pin down a parameter's type, cast it. Reylo compiles the cast to each database's own:
 
@@ -214,7 +214,7 @@ A call to a function your application registers fails the type check, cast or no
 
 </Details>
 
-### Nulls
+### Left joins
 
 A left join makes the joined table's columns nullable:
 
@@ -241,6 +241,8 @@ where p.published_at is not null
 
 </Inferred>
 
+### Computed columns
+
 Reylo infers which computed columns can never be null:
 
 <Inferred>
@@ -254,6 +256,8 @@ from users u
 
 </Inferred>
 
+### Nullable parameters
+
 To accept null, wrap a parameter in coalesce:
 
 <Inferred>
@@ -266,9 +270,9 @@ where user_id = coalesce(:user_id::int, user_id)
 
 </Inferred>
 
-### Cardinality
+### Unique keys
 
-A query that matches a unique key returns one row or null:
+Reylo infers each query's cardinality, how many rows it returns. A query that matches a unique key returns one row or null:
 
 <Inferred>
 
@@ -339,6 +343,8 @@ A unique index on an expression or with a `where` gives `many`.
 
 </Details>
 
+### Aggregates
+
 An aggregate without a group by returns exactly one row:
 
 <Inferred>
@@ -363,6 +369,8 @@ where user_id = :user_id::int
 
 </Inferred>
 
+### Inserts with `returning`
+
 An insert that returns its row resolves to exactly that row:
 
 <Inferred>
@@ -381,9 +389,9 @@ returning id
 
 </Inferred>
 
-### Unions
+### Enums and check constraints [#unions]
 
-A text column whose check constraint lists its values is a union of them:
+A text column whose check constraint lists its values is a union of them, as a Postgres enum is:
 
 <Inferred>
 
@@ -433,7 +441,7 @@ group by u.id
 
 </Inferred>
 
-### JSON Schema [#typed-json]
+### JSON Schema [#json-schema]
 
 Declare a JSON Schema, and Reylo types the JSON it describes. A JSON column declares one in a check constraint:
 
@@ -483,7 +491,9 @@ from events
 
 </Inferred>
 
-A JSON parameter declares one in its cast to `json` or `jsonb`, and Reylo infers the parameter's type from it:
+### JSON parameters [#typed-json]
+
+A JSON parameter declares its schema in its cast to `json` or `jsonb`, and Reylo infers the parameter's type from it:
 
 <Inferred>
 
@@ -568,6 +578,8 @@ values (:payload)
 ```
 
 </Inferred>
+
+### `oneOf` and discriminated unions [#oneof]
 
 A `oneOf` in a schema is a [union](#unions). Give each member a key with one value, and it is a discriminated union, which TypeScript narrows on that key. A parameter's schema works the same way ([an example](#discriminated-unions)):
 
