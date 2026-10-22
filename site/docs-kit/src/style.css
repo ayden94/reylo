@@ -447,8 +447,9 @@ html .prose {
 
 /* A pinned `^?` popup keeps clear of the lines around it: the maintainer found the next line
    "cramped" 4px under its card. The card sits 8px under the name it points at (Fumadocs' gap, which
-   its arrow spans) and 14px above the next line. */
-.twoslash .twoslash-query-line {
+   its arrow spans) and 14px above the next line. A pinned error card (below) does the same. */
+.twoslash .twoslash-query-line,
+figure.shiki .dk-error-line {
   padding-bottom: 0.875rem;
 }
 
@@ -461,7 +462,7 @@ html .prose {
 /* A `^?` query shows the hover's card inline, under the line it asks about. The card is as wide as
    its type, up to the block's width, not the hover popup's fixed 20rem, which cut a long type off
    at the card's edge; the type wraps inside it (above). */
-.twoslash-query-line .twoslash-popup-container {
+:is(.twoslash-query-line, .dk-error-line) .twoslash-popup-container {
   width: fit-content;
   max-width: 100%;
   margin-right: 0;
@@ -470,8 +471,56 @@ html .prose {
 
 /* A query is the last line of its block, and Twoslash leaves the empty line its `^?` comment was
    on below the card: hide that line, so the block ends at the card plus its padding. */
-figure.shiki code > .twoslash-query-line + .line:last-child:not(:has(span:not(:empty))) {
+figure.shiki code > :is(.twoslash-query-line, .dk-error-line) + .line:last-child:not(:has(span:not(:empty))) {
   display: none;
+}
+
+/* ── Pinned error cards ──────────────────────────────────────────────────────
+   An error in a code block is drawn as the editor draws it, a red squiggle under
+   its exact range, and its message, with its source after it (`reylo(6)`,
+   `ts(2339)`), in the `^?` card, pinned under the range's last line in space it
+   opens there (mdx/diagnostics.ts). The card never covers the code, and every
+   line of the block stays readable. It replaces Twoslash's line of red text
+   under the line. */
+
+/* The squiggle: Twoslash's red, wavy, under the range's own characters, leading spaces included. */
+#nd-page figure.shiki :is(.twoslash-error, .dk-error) {
+  text-decoration: wavy underline var(--color-twoslash-error-foreground);
+  text-decoration-skip-ink: none;
+  text-underline-offset: 3px;
+  padding-bottom: 0;
+}
+
+/* The card's line starts where the code does, so its spaces put the arrow under the range's column;
+   the card stops at the block's right edge, and its message wraps inside it, between words. */
+#nd-page figure.shiki .dk-error-line {
+  padding-inline: var(--padding-left, 1rem) var(--padding-right, 1rem);
+}
+
+#nd-page figure.shiki .dk-error-line > span:first-child {
+  flex-shrink: 0;
+}
+
+#nd-page figure.shiki .dk-error-line .twoslash-popup-container {
+  min-width: 0;
+  flex-shrink: 1;
+}
+
+#nd-page figure.shiki .dk-error-text {
+  display: block;
+  font-size: var(--dk-code-size, 13px);
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+/* The message in the code's own colour, its source quieter, as the editor's hover writes them. */
+#nd-page figure.shiki .dk-error-text .dk-error-message {
+  color: var(--color-fd-popover-foreground);
+}
+
+#nd-page figure.shiki .dk-error-text .dk-error-source {
+  color: var(--color-fd-muted-foreground);
 }
 
 /* ── Twoslash completions ────────────────────────────────────────────────────
@@ -734,6 +783,18 @@ code {
   margin-top: 1rem;
 }
 
+/* A followed group whose chosen panel opens or ends with a paragraph (a sentence that differs per
+   variant, between two code blocks) sits as a paragraph does there: the panel's paragraphs lose their
+   margins to Fumadocs' `prose-no-margin`, and the group's 1rem left them 4px and 6px tighter to the
+   blocks around them than the page's other paragraphs. */
+#nd-page .dk-variant-follow:has(> .dk-variant-panel:not([data-state='inactive']) > p:first-child) {
+  margin-top: 1.25em;
+}
+
+#nd-page .dk-variant-follow:has(> .dk-variant-panel:not([data-state='inactive']) > p:last-child) {
+  margin-bottom: 1.375em;
+}
+
 /* ── Phones ──────────────────────────────────────────────────────────────────
    A tabs panel pads less, so a nested code line keeps more of the narrow column. An untitled
    block's copy button floats over its first line, so that line stops short of it. */
@@ -762,18 +823,23 @@ code {
   /* A pinned `^?` card takes the code block's width on a phone, less 8px on each side so its border
      stays clear of the block's. It sat under the queried name and kept only what was left of the
      line (on Reylo's page a type 168px wide in a 358px block, wrapping every property). The spaces before it, which line it
-     up under the name, go, and so does its arrow, which would point at the wrong column. */
-  #nd-page .twoslash-query-line > span:first-child:not(.twoslash-popup-container) {
+     up under the name, go, and so does its arrow, which would point at the wrong column. A pinned
+     error card does the same. */
+  #nd-page figure.shiki .dk-error-line {
+    padding-inline: 0;
+  }
+
+  #nd-page :is(.twoslash-query-line, .dk-error-line) > span:first-child:not(.twoslash-popup-container) {
     display: none;
   }
 
-  #nd-page .twoslash-query-line .twoslash-popup-container {
+  #nd-page :is(.twoslash-query-line, .dk-error-line) .twoslash-popup-container {
     width: calc(100% - 1rem);
     max-width: none;
     margin-inline: 0.5rem;
   }
 
-  #nd-page .twoslash-query-line .twoslash-popup-arrow {
+  #nd-page :is(.twoslash-query-line, .dk-error-line) .twoslash-popup-arrow {
     display: none;
   }
 
