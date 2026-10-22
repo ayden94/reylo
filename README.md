@@ -1,6 +1,11 @@
 <h1 align="center">
-  <img src="site/public/readme-demo.gif" alt="Reylo: import .sql files into your TypeScript code with full type inference. Hovering a query's result in an editor shows its type, which follows the SQL as the SQL changes." />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="site/public/readme-logo-dark.svg" />
+    <img src="site/public/readme-logo-light.svg" width="160" alt="Reylo" />
+  </picture>
 </h1>
+
+<p align="center">Import <code>.sql</code> files into your TypeScript code with full type inference</p>
 
 <p align="center">
   <a href="https://github.com/colinhacks/reylo/actions/workflows/test.yml"><img src="https://github.com/colinhacks/reylo/actions/workflows/test.yml/badge.svg?branch=main" alt="test status" /></a>
@@ -12,6 +17,12 @@
 <div align="center">
   <a href="https://reylo.dev">Read the docs →</a>
 </div>
+
+<br/>
+
+<p align="center">
+  <img src="site/public/readme-demo.gif" alt="An editor: hovering a query's result shows its type, which follows the SQL as the SQL changes" />
+</p>
 
 <br/>
 
