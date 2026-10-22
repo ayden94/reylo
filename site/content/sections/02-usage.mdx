@@ -44,16 +44,7 @@ const user = await getUser.run(db, { id: 1 });
 //    ^?
 ```
 
-It resolves to the rows, shaped by how many the query can return:
-
-| The query | Resolves to |
-| --- | --- |
-| A match on a primary or unique key, or `limit 1` | `Row \| null` |
-| An aggregate without `group by`, a one-row `insert … returning` | `Row` |
-| An `insert`, `update` or `delete` without `returning` | `void` |
-| Anything else | `Row[]` |
-
-It throws when the rows don't fit the shape, such as a second row for `Row | null`.
+TypeScript checks both the parameters you pass and the result you get back.
 
 ### `.runSync()`
 
