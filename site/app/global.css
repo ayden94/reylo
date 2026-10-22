@@ -159,15 +159,16 @@
 }
 
 /* The editor recording under the hero (components/hero.tsx): the column's width and the video's own
-   shape from the first paint, on the recording's yellow until its first frame arrives. It never
-   runs past the column's edges. A phone gets the stacked cut and its shape. */
+   shape from the first paint, showing a still of the loop's first frame until the video draws it.
+   It never runs past the column's edges. A phone gets the stacked cut, its shape and its still. */
 #nd-page .hero-demo {
   width: 100%;
-  aspect-ratio: 2200 / 1084;
+  aspect-ratio: 1344 / 662;
   margin: 0 0 4.5rem;
   border-radius: 12px;
   overflow: hidden;
-  background: #fbc40e;
+  /* The loop's first frame, painted until the video draws that same frame. */
+  background: #fbc40e url('/demo/reylo-first.webp') center / cover no-repeat;
 }
 
 #nd-page .hero-demo video {
@@ -210,6 +211,7 @@
   #nd-page .hero-demo {
     aspect-ratio: 1000 / 898;
     margin-bottom: 3rem;
+    background-image: url('/demo/reylo-phone-first.webp');
   }
 }
 

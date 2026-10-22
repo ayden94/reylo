@@ -60,11 +60,16 @@ export function HeroActions() {
 
 // The demo's markup as HTML: React leaves `muted` out of server-rendered HTML, and a browser
 // autoplays only a muted video, so a <video> rendered by React would sit still until hydration.
-// A phone takes the portrait cut (its media query matches app/global.css's breakpoint).
+// A phone takes the portrait cut (its media query matches app/global.css's breakpoint). Each cut is
+// AV1 for the browsers that decode it and H.264 for the rest: the browser plays the first source
+// whose type it can decode and whose media query matches. The desktop cut is 1344px wide, twice the
+// column, all a 2x screen draws there.
 const demoVideo =
   '<video autoplay loop muted playsinline preload="auto" aria-label="An editor: hovering user in main.ts shows its type; the SQL in get_user.sql gains columns and loses its where clause, and the type follows">' +
-  '<source src="/demo/reylo-phone.mp4" type="video/mp4" media="(max-width: 767px)">' +
-  '<source src="/demo/reylo.mp4" type="video/mp4">' +
+  '<source src="/demo/reylo-phone.av1.mp4" type="video/mp4; codecs=av01.0.05M.08" media="(max-width: 767px)">' +
+  '<source src="/demo/reylo-phone.mp4" type="video/mp4; codecs=avc1.640032" media="(max-width: 767px)">' +
+  '<source src="/demo/reylo.av1.mp4" type="video/mp4; codecs=av01.0.05M.08">' +
+  '<source src="/demo/reylo.mp4" type="video/mp4; codecs=avc1.640032">' +
   '</video>';
 
 /**
