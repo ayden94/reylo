@@ -324,9 +324,10 @@
 }
 
 
-/* Setup's optional step, the editor: its number is an outline rather than a filled disc. */
+/* Setup's optional step, the editor: its number is an outline rather than a filled disc, on the
+   page's background so that the rail stops at its edge. */
 #nd-page .prose .dk-steps > h3#editors::before {
-  background: transparent;
+  background: var(--color-fd-background);
   color: var(--dk-accent);
   box-shadow: inset 0 0 0 1.5px var(--dk-accent);
 }
