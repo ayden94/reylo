@@ -794,9 +794,11 @@ Each driver reads Postgres's protocol as it always does, and Reylo makes only th
 | Neon, Vercel Postgres | The same table, with each query | | |
 | PGlite | A parser table with each query, naming the statement's types | | |
 | postgres.js | Each value's text (`.raw()`), the row built with the query's own column names | A `transform.row` | |
-| `Bun.sql` | Bun's own values, converted | | A `timestamp`'s and a `timestamptz`'s microseconds, and a date before 1 AD; it throws on a `NULL` inside an `int4[]` or `float4[]` |
+| `Bun.sql` | Bun's own values, converted | | A `timestamp`'s and a `timestamptz`'s microseconds, and a value before 1 AD; it throws on a `NULL` inside an `int4[]` or `float4[]`, and on two array shapes (below) |
 
 - A postgres.js `transform` that renames your columns does not rename Reylo's.
+- On `Bun.sql`, a statement with a parameter is read over the binary protocol and one without as text. So a `real` is its exact float, `1.100000023841858`, only with a parameter, and a `timestamp` or a `timestamptz` before 1 AD is refused only without one; a `date` before 1 AD is refused either way.
+- Bun fails with its own error, "Failed to read data", before Reylo sees the value, on a two-dimensional `int[]` in a statement with a parameter and on an array with explicit bounds in one without.
 - The `@vercel/postgres` package is deprecated on npm: Reylo's types accept its client, and its tests do not run it.
 - Each driver takes its transactions and connections too: `pg`'s Pool, Client and PoolClient; postgres.js's and `Bun.sql`'s `.begin()`, `.savepoint()` and `.reserve()`; PGlite's `.transaction()`; Neon's Pool and Client; and `pg-promise`'s `.task()` and `.tx()`.
 
