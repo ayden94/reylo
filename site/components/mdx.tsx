@@ -5,6 +5,7 @@ import { Dialect, DialectSwitch, DialectTabs } from './dialect-tabs';
 import { HeroActions } from './hero';
 import { HowItWorksDiagram } from './how-it-works-diagram';
 import { Inferred, InferredRow, InferredTypes } from './inferred';
+import { Pairs, Rules } from './value-pairs';
 
 /**
  * docs-kit's components (headings with the link icon and the copy-as-Markdown button, accordions,
@@ -30,6 +31,10 @@ export function getMDXComponents(components?: MDXComponents) {
     Inferred,
     InferredRow,
     InferredTypes,
+    // A rule list whose rules show SQL values and what `.run()` returns for each, the dialect
+    // pages' (components/value-pairs.tsx).
+    Rules,
+    Pairs,
     ...components,
   });
 }

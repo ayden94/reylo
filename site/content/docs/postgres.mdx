@@ -105,10 +105,51 @@ select count(*) as total, count(*)::int as total_number
 from orders
 ```
 
-- The `sum()` of an `integer` column is a `bigint`, and of a `bigint` or a `numeric` a `numeric`, so a `string`.
-- A cast to `int` that overflows is Postgres's error, "integer out of range", never a wrapped number.
-- JavaScript's `JSON.stringify` refuses a `bigint`, so write one out of your API as its text, `String(v)`, or as the integer itself, `JSON.rawJSON(String(v))`, which is what `.outputSchema` describes.
-- Inside JSON the statement builds, a `bigint` is a JSON number, which `JSON.parse` rounds past 2^53 ([JSON](#json)).
+<Rules>
+
+**`sum()`**
+
+The `sum()` of an `integer` column is a `bigint`, and of a `bigint` or a `numeric` a `numeric`, so a `string`.
+
+<Pairs>
+
+- `sum(2::integer)` → `2n`
+- `sum(2::bigint)` → `"2"`
+- `sum(2.5::numeric)` → `"2.5"`
+
+</Pairs>
+
+**A cast that overflows**
+
+A cast to `int` that overflows is Postgres's error, never a wrapped number.
+
+<Pairs>
+
+- `3000000000::bigint::int` → `throws PostgresError: integer out of range`
+
+</Pairs>
+
+**Writing a `bigint` out**
+
+JavaScript's `JSON.stringify` refuses a `bigint`, so write one out of your API as its text, `String(v)`, or as the integer itself, `JSON.rawJSON(String(v))`, which is what `.outputSchema` describes.
+
+<Pairs>
+
+- `9007199254740993::bigint` → `9007199254740993n`
+
+</Pairs>
+
+**Inside JSON the statement builds**
+
+A `bigint` is a JSON number, which `JSON.parse` rounds past 2^53 ([JSON](#json)).
+
+<Pairs>
+
+- `json_build_object('n', 9007199254740993::bigint)` → `{ n: 9007199254740992 }`
+
+</Pairs>
+
+</Rules>
 
 ### Decimals
 
@@ -135,14 +176,98 @@ select placed_at, ships_on from orders where id = :id
 
 Where your runtime has `Temporal`, `Temporal.Instant.from()` reads the instant, and `Temporal.PlainDate.from()` the date. Each text goes back in as a parameter as it is ([What a parameter takes](#what-a-parameter-takes)).
 
-- The fraction is the server's, to the microsecond, with its trailing zeros dropped and none for a whole second: `"2026-10-20T10:00:00.5Z"`, `"2026-10-20T10:00:00Z"`.
-- An offset with seconds, as before standard time, moves to UTC exactly: `1883-11-18 12:00:00-07:52:58` is `"1883-11-18T19:52:58Z"`.
-- The values `infinity` and `-infinity` stay those words, in every date and time type.
-- A `timestamptz` past 9999 or before 1 AD takes ISO 8601's extended year, as `Temporal.Instant` writes it: `"+012344-12-31T18:30:00Z"`, and `"-000001-06-01T12:00:00Z"` for 2 BC. A `date` or a `timestamp` keeps Postgres's text: `"12345-01-01"`, `"0002-06-01 BC"`.
-- Postgres reaches 294276 AD, and `Temporal.Instant` stops at 275760 AD, where `Temporal.Instant.from` throws a `RangeError`.
-- A `time`, a `timetz` and an `interval` are the server's text: `"10:00:00+02"`, `"1 day 02:03:04"`. Reylo reads the text at Postgres's default `DateStyle` (`ISO`) and `IntervalStyle`, so a session that sets others gets the text they write.
-- Inside JSON the statement builds, a `timestamptz` is Postgres's text in the session's time zone, `"2026-10-20T01:00:00.123456-07:00"`, not the UTC form above.
-- On `Bun.sql`, a `timestamp` or a `timestamptz` keeps its milliseconds, not its microseconds ([Drivers](#drivers)).
+<Rules>
+
+**Fractions of a second**
+
+The fraction is the server's, to the microsecond, with its trailing zeros dropped, and none for a whole second.
+
+<Pairs>
+
+- `'2026-10-20 10:00:00.123456+00'::timestamptz` → `"2026-10-20T10:00:00.123456Z"`
+- `'2026-10-20 10:00:00.5+00'::timestamptz` → `"2026-10-20T10:00:00.5Z"`
+- `'2026-10-20 10:00:00+00'::timestamptz` → `"2026-10-20T10:00:00Z"`
+
+</Pairs>
+
+**An offset with seconds**
+
+An offset with seconds, as before standard time, moves to UTC exactly.
+
+<Pairs>
+
+- `'1883-11-18 12:00:00-07:52:58'::timestamptz` → `"1883-11-18T19:52:58Z"`
+
+</Pairs>
+
+**Infinity**
+
+The values `infinity` and `-infinity` stay those words, in every date and time type.
+
+<Pairs>
+
+- `'infinity'::timestamptz` → `"infinity"`
+- `'-infinity'::date` → `"-infinity"`
+
+</Pairs>
+
+**Years past 9999 or before 1 AD**
+
+A `timestamptz` takes ISO 8601's extended year, as `Temporal.Instant` writes it. A `date` or a `timestamp` keeps Postgres's text.
+
+<Pairs>
+
+- `'12344-12-31 18:30:00+00'::timestamptz` → `"+012344-12-31T18:30:00Z"`
+- `'0002-06-01 12:00:00+00 BC'::timestamptz` → `"-000001-06-01T12:00:00Z"`
+- `'12345-01-01'::date` → `"12345-01-01"`
+- `'0002-06-01 BC'::date` → `"0002-06-01 BC"`
+- `'0002-06-01 12:00:00 BC'::timestamp` → `"0002-06-01T12:00:00 BC"`
+
+</Pairs>
+
+**Past Temporal's range**
+
+Postgres reaches 294276 AD, and `Temporal.Instant` stops at 275760 AD, where `Temporal.Instant.from` throws a `RangeError`.
+
+<Pairs>
+
+- `'294276-12-31 23:59:59+00'::timestamptz` → `"+294276-12-31T23:59:59Z"`
+
+</Pairs>
+
+**Times and intervals**
+
+A `time`, a `timetz` and an `interval` are the server's text. Reylo reads the text at Postgres's default `DateStyle` (`ISO`) and `IntervalStyle`, so a session that sets others gets the text they write.
+
+<Pairs>
+
+- `'10:00:00'::time` → `"10:00:00"`
+- `'10:00:00+02'::timetz` → `"10:00:00+02"`
+- `'1 day 02:03:04'::interval` → `"1 day 02:03:04"`
+
+</Pairs>
+
+**Inside JSON the statement builds**
+
+A `timestamptz` is Postgres's text in the session's time zone, not the UTC form above. Here the session's `TimeZone` is `America/Los_Angeles`.
+
+<Pairs>
+
+- `json_build_object('at', '2026-10-20 08:00:00.123456+00'::timestamptz)` → `{ at: "2026-10-20T01:00:00.123456-07:00" }`
+
+</Pairs>
+
+**On `Bun.sql`**
+
+A `timestamp` or a `timestamptz` keeps its milliseconds, not its microseconds ([Drivers](#drivers)).
+
+<Pairs>
+
+- `'2026-10-20 10:00:00.123456+00'::timestamptz` → `"2026-10-20T10:00:00.123Z"`
+
+</Pairs>
+
+</Rules>
 
 ### Truth values
 
