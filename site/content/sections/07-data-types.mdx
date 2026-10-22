@@ -1,0 +1,109 @@
+---
+title: "Data types"
+---
+
+## Data types
+
+Reylo decodes its own queries' values itself, so every driver gives the same types. A 64-bit integer is a `bigint`, a decimal its exact text, and an instant its ISO 8601 text in UTC: no value is a `Date`.
+
+<DialectTabs>
+<Dialect value="Postgres">
+
+| SQL type | TypeScript |
+| --- | --- |
+| `smallint`, `integer`, `oid` | `number` |
+| `bigint` | `bigint` |
+| `real`, `double precision` | `number` |
+| `numeric`, `money` | `string` |
+| `text`, `varchar`, `char` | `string` |
+| `boolean` | `boolean` |
+| `uuid` | `string` |
+| `date` | `string`, as `2026-10-20` |
+| `timestamp` | `string`, as `2026-10-20T10:00:00.123456` |
+| `timestamptz` | `string`, the instant in UTC, as `2026-10-20T08:00:00.123456Z` |
+| `time`, `timetz`, `interval` | `string` |
+| `json`, `jsonb` | [typed by its schema or the query](#json-values) |
+| `bytea` | `Uint8Array` |
+| An array | an array of its element type, a `NULL` element `null` |
+| An enum | the union of its labels |
+| A domain | its base type |
+| A row value | `string` |
+| Every other type (`inet`, `cidr`, ranges, `point`, `tsvector`, `xml`, …) | a `string`, as the database writes it |
+
+</Dialect>
+<Dialect value="MySQL">
+
+| SQL type | TypeScript |
+| --- | --- |
+| `TINYINT`, `SMALLINT`, `MEDIUMINT`, `INT`, `YEAR` | `number` |
+| `BOOLEAN` (a `TINYINT(1)`), `BIT(1)` | `boolean` |
+| A comparison, `IS NULL`, `IN`, `BETWEEN`, `LIKE`, `EXISTS`, `NOT`, `AND`, `OR` | `boolean` |
+| `BIGINT`, `count(*)` | `bigint` |
+| `DECIMAL` | `string` |
+| `FLOAT`, `DOUBLE` | `number` |
+| `CHAR`, `VARCHAR`, `TEXT` | `string` |
+| `ENUM` | `string` |
+| `SET` | `string`, as `a,b` |
+| `DATE` | `string`, as `2026-10-20` |
+| `DATETIME`, `TIMESTAMP` | `string`, as `2026-10-20T10:00:00.123` |
+| `TIME` | `string` |
+| `JSON` | [typed by its schema or the query](#json-values) |
+| `BINARY`, `VARBINARY`, `BLOB`, `BIT` wider than 1 | `Uint8Array` |
+| `VECTOR` | `number[]` |
+
+</Dialect>
+<Dialect value="SQLite">
+
+| Declared type | TypeScript |
+| --- | --- |
+| `INTEGER`, `INT`, `count(*)` | `number` |
+| `BIGINT`, `INT8`, `UNSIGNED BIG INT` | `bigint` |
+| `REAL` | `number` |
+| `TEXT` | `string` |
+| `BLOB` | `Uint8Array` |
+| `BOOLEAN`, `BOOL` | `boolean` |
+| A comparison, `IS NULL`, `IN`, `BETWEEN`, `LIKE`, `EXISTS`, `NOT`, `AND`, `OR` | `boolean` |
+| `NUMERIC`, `DATE`, `DATETIME` | `number \| string` |
+| No type, or `ANY` in a `STRICT` table | `unknown` |
+| `json_object(…)`, `json_group_array(…)` | [the object or array it builds](#json-values) |
+
+</Dialect>
+</DialectTabs>
+
+For every rule and edge case of each database, from 64-bit integers to time zones, nulls, row counts and parameters, see its own page: [Postgres](/postgres#data-types), [MySQL](/mysql#data-types) and [SQLite](/sqlite#data-types).
+
+### JSON values
+
+A JSON value comes back parsed, and Reylo types it from:
+
+- a JSON Schema check on its column, on Postgres and MySQL ([example](#json));
+- the query that builds it, at every level ([example](#json));
+- the schema in a parameter's cast, or the column the parameter is written to, on Postgres ([Typed JSON](#typed-json)).
+
+Anything else is `unknown`. SQLite has no JSON type, so a stored document there is a `string`.
+
+To type a value read out of a document, cast it:
+
+<Inferred>
+
+```sql file="json_fields.sql" dialect="postgres"
+select (payload ->> 'x')::int as x,
+  payload ->> 'code' as code
+from events
+```
+
+```sql file="json_fields.sql" dialect="mysql"
+select cast(payload ->> '$.x' as signed) as x,
+  payload ->> '$.code' as code
+from events
+```
+
+```sql file="json_fields.sql" dialect="sqlite"
+select cast(payload ->> '$.x' as integer) as x,
+  cast(payload ->> '$.code' as text) as code
+from events
+```
+
+</Inferred>
+
+For every rule of each database, see [Postgres](/postgres#json), [MySQL](/mysql#json) and [SQLite](/sqlite#json).
