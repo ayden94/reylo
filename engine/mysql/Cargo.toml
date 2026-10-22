@@ -13,6 +13,6 @@ reylo-engine-build = { path = "../build-support" }
 
 [dependencies]
 reylo-engine-core = { path = "../core" }
-sqlparser = { version = "0.63", default-features = false, features = ["std"] }
+sqlparser = { path = "vendor/sqlparser", default-features = false, features = ["std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "unbounded_depth"] }

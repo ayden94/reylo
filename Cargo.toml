@@ -7,6 +7,9 @@
 # The `[patch]` is the Postgres crate's: `pg_query` 18.0.0, the Postgres 18 parser, with the patch
 # from `engine/postgres/vendor/` applied by `engine/build.sh --prepare`, which also fetches the SQLite
 # amalgamation `engine/sqlite/build.rs` compiles. Run it once before any cargo command here.
+#
+# `engine/mysql/vendor/sqlparser`, the MySQL crate's own copy of `sqlparser`, is a member as every
+# path dependency under this directory is, with no tests of its own.
 [workspace]
 resolver = "2"
 members = [
