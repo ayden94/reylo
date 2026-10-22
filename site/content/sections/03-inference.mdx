@@ -343,6 +343,83 @@ from events
 
 </Inferred>
 
+A JSON column whose schema is a `oneOf` is a union. Give each member a key with one value, and it is a discriminated union, which TypeScript narrows on that key. A JSON parameter's schema works the same way ([an example](#discriminated-unions)):
+
+<Inferred>
+
+```sql schema dialect="postgres"
+create extension if not exists pg_jsonschema;
+
+create table events (
+  id serial primary key,
+  payload jsonb not null check (jsonb_matches_schema('{
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": {
+          "kind": { "enum": ["click"] },
+          "x": { "type": "integer" },
+          "y": { "type": "integer" }
+        },
+        "required": ["kind", "x", "y"],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "kind": { "enum": ["key"] },
+          "code": { "type": "string" }
+        },
+        "required": ["kind", "code"],
+        "additionalProperties": false
+      }
+    ]
+  }', payload))
+);
+```
+
+```sql schema dialect="mysql"
+create table events (
+  id int auto_increment primary key,
+  payload json not null check (json_schema_valid('{
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": {
+          "kind": { "enum": ["click"] },
+          "x": { "type": "integer" },
+          "y": { "type": "integer" }
+        },
+        "required": ["kind", "x", "y"],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "kind": { "enum": ["key"] },
+          "code": { "type": "string" }
+        },
+        "required": ["kind", "code"],
+        "additionalProperties": false
+      }
+    ]
+  }', payload))
+);
+```
+
+```sql file="inferred_event_payloads_union.sql" dialect="postgres"
+select id, payload
+from events
+```
+
+```sql file="inferred_event_payloads_union.sql" dialect="mysql"
+select id, payload
+from events
+```
+
+</Inferred>
+
+
 ### JSON
 
 Type information bubbles up through JSON aggregation:
