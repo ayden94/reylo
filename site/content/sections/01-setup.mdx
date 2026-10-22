@@ -32,13 +32,7 @@ Each setup has a complete, working example project to copy, whose README's "How 
 
 </AgentPrompt>
 
-Reylo's agent skill gives your agent its rules for writing and running queries in every later session. Install it in your project:
-
-```sh
-npx skills add colinhacks/reylo --skill using-reylo
-```
-
-Then set Reylo up in five steps:
+Then set Reylo up in six steps:
 
 <div className="dk-steps">
 
@@ -385,6 +379,14 @@ Or specify a set of `.env` files to load:
 ```yaml title=".reylo.yaml"
 # the default is [.env.local, .env]
 env: [.env.development, .env]
+```
+
+### Skill
+
+Install Reylo's agent skill, which gives your coding agent Reylo's rules for writing and running queries in every session:
+
+```sh
+npx skills add colinhacks/reylo --skill using-reylo
 ```
 
 </div>
