@@ -401,77 +401,7 @@ from events
 
 </Inferred>
 
-A JSON column whose schema is a `oneOf` is a union. Give each member a key with one value, and it is a discriminated union, which TypeScript narrows on that key. A JSON parameter's schema works the same way ([an example](#discriminated-unions)):
-
-<Inferred>
-
-```sql schema dialect="postgres"
-create extension if not exists pg_jsonschema;
-
-create table events (
-  id serial primary key,
-  payload jsonb not null check (jsonb_matches_schema('{
-    "type": "object",
-    "oneOf": [{
-      "properties": {
-        "kind": { "const": "click" },
-        "x": { "type": "integer" },
-        "y": { "type": "integer" }
-      },
-      "required": ["kind", "x", "y"],
-      "additionalProperties": false
-    }, {
-      "properties": {
-        "kind": { "const": "key" },
-        "code": { "type": "string" }
-      },
-      "required": ["kind", "code"],
-      "additionalProperties": false
-    }]
-  }', payload))
-);
-```
-
-```sql schema dialect="mysql"
--- MySQL checks JSON Schema draft 4, which has no const
-create table events (
-  id int auto_increment primary key,
-  payload json not null check (json_schema_valid('{
-    "type": "object",
-    "oneOf": [{
-      "properties": {
-        "kind": { "enum": ["click"] },
-        "x": { "type": "integer" },
-        "y": { "type": "integer" }
-      },
-      "required": ["kind", "x", "y"],
-      "additionalProperties": false
-    }, {
-      "properties": {
-        "kind": { "enum": ["key"] },
-        "code": { "type": "string" }
-      },
-      "required": ["kind", "code"],
-      "additionalProperties": false
-    }]
-  }', payload))
-);
-```
-
-```sql file="inferred_event_payloads_union.sql" dialect="postgres"
-select id, payload
-from events
-```
-
-```sql file="inferred_event_payloads_union.sql" dialect="mysql"
-select id, payload
-from events
-```
-
-</Inferred>
-
-
-### JSON
+### JSON aggregation [#json]
 
 Type information bubbles up through JSON aggregation:
 
@@ -503,7 +433,9 @@ group by u.id
 
 </Inferred>
 
-A JSON column with a JSON Schema check is typed by that schema:
+### JSON Schema [#typed-json]
+
+Declare a JSON Schema, and Reylo types the JSON it describes. A JSON column declares one in a check constraint:
 
 <Inferred>
 
@@ -551,9 +483,7 @@ from events
 
 </Inferred>
 
-### Typed JSON
-
-When casting to `json` or `jsonb`, you can define a JSON Schema annotation. Reylo infers the parameter's type from it:
+A JSON parameter declares one in its cast to `json` or `jsonb`, and Reylo infers the parameter's type from it:
 
 <Inferred>
 
@@ -635,6 +565,75 @@ create table events (
 ```sql file="inferred_record_event.sql" dialect="postgres"
 insert into events (payload)
 values (:payload)
+```
+
+</Inferred>
+
+A `oneOf` in a schema is a [union](#unions). Give each member a key with one value, and it is a discriminated union, which TypeScript narrows on that key. A parameter's schema works the same way ([an example](#discriminated-unions)):
+
+<Inferred>
+
+```sql schema dialect="postgres"
+create extension if not exists pg_jsonschema;
+
+create table events (
+  id serial primary key,
+  payload jsonb not null check (jsonb_matches_schema('{
+    "type": "object",
+    "oneOf": [{
+      "properties": {
+        "kind": { "const": "click" },
+        "x": { "type": "integer" },
+        "y": { "type": "integer" }
+      },
+      "required": ["kind", "x", "y"],
+      "additionalProperties": false
+    }, {
+      "properties": {
+        "kind": { "const": "key" },
+        "code": { "type": "string" }
+      },
+      "required": ["kind", "code"],
+      "additionalProperties": false
+    }]
+  }', payload))
+);
+```
+
+```sql schema dialect="mysql"
+-- MySQL checks JSON Schema draft 4, which has no const
+create table events (
+  id int auto_increment primary key,
+  payload json not null check (json_schema_valid('{
+    "type": "object",
+    "oneOf": [{
+      "properties": {
+        "kind": { "enum": ["click"] },
+        "x": { "type": "integer" },
+        "y": { "type": "integer" }
+      },
+      "required": ["kind", "x", "y"],
+      "additionalProperties": false
+    }, {
+      "properties": {
+        "kind": { "enum": ["key"] },
+        "code": { "type": "string" }
+      },
+      "required": ["kind", "code"],
+      "additionalProperties": false
+    }]
+  }', payload))
+);
+```
+
+```sql file="inferred_event_payloads_union.sql" dialect="postgres"
+select id, payload
+from events
+```
+
+```sql file="inferred_event_payloads_union.sql" dialect="mysql"
+select id, payload
+from events
 ```
 
 </Inferred>
