@@ -160,10 +160,23 @@ function plan(name: string, kind: Kind, exact: boolean): Plan {
   if (kind === "json") return { name, big: (v) => exactInteger(v, name), num: undefined, str: (v) => JSON.parse(v) };
   if (kind === "text") return { name, big: String, num: undefined, str: undefined };
   if (kind === "int") return { name, big: (v) => exactInteger(v, name), num: exact ? undefined : (v) => exactInteger(v, name), str: (v) => coerce(kind, v, name) };
+  // libSQL under intMode "string" hands an INTEGER over as its digits, and says nothing of the storage
+  // class or of its mode. Where the column is a REAL's, or a NUMERIC's, those digits can only be an
+  // INTEGER's: SQLite stores text that reads as an integer as that integer in a column of REAL or
+  // NUMERIC affinity, and a REAL reaches JavaScript as a number. So they are the integer, exact or
+  // refused. In a column with no type, or one built from what may be TEXT, the digits may be a
+  // TEXT's, and stay as the driver gave them (wiki/driver-decoding.md).
+  const kinds = kind.split("|");
+  const digits = kinds.includes("int") || kinds.includes("float") ? (v: string) => (/^[+-]?\d+$/.test(v) ? exactInteger(BigInt(v), name) : v) : undefined;
   // A NUMERIC's either: read as numbers, one past 2^53 may be a rounded INTEGER, which is refused.
-  if (!exact && kind.split("|").includes("int")) return { name, big: (v) => exactInteger(v, name), num: (v) => (Number.isInteger(v) ? exactInteger(v, name) : v), str: undefined };
-  // A REAL, a BLOB, a column with no type: an integer is exact or refused, a number is as it is.
-  return { name, big: (v) => exactInteger(v, name), num: undefined, str: undefined };
+  if (!exact && kinds.includes("int")) return { name, big: (v) => exactInteger(v, name), num: (v) => (Number.isInteger(v) ? exactInteger(v, name) : v), str: numericOnly(kinds) ? digits : undefined };
+  // A REAL, a NUMERIC read exact, a BLOB, a column with no type: an integer is exact or refused, a number is as it is.
+  return { name, big: (v) => exactInteger(v, name), num: undefined, str: numericOnly(kinds) ? digits : undefined };
+}
+
+/** A REAL's, an INTEGER's or a NUMERIC's column (`int|float|text`, the one kind a NUMERIC has), where integer digits can only be an INTEGER's. */
+function numericOnly(kinds: string[]): boolean {
+  return kinds.every((k) => k === "int" || k === "float") || (kinds.length === 3 && kinds.includes("int") && kinds.includes("float") && kinds.includes("text"));
 }
 
 /**
