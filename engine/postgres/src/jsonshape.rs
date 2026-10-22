@@ -234,6 +234,7 @@ struct Builder<'a> {
     grouped: bool,
 }
 
+#[derive(Clone)]
 struct Draft {
     ctx: usize,
     /// A `to_jsonb(alias)` probe, whose every column is one field.
@@ -314,13 +315,42 @@ impl Builder<'_> {
                     self.leaf(expr)
                 }
             }
+            // `coalesce(x, …)` is `x` where `x` stands alone or is never NULL, and an array under
+            // `'[]'` is that array or an empty one, so never NULL. Under any other default it may be
+            // that default, of any shape, so it is one value the build reads as it is.
             Some(NodeEnum::CoalesceExpr(c)) => {
                 let Some(first) = c.args.first() else { return Shape::Unknown };
-                let guarded = c.args[1..].iter().any(is_non_null_const);
-                match (self.walk(first), guarded) {
-                    (Shape::Object { fields, .. }, true) => Shape::Object { fields, non_null: true },
-                    (Shape::Array { items, .. }, true) => Shape::Array { items, non_null: true },
-                    (shape, _) => shape,
+                // What the walk drafts for `x` goes unread where the whole is one value.
+                let drafted = self.drafts.clone();
+                match (self.walk(first), &c.args[1..]) {
+                    (shape, []) => shape,
+                    (shape @ (Shape::Object { non_null: true, .. } | Shape::Array { non_null: true, .. }), _) => shape,
+                    (Shape::Array { items, .. }, [default]) if crate::infer::is_empty_array(default) => Shape::Array { items, non_null: true },
+                    // A placeholder is the whole's type under a default that cannot widen it, and it
+                    // resolves nullable. Under any other one the whole is no probe's to read, since a
+                    // probe binds nothing: `coalesce($1::int, 1.5)` is a numeric.
+                    (shape @ Shape::Param(_), defaults) if defaults.iter().all(keeps_param_type) => shape,
+                    // An `x` the build cannot explain leaves the whole unexplained too, and it
+                    // costs no probe: one may aggregate in a way no probe without a GROUP BY takes.
+                    (Shape::Unknown, _) => {
+                        self.drafts = drafted;
+                        Shape::Unknown
+                    }
+                    _ => {
+                        self.drafts = drafted;
+                        // An aggregate there goes in a probe of its own, under a context id of its
+                        // own over the same `FROM`: a probe has no GROUP BY, so beside a bare
+                        // column of the context's own probe it would fail that probe whole.
+                        if !crate::infer::aggregates(expr, self.dialect, self.trust, None) {
+                            return self.leaf(expr);
+                        }
+                        let top = self.stack.len() - 1;
+                        self.next_ctx += 1;
+                        let ctx = std::mem::replace(&mut self.stack[top].0, self.next_ctx);
+                        let shape = self.leaf(expr);
+                        self.stack[top].0 = ctx;
+                        shape
+                    }
                 }
             }
             Some(NodeEnum::TypeCast(t)) => match (t.arg.as_deref(), casts_to_json(t)) {
@@ -771,14 +801,12 @@ fn string_const(node: &Node) -> Option<String> {
     }
 }
 
-/// A constant that is not NULL, which is what makes a `coalesce` non-null.
-fn is_non_null_const(node: &Node) -> bool {
-    match node.node.as_ref() {
-        Some(NodeEnum::AConst(c)) => !c.isnull,
-        Some(NodeEnum::TypeCast(t)) => t.arg.as_deref().is_some_and(is_non_null_const),
-        Some(NodeEnum::AArrayExpr(_)) => true,
-        _ => false,
-    }
+/// A default that leaves a `coalesce` over a placeholder the placeholder's type, as JSON writes it:
+/// a NULL or an untyped string, which take that type, and an integer or a boolean, which coalesce
+/// only with a type of their own kind (`int2` widens to `int4`, an integer all the same).
+fn keeps_param_type(node: &Node) -> bool {
+    use protobuf::a_const::Val;
+    matches!(node.node.as_ref(), Some(NodeEnum::AConst(c)) if c.isnull || matches!(c.val, Some(Val::Sval(_) | Val::Ival(_) | Val::Boolval(_))))
 }
 
 fn casts_to_json(t: &protobuf::TypeCast) -> bool {
@@ -943,6 +971,24 @@ mod tests {
     }
 
     #[test]
+    fn a_coalesce_read_as_one_value_probes_an_aggregate_apart() {
+        // Under `'{}'` the whole aggregate is one value, which a probe beside `title` would fail:
+        // it has no GROUP BY.
+        let p = shapes("SELECT jsonb_build_object('ids', coalesce(jsonb_agg(p.id), '{}'), 'titles', jsonb_agg(p.title)) AS o FROM posts p");
+        assert_eq!(p.probes.iter().map(|q| q.sql.as_str()).collect::<Vec<_>>(), ["SELECT COALESCE(jsonb_agg(p.id), '{}') AS a0 FROM posts p", "SELECT p.title AS a0 FROM posts p"]);
+        let Shape::Object { fields, .. } = &p.columns[0].1 else { panic!() };
+        assert_eq!(fields[0].1, Shape::Column { probe: 0, index: 0 });
+        // One that does not aggregate stays on its context's probe, so it costs none of the budget.
+        let q = shapes("SELECT jsonb_build_object('id', u.id, 'name', coalesce(u.name, u.email), 'doc', coalesce(u.doc, '{}')) AS o FROM users u");
+        assert_eq!(q.probes.iter().map(|q| q.sql.as_str()).collect::<Vec<_>>(), ["SELECT u.id AS a0, COALESCE(u.name, u.email) AS a1, COALESCE(u.doc, '{}') AS a2 FROM users u"]);
+        // One over an `x` the build cannot explain is unexplained too, and probes nothing.
+        let r = shapes("SELECT jsonb_build_object('name', u.name, 'titles', coalesce(to_jsonb(array_agg(p.title)), '[]')) AS o FROM users u JOIN posts p ON p.author_id = u.id GROUP BY u.name");
+        assert_eq!(r.probes.iter().map(|q| q.sql.as_str()).collect::<Vec<_>>(), ["SELECT u.name AS a0 FROM users u JOIN posts p ON p.author_id = u.id"]);
+        let Shape::Object { fields, .. } = &r.columns[0].1 else { panic!() };
+        assert_eq!(fields[1].1, Shape::Unknown);
+    }
+
+    #[test]
     fn a_whole_row_probes_the_star() {
         let p = shapes("SELECT to_jsonb(u) AS author FROM users u");
         assert_eq!(p.probes[0].sql, "SELECT u.* FROM users u");
@@ -1076,6 +1122,11 @@ mod tests {
         assert_eq!(fields[0].1, Shape::Param(1));
         assert_eq!(fields[1].1, Shape::Column { probe: 0, index: 0 });
         assert_eq!(p.probes[0].sql, "SELECT t.id AS a0 FROM todos t");
+        // Under a default that cannot widen it, a coalesce of one is the placeholder; under a
+        // decimal it is a numeric, which no probe can read.
+        let c = shapes("SELECT jsonb_build_object('q', coalesce($1::text, 'd'), 'n', coalesce($2::int, 0, NULL), 'x', coalesce($3::int, 1.5)) AS x FROM todos t");
+        let Shape::Object { fields, .. } = &c.columns[0].1 else { panic!() };
+        assert_eq!(fields.iter().map(|f| f.1.clone()).collect::<Vec<_>>(), [Shape::Param(1), Shape::Param(2), Shape::Unknown]);
         // An expression merely containing one cannot go in a probe, which binds nothing.
         let q = shapes("SELECT jsonb_build_object('q', 'x' || $1::text) AS x FROM todos t");
         let Shape::Object { fields, .. } = &q.columns[0].1 else { panic!() };
