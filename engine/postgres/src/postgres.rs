@@ -76,6 +76,26 @@ pub const CHECKS_QUERY: &str = "SELECT a.attrelid::int8, a.attnum::int4, a.attna
       AND ((CASE WHEN t.typtype = 'd' THEN t.typbasetype ELSE t.oid END) IN ('pg_catalog.text'::pg_catalog.regtype, 'pg_catalog.varchar'::pg_catalog.regtype) \
         AND coalesce((SELECT o.collisdeterministic FROM pg_collation o WHERE o.oid = a.attcollation), true) \
         OR (CASE WHEN t.typtype = 'd' THEN t.typbasetype ELSE t.oid END) IN ('pg_catalog.json'::pg_catalog.regtype, 'pg_catalog.jsonb'::pg_catalog.regtype))";
+/// Whether each column of the named relations refuses null, for a parameter written to it
+/// ([`Engine::nullable_params`]): `(relation, attnum, column, whether its NOT NULL or a domain of
+/// its type's declared NOT NULL refuses it, or the relation is a view, whose columns say nothing
+/// of what the table or the rule or trigger behind it takes, the enforced CHECKs of the table that read the column,
+/// the CHECKs of every domain of its type)`, each CHECK as the server prints it. A CHECK refuses
+/// null where it tests the column `IS NOT NULL` among its conjuncts ([`refuses_null`]); a NOT VALID
+/// one still checks every row written. `$1` is `text[]` of relation names.
+pub const REFUSES_NULL_QUERY: &str = "WITH RECURSIVE domains(attrelid, attnum, oid) AS ( \
+      SELECT a.attrelid, a.attnum, t.oid FROM pg_class c JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped \
+        JOIN pg_type t ON t.oid = a.atttypid AND t.typtype = 'd' \
+      WHERE c.relname = ANY($1::text[]) AND pg_catalog.pg_table_is_visible(c.oid) \
+      UNION SELECT d.attrelid, d.attnum, t.oid FROM domains d JOIN pg_type b ON b.oid = d.oid JOIN pg_type t ON t.oid = b.typbasetype AND t.typtype = 'd') \
+    SELECT c.relname::text, a.attnum::int4, a.attname::text, \
+      a.attnotnull OR c.relkind IN ('v', 'm') OR EXISTS (SELECT 1 FROM domains d JOIN pg_type t ON t.oid = d.oid WHERE d.attrelid = a.attrelid AND d.attnum = a.attnum AND t.typnotnull), \
+      coalesce((SELECT pg_catalog.array_agg(pg_catalog.pg_get_expr(k.conbin, k.conrelid, true)) FROM pg_constraint k \
+        WHERE k.contype = 'c' AND k.conrelid = c.oid AND a.attnum = ANY(k.conkey) AND coalesce((pg_catalog.to_jsonb(k) ->> 'conenforced')::bool, true)), '{}'::text[]), \
+      coalesce((SELECT pg_catalog.array_agg(pg_catalog.pg_get_expr(k.conbin, 0, true)) FROM domains d JOIN pg_constraint k ON k.contypid = d.oid AND k.contype = 'c' \
+        WHERE d.attrelid = a.attrelid AND d.attnum = a.attnum), '{}'::text[]) \
+    FROM pg_class c JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped \
+    WHERE c.relname = ANY($1::text[]) AND pg_catalog.pg_table_is_visible(c.oid)";
 /// `$1` is `oid[]` of relations.
 pub const RELNAMES_QUERY: &str = "SELECT c.oid::int8, c.relname::text FROM pg_class c WHERE c.oid = ANY($1::oid[])";
 /// Every column of the relations the parse names, by name, so provenance and `NOT NULL` are
@@ -564,28 +584,49 @@ impl<'a> Engine<'a> {
         Some(())
     }
 
-    /// The parameters the caller may pass null for, by number: one the statement tests for null
-    /// or coalesces (`:p IS NULL OR …`, `coalesce(:p, 50)`), and one that is the whole value
-    /// written to a column the catalog lets hold null, wherever it is written (a parameter that
-    /// also fills a NOT NULL column cannot be null). The rules take every other parameter as a
-    /// non-null value, which is what its TypeScript type promises.
+    /// The parameters the caller may pass null for, by number (the maintainer, 2026-10-21): each
+    /// one the statement passes first to `coalesce` (`coalesce(:p, 50)`, `coalesce(:p::int, col)`),
+    /// bare, under a cast, or through the column of a WITH query that selects it; and each one
+    /// that is, bare, with no cast, the whole value written to a column that may hold null,
+    /// wherever it is written (a parameter that also fills a column that refuses null cannot be
+    /// null). A column refuses null by its `NOT NULL`, by its domain's (declared `not null`, or
+    /// checking `VALUE IS NOT NULL`), or by a CHECK that tests it `IS NOT NULL` ([`refuses_null`]).
+    /// A cast parameter is its cast's type: "If you wanted to do type inference based on the
+    /// column, you shouldn't have added the cast." Nothing else lets a parameter take null, not a
+    /// null test of it. The rules take every other parameter as a non-null value, which is what
+    /// its TypeScript type promises.
     fn nullable_params(&self, parsed: Option<&Parsed>, relations: &[String]) -> Lazy<HashSet<i32>> {
         let Some(parsed) = parsed else { return Some(HashSet::new()) };
-        let mut out: HashSet<i32> = parsed.params.iter().filter(|(_, u)| u.null_guarded || u.coalesce).map(|(n, _)| *n).collect();
-        if parsed.filled.is_empty() {
+        let mut out: HashSet<i32> = parsed.params.iter().filter(|(_, u)| u.coalesce).map(|(n, _)| *n).collect();
+        if parsed.bare.is_empty() {
             return Some(out);
         }
-        self.prefetch(relations)?;
+        let mut written: Vec<String> = parsed.bare.iter().map(|(_, relation, _)| relation.clone()).collect();
+        written.sort();
+        written.dedup();
+        let refusing = self.host.query(REFUSES_NULL_QUERY, vec![json!(written)], Scope::Statement);
+        let prefetched = self.prefetch(relations);
+        let (refusing, ()) = (refusing?, prefetched?);
+        // Per relation, by attribute: whether the column refuses null.
+        let mut refuses: HashMap<(String, i32), bool> = HashMap::new();
+        for row in refusing.unwrap_or_default() {
+            let (Some(relation), Some(attnum), Some(column), Some(not_null)) = (row.first().and_then(as_str), row.get(1).and_then(as_u32), row.get(2).and_then(as_str), row.get(3).and_then(as_bool)) else { continue };
+            let checked = row.get(4).and_then(as_strings).unwrap_or_default().iter().any(|check| refuses_null(check, column));
+            let domain = row.get(5).and_then(as_strings).unwrap_or_default().iter().any(|check| refuses_null(check, "value"));
+            refuses.insert((relation.to_string(), attnum as i32), not_null || checked || domain);
+        }
         let columns = self.columns_by_name.borrow();
         let mut fills: HashMap<i32, bool> = HashMap::new();
-        for (n, relation, column) in &parsed.filled {
+        for (n, relation, column) in &parsed.bare {
             let Some(known) = columns.get(relation) else { continue };
-            let not_null = match column {
-                analyze::Filled::Name(name) => known.values().find(|(c, _)| c == name).map(|(_, nn)| *nn),
-                analyze::Filled::Position(i) => known.values().nth(*i).map(|(_, nn)| *nn),
+            let found = match column {
+                analyze::Filled::Name(name) => known.iter().find(|(_, (c, _))| c == name),
+                analyze::Filled::Position(i) => known.iter().nth(*i),
             };
-            if let Some(not_null) = not_null {
-                *fills.entry(*n).or_insert(true) &= !not_null;
+            // A column the refusals do not name keeps its NOT NULL alone.
+            if let Some((attnum, (_, not_null))) = found {
+                let refused = refuses.get(&(relation.clone(), *attnum)).copied().unwrap_or(*not_null);
+                *fills.entry(*n).or_insert(true) &= !refused;
             }
         }
         out.extend(fills.into_iter().filter(|(_, nullable)| *nullable).map(|(n, _)| n));
@@ -1509,6 +1550,28 @@ pub fn with_values(ty: Type, values: Option<&[String]>) -> Type {
 /// through as well. A cast to a string type around the column or a value is the server's own
 /// (`v::text = ANY (ARRAY['x'::character varying]::text[])` for a `varchar`). Anything else
 /// proves nothing.
+/// Whether a CHECK, as the server prints it, refuses null in `column` (`value` for a domain's):
+/// one of its conjuncts tests the column `IS NOT NULL`, which a null makes false where any other
+/// test of it would be unknown, and so pass.
+fn refuses_null(text: &str, column: &str) -> bool {
+    use pg_query::protobuf::node::Node as N;
+    use pg_query::protobuf::{BoolExprType, NullTestType};
+    let Ok(parsed) = crate::stack::parse(&format!("SELECT {text}")) else { return false };
+    let Some(N::SelectStmt(select)) = parsed.protobuf.stmts.first().and_then(|s| s.stmt.as_deref()).and_then(|s| s.node.as_ref()) else { return false };
+    let Some(N::ResTarget(target)) = select.target_list.first().and_then(|t| t.node.as_ref()) else { return false };
+    fn conjunct(node: &pg_query::protobuf::Node, column: &str) -> bool {
+        match node.node.as_ref() {
+            Some(N::BoolExpr(b)) if b.boolop == BoolExprType::AndExpr as i32 => b.args.iter().any(|a| conjunct(a, column)),
+            Some(N::NullTest(t)) if t.nulltesttype == NullTestType::IsNotNull as i32 => match t.arg.as_deref().and_then(|a| a.node.as_ref()) {
+                Some(N::ColumnRef(c)) => matches!(c.fields.as_slice(), [f] if matches!(f.node.as_ref(), Some(N::String(s)) if s.sval == column)),
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+    target.val.as_deref().is_some_and(|v| conjunct(v, column))
+}
+
 fn check_values(text: &str, column: &str) -> Option<Vec<String>> {
     use pg_query::protobuf::node::Node as N;
     let parsed = crate::stack::parse(&format!("SELECT {text}")).ok()?;
@@ -1979,11 +2042,25 @@ mod tests {
     }
 
     #[test]
-    fn a_cast_parameter_is_as_nullable_as_the_bare_one() {
+    fn a_parameter_may_be_null_coalesced_first_or_written_bare_to_a_column_that_holds_null() {
         // A server with one table, `users (id int primary key, name text not null, email text,
-        // score numeric, n int, doc jsonb, meta json not null)`, describing every statement with no
-        // result column and every parameter as text.
-        let columns = [("id", true), ("name", true), ("email", false), ("score", false), ("n", false), ("doc", false), ("meta", true)];
+        // score numeric, n int, doc jsonb, meta json not null, nick text check (nick is not null),
+        // mail required_email, code text check (code <> '' and code is not null), tag tag_text)`,
+        // where the domain `required_email` is declared `not null` and the domain `tag_text`
+        // checks `VALUE IS NOT NULL`, describing every statement with no result column and every
+        // parameter as text.
+        let columns = [("id", true), ("name", true), ("email", false), ("score", false), ("n", false), ("doc", false), ("meta", true), ("nick", false), ("mail", false), ("code", false), ("tag", false)];
+        let refusals = |i: usize, name: &str| -> Vec<Value> {
+            let (not_null, checks, domain): (bool, Vec<&str>, Vec<&str>) = match name {
+                "id" | "name" | "meta" | "mail" => (true, vec![], vec![]),
+                "nick" => (false, vec!["nick IS NOT NULL"], vec![]),
+                "code" => (false, vec!["code <> ''::text AND code IS NOT NULL"], vec![]),
+                "tag" => (false, vec![], vec!["VALUE IS NOT NULL"]),
+                "score" => (false, vec!["score > 0::numeric"], vec![]),
+                _ => (false, vec![], vec![]),
+            };
+            vec![json!("users"), json!(i + 1), json!(name), json!(not_null), json!(checks), json!(domain)]
+        };
         let nullable = |sql: &str| {
             let mut answers: HashMap<String, Answer> = HashMap::new();
             for _ in 0..64 {
@@ -2001,6 +2078,7 @@ mod tests {
                         crate::api::Need::Query { id, sql, .. } => {
                             let rows = match sql.as_str() {
                                 RELATION_COLUMNS_QUERY => columns.iter().enumerate().map(|(i, (name, not_null))| vec![json!(16400), json!("users"), json!(i + 1), json!(not_null), Value::Null, json!(name), json!(not_null)]).collect(),
+                                REFUSES_NULL_QUERY => columns.iter().enumerate().map(|(i, (name, _))| refusals(i, name)).collect(),
                                 cardinality::UNIQUE_KEYS_QUERY => vec![vec![json!("users"), json!(["id"]), json!([null]), Value::Null], vec![json!("users"), json!(["email"]), json!([null]), Value::Null]],
                                 _ => vec![],
                             };
@@ -2011,18 +2089,34 @@ mod tests {
             }
             panic!("the replay did not converge");
         };
-        // Written whole to a column, under any cast: as nullable as the column, in an INSERT's
-        // rows, an UPDATE's SET and an upsert's, a row value's elements included.
-        assert_eq!(nullable("INSERT INTO users (name, email) VALUES (:name::text, :email::text) ON CONFLICT (email) DO UPDATE SET name = excluded.name RETURNING id"), "name email?");
-        assert_eq!(nullable("INSERT INTO users (name, email, score, n, doc, meta) VALUES (:name::text, :email::text, :score::numeric, :n::int, :doc::jsonb, :meta::json), (:a, :b, :c, :d, :e, :f)"), "name email? score? n? doc? meta a b? c? d? e? f");
-        assert_eq!(nullable("UPDATE users SET email = :email::text, name = :name::text, n = :n::int, doc = :doc::json::jsonb, meta = :meta::json WHERE id = :id::int"), "email? name n? doc? meta id");
-        assert_eq!(nullable("UPDATE users SET (name, email) = (:name::text, :email::text) WHERE id = :id::int"), "name email? id");
+        // Written whole and bare to a column that may hold null, in an INSERT's rows, by name and
+        // by place, the SELECT that feeds an INSERT, an UPDATE's SET and an upsert's, a row
+        // value's elements included: as nullable as the column.
+        assert_eq!(nullable("INSERT INTO users (name, email) VALUES (:name, :email) ON CONFLICT (email) DO UPDATE SET name = excluded.name RETURNING id"), "name email?");
+        assert_eq!(nullable("INSERT INTO users (name, email, score, n, doc, meta) VALUES (:name, :email, :score, :n, :doc, :meta), (:a, :b, :c, :d, :e, :f)"), "name email? score? n? doc? meta a b? c? d? e? f");
+        assert_eq!(nullable("INSERT INTO users VALUES (:id, :name, :email)"), "id name email?");
+        assert_eq!(nullable("INSERT INTO users (name, email) SELECT :name, :email"), "name email?");
+        assert_eq!(nullable("UPDATE users SET email = :email, name = :name, n = :n WHERE id = :id"), "email? name n? id");
         assert_eq!(nullable("UPDATE users SET (name, email) = (:name, :email) WHERE id = :id"), "name email? id");
-        assert_eq!(nullable("INSERT INTO users (name) VALUES ('a') ON CONFLICT (id) DO UPDATE SET email = :email::text, name = :name::text"), "email? name");
-        // Coalesced or tested for NULL, under a cast; a SELECT's column is no value written whole.
-        assert_eq!(nullable("UPDATE users SET n = coalesce(:n::int, n), doc = coalesce(:doc::jsonb, doc) WHERE id = :id::int"), "n? doc? id");
-        assert_eq!(nullable("SELECT id FROM users WHERE (:doc::json IS NULL OR n = :x::int)"), "doc? x");
+        assert_eq!(nullable("INSERT INTO users (name) VALUES ('a') ON CONFLICT (id) DO UPDATE SET email = :email, name = :name"), "email? name");
+        // A column that refuses null otherwise: a CHECK that tests it IS NOT NULL (among others),
+        // a domain declared NOT NULL, a domain that checks VALUE IS NOT NULL. A CHECK a null
+        // passes, `score > 0`, leaves the column nullable.
+        assert_eq!(nullable("INSERT INTO users (name, nick, mail, code, tag) VALUES (:name, :nick, :mail, :code, :tag)"), "name nick mail code tag");
+        assert_eq!(nullable("UPDATE users SET nick = :nick, mail = :mail, code = :code, tag = :tag, score = :score WHERE id = :id"), "nick mail code tag score? id");
+        // A cast parameter is its cast's type, never null, however it is written; so is an expression.
+        assert_eq!(nullable("INSERT INTO users (name, email) VALUES (:name::text, :email::text) ON CONFLICT (email) DO UPDATE SET name = excluded.name RETURNING id"), "name email");
+        assert_eq!(nullable("INSERT INTO users (name, email, score, n, doc, meta) VALUES (:name::text, :email::text, :score::numeric, :n::int, :doc::jsonb, :meta::json)"), "name email score n doc meta");
+        assert_eq!(nullable("UPDATE users SET email = CAST(:email AS text), n = :n::int, doc = :doc::json::jsonb, score = lower(:s)::numeric WHERE id = :id::int"), "email n doc s id");
+        assert_eq!(nullable("UPDATE users SET (name, email) = (:name::text, :email::text) WHERE id = :id::int"), "name email id");
         assert_eq!(nullable("INSERT INTO users (name, email) SELECT :name::text, :email::text"), "name email");
+        // Tested for NULL, or compared with IS NOT DISTINCT FROM: a value all the same.
+        assert_eq!(nullable("SELECT id FROM users WHERE (:doc::json IS NULL OR n = :x::int) AND email IS NOT DISTINCT FROM :e AND :k::int IS NOT NULL"), "doc x e k");
+        // The first argument of `coalesce`, bare, under a cast, or the column of a WITH query that
+        // selects it: the caller may pass null. A later argument is a value.
+        assert_eq!(nullable("UPDATE users SET n = coalesce(:n::int, n), doc = coalesce(:doc::jsonb, doc), name = coalesce(name, :e) WHERE id = :id::int"), "n? doc? e id");
+        assert_eq!(nullable("UPDATE users SET name = coalesce(CAST(:name AS text), name), meta = coalesce(:meta, meta) WHERE id = :id"), "name? meta? id");
+        assert_eq!(nullable("WITH input AS (SELECT :q::text AS q) SELECT id FROM users, input WHERE name = coalesce(input.q, name)"), "q?");
     }
 
     #[test]

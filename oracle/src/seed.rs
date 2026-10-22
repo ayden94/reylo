@@ -417,6 +417,12 @@ fn assignments(pools: &[Vec<String>]) -> Vec<Vec<String>> {
     (0..width).map(|r| pools.iter().map(|p| p[r % p.len().max(1)].clone()).collect()).collect()
 }
 
+/// Whether the server refused a run with a NOT NULL or a CHECK violation, which a NULL bound to a
+/// parameter may cause; a timeout or any other error is no such refusal.
+fn refuses_null(e: &tokio_postgres::Error) -> bool {
+    matches!(e.code(), Some(c) if *c == SqlState::NOT_NULL_VIOLATION || *c == SqlState::CHECK_VIOLATION)
+}
+
 fn message(e: &tokio_postgres::Error) -> String {
     e.as_db_error().map(|d| format!("{} ({})", d.message(), d.code().code())).unwrap_or_else(|| e.to_string())
 }
@@ -456,15 +462,19 @@ pub async fn check(client: &Client, statements: &[(String, String, Value)], time
                 let rewritten = analysis["rewritten"]["sql"].as_str().unwrap_or(sql).to_string();
                 let order: Vec<String> = analysis["rewritten"]["order"].as_array().map(|o| o.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
                 let params = analysis["params"].as_array().cloned().unwrap_or_default();
-                for values in assignments(&bound.pools) {
+                // Each placeholder `$n` is the n-th name of `order`; the value is that parameter's.
+                let text_of = |values: &[String]| {
                     let mut text = rewritten.clone();
-                    // Each placeholder `$n` is the n-th name of `order`; the value is that parameter's.
                     for (n, name) in order.iter().enumerate().rev() {
                         let index = params.iter().position(|p| p["name"].as_str() == Some(name)).unwrap_or(n);
                         let literal = values.get(index).cloned().unwrap_or_else(|| "NULL".into());
                         let ty = bound.casts.get(n).cloned().unwrap_or_else(|| "text".into());
                         text = text.replace(&format!("${}", n + 1), &format!("({literal})::{ty}"));
                     }
+                    text
+                };
+                for values in assignments(&bound.pools) {
+                    let text = text_of(&values);
                     let sql_text = format!("SAVEPOINT q; {text}");
                     let messages = match client.simple_query(&sql_text).await {
                         Ok(m) => m,
@@ -475,6 +485,44 @@ pub async fn check(client: &Client, statements: &[(String, String, Value)], time
                                 tally.timed_out += 1;
                             } else {
                                 tally.fail(message(&e));
+                            }
+                            // A NULL the engine let a parameter take, which the database refuses
+                            // with a NOT NULL or a CHECK violation, is a parameter typed nullable
+                            // that may not be null. The NULLs are to blame where the same run with
+                            // each of them given a value of its pool is not refused so; then each
+                            // that is refused alone, the others given values, is named.
+                            if refuses_null(&e) {
+                                let nulls: Vec<usize> = (0..params.len()).filter(|&i| values.get(i).map(String::as_str) == Some("NULL") && params[i]["nullable"].as_bool().unwrap_or(false) && bound.pools.get(i).is_some_and(|pool| pool.iter().any(|v| v != "NULL"))).collect();
+                                let filled = |keep: Option<usize>| -> Vec<String> {
+                                    let mut other = values.clone();
+                                    for &i in nulls.iter().filter(|&&i| Some(i) != keep) {
+                                        other[i] = bound.pools[i].iter().find(|v| *v != "NULL").cloned().unwrap_or_default();
+                                    }
+                                    other
+                                };
+                                let mut blamed: Vec<(usize, String)> = Vec::new();
+                                if !nulls.is_empty() {
+                                    let outcome = client.simple_query(&format!("SAVEPOINT q; {}", text_of(&filled(None)))).await;
+                                    client.batch_execute("ROLLBACK TO SAVEPOINT q").await.map_err(|e| e.to_string())?;
+                                    if !outcome.as_ref().is_err_and(refuses_null) {
+                                        for &i in &nulls {
+                                            if nulls.len() == 1 {
+                                                blamed.push((i, message(&e)));
+                                                continue;
+                                            }
+                                            let outcome = client.simple_query(&format!("SAVEPOINT q; {}", text_of(&filled(Some(i))))).await;
+                                            client.batch_execute("ROLLBACK TO SAVEPOINT q").await.map_err(|e| e.to_string())?;
+                                            if let Err(alone) = &outcome {
+                                                if refuses_null(alone) {
+                                                    blamed.push((i, message(alone)));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                for (i, why) in blamed {
+                                    problems.push(format!("{file}: parameter {} typed nullable, and the database refuses its NULL: {why} with ({})", params[i]["name"].as_str().unwrap_or("?"), values.join(", ")));
+                                }
                             }
                             continue;
                         }
@@ -727,6 +775,13 @@ fn with_deadline<T>(db: &rusqlite::Connection, ms: u64, run: impl FnOnce() -> T)
     out
 }
 
+/// Whether SQLite refused a run with a NOT NULL or a CHECK constraint, which a NULL bound to a
+/// parameter may cause; any other error is no such refusal.
+fn sqlite_refuses_null(e: &rusqlite::Error) -> bool {
+    let text = e.to_string();
+    matches!(e, rusqlite::Error::SqliteFailure(f, _) if f.code == rusqlite::ErrorCode::ConstraintViolation) && (text.contains("NOT NULL constraint failed") || text.contains("CHECK constraint failed"))
+}
+
 fn interrupted(e: &rusqlite::Error) -> bool {
     matches!(e, rusqlite::Error::SqliteFailure(f, _) if f.code == rusqlite::ErrorCode::OperationInterrupted)
 }
@@ -752,26 +807,31 @@ pub fn check_sqlite(db: &rusqlite::Connection, statements: &[(String, String, Va
                 let text = analysis["rewritten"]["sql"].as_str().unwrap_or(sql).to_string();
                 let params = analysis["params"].as_array().cloned().unwrap_or_default();
                 let order: Vec<String> = analysis["rewritten"]["order"].as_array().map(|o| o.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+                // A parameter's pool ends with a value no seeded row holds, one of its own, so a
+                // write of a new unique key runs at all, as on Postgres.
                 let pools: Vec<Vec<rusqlite::types::Value>> = params
                     .iter()
-                    .map(|p| {
-                        let mut values = sqlite_pool(p["type_name"].as_str().unwrap_or(""), Scenario::Edges, false);
+                    .enumerate()
+                    .map(|(i, p)| {
+                        let declared = p["type_name"].as_str().unwrap_or("");
+                        let mut values = sqlite_pool(declared, Scenario::Edges, false);
                         if !p["nullable"].as_bool().unwrap_or(false) {
                             values.retain(|v| *v != rusqlite::types::Value::Null);
                         }
+                        values.push(sqlite_fresh(declared, 900_000 + i));
                         values
                     })
                     .collect();
                 let width = pools.iter().map(Vec::len).max().unwrap_or(1).max(1);
                 let cardinality = analysis["cardinality"].as_str().unwrap_or("many");
                 let columns = analysis["columns"].as_array().cloned().unwrap_or_default();
+                // Each `?` is the n-th name of `order`, and the value is that parameter's.
+                let bind = |values: &[rusqlite::types::Value]| -> Vec<rusqlite::types::Value> {
+                    order.iter().map(|name| params.iter().position(|p| p["name"].as_str() == Some(name)).and_then(|i| values.get(i).cloned()).unwrap_or(rusqlite::types::Value::Null)).collect()
+                };
                 for r in 0..width {
                     let values: Vec<rusqlite::types::Value> = pools.iter().map(|p| p.get(r % p.len().max(1)).cloned().unwrap_or(rusqlite::types::Value::Null)).collect();
-                    // Each `?` is the n-th name of `order`, and the value is that parameter's.
-                    let bound: Vec<rusqlite::types::Value> = order
-                        .iter()
-                        .map(|name| params.iter().position(|p| p["name"].as_str() == Some(name)).and_then(|i| values.get(i).cloned()).unwrap_or(rusqlite::types::Value::Null))
-                        .collect();
+                    let bound = bind(&values);
                     let shown = bound.iter().map(|v| format!("{v:?}")).collect::<Vec<_>>().join(", ");
                     db.execute_batch("SAVEPOINT q").map_err(|e| e.to_string())?;
                     // The rows are checked as they come, so a statement that returns rows without
@@ -838,6 +898,41 @@ pub fn check_sqlite(db: &rusqlite::Connection, statements: &[(String, String, Va
                             }
                             if cardinality != "many" && returned > 1 {
                                 problems.push(format!("{file}: proven {cardinality}, returned {returned} rows before it failed with ({shown})"));
+                            }
+                            // A NULL the engine let a parameter take, which SQLite refuses with a
+                            // NOT NULL or a CHECK constraint, is a parameter typed nullable that
+                            // may not be null. The NULLs are to blame where the same run with each
+                            // of them given a value of its pool is not refused so; then each that
+                            // is refused alone, the others given values, is named.
+                            if sqlite_refuses_null(&e) {
+                                use rusqlite::types::Value::Null;
+                                let nulls: Vec<usize> = (0..params.len()).filter(|&i| values.get(i) == Some(&Null) && params[i]["nullable"].as_bool().unwrap_or(false) && pools.get(i).is_some_and(|pool| pool.iter().any(|v| *v != Null))).collect();
+                                let filled = |keep: Option<usize>| -> Vec<rusqlite::types::Value> {
+                                    let mut other = values.clone();
+                                    for &i in nulls.iter().filter(|&&i| Some(i) != keep) {
+                                        other[i] = pools[i].iter().find(|v| **v != Null).cloned().unwrap_or(Null);
+                                    }
+                                    other
+                                };
+                                let mut probe = |values: Vec<rusqlite::types::Value>| -> Result<Option<String>, String> {
+                                    db.execute_batch("SAVEPOINT q").map_err(|e| e.to_string())?;
+                                    let (_, outcome) = run_sqlite_statement(db, &text, &bind(&values), timeout_ms, |_| {});
+                                    if db.is_autocommit() {
+                                        begin_seeded(db, &tables, scenario, timeout_ms, &mut refused)?;
+                                        again += 1;
+                                    } else {
+                                        db.execute_batch("ROLLBACK TO q; RELEASE q").map_err(|e| e.to_string())?;
+                                    }
+                                    Ok(outcome.err().filter(sqlite_refuses_null).map(|e| e.to_string()))
+                                };
+                                if !nulls.is_empty() && probe(filled(None))?.is_none() {
+                                    for &i in &nulls {
+                                        let why = if nulls.len() == 1 { Some(e.to_string()) } else { probe(filled(Some(i)))? };
+                                        if let Some(why) = why {
+                                            problems.push(format!("{file}: parameter {} typed nullable, and the database refuses its NULL: {why} with ({shown})", params[i]["name"].as_str().unwrap_or("?")));
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -983,6 +1078,24 @@ fn sqlite_pool(declared: &str, scenario: Scenario, autoincrement: bool) -> Vec<r
         out.extend([Integer(1), Real(1.5), Text("1".into()), Text("x".into())]);
     }
     out
+}
+
+/// A value of a declared SQLite type no seeded row holds, the `n`th, by the affinity SQLite gives
+/// the name.
+fn sqlite_fresh(declared: &str, n: usize) -> rusqlite::types::Value {
+    use rusqlite::types::Value::{Blob, Integer, Real, Text};
+    let t = declared.to_ascii_lowercase();
+    if t.contains("int") {
+        Integer(n as i64)
+    } else if t.contains("char") || t.contains("clob") || t.contains("text") || t.is_empty() {
+        Text(format!("k{n}"))
+    } else if t.contains("blob") {
+        Blob(n.to_be_bytes().to_vec())
+    } else if t.contains("real") || t.contains("floa") || t.contains("doub") {
+        Real(n as f64 + 0.5)
+    } else {
+        Integer(n as i64)
+    }
 }
 
 /// Open the transaction and seed it. When SQLite ends the transaction over a row's insert, the

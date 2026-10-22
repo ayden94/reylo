@@ -1,12 +1,16 @@
-//! Which MySQL parameters the caller may pass null for, by the rules of Postgres and SQLite
-//! (`postgres::nullable_params`, `sqlite::guarded_params`), read off the `sqlparser` tree, since
-//! MySQL's prepare says nothing of a parameter's nullability: one the statement tests for null
-//! (`:p is null`, `:p is not null`, `isnull(:p)`, `:p <=> x`) or passes first to `coalesce` or
-//! `ifnull`, directly or through the column of a WITH query or a derived table that selects it
-//! (`with input as (select :p as p) … where input.p is null`), and one that is the whole value
-//! written to a column the table lets hold null (a row of an INSERT's or a REPLACE's VALUES, its
-//! SET list, an UPDATE's SET, ON DUPLICATE KEY UPDATE), unless it also fills a NOT NULL column.
-//! Every other parameter is a non-null value.
+//! Which MySQL parameters the caller may pass null for, by the rule of Postgres and SQLite
+//! (`postgres::nullable_params`, `sqlite::coalesced_params`), read off the `sqlparser` tree, since
+//! MySQL's prepare says nothing of a parameter's nullability (the maintainer, 2026-10-21): one the
+//! statement passes first to `coalesce` or `ifnull`, the two-argument coalesce, bare or under the
+//! conversion a `::type` cast compiles to, directly or through the column of a WITH query or a
+//! derived table that selects it (`with input as (select :p as p) … where coalesce(input.p, 0) =
+//! 0`); and one that is, bare, with no cast, the whole value written to a column that may hold
+//! null (a row of an INSERT's or a REPLACE's VALUES, the SELECT that feeds one, its SET list, an
+//! UPDATE's SET, ON DUPLICATE KEY UPDATE), unless it also fills a column that refuses null, by its
+//! NOT NULL or by an enforced CHECK that tests it IS NOT NULL. A cast parameter is its cast's
+//! type: "If you wanted to do type inference based on the column, you shouldn't have added the
+//! cast." Every other parameter is a non-null value, one the statement tests for null or compares
+//! with `<=>` included.
 
 use crate::api::Scope;
 use crate::fresh::Tables;
@@ -18,9 +22,18 @@ use std::collections::{HashMap, HashSet};
 
 /// Each column of the named tables of the current schema, whether it may hold NULL, and its
 /// `extra`, in the order an INSERT without a column list fills them, which passes over an
-/// INVISIBLE column. `?` is the comma-joined table names, because MySQL binds no arrays.
-const COLUMNS_QUERY: &str = "select c.table_name, c.column_name, c.is_nullable, c.extra from information_schema.columns c \
+/// INVISIBLE column. A view's column is taken to refuse NULL: what a write through it takes is its
+/// table's to say. `?` is the comma-joined table names, because MySQL binds no arrays.
+const COLUMNS_QUERY: &str = "select c.table_name, c.column_name, if(t.table_type = 'VIEW', 'NO', c.is_nullable), c.extra from information_schema.columns c \
+    join information_schema.tables t on t.table_schema = c.table_schema and t.table_name = c.table_name \
     where c.table_schema = database() and find_in_set(c.table_name, ?) order by c.table_name, c.ordinal_position";
+
+/// The enforced CHECKs of the named tables of the current schema, as the server prints each
+/// (MySQL 8.0.16 and later; a server without the views answers an error, and no CHECK refuses
+/// null there).
+const CHECKS_QUERY: &str = "select tc.table_name, cc.check_clause from information_schema.table_constraints tc \
+    join information_schema.check_constraints cc on cc.constraint_schema = tc.constraint_schema and cc.constraint_name = tc.constraint_name \
+    where tc.table_schema = database() and tc.constraint_type = 'CHECK' and tc.enforced = 'YES' and find_in_set(tc.table_name, ?)";
 
 /// Each column's type of the named tables of the current schema, for [`column_types`]: its
 /// `data_type`, its `column_type` (`tinyint(1)`, `bit(1)`, `bigint unsigned`) and its `extra`.
@@ -44,12 +57,13 @@ pub(crate) fn names(rewritten: &lex::Rewritten) -> Names {
     out
 }
 
-/// Asks for the columns of the tables the statement writes a parameter to, so that the answer
-/// comes in the round of the statement's own prepare.
+/// Asks for the columns of the tables the statement writes a parameter to or compares one with,
+/// so that the answer comes in the round of the statement's own prepare.
 pub(crate) fn prefetch(statement: &Statement, names: &Names, host: &Host) {
-    let tables = written_tables(&filled(statement, names));
+    let tables = written_tables(&filled(statement, names, true));
     if !tables.is_empty() {
         let _ = host.query(COLUMNS_QUERY, vec![json!(tables.join(","))], Scope::Statement);
+        let _ = host.query(CHECKS_QUERY, vec![json!(tables.join(","))], Scope::Statement);
     }
     let typed = typed_targets(statement, names);
     if !typed.is_empty() {
@@ -59,7 +73,7 @@ pub(crate) fn prefetch(statement: &Statement, names: &Names, host: &Host) {
 
 /// The parameters written whole to a column or compared whole with one, each with that column.
 fn typed_targets(statement: &Statement, names: &Names) -> Vec<(String, String, Target)> {
-    let mut targets = filled(statement, names);
+    let mut targets = filled(statement, names, false);
     targets.extend(compared(statement, names));
     targets
 }
@@ -200,18 +214,29 @@ pub(crate) fn nullable(statement: &Statement, names: &Names, host: &Host) -> Laz
     let mut walk = Walk { names, out: HashSet::new(), tables: Vec::new() };
     walk.statement(statement, &Env::default());
     let mut out = walk.out;
-    let filled = filled(statement, names);
+    let filled = filled(statement, names, true);
     if filled.is_empty() {
         return Some(out);
     }
-    let rows = host.query(COLUMNS_QUERY, vec![json!(written_tables(&filled).join(","))], Scope::Statement)?;
+    let tables = json!(written_tables(&filled).join(","));
+    let (rows, checks) = (host.query(COLUMNS_QUERY, vec![tables.clone()], Scope::Statement), host.query(CHECKS_QUERY, vec![tables], Scope::Statement));
+    let (rows, checks) = (rows?, checks?);
+    // Per table as the server names it, the CHECKs.
+    let mut checked: HashMap<String, Vec<String>> = HashMap::new();
+    for row in checks.unwrap_or_default() {
+        if let (Some(table), Some(clause)) = (row.first().and_then(as_str), row.get(1).and_then(as_str)) {
+            checked.entry(table.to_string()).or_default().push(clause.to_string());
+        }
+    }
     // Per table as the server names it: each column in lower case, whether it may hold NULL, and
     // whether it is INVISIBLE.
     let mut columns: HashMap<String, Vec<(String, bool, bool)>> = HashMap::new();
     for row in rows.unwrap_or_default() {
         let (Some(table), Some(column), Some(nullable)) = (row.first().and_then(as_str), row.get(1).and_then(as_str), row.get(2).and_then(as_str)) else { continue };
         let invisible = row.get(3).and_then(as_str).is_some_and(|extra| extra.to_ascii_uppercase().contains("INVISIBLE"));
-        columns.entry(table.to_string()).or_default().push((column.to_ascii_lowercase(), nullable.eq_ignore_ascii_case("YES"), invisible));
+        let column = column.to_ascii_lowercase();
+        let refused = checked.get(table).is_some_and(|clauses| clauses.iter().any(|clause| refuses_null(clause, &column)));
+        columns.entry(table.to_string()).or_default().push((column, nullable.eq_ignore_ascii_case("YES") && !refused, invisible));
     }
     let mut fills: HashMap<String, bool> = HashMap::new();
     for (param, table, target) in filled {
@@ -238,6 +263,28 @@ pub(crate) fn nullable(statement: &Statement, names: &Names, host: &Host) -> Laz
     }
     out.extend(fills.into_iter().filter(|(_, nullable)| *nullable).map(|(param, _)| param));
     Some(out)
+}
+
+/// Whether a CHECK, as the server prints it (`(`email` is not null)`), refuses null in `column`
+/// (lower case): one of its conjuncts tests the column IS NOT NULL, which a null makes false where
+/// any other test of it would be unknown, and so pass.
+fn refuses_null(clause: &str, column: &str) -> bool {
+    use sqlparser::dialect::MySqlDialect;
+    use sqlparser::parser::Parser;
+    fn conjunct(e: &Expr, column: &str) -> bool {
+        match e {
+            Expr::Nested(inner) => conjunct(inner, column),
+            Expr::BinaryOp { left, op: ast::BinaryOperator::And, right } => conjunct(left, column) || conjunct(right, column),
+            Expr::IsNotNull(inner) => match inner.as_ref() {
+                Expr::Identifier(i) => i.value.eq_ignore_ascii_case(column),
+                Expr::Nested(n) => matches!(n.as_ref(), Expr::Identifier(i) if i.value.eq_ignore_ascii_case(column)),
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+    let dialect = MySqlDialect {};
+    Parser::new(&dialect).try_with_sql(clause).and_then(|mut p| p.parse_expr()).is_ok_and(|e| conjunct(&e, column))
 }
 
 /// The tables of the current schema the statement reads and writes, as it names them, for the
@@ -313,8 +360,24 @@ fn json_compact(e: &Expr) -> Option<&Expr> {
     }
 }
 
-/// Every parameter written whole to a column: (parameter, table as the statement names it, column).
-fn filled(statement: &Statement, names: &Names) -> Vec<(String, String, Target)> {
+/// The parameter an expression is, bare: under parentheses alone, no cast.
+fn bare(e: &Expr, names: &Names) -> Option<String> {
+    match e {
+        Expr::Value(v) => match &v.value {
+            ast::Value::Placeholder(p) if p == "?" => names.get(&(v.span.start.line, v.span.start.column)).cloned(),
+            _ => None,
+        },
+        Expr::Nested(inner) => bare(inner, names),
+        _ => None,
+    }
+}
+
+/// Every parameter written whole to a column: (parameter, table as the statement names it,
+/// column). With `bare`, only one with no cast, which takes the column's nullability, and the
+/// columns of the one SELECT that feeds an INSERT too; otherwise one under the casts too, which
+/// takes the column's type.
+fn filled(statement: &Statement, names: &Names, bare_only: bool) -> Vec<(String, String, Target)> {
+    let direct = |e: &Expr, names: &Names| if bare_only { bare(e, names) } else { direct(e, names) };
     let mut out = Vec::new();
     let column = |target: &ast::AssignmentTarget| match target {
         ast::AssignmentTarget::ColumnName(name) => name.0.last().and_then(|p| p.as_ident()).map(|i| (name.0.len(), i.value.to_ascii_lowercase())),
@@ -328,16 +391,29 @@ fn filled(statement: &Statement, names: &Names) -> Vec<(String, String, Target)>
             if columns.len() != insert.columns.len() {
                 return out;
             }
-            if let Some(SetExpr::Values(values)) = insert.source.as_ref().filter(|q| q.with.is_none()).map(|q| q.body.as_ref()) {
-                for row in &values.rows {
-                    for (i, value) in row.content.iter().enumerate() {
+            let target_at = |i: usize| if columns.is_empty() { Some(Target::Position(i)) } else { columns.get(i).map(|c| Target::Name(c.clone())) };
+            match insert.source.as_ref().filter(|q| q.with.is_none()).map(|q| q.body.as_ref()) {
+                Some(SetExpr::Values(values)) => {
+                    for row in &values.rows {
+                        for (i, value) in row.content.iter().enumerate() {
+                            let Some(param) = direct(value, names) else { continue };
+                            if let Some(target) = target_at(i) {
+                                out.push((param, table.clone(), target));
+                            }
+                        }
+                    }
+                }
+                // The SELECT that feeds the INSERT writes its columns whole, as a VALUES row does.
+                Some(SetExpr::Select(select)) if bare_only => {
+                    for (i, item) in select.projection.iter().enumerate() {
+                        let (SelectItem::UnnamedExpr(value) | SelectItem::ExprWithAlias { expr: value, .. }) = item else { break };
                         let Some(param) = direct(value, names) else { continue };
-                        let target = if columns.is_empty() { Some(Target::Position(i)) } else { columns.get(i).map(|c| Target::Name(c.clone())) };
-                        if let Some(target) = target {
+                        if let Some(target) = target_at(i) {
                             out.push((param, table.clone(), target));
                         }
                     }
                 }
+                _ => {}
             }
             let update = match &insert.on {
                 Some(ast::OnInsert::DuplicateKeyUpdate(set)) => set.as_slice(),
@@ -670,15 +746,10 @@ impl Walk<'_> {
         }
     }
 
-    /// Walks an expression: a null test or a coalesce of a parameter marks it.
+    /// Walks an expression: a parameter passed first to `coalesce` or `ifnull` is marked.
     fn expr(&mut self, e: &Expr, env: &Env) {
         match e {
-            Expr::IsNull(x) | Expr::IsNotNull(x) => self.mark(x, env),
-            Expr::IsDistinctFrom(a, b) | Expr::IsNotDistinctFrom(a, b) | Expr::BinaryOp { left: a, op: ast::BinaryOperator::Spaceship, right: b } => {
-                self.mark(a, env);
-                self.mark(b, env);
-            }
-            Expr::Function(f) if matches!(crate::mysql::builtin(f).as_str(), "coalesce" | "ifnull" | "isnull") => {
+            Expr::Function(f) if matches!(crate::mysql::builtin(f).as_str(), "coalesce" | "ifnull") => {
                 if let ast::FunctionArguments::List(list) = &f.args {
                     if let Some(first) = list.args.first().and_then(arg_expr) {
                         self.mark(first, env);
@@ -780,12 +851,18 @@ mod tests {
     use std::collections::HashMap;
 
     /// The analysis of `sql` over a schema: `users (id NOT NULL, name NOT NULL, secret NOT NULL
-    /// INVISIBLE, email, bio)` and `posts (id NOT NULL, user_id NOT NULL, title NOT NULL, tag)`;
-    /// each parameter with whether it may be null, and whether the columns were asked for.
+    /// INVISIBLE, email, bio)`, `posts (id NOT NULL, user_id NOT NULL, title NOT NULL, tag)` and
+    /// `accounts (id NOT NULL, email, nick, note)` with `check (email <> '' and email is not null)`,
+    /// `check (nick is not null)` and `check (note <> '')`; each parameter with whether it may be
+    /// null, and whether the columns were asked for.
     fn nullable(sql: &str) -> (Vec<(String, bool)>, bool) {
         let columns = json!({ "rows": [
+            ["accounts", "id", "NO", ""], ["accounts", "email", "YES", ""], ["accounts", "nick", "YES", ""], ["accounts", "note", "YES", ""],
             ["posts", "id", "NO", "auto_increment"], ["posts", "user_id", "NO", ""], ["posts", "title", "NO", ""], ["posts", "tag", "YES", ""],
             ["users", "id", "NO", "auto_increment"], ["users", "name", "NO", ""], ["users", "secret", "NO", "INVISIBLE"], ["users", "email", "YES", ""], ["users", "bio", "YES", ""],
+        ] });
+        let checks = json!({ "rows": [
+            ["accounts", "((`email` <> _utf8mb4'') and (`email` is not null))"], ["accounts", "(`nick` is not null)"], ["accounts", "(`note` <> _utf8mb4'')"],
         ] });
         let mut answers: HashMap<String, Answer> = HashMap::new();
         let mut asked = false;
@@ -805,6 +882,7 @@ mod tests {
                         asked = true;
                         (id, columns.clone())
                     }
+                    Need::Query { id, sql, .. } if sql == super::CHECKS_QUERY => (id, checks.clone()),
                     Need::Query { id, .. } => (id, json!({ "rows": [] })),
                 };
                 answers.insert(id, serde_json::from_value(answer).unwrap());
@@ -894,66 +972,86 @@ mod tests {
     }
 
     #[test]
-    fn a_parameter_written_whole_to_a_nullable_column_may_be_null() {
+    fn a_bare_parameter_written_whole_to_a_nullable_column_may_be_null() {
         assert_eq!(nullable("insert into users (name, email) values (:name, :email)"), (vec![("name".into(), false), ("email".into(), true)], true));
         assert_eq!(may_be_null("update users set email = :email, name = :name where id = :id"), ["email"]);
         assert_eq!(may_be_null("update users u set u.bio = :bio where u.id = :id"), ["bio"]);
-        // Every row of a VALUES list, through a cast, which keeps a NULL; a REPLACE as an INSERT.
-        assert_eq!(may_be_null("insert into users (name, email) values (:n1, :e1), (:n2, cast(:e2 as char))"), ["e1", "e2"]);
+        // Every row of a VALUES list; a REPLACE as an INSERT; parentheses leave it bare.
+        assert_eq!(may_be_null("insert into users (name, email) values (:n1, :e1), (:n2, :e2)"), ["e1", "e2"]);
         assert_eq!(may_be_null("replace into users (name, email, bio) values (:name, :email, (:bio))"), ["email", "bio"]);
         // Without a column list, by position, past the INVISIBLE column, which takes no value.
         assert_eq!(may_be_null("insert into users values (:id, :name, :email, :bio)"), ["email", "bio"]);
-        // The SET form, and ON DUPLICATE KEY UPDATE.
+        // The SET form, ON DUPLICATE KEY UPDATE, and the SELECT that feeds an INSERT.
         assert_eq!(may_be_null("insert into users set name = :name, email = :email"), ["email"]);
         assert_eq!(may_be_null("insert into users (name, email) values (:name, :email) on duplicate key update bio = :bio, name = :again"), ["email", "bio"]);
+        assert_eq!(may_be_null("insert into users (name, email) select :name, :email"), ["email"]);
+        assert_eq!(may_be_null("insert into users (name, email, bio) select name, :email, :bio from users"), ["email", "bio"]);
         // A table of a join, by the name the statement gives it.
         assert_eq!(may_be_null("update users u join posts p on p.user_id = u.id set u.email = :email, p.title = :title, p.tag = :tag where p.id = :id"), ["email", "tag"]);
+        // A column a CHECK refuses null in: a conjunct tests it IS NOT NULL. One a null passes is nullable.
+        assert_eq!(may_be_null("insert into accounts (id, email, nick, note) values (:id, :email, :nick, :note)"), ["note"]);
+        assert_eq!(may_be_null("update accounts set email = :email, nick = :nick, note = :note where id = :id"), ["note"]);
         // Not the whole value: the expression it is part of decides what is written.
         assert_eq!(nullable("update users set email = lower(:email) where id = :id"), (vec![("email".into(), false), ("id".into(), false)], false));
-        assert!(may_be_null("insert into users (name, email) select name, :email from users").is_empty());
         // A read asks for no columns.
         assert_eq!(nullable("select id from users where email = :email"), (vec![("email".into(), false)], false));
     }
 
     #[test]
-    fn a_cast_parameter_is_as_nullable_as_the_bare_one() {
-        // What a `:name::type` cast compiles to: the bare placeholder for a text type, `CAST(? AS
-        // SIGNED)`, `CAST(? AS DECIMAL(…))` and `CAST(? AS JSON)`, and on MariaDB `JSON_COMPACT(?)`
-        // for `::json`. Each keeps NULL: written whole to a nullable column the parameter may be
-        // null, to a NOT NULL one it is a value, and coalesced or tested it may be null.
-        let lists = |a: Vec<String>| a.join(" ");
-        let q = |sql: &str| lists(may_be_null(sql));
-        assert_eq!(q("insert into users (name, email, bio) values (:name, CAST(:email AS JSON), JSON_COMPACT(:bio))"), "email bio");
-        assert_eq!(q("insert into users (name, email, bio) values (CAST(:name AS SIGNED), CAST(:email AS DECIMAL(10,2)), CAST(:bio AS UNSIGNED)), (JSON_COMPACT(:n2), :e2, CAST(:b2 AS DATETIME(6)))"), "email bio e2 b2");
-        assert_eq!(q("update users set email = CAST(:email AS SIGNED), name = JSON_COMPACT(:name), bio = JSON_COMPACT(:bio) where id = CAST(:id AS SIGNED)"), "email bio");
-        assert_eq!(q("insert into users (name, email) values (:name, :email) on duplicate key update bio = CAST(:bio AS JSON), name = CAST(:again AS SIGNED)"), "email bio");
-        assert_eq!(q("update users set email = coalesce(JSON_COMPACT(:e), email), name = coalesce(CAST(:n AS SIGNED), name) where JSON_COMPACT(:j) is null"), "e n j");
-        // A function that is not the cast's, or JSON_COMPACT of more than the parameter, is an expression.
-        assert_eq!(q("update users set email = json_quote(:e), bio = JSON_COMPACT(concat(:b, '')) where id = :id"), "");
+    fn a_cast_parameter_is_its_casts_type_and_takes_no_null() {
+        // What a `:name::type` cast compiles to: `CAST(? AS SIGNED)`, `CAST(? AS DECIMAL(…))`,
+        // `CAST(? AS JSON)`, and on MariaDB `JSON_COMPACT(?)` for `::json`: written whole to a
+        // nullable column, the parameter is a value ("If you wanted to do type inference based on
+        // the column, you shouldn't have added the cast", the maintainer, 2026-10-21).
+        for sql in [
+            "insert into users (name, email, bio) values (:name, CAST(:email AS JSON), JSON_COMPACT(:bio))",
+            "insert into users (name, email, bio) values (CAST(:name AS SIGNED), CAST(:email AS DECIMAL(10,2)), CAST(:bio AS UNSIGNED)), (JSON_COMPACT(:n2), cast(:e2 as char), CAST(:b2 AS DATETIME(6)))",
+            "update users set email = CAST(:email AS SIGNED), name = JSON_COMPACT(:name), bio = JSON_COMPACT(:bio) where id = CAST(:id AS SIGNED)",
+            "insert into users (name, email) values (:name, cast(:email as char)) on duplicate key update bio = CAST(:bio AS JSON), name = CAST(:again AS SIGNED)",
+            "insert into users (name, email) select :name, cast(:email as char)",
+            "update users set email = json_quote(:e), bio = concat(:b, '') where id = :id",
+        ] {
+            assert!(may_be_null(sql).is_empty(), "{sql}: {:?}", may_be_null(sql));
+        }
     }
 
     #[test]
-    fn a_parameter_the_statement_tests_for_null_or_coalesces_may_be_null() {
-        assert_eq!(may_be_null("select id from users where coalesce(:n, 0) = 0 and ifnull(:m, 1) = 1 and isnull(:k) and :a <=> email and :b is not null and email = coalesce(email, :c)"), ["n", "m", "k", "a", "b"]);
-        assert_eq!(may_be_null("select id from users where cast(:p as char) is null"), ["p"]);
+    fn a_null_test_or_a_null_safe_comparison_lets_no_null_through() {
+        for sql in [
+            "select id from users where isnull(:k) and :a <=> email and :b is not null and :c is null",
+            "select id from users where cast(:p as char) is null",
+            "delete from users where :email is null",
+            "with input as (select :q as q) select id from users, input where input.q is null or users.name = input.q",
+            "update users set email = coalesce(JSON_COMPACT(:e), email) where JSON_COMPACT(:j) is null",
+        ] {
+            assert!(may_be_null(sql).iter().all(|p| p == "e"), "{sql}: {:?}", may_be_null(sql));
+        }
+    }
+
+    #[test]
+    fn a_parameter_passed_first_to_coalesce_may_be_null() {
+        assert_eq!(may_be_null("select id from users where coalesce(:n, 0) = 0 and ifnull(:m, 1) = 1 and email = coalesce(email, :c) and ifnull(email, :d) = ''"), ["n", "m"]);
         assert_eq!(may_be_null("update users set name = :name where coalesce(:id, id) = id"), ["id"]);
-        assert_eq!(may_be_null("delete from users where :email is null"), ["email"]);
+        // Under the conversions a `::type` cast compiles to, keeping NULL.
+        assert_eq!(may_be_null("update users set email = coalesce(JSON_COMPACT(:e), email), name = coalesce(CAST(:n AS SIGNED), name), bio = ifnull(cast(:b as json), bio) where id = CAST(:id AS SIGNED)"), ["e", "n", "b"]);
+        // A function that is not the cast's, or JSON_COMPACT of more than the parameter, is an expression.
+        assert!(may_be_null("update users set email = coalesce(json_quote(:e), email), bio = coalesce(JSON_COMPACT(concat(:b, '')), bio) where id = :id").is_empty());
         // Through the column of a WITH query or a derived table that selects it, by its name, by
         // a FROM alias, by a column list, bare, and along a chain of WITH queries.
         let q = |sql: &str| may_be_null(sql);
-        assert_eq!(q("with input as (select :q as q) select id from users, input where input.q is null or users.name = input.q"), ["q"]);
-        assert_eq!(q("with input as (select :q as q) select id from users, input i where i.q is null"), ["q"]);
-        assert_eq!(q("with input (v) as (select :q) select id from users, input where input.v is null"), ["q"]);
-        assert_eq!(q("with input as (select :q as q) select id from users, input where q is null"), ["q"]);
+        assert_eq!(q("with input as (select :q as q) select id from users, input where coalesce(input.q, users.name) = users.name"), ["q"]);
+        assert_eq!(q("with input as (select :q as q) select id from users, input i where coalesce(i.q, 0) = 0"), ["q"]);
+        assert_eq!(q("with input (v) as (select :q) select id from users, input where ifnull(input.v, 0) = 0"), ["q"]);
+        assert_eq!(q("with input as (select :q as q) select id from users, input where coalesce(q, 0) = 0"), ["q"]);
         assert_eq!(q("with a as (select :q as q), b as (select a.q as r from a) select id from users, b where coalesce(b.r, 0) = 0"), ["q"]);
-        assert_eq!(q("select id from users, (select cast(:q as signed) as q) as s where s.q is null or users.id = s.q"), ["q"]);
-        assert_eq!(q("select id from users join (select :q as q) s on s.q is null"), ["q"]);
-        assert_eq!(q("with input as (select :q as q) select id from users where exists (select 1 from input where input.q is null)"), ["q"]);
-        // Not the parameter: another column of the item, a test of a table's column, a compound,
-        // and a bare name a table between could hold.
-        assert!(q("with input as (select :q as q, 1 as one) select id from users, input where input.one is null and users.email is null").is_empty());
-        assert!(q("with input as (select :q as q union all select 1) select id from users, input where input.q is null").is_empty());
-        assert!(q("with input as (select :q as q) select id from input where exists (select 1 from users where q is null)").is_empty());
+        assert_eq!(q("select id from users, (select cast(:q as signed) as q) as s where users.id = coalesce(s.q, users.id)"), ["q"]);
+        assert_eq!(q("select id from users join (select :q as q) s on coalesce(s.q, 0) = 0"), ["q"]);
+        assert_eq!(q("with input as (select :q as q) select id from users where exists (select 1 from input where coalesce(input.q, 0) = 0)"), ["q"]);
+        // Not the parameter: another column of the item, a coalesce of a table's column, a
+        // compound, and a bare name a table between could hold.
+        assert!(q("with input as (select :q as q, 1 as one) select id from users, input where coalesce(input.one, users.email) is null").is_empty());
+        assert!(q("with input as (select :q as q union all select 1) select id from users, input where coalesce(input.q, 0) = 0").is_empty());
+        assert!(q("with input as (select :q as q) select id from input where exists (select 1 from users where coalesce(q, 0) = 0)").is_empty());
         assert!(q("select id from users where name = :q").is_empty());
     }
 }

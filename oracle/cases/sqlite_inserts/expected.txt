@@ -1,7 +1,7 @@
 insert_copy.sql: none () -> {  }
-insert_select.sql: none (1: text, 2: numeric) -> {  }
+insert_select.sql: none (1: text?, 2: numeric) -> {  }
 insert_select_compound.sql: many (a: integer, b: text) -> { name: text, k: integer? }
-insert_select_returning.sql: many (meta: text, d: integer, n: integer) -> { name: text, meta: text?, k: integer? }
+insert_select_returning.sql: many (meta: text?, d: integer, n: integer) -> { name: text, meta: text?, k: integer? }
 numeric_column.sql: many (ready: numeric) -> { name: text }
 values_alone.sql: many (p: real, q: integer) -> { column1: integer, column2: text?, column3: real }
 values_one_row.sql: one () -> { column1: integer, column2: text }

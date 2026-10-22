@@ -84,6 +84,8 @@ pub struct ColumnInfo {
     pub declared: String,
     pub affinity: String,
     pub not_null: bool,
+    /// A CHECK of the table tests the column IS NOT NULL among its conjuncts: a write of NULL fails.
+    pub checked_not_null: bool,
     pub pk: bool,
     pub generated: bool,
     pub hidden: bool,

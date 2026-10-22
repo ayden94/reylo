@@ -81,8 +81,8 @@ const jsonQuery: QueryModule<"postgres"> = {
   params: ["s", "n", "b", "t", "z", "o", "e", "l"],
   inputs: { ...Object.fromEntries([..."snbtzoe"].map((k) => [k, { type: { kind: "json" as const } }])), l: { type: { kind: "array", of: { kind: "json" } } } },
 };
-const jsonValues = { s: "abc", n: 5, b: true, t: '{"a":1}', z: null, o: { d: new Date("2026-01-02T03:04:05Z") }, e: [], l: ["x", { a: 1 }, null, [true]] };
-const jsonTexts = ['"abc"', "5", "true", '"{\\"a\\":1}"', null, '{"d":"2026-01-02T03:04:05.000Z"}', "[]", '{"\\"x\\"","{\\"a\\":1}",NULL,"[true]"}'];
+const jsonValues = { s: "abc", n: 5, b: true, t: '{"a":1}', z: null, o: { d: new Date("2026-01-02T03:04:05Z") }, e: [], l: ["x", { a: 1 }, [true]] };
+const jsonTexts = ['"abc"', "5", "true", '"{\\"a\\":1}"', null, '{"d":"2026-01-02T03:04:05.000Z"}', "[]", '{"\\"x\\"","{\\"a\\":1}","[true]"}'];
 
 test("postgres: a JSON parameter's value is a JavaScript value, which every driver gets as its JSON text, a string as a JSON string, null as NULL", async () => {
   const seen: unknown[][] = [];
@@ -151,7 +151,7 @@ test("a Date for any date or time parameter, and a string without its zone for a
   };
   const seen: unknown[][] = [];
   const client = { query: async (_: string, values?: unknown[]) => (seen.push(values!), { rows: [] }) };
-  const ok = { at: "2026-10-12 19:06:48.282", day: "2026-10-12", tz: "1970-01-01T00:00:00Z", tzs: ["2026-10-12T19:06:48.282Z", "2026-10-12 19:06:48+09", "2026-10-12 19:06:48.5-07:30", "2026-10-12 19:06 America/Los_Angeles", "2026-10-12 19:06:48 UTC", "infinity", "-infinity", "0001-01-01 00:00:00+00 BC", null, "+010000-01-01T00:00:00Z"], days: [["2026-10-12"]] };
+  const ok = { at: "2026-10-12 19:06:48.282", day: "2026-10-12", tz: "1970-01-01T00:00:00Z", tzs: ["2026-10-12T19:06:48.282Z", "2026-10-12 19:06:48+09", "2026-10-12 19:06:48.5-07:30", "2026-10-12 19:06 America/Los_Angeles", "2026-10-12 19:06:48 UTC", "infinity", "-infinity", "0001-01-01 00:00:00+00 BC", "+010000-01-01T00:00:00Z"], days: [["2026-10-12"]] };
   await execute(client, q, ok);
   assert.equal(seen.length, 1);
   const refused = async (values: Record<string, unknown>, message: RegExp) => assert.rejects(Promise.resolve().then(() => execute(client, q, { ...ok, ...values })), (e: Error) => e instanceof TypeError && message.test(e.message));
@@ -163,6 +163,9 @@ test("a Date for any date or time parameter, and a string without its zone for a
   await refused({ tzs: ["2026-10-12T00:00:00Z", new Date(0)] }, /^Parameter "tzs" is a timestamptz, .*not a Date/);
   for (const tz of ["2026-10-12 19:06:48", "2026-10-12T19:06:48.282", "2026-10-12"]) await refused({ tz }, /^Parameter "tz" is a timestamptz, an instant, so a string for it names its zone/);
   await refused({ tzs: ["2026-10-12T00:00:00Z", "2026-10-12 19:06"] }, /^Parameter "tzs" is a timestamptz/);
+  // An array parameter takes no null element, as its type says (the maintainer, 2026-10-21), in any dimension.
+  await refused({ tzs: ["2026-10-12T00:00:00Z", null] }, /^Parameter "tzs" is an array whose elements may not be null, and the element at \[1\] is/);
+  await refused({ days: [["2026-10-12", undefined]] }, /^Parameter "days" is an array whose elements may not be null, and the element at \[0\]\[1\] is/);
   assert.equal(seen.length, 1);
   // MySQL's DATETIME and TIMESTAMP are the engine's timestamp, and a placeholder compared with both is either.
   const my: QueryModule<"mysql"> = { dialect: "mysql", sql: "select :at", params: ["at"], inputs: { at: time("date|timestamp") } };

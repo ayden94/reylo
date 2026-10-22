@@ -473,6 +473,30 @@ static void returningHook(Parse *pParse, Table *pTab, ExprList *pNew){
 
 /* ---- tables: columns and unique keys ------------------------------------------------------- */
 
+/* Whether a CHECK refuses NULL in column iCol: one of its conjuncts tests the column IS NOT NULL,
+** which NULL makes false where any other test of it would be NULL, and so pass. The CHECK's names
+** are resolved (TK_COLUMN) once the table is built, and still names (TK_ID) before. */
+static int refusesNull(Expr *p, Table *pTab, int iCol){
+  Expr *x;
+  if( p==0 ) return 0;
+  if( p->op==TK_AND ) return refusesNull(p->pLeft, pTab, iCol) || refusesNull(p->pRight, pTab, iCol);
+  if( p->op!=TK_NOTNULL ) return 0;
+  for(x=p->pLeft; x && x->op==TK_COLLATE; x=x->pLeft){}
+  if( x==0 ) return 0;
+  if( x->op==TK_COLUMN ) return x->iColumn==iCol;
+  if( x->op==TK_ID ) return sqlite3StrICmp(x->u.zToken, pTab->aCol[iCol].zCnName)==0;
+  return 0;
+}
+static int checkedNotNull(Table *pTab, int iCol){
+#ifndef SQLITE_OMIT_CHECK
+  int k;
+  for(k=0; pTab->pCheck && k<pTab->pCheck->nExpr; k++){
+    if( refusesNull(pTab->pCheck->a[k].pExpr, pTab, iCol) ) return 1;
+  }
+#endif
+  return 0;
+}
+
 static void tables(sqlite3_str *s){
   int t, i, k;
   sqlite3_str_appendchar(s, 1, '{');
@@ -491,6 +515,7 @@ static void tables(sqlite3_str *s){
       kv_str(s, "declared", sqlite3ColumnType(pCol, ""));
       kv_str(s, "affinity", affName(pCol->affinity));
       kv_bool(s, "notNull", pCol->notNull!=0);
+      kv_bool(s, "checkedNotNull", checkedNotNull(pTab, i));
       kv_bool(s, "pk", (pCol->colFlags & COLFLAG_PRIMKEY)!=0);
       kv_bool(s, "generated", (pCol->colFlags & COLFLAG_GENERATED)!=0);
       kv_bool(s, "hidden", (pCol->colFlags & COLFLAG_HIDDEN)!=0);

@@ -360,6 +360,13 @@ function statement(query: QueryModule, params: ParamsInput) {
       if (structured) bound.text = variant(bound.text, structured, type.fields, prepared.present);
       return;
     }
+    // An array parameter takes no NULL element, as its type says (`:ids::int[]` is `number[]`;
+    // the maintainer, 2026-10-21): a NULL in `= any(:ids)` matches nothing. An array inside a
+    // structured parameter's member keeps its NULL elements (src/rows.ts).
+    if (type?.kind === "array" && Array.isArray(bound.values[i])) {
+      const at = nullElement(bound.values[i] as unknown[]);
+      if (at !== undefined) throw new TypeError(`Parameter "${name}" is an array whose elements may not be null, and the element at ${at} is. Leave it out of the array.`);
+    }
     // A `::type` written on MySQL or SQLite, whose cast turns a value it cannot read into 0 or
     // NULL: the value is checked against the type as written.
     const cast = query.inputs?.[name]?.cast;
@@ -371,6 +378,19 @@ function statement(query: QueryModule, params: ParamsInput) {
   // structured parameter's is written already).
   if (query.dialect !== "postgres") bound.values = bound.values.map((v, i) => (isJsonValue(query, bound.names[i]!, v) && query.inputs?.[bound.names[i]!]?.type.kind !== "rows" ? JSON.stringify(v) : v));
   return bound;
+}
+
+/** Where an array, or an array inside it (a multidimensional one), holds null or undefined: `[2]`, `[1][0]`. */
+function nullElement(array: readonly unknown[], path = ""): string | undefined {
+  for (let i = 0; i < array.length; i++) {
+    const e = array[i];
+    if (e == null) return `${path}[${i}]`;
+    if (Array.isArray(e)) {
+      const inner = nullElement(e, `${path}[${i}]`);
+      if (inner !== undefined) return inner;
+    }
+  }
+  return undefined;
 }
 
 function value(params: Record<string, unknown>, name: string) {
