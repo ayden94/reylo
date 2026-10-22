@@ -65,7 +65,7 @@ create table events (
 
 ## Data types
 
-Reylo decodes every value of its own queries itself, on every driver, so each SQL type has one TypeScript type and one form at run time:
+Reylo decodes every value of its own queries itself, on every driver, so each SQL type has one TypeScript type and one form at run time. In each pair below the table, the SQL is a value and the JavaScript is what Reylo returns: `select <SQL> as v` gives the row `{ v: <JavaScript> }`.
 
 | SQL type | TypeScript | The value `.run()` returns |
 | --- | --- | --- |
@@ -155,9 +155,44 @@ A `bigint` is a JSON number, which `JSON.parse` rounds past 2^53 ([JSON](#json))
 
 A `numeric` is its exact text, `"12.50"`, with the column's scale, and so is an `avg()`. A `money` is its text in the server's currency format, `"$1.50"`.
 
-- A `real` is a 32-bit float: `Bun.sql`, which reads the binary protocol, gives its exact value, `1.100000023841858`, and the other drivers the shorter text's, `1.1`. A `double precision` is the same on every driver.
-- Inside JSON the statement builds, a `numeric` is a JSON number, which `JSON.parse` reads as a double: `12345678901234.123456` becomes `12345678901234.123`.
-- A `numeric` parameter takes the text, `"12.50"` ([What a parameter takes](#what-a-parameter-takes)).
+<Rules>
+
+**32-bit floats**
+
+A `real` is a 32-bit float, given as the shorter text Postgres writes, except on `Bun.sql` in a statement with a parameter. A `double precision` is the same on every driver.
+
+<Pairs>
+
+- `1.1::real` → `1.1`
+- `1.1::double precision` → `1.1`
+
+</Pairs>
+
+**On `Bun.sql`**
+
+In a statement with a parameter, `Bun.sql` reads the binary protocol and gives a `real`'s exact value; in one without, it reads the text, as the other drivers do. Here the statement has a parameter.
+
+<Pairs>
+
+- `1.1::real` → `1.100000023841858`
+
+</Pairs>
+
+**Inside JSON the statement builds**
+
+A `numeric` is a JSON number, which `JSON.parse` reads as a double.
+
+<Pairs>
+
+- `json_build_object('n', 12345678901234.123456::numeric)` → `{ n: 12345678901234.123 }`
+
+</Pairs>
+
+**Decimal parameters**
+
+A `numeric` parameter takes the text, `"12.50"` ([What a parameter takes](#what-a-parameter-takes)).
+
+</Rules>
 
 ### Dates and times
 
@@ -334,25 +369,89 @@ const row = await userRow.run(db, { id: 1 });
 select to_jsonb(u) as "user" from users u where u.id = :id::int
 ```
 
-- The `CHECK` may call pg_jsonschema's `jsonb_matches_schema` or `json_matches_schema`, or the validator of four other extensions (`jsonschema`, `postgres-json-schema`, `is_jsonb_valid`, `json_schema_validate`). Reylo knows each by the extension that defines it, never by its name, and reads only the keywords that validator enforces, under the draft it applies.
-- The schema's type reaches:
-  - a bare read of the column, through a view or a subquery too;
-  - the column inside JSON the statement builds;
-  - a whole stored row (`jsonb_agg(e)` over `from events e`);
-  - a parameter written whole to the column.
-- An expression over the column (`payload -> 'x'`) is `unknown`, and so is a column under a `union`, and one whose `CHECK` was added `NOT VALID`.
-- Built with `to_jsonb`, one value is `unknown`, and a whole row is the row's object.
-- Inside a document a value is what JSON writes: integers and `numeric` are numbers, which `JSON.parse` rounds past 2^53 on every driver; a date is its text in the session's time zone; a `bytea` is its hex text, `"\\x0102ff"`; a `boolean` is `true` or `false`.
-- Over no rows, `jsonb_agg` is `null`, and its type says so: `coalesce(jsonb_agg(…), '[]')` is the array alone.
-- A JSON parameter takes any JSON value, and a string is stored as a JSON string ([What a parameter takes](#what-a-parameter-takes)).
+<Rules>
+
+**The validators Reylo reads**
+
+The `CHECK` may call pg_jsonschema's `jsonb_matches_schema` or `json_matches_schema`, or the validator of four other extensions (`jsonschema`, `postgres-json-schema`, `is_jsonb_valid`, `json_schema_validate`). Reylo knows each by the extension that defines it, never by its name, and reads only the keywords that validator enforces, under the draft it applies.
+
+**Where the schema's type reaches**
+
+The schema's type reaches a bare read of the column, through a view or a subquery too; the column inside JSON the statement builds; a whole stored row (`jsonb_agg(e)` over `from events e`); and a parameter written whole to the column.
+
+**Where it stops**
+
+An expression over the column (`payload -> 'x'`) is `unknown`, and so is a column under a `union`, and one whose `CHECK` was added `NOT VALID`.
+
+**Built with `to_jsonb`**
+
+One value turned to JSON by `to_jsonb` is `unknown`, and a whole row is the row's object.
+
+**Values inside a document**
+
+Inside a document a value is what JSON writes: integers and `numeric` are numbers, which `JSON.parse` rounds past 2^53 on every driver; a `date` is its text, and a `timestamptz` its text in the session's time zone, here `America/Los_Angeles`; a `bytea` is its hex text; a `boolean` is `true` or `false`.
+
+<Pairs>
+
+- `jsonb_build_object('n', 9007199254740993::bigint)` → `{ n: 9007199254740992 }`
+- `jsonb_build_object('n', 12.50::numeric)` → `{ n: 12.5 }`
+- `jsonb_build_object('d', '2026-10-20'::date)` → `{ d: "2026-10-20" }`
+- `jsonb_build_object('at', '2026-10-20 08:00:00+00'::timestamptz)` → `{ at: "2026-10-20T01:00:00-07:00" }`
+- `jsonb_build_object('b', '\x0102ff'::bytea)` → `{ b: "\\x0102ff" }`
+- `jsonb_build_object('ok', true)` → `{ ok: true }`
+
+</Pairs>
+
+**Aggregates over no rows**
+
+Over no rows, `jsonb_agg` is `null`, and its type says so: `coalesce(jsonb_agg(…), '[]')` is the array alone.
+
+<Pairs>
+
+- `jsonb_agg(1) filter (where false)` → `null`
+- `coalesce(jsonb_agg(1) filter (where false), '[]')` → `[]`
+
+</Pairs>
+
+**JSON parameters**
+
+A JSON parameter takes any JSON value, and a string is stored as a JSON string ([What a parameter takes](#what-a-parameter-takes)).
+
+</Rules>
 
 ### Binary
 
 A `bytea` is a `Uint8Array`. Most drivers give Reylo a `Buffer`, which is one, so `.run()` returns it as it is.
 
-- Reylo reads both of Postgres's text forms, the hex form of the default `bytea_output` and the escape form.
-- A `bytea` parameter takes a `Uint8Array`, a `Buffer` or not, on every driver.
-- Inside JSON the statement builds, a `bytea` is its hex text, `"\\x0102ff"`.
+<Rules>
+
+**Both text forms**
+
+Reylo reads both of Postgres's text forms of a `bytea`, the hex form of the default `bytea_output` and the escape form. The second pair's session sets `bytea_output` to `escape`.
+
+<Pairs>
+
+- `'\x0102ff'::bytea` → `<Buffer 01 02 ff>`
+- `'\x0102ff'::bytea` → `Uint8Array(3) [ 1, 2, 255 ]`
+
+</Pairs>
+
+**Binary parameters**
+
+A `bytea` parameter takes a `Uint8Array`, a `Buffer` or not, on every driver.
+
+**Inside JSON the statement builds**
+
+A `bytea` is its text in the session's `bytea_output`: the hex form by default, and the escape form in the second pair, whose session sets `escape`.
+
+<Pairs>
+
+- `json_build_object('b', '\x0102ff'::bytea)` → `{ b: "\\x0102ff" }`
+- `json_build_object('b', '\x0102ff'::bytea)` → `{ b: "\\001\\002\\377" }`
+
+</Pairs>
+
+</Rules>
 
 ### Arrays
 
@@ -372,35 +471,144 @@ left join orders o on o.user_id = u.id
 group by u.id
 ```
 
-- Postgres lets any array hold `NULL`, whatever the column's `NOT NULL` says. A column's array is typed `string[]`, and a `NULL` element comes back as `null`. Where the statement builds the array from values that may be `NULL`, as `array_agg` over a `left join` does, the type says so: `(bigint | null)[]`.
-- The string `"NULL"` stays a string.
-- Postgres does not record how many dimensions an array has, so `'{{1,2},{3,4}}'::int[]` is typed `number[]` and comes back as nested arrays, `[[1, 2], [3, 4]]`.
-- An array with explicit bounds, `'[0:1]={5,6}'`, comes back as a plain array, `[5, 6]`.
-- An array of row values is its text, as a row value is.
-- An array parameter takes a JavaScript array on every driver, for a SQL array (`any(:ids)`, `:tags::text[]`) and for JSON (`:data::jsonb`) alike: Reylo writes it in the form the driver binds right.
+<Rules>
+
+**`NULL` elements**
+
+Postgres lets any array hold `NULL`, whatever the column's `NOT NULL` says. A `text[]` column is typed `string[]`, and a `NULL` element comes back as `null`. Where the statement builds the array from values that may be `NULL`, as `array_agg` over a `left join` does, the type says so: `(bigint | null)[]`.
+
+<Pairs>
+
+- `'{a,NULL}'::text[]` → `[ "a", null ]`
+
+</Pairs>
+
+**The string NULL**
+
+A quoted `"NULL"` element stays a string.
+
+<Pairs>
+
+- `'{"NULL"}'::text[]` → `[ "NULL" ]`
+
+</Pairs>
+
+**Several dimensions**
+
+Postgres does not record how many dimensions an array has, so a two-dimensional `int[]` is typed `number[]` and comes back as nested arrays. On `Bun.sql`, one in a statement with a parameter fails with Bun's own error, "Failed to read data", before Reylo sees it.
+
+<Pairs>
+
+- `'{{1,2},{3,4}}'::int[]` → `[ [ 1, 2 ], [ 3, 4 ] ]`
+
+</Pairs>
+
+**Explicit bounds**
+
+An array with explicit bounds comes back as a plain array, its bounds dropped. On `Bun.sql`, one in a statement without a parameter fails with Bun's own error, "Failed to read data", before Reylo sees it.
+
+<Pairs>
+
+- `'[0:1]={5,6}'::int[]` → `[ 5, 6 ]`
+
+</Pairs>
+
+**Arrays of row values**
+
+An array of row values is its text, as a row value is.
+
+<Pairs>
+
+- `array[row(1, 'Ada')]` → `"{\"(1,Ada)\"}"`
+
+</Pairs>
+
+**Array parameters**
+
+An array parameter takes a JavaScript array on every driver, for a SQL array (`any(:ids)`, `:tags::text[]`) and for JSON (`:data::jsonb`) alike: Reylo writes it in the form the driver binds right.
+
+</Rules>
 
 ### Enums and domains
 
 An enum is the union of its labels, and so is a `text` or `varchar` column whose `CHECK` keeps it to a list of strings (`kind in ('click', 'key')`). A domain is its base type: `orders.total`, an `amount`, is a `numeric`, so a `string`.
 
-- An array of an enum is an array of the union.
-- A parameter compared with an enum takes the union, and a value that is no label is Postgres's error, "invalid input value for enum".
-- A domain over `jsonb` whose `CHECK` holds it to a JSON Schema is what the schema admits.
-- A `CHECK` added `NOT VALID` narrows nothing, since rows written before it may not hold.
+<Rules>
+
+**Arrays of an enum**
+
+An array of an enum is an array of the union.
+
+<Pairs>
+
+- `'{admin,member}'::user_role[]` → `[ "admin", "member" ]`
+
+</Pairs>
+
+**Enum parameters**
+
+A parameter compared with an enum takes the union, and a value that is no label is Postgres's error, "invalid input value for enum".
+
+**Domains over JSON**
+
+A domain over `jsonb` whose `CHECK` holds it to a JSON Schema is what the schema admits.
+
+**Checks added `NOT VALID`**
+
+A `CHECK` added `NOT VALID` narrows nothing, since rows written before it may not hold.
+
+</Rules>
 
 ### Other types
 
 Every other type is the text Postgres writes for it, a `string`: `uuid`, `inet`, `cidr`, `macaddr`, ranges and multiranges, geometric types, `tsvector`, `xml`, `money`, and a type an extension creates.
 
-- A `char(n)` is padded with spaces to its length: `char(3)` holds `"c  "`.
-- A row value, or a column of a composite type, is its text, `"(1,Ada)"`. Inside JSON the statement builds, a composite is an object of its fields.
-- A function's result has the type the function declares.
+<Rules>
+
+**Fixed-length text**
+
+A `char(n)` is padded with spaces to its length.
+
+<Pairs>
+
+- `'c'::char(3)` → `"c  "`
+
+</Pairs>
+
+**Row values**
+
+A row value, or a column of a composite type, is its text. Inside JSON the statement builds, a composite is an object of its fields.
+
+<Pairs>
+
+- `row(1, 'Ada')` → `"(1,Ada)"`
+- `json_build_object('u', row(1, 'Ada'))` → `{ u: { f1: 1, f2: "Ada" } }`
+
+</Pairs>
+
+**Function results**
+
+A function's result has the type the function declares.
+
+</Rules>
 
 ### Values Reylo refuses
 
 Every Postgres driver but `Bun.sql` hands Reylo each value's text, which Reylo decodes itself, so one value is refused, with an error that names its column:
 
-- **A date before 1 AD on `Bun.sql`**, which Bun decodes as an Invalid Date before Reylo sees it. Reylo refuses it rather than return a wrong value.
+<Rules>
+
+**Dates before 1 AD on `Bun.sql`**
+
+Bun decodes a `date` before 1 AD as an Invalid Date before Reylo sees it, and so a `timestamp` or a `timestamptz` in a statement without a parameter. Reylo refuses each rather than return a wrong value.
+
+<Pairs>
+
+- `'0002-06-01 BC'::date` → `throws DecodeError: Column "v": the driver returned an Invalid Date, which is how Bun.sql decodes a date or timestamp before 1 AD. Reylo refuses it rather than return a wrong value.`
+
+</Pairs>
+
+</Rules>
 
 ## Nullability
 

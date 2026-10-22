@@ -60,6 +60,8 @@
   font-variant-ligatures: none;
   color: var(--color-fd-headings);
   overflow-wrap: break-word;
+  /* A padded value such as `"c  "` keeps its spaces, and a long one still wraps. */
+  white-space: pre-wrap;
 }
 
 /* The page's code colours, Shiki's GitHub themes as docs-kit shows them (style.css). */
