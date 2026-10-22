@@ -1310,3 +1310,74 @@ html #nd-page .prose :where(code):not(:where(pre code, [class~='not-prose'], [cl
 html #nd-page .prose table {
   font-size: 0.9375rem;
 }
+
+/* ── Steps ──────────────────────────────────────────────────────────────────
+   `<div className="dk-steps">` around a sequence of h3s makes them numbered steps: each h3 takes
+   its number in a disc on a rail down the left, and the content runs beside the rail. The h3s
+   are not the prose's direct children there, so their own rules are repeated for them. In a step
+   the number takes the margin, so the link icon joins the copy button at the right end of the
+   line, as on a narrow window. */
+#nd-page .prose .dk-steps {
+  counter-reset: dk-step;
+  position: relative;
+  padding-left: 2.75rem;
+  margin-top: 2rem;
+}
+#nd-page .prose .dk-steps::before {
+  content: '';
+  position: absolute;
+  left: calc(0.875rem - 0.5px);
+  top: 0.5rem;
+  bottom: 0;
+  width: 1px;
+  background: var(--color-fd-border);
+}
+#nd-page .prose .dk-steps > h3 {
+  position: relative;
+  color: var(--color-fd-headings);
+  font-size: 1.1875rem;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+  margin-top: 3.25rem;
+  margin-bottom: calc(0.6em + 0.5rem);
+}
+#nd-page .prose .dk-steps > h3:first-child { margin-top: 0; }
+#nd-page .prose .dk-steps > h3::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -0.5rem;
+  height: 1px;
+  background-color: color-mix(in oklab, var(--color-fd-border) 80%, transparent);
+  pointer-events: none;
+}
+#nd-page .prose .dk-steps > h3::before {
+  counter-increment: dk-step;
+  content: counter(dk-step);
+  position: absolute;
+  left: -2.75rem;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--color-fd-background);
+  background: var(--dk-accent);
+}
+/* In a step, the number takes the margin, so the link icon joins the copy button at the right end
+   of the line, as on a narrow window. */
+#nd-page .prose .dk-steps > h3 .dk-anchor {
+  position: static;
+  translate: none;
+  order: 2;
+  margin-inline-end: -0.5rem;
+  padding: 0.3125rem;
+}
+#nd-page .prose .dk-steps > h3 .dk-copy-section { order: 3; }

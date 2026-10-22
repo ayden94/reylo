@@ -322,3 +322,11 @@
   color: var(--color-fd-muted-foreground);
   white-space: nowrap;
 }
+
+
+/* Setup's optional step, the editor: its number is an outline rather than a filled disc. */
+#nd-page .prose .dk-steps > h3#editors::before {
+  background: transparent;
+  color: var(--dk-accent);
+  box-shadow: inset 0 0 0 1.5px var(--dk-accent);
+}

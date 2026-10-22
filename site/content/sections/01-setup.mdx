@@ -31,6 +31,10 @@ Each setup has a complete, working example project to copy, whose README's "How 
 
 </AgentPrompt>
 
+Then set Reylo up in five steps:
+
+<div className="dk-steps">
+
 ### Install
 
 Install Reylo, the engine for your database and TypeScript 7.1:
@@ -64,7 +68,7 @@ Then type-check with `--runExternalCode`, which lets `tsc` run content mappers:
 }
 ```
 
-### Plugins
+### Runtime / framework [#plugins]
 
 Install the plugin for your runtime or framework of choice:
 
@@ -256,7 +260,7 @@ For a complete, working project, copy the example for your setup. Its README, un
 | Jest | [examples/jest](https://github.com/colinhacks/reylo/tree/main/examples/jest) | SQLite, `better-sqlite3` |
 | Cloudflare Workers | [examples/cloudflare-workers](https://github.com/colinhacks/reylo/tree/main/examples/cloudflare-workers) | SQLite, Cloudflare D1 |
 
-### Editors
+### Editor (optional) [#editors]
 
 Set up your editor to use the TypeScript 7.1 language server, with content mappers on. Then a hover over a query shows its types, an error in a `.sql` file is underlined where it is, and go-to-definition on a query opens its `.sql` file.
 
@@ -378,3 +382,4 @@ Or specify a set of `.env` files to load:
 env: [.env.development, .env]
 ```
 
+</div>
