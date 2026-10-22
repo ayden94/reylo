@@ -103,7 +103,10 @@ export BINDGEN_EXTRA_CLANG_ARGS_wasm32_wasip1="--sysroot=$SYSROOT --target=wasm3
 # (src/stack.rs) needs about 0.5 MiB of it. libpg_query cannot find the bounds of a WebAssembly
 # stack and keeps its default budget of 100 kB of it, which stops a statement nested about twice
 # that deep while the JavaScript engine's own stack, which every wasm call also spends, has room.
-export CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="-C link-arg=-L$SYSROOT/lib/wasm32-wasip1 -C link-arg=-lwasi-emulated-signal -C link-arg=-lwasi-emulated-process-clocks -C link-arg=-lwasi-emulated-mman -C link-arg=-lwasi-emulated-getpid -C link-arg=-lsetjmp -C link-arg=-zstack-size=8388608 --remap-path-prefix=$REPO_ROOT=/reylo --remap-path-prefix=$CARGO_HOME_DIR=/cargo"
+# `--compress-relocations` writes each index and address the linker fills in at its own length
+# rather than padded to five bytes, which needs the artifact stripped (`CARGO_PROFILE_RELEASE_STRIP`
+# below); together they leave out a quarter of each artifact and change no instruction.
+export CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="-C link-arg=-L$SYSROOT/lib/wasm32-wasip1 -C link-arg=-lwasi-emulated-signal -C link-arg=-lwasi-emulated-process-clocks -C link-arg=-lwasi-emulated-mman -C link-arg=-lwasi-emulated-getpid -C link-arg=-lsetjmp -C link-arg=-zstack-size=8388608 -C link-arg=--compress-relocations --remap-path-prefix=$REPO_ROOT=/reylo --remap-path-prefix=$CARGO_HOME_DIR=/cargo"
 
 # The artifacts asked for, every database's by default.
 if [ $# -gt 0 ]; then WANTED=("$@"); else WANTED=("${DATABASES[@]}"); fi
@@ -122,8 +125,10 @@ done
 # inlines across crates into larger frames, every wasm frame is a frame on the JavaScript engine's
 # own stack, and the depth a statement may nest (`core/src/stack.rs`) and the loader's depth tests
 # were measured on code built this way; with LTO a MySQL statement at the bound overflows Node's
-# stack. One invocation for every artifact, so the crates they share are built once.
-export CARGO_PROFILE_RELEASE_OPT_LEVEL=s CARGO_PROFILE_RELEASE_LTO=false
+# stack. One invocation for every artifact, so the crates they share are built once. The artifacts
+# are stripped of the name section, the name of every function, which only a stack trace reads: a
+# trap reports `wasm-function[N]` instead, which a build of the same commit without the strip names.
+export CARGO_PROFILE_RELEASE_OPT_LEVEL=s CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_STRIP=symbols
 TARGET_DIR="${CARGO_TARGET_DIR:-$(cd .. && pwd)/target}"
 cargo build --release --target wasm32-wasip1 "${PACKAGES[@]}"
 for db in "${WANTED[@]}"; do
