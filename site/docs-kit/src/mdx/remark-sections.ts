@@ -140,6 +140,8 @@ function cleanProse(text: string): string {
     text
       // MDX comments.
       .replace(/\{\/\*[\s\S]*?\*\/\}\n?/g, '')
+      // A heading's custom id (`### Name [#id]`), which only the HTML anchor reads.
+      .replace(/^(#{1,6}[ \t].*?)[ \t]+\[#[^\]\s]+\][ \t]*$/gm, '$1')
       // A callout as a quote, its title in bold.
       .replace(/<Callout[^>]*?title="([^"]*)"[^>]*>\s*([\s\S]*?)\s*<\/Callout>/g, (_, title: string, body: string) => `> **${title}.** ${body.replace(/\n/g, '\n> ')}`)
       .replace(/<Callout[^>]*>\s*([\s\S]*?)\s*<\/Callout>/g, (_, body: string) => `> ${body.replace(/\n/g, '\n> ')}`)
