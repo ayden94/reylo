@@ -309,3 +309,17 @@
     right: 0.5rem;
   }
 }
+
+/* A card or an example on one database only says so in a light gray label where the switch would
+   be (components/dialect-tabs.tsx), in the switch's face and size. */
+#nd-page .reylo-dialect-only {
+  display: inline-block;
+  margin-inline-start: auto;
+  padding: 11px 8px 3px;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--color-fd-muted-foreground);
+  white-space: nowrap;
+}
