@@ -717,7 +717,7 @@ Write each parameter as `:name`. Reylo sends `$1`, `$2`, … and `.run()` takes 
 
 ### What a parameter takes
 
-Every value `.run()` returns goes back in as a parameter of its type, on every driver, so a row can be passed straight to the next statement:
+Every value `.run()` returns goes back in as a parameter of its type, on every driver, so a row can be passed straight to the next statement; a `null` goes back in where the parameter takes one ([Parameters that may be null](#parameters-that-may-be-null)):
 
 | SQL type | A parameter takes |
 | --- | --- |
@@ -729,7 +729,7 @@ Every value `.run()` returns goes back in as a parameter of its type, on every d
 | `timestamptz` | a `string` that names its zone |
 | `json`, `jsonb` | any JSON value, or what the column's JSON Schema admits |
 | `bytea` | `Uint8Array` |
-| An array | an array of its element's parameter type or `null` |
+| An array | an array of its element's parameter type |
 | An enum | the union of its labels |
 
 - The parameters of `limit :n` and `offset :n` are `bigint`, so they take a `number` too.
@@ -739,7 +739,7 @@ Every value `.run()` returns goes back in as a parameter of its type, on every d
 - Postgres refuses the extended years a `timestamptz` comes back with, `+010000-…` and `0000`, so Reylo writes them as `10000-…` and `… BC`, and the value goes back in.
 - A JSON parameter reaches the database as its JSON text on every driver, so a string is a JSON string: `'{"a":1}'` is stored as the string `"{\"a\":1}"`. To pass JSON text you already hold, cast it from text: `:data::text::jsonb`.
 - A typed JSON parameter, `:events::jsonb('…')`, reaches Postgres as `$1::jsonb` (or `$1::json`) holding its JSON text, after `.run()` has filled in its schema's defaults and checked the value against the schema.
-- An array's elements take `null`, which binds `NULL`, so an array that comes back with `NULL` elements goes back in.
+- An array's elements never take `null`, and `.run()` refuses an array that holds one: `id = any(:ids)` matches nothing for a `NULL` element.
 
 ### Parameters without a type
 
@@ -753,12 +753,12 @@ A bare `select :x` is `text`, so a `string`. Where nothing types it, as in `sele
 
 ### Parameters that may be null
 
-A parameter is `| null` only where the statement lets it be:
+A parameter takes `null` in two places:
 
-- where it tests it for null or coalesces it;
-- where it writes it whole to a column that may hold `NULL`.
+- as the first argument of `coalesce`, with a cast or without;
+- written whole, with no cast, to a column that may hold `NULL`.
 
-A test for null needs a cast, since `:role is null` alone gives Postgres nothing to type, and the parameter appears once, so select it in a `with`:
+A cast is the parameter's whole type, so `:email::text` never takes `null`, and a test for null (`:role is null`, `is not distinct from`) makes nothing nullable. A column holds `NULL` unless it is `NOT NULL`, its domain is declared `not null`, or a `check (… is not null)` holds it:
 
 ```ts twoslash tab="main.ts"
 import usersByRole from "./pg_users_by_role.sql";
@@ -768,12 +768,9 @@ const users = await usersByRole.run(db, { role: null });
 ```
 
 ```sql tab="pg_users_by_role.sql"
-with input as (select :role::user_role as role)
-select u.id, u.name from users u, input
-where input.role is null or u.role = input.role
+select id, name from users
+where role = coalesce(:role::user_role, role)
 ```
-
-The one-line form is `where u.role = coalesce(:role, u.role)`.
 
 ### Casts
 

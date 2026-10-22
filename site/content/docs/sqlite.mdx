@@ -677,7 +677,7 @@ Write each parameter as `:name`, or as SQLite's own `@name` or `$name`, one pref
 
 ### What a parameter takes
 
-Every value `.run()` returns goes back in as a parameter of its type, on every driver, so a row can be passed straight to the next statement:
+Every value `.run()` returns goes back in as a parameter of its type, on every driver, so a row can be passed straight to the next statement; a `null` goes back in where the parameter takes one ([Parameters that may be null](#parameters-that-may-be-null)):
 
 | Affinity | A parameter takes |
 | --- | --- |
@@ -716,12 +716,12 @@ By default such a parameter is an error in the type check, which asks for a cast
 
 ### Parameters that may be null
 
-A parameter is `| null` only where the statement lets it be:
+A parameter takes `null` in two places:
 
-- where it tests it for null or coalesces it;
-- where it writes it whole to a column that may hold `NULL`.
+- as the first argument of `coalesce` or `ifnull`, with a cast or without;
+- written whole, with no cast, to a column that may hold `NULL`.
 
-A test for null types nothing on SQLite, so cast the parameter, and select it in a `with` to read it twice:
+A cast is the parameter's whole type, so `:email::text` never takes `null`, and a test for null (`:p is null`, `:p is col`) makes nothing nullable. A column holds `NULL` unless it is `NOT NULL` or a `check (… is not null)` holds it:
 
 ```ts twoslash tab="main.ts"
 import usersByNick from "./lite_users_by_nick.sql";
@@ -731,12 +731,9 @@ const users = await usersByNick.run(db, { nick: null });
 ```
 
 ```sql tab="lite_users_by_nick.sql" dialect="sqlite"
-with input as (select cast(:nick as text) as nick)
-select users.id, users.name from users, input
-where input.nick is null or users.nick = input.nick
+select id, name from users
+where nick = coalesce(:nick::text, nick)
 ```
-
-The one-line form is `where nick = coalesce(:nick, nick)`.
 
 ### Casts
 
