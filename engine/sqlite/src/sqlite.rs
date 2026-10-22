@@ -2684,12 +2684,12 @@ mod tests {
         // recursion, the reading of its tree and the walks over it run on the engine's stack.
         let ddl = vec!["create table users (id integer primary key, name text not null, nick text)".to_string()];
         let small = |sql: String| std::thread::scope(|s| std::thread::Builder::new().stack_size(256 << 10).spawn_scoped(s, || analyze_ddl(&sql, &ddl, &Extras::default()).analysis).unwrap().join().unwrap());
-        // SQLite's own bound is 1,000; the engine's SQLite takes half of it (`csrc/reylo_sqlite.c`).
-        for (shape, n) in [("sum", 500), ("and_or", 498), ("case", 498), ("coalesce", 499), ("subquery", 29)] {
+        // SQLite's own bound is 1,000; the engine's SQLite takes 350 (`csrc/reylo_sqlite.c`).
+        for (shape, n) in [("sum", 350), ("and_or", 348), ("case", 348), ("coalesce", 349), ("subquery", 23)] {
             let at = small(crate::stack::nested(shape, n));
             assert!(at.diagnostics.is_empty() && at.kind == "select", "{shape} at {n}: {:?}", at.diagnostics);
             let past = small(crate::stack::nested(shape, n + 1));
-            assert_eq!(past.diagnostics.iter().map(|d| d.message.as_str()).collect::<Vec<_>>(), ["Expression tree is too large (maximum depth 500)"], "{shape} at {}", n + 1);
+            assert_eq!(past.diagnostics.iter().map(|d| d.message.as_str()).collect::<Vec<_>>(), ["Expression tree is too large (maximum depth 350)"], "{shape} at {}", n + 1);
         }
         // A list does not nest: SQLite's OR is a tree, which its bound counts; an IN list is not.
         let list = (0..5_000).map(|i| i.to_string()).collect::<Vec<_>>().join(", ");

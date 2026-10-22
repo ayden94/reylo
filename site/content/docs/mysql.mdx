@@ -655,5 +655,5 @@ The edges of what Reylo types on MySQL, each with what to write instead:
 - **A statement Reylo's parser does not read.** Reylo reads the statement itself for row counts and JSON shapes. One it cannot read keeps the server's types and nullability, resolves to `Row[]`, and its JSON is `unknown`.
 - **A `with` before an `insert`.** MySQL 8.4 refuses `with … insert`, so a `with` follows `insert into … (…)`, as in the main docs' [JSON parameters](/#typed-json).
 - **A parameter in place of a name.** A parameter is a value: `select * from :table` is MySQL's syntax error, and `order by :column` sorts by a constant. Choose a column with `case :sort when 'name' then name end`.
-- **A statement with more than 500 operators** (`a + b + …`, `x = 1 or x = 2 or …`), or nested past 1,000 levels, which Reylo types from the server's description alone: any number of rows.
+- **A statement with more than 500 operators** (`a + b + …`, `x = 1 or x = 2 or …`), or nested past 200 levels (196 nested function calls, 195 nested `case`s or 97 nested subqueries), which Reylo types from the server's description alone: any number of rows.
 - **One statement per file.** A file holds one `select`, `insert`, `update`, `delete`, `replace`, `values` or `table`. A `call` is an error in the type check, and so is a file of several statements or of DDL, such as a migration.

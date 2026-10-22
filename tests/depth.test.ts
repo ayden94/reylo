@@ -5,13 +5,14 @@ import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Engine, enginePath, type Dialect, type EngineIo } from "../src/engine.ts";
+import { Engine, engine, enginePath, type Dialect, type EngineIo } from "../src/engine.ts";
 import { Session } from "../src/analyze.ts";
 
 // How deeply a statement may nest for the engine to read it: libpg_query hands over at most 1,000
 // levels of a parse tree (engine/core/src/stack.rs), the same in the WebAssembly engine as in every
-// native host, and the embedded SQLite half SQLite's own bound of 1,000. These are the deepest
-// statements of each shape that parse, as engine/core/src/stack.rs's tests have them.
+// native host, and the embedded SQLite reads an expression 350 deep, where SQLite's own bound is
+// 1,000. These are the deepest statements of each shape that parse, as engine/core/src/stack.rs's
+// tests have them.
 function nested(shape: string, n: number): string {
   const fold = (start: string, f: (s: string, i: number) => string) => Array.from({ length: n }, (_, i) => i).reduce(f, start);
   switch (shape) {
@@ -28,10 +29,11 @@ function nested(shape: string, n: number): string {
   throw new Error(`no shape ${shape}`);
 }
 const POSTGRES_BOUNDS: [string, number][] = [["sum", 496], ["concat", 496], ["and_or", 495], ["case", 493], ["coalesce", 495], ["json", 495], ["subquery", 164]];
-const SQLITE_BOUNDS: [string, number][] = [["sum", 500], ["and_or", 498], ["case", 498], ["coalesce", 499], ["subquery", 29]];
-// MySQL's statements are read by sqlparser with the same bound, which counts each operator of a
-// chain (`id = 0 or (…)` is two a level), as engine/mysql/src/mysql.rs's tests have them.
-const MYSQL_BOUNDS: [string, number][] = [["sum", 501], ["and_or", 248], ["case", 495], ["coalesce", 496], ["subquery", 247]];
+const SQLITE_BOUNDS: [string, number][] = [["sum", 350], ["and_or", 348], ["case", 348], ["coalesce", 349], ["subquery", 23]];
+// MySQL's statements are read by sqlparser with a fifth of the bound, 200 levels of its recursion,
+// which a parenthesized operand (`id = 0 or (…)`) and a subquery each spend two of, and at most 500
+// operators, as engine/mysql/src/mysql.rs's tests have them.
+const MYSQL_BOUNDS: [string, number][] = [["sum", 501], ["and_or", 98], ["case", 195], ["coalesce", 196], ["subquery", 97]];
 
 // A server that describes every statement as one int4 column and answers every catalog query with
 // no rows: enough for the engine to parse the statement and run every pass over its tree.
@@ -45,16 +47,38 @@ const io: EngineIo = {
   },
 };
 
-// The host's own frames on the stack below every call into the engine: about 45% of the stack
-// Node gives its main thread, which the engine shares with its caller.
-const HOST_FRAMES = 4_000;
+// The host's own frames on the stack below every call into the engine: 45% of the stack Node
+// gives its main thread, which the engine shares with its caller. They are counted before each
+// call as a share of the frames of `deep` that fit, since a frame's size is whatever V8 has
+// compiled `deep` to by then: a fixed 4,000 frames were 45% of the stack while it was interpreted
+// and a third once it was optimized.
+const HOST_SHARE = 0.45;
 const deep = <T>(n: number, f: () => T): T => (n === 0 ? f() : deep(n - 1, f));
+/** How many frames of `deep` fit on the stack from here. */
+function room(): number {
+  let fits = 0;
+  let overflows = 1 << 20;
+  while (overflows - fits > 1) {
+    const n = (fits + overflows) >>> 1;
+    try {
+      deep(n, () => n);
+      fits = n;
+    } catch (e) {
+      if (!(e instanceof RangeError)) throw e;
+      overflows = n;
+    }
+  }
+  return fits;
+}
+/** The engine, with every call it is made beneath the host's frames. */
+function hosted(instance: Engine): Engine {
+  const call = instance.call.bind(instance);
+  instance.call = (request: object) => deep(Math.floor(HOST_SHARE * room()), () => call(request));
+  return instance;
+}
 /** A fresh instance of the dialect's engine, as the repository installs it, whose calls this file wraps. */
 async function loaded(dialect: Dialect): Promise<Engine> {
-  const engine = await Engine.load(enginePath(dialect, fileURLToPath(new URL("..", import.meta.url)))!);
-  const call = engine.call.bind(engine);
-  engine.call = (request: object) => deep(HOST_FRAMES, () => call(request));
-  return engine;
+  return hosted(await Engine.load(enginePath(dialect, fileURLToPath(new URL("..", import.meta.url)))!));
 }
 
 test("a Postgres statement nested to the bound is read whole, one level past it falls back to the describe, and the engine goes on", async () => {
@@ -83,6 +107,8 @@ test("a SQLite statement nested to the engine's bound is typed, and one level pa
   const db = new DatabaseSync(join(root, "app.db"));
   db.exec("create table users (id integer primary key, name text not null, nick text)");
   db.close();
+  // The session analyzes with the process's one instance of the SQLite engine, which this wraps.
+  hosted(await engine("sqlite", root));
   const session = await Session.open(root, { DATABASE_URL: "file:./app.db" });
   try {
     for (const [shape, n] of SQLITE_BOUNDS) {
@@ -90,7 +116,7 @@ test("a SQLite statement nested to the engine's bound is typed, and one level pa
       assert.ok(at.ok && at.analysis.kind === "select" && at.analysis.diagnostics.length === 0, `${shape} at ${n}: ${JSON.stringify(at).slice(0, 300)}`);
       const past = await session.analyze(nested(shape, n + 1), { force: true });
       assert.ok(past.ok, `${shape} at ${n + 1}`);
-      assert.deepEqual(past.ok && past.analysis.diagnostics.map((d) => d.message), ["Expression tree is too large (maximum depth 500)"], `${shape} at ${n + 1}`);
+      assert.deepEqual(past.ok && past.analysis.diagnostics.map((d) => d.message), ["Expression tree is too large (maximum depth 350)"], `${shape} at ${n + 1}`);
     }
     const plain = await session.analyze("select id, name from users where id = :id", { force: true });
     assert.ok(plain.ok && plain.analysis.cardinality === "maybeOne");

@@ -797,5 +797,5 @@ The edges of what Reylo types on SQLite, each with what to write instead:
   - Such a value is `null` where the type says `number`: `1e999 * 0`, `price - price` where `price` holds `1e999`, and `5 % 0.5`, whose divisor `%` reads as the integer 0.
   - Write `coalesce(price * qty, 0)` where a `REAL` may hold an infinity. An overflow is no such case: `9e307 * 9e307` is `Infinity`.
 - **A parameter in place of a name.** A parameter is a value: `select * from :table` is SQLite's syntax error, and `order by :column` sorts by a constant. Choose a column with `case :sort when 'name' then name end`.
-- **A statement nested deeper than 500 expressions**, which is SQLite's error, "Expression tree is too large".
+- **A statement nested deeper than 350 expressions**, which is SQLite's error, "Expression tree is too large".
 - **One statement per file.** A file holds one `select`, `insert`, `update`, `delete`, `replace` or `values`. A file of several statements or of DDL, such as a migration, is an error in the type check.

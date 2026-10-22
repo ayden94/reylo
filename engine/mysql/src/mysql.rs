@@ -909,14 +909,23 @@ fn opens_without_result_sets(sql: &str) -> bool {
     matches!(first, Some(Some(Keyword::DELETE | Keyword::UPDATE | Keyword::INSERT | Keyword::REPLACE | Keyword::SELECT | Keyword::WITH)))
 }
 
-/// Parse with the depth bound the Postgres parser has ([`crate::stack::MAX_DEPTH`] messages, about
-/// 500 levels of expression) in place of sqlparser's default of 50, so a statement nests as deeply
-/// on MySQL as on Postgres before only the server's describe is left. sqlparser's bound counts
-/// only its own recursion, and it reads a chain of operators (`a + b + …`, `x = 1 or x = 2 or …`)
-/// in a loop into a tree as deep as the chain, which every walk of the engine and the tree's drop
-/// then recurse through: so a statement with more operators than the bound is refused before it
-/// is read. That counts operators in separate expressions together, and only ever leaves a
-/// statement to the describe that a deeper bound would have read.
+/// Parse with a depth bound of a fifth of [`crate::stack::MAX_DEPTH`] in place of sqlparser's
+/// default of 50: 200 levels of its recursion, which are 196 nested function calls (`coalesce`,
+/// `abs`, `json_object`), 195 nested `CASE`s, or 97 nested subqueries, which spend two levels each.
+/// It is less than the Postgres parser's 500 levels because in the WebAssembly engine sqlparser's
+/// recursion runs on the JavaScript engine's own stack, which a host shares (`core/src/stack.rs`),
+/// at about twice libpg_query's cost a level: a nested function call is eight frames of the parser,
+/// some 2 kB of Node's stack once V8 has optimized them, so under the Postgres bound 496 nested
+/// `coalesce`s needed two thirds of Node's stack before V8 optimized the engine and, on Node 24,
+/// more than all of it after. At 200 the deepest statement of every shape needs at most 42% of it,
+/// as on Postgres, whatever V8 has compiled the engine to (measured on Node 24 and 26, 2026-10-21).
+/// sqlparser's bound counts only its own recursion, and it reads a chain of operators (`a + b + …`,
+/// `x = 1 or x = 2 or …`) in a loop into a tree as deep as the chain, which every walk of the
+/// engine and the tree's drop then recurse through: so a statement with more operators than half of
+/// [`crate::stack::MAX_DEPTH`] is refused before it is read, a bound of its own, since those walks
+/// cost a fraction of the parser's recursion (501 terms need 15% of the stack). That counts
+/// operators in separate expressions together, and only ever leaves a statement to the describe
+/// that a deeper bound would have read.
 ///
 /// MySQL's compound interval units (`interval '1:30' minute_second`, `extract(day_hour from d)`)
 /// are not sqlparser's (0.63 refuses the statement), so each is read as its smallest part, the
@@ -928,7 +937,6 @@ fn opens_without_result_sets(sql: &str) -> bool {
 fn parse(dialect: &dyn sqlparser::dialect::Dialect, sql: &str) -> Result<Vec<Statement>, sqlparser::parser::ParserError> {
     use sqlparser::keywords::Keyword;
     use sqlparser::tokenizer::{Token, Word};
-    let bound = crate::stack::MAX_DEPTH / 2;
     let mut tokens = sqlparser::tokenizer::Tokenizer::new(dialect, sql).tokenize_with_location()?;
     for t in tokens.iter_mut() {
         let Token::Word(w) = &t.token else { continue };
@@ -956,10 +964,10 @@ fn parse(dialect: &dyn sqlparser::dialect::Dialect, sql: &str) -> Result<Vec<Sta
             t => !matches!(t.to_string().chars().next(), Some('\'' | '"' | '`' | 'X' | 'x' | 'N' | 'B' | 'b')),
         })
         .count();
-    if operators > bound {
+    if operators > crate::stack::MAX_DEPTH / 2 {
         return Err(sqlparser::parser::ParserError::RecursionLimitExceeded);
     }
-    Parser::new(dialect).with_recursion_limit(bound).with_tokens_with_locations(tokens).parse_statements()
+    Parser::new(dialect).with_recursion_limit(crate::stack::MAX_DEPTH / 5).with_tokens_with_locations(tokens).parse_statements()
 }
 
 /// What may reach each item of a probe's select list. A probe is the engine's own text, where a
@@ -1962,13 +1970,14 @@ mod tests {
     }
 
     #[test]
-    fn statements_nest_as_deeply_as_on_postgres() {
-        // sqlparser's own bound is 50; the engine's is the Postgres parser's. A chain of operators
-        // counts every operator (`id = 0 or (…)` is two a level), and a statement past the bound is
-        // an error to parse, left to the server's describe, never an overflow of the stack.
+    fn statements_nest_to_the_engines_bound() {
+        // sqlparser's own bound is 50; the engine's is 200 levels of its recursion, which a
+        // parenthesized operand (`id = 0 or (…)`) and a subquery each spend two of, and 500
+        // operators in all. A statement past either is an error to parse, left to the server's
+        // describe, never an overflow of the stack.
         let deepest = |shape: &str| crate::stack::run(|| (1..1_000).take_while(|&n| parse(&MySqlDialect {}, &crate::stack::nested(shape, n)).is_ok()).last().unwrap_or(0));
         let found: Vec<(&str, usize)> = ["sum", "and_or", "case", "coalesce", "subquery"].into_iter().map(|shape| (shape, deepest(shape))).collect();
-        assert_eq!(found, vec![("sum", 501), ("and_or", 248), ("case", 495), ("coalesce", 496), ("subquery", 247)]);
+        assert_eq!(found, vec![("sum", 501), ("and_or", 98), ("case", 195), ("coalesce", 196), ("subquery", 97)]);
         for shape in ["sum", "case", "or", "and_or"] {
             assert!(crate::stack::run(|| parse(&MySqlDialect {}, &crate::stack::nested(shape, 100_000)).is_err()), "{shape}");
         }

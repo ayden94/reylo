@@ -728,7 +728,7 @@ static char *missingSchema(const char *zSql, const char *zMsg, int *piOfst, int 
 }
 
 /* How deep the user's statement may nest: see reylo_sqlite_analyze. */
-#define REYLO_SQLITE_EXPR_DEPTH 500
+#define REYLO_SQLITE_EXPR_DEPTH 350
 
 /*
 ** Analyzes one statement against the schema DDL, with the host's scalar functions (azFn[i] taking
@@ -762,10 +762,13 @@ char *reylo_sqlite_analyze(
   gHost = azHost; gnHost = nHost; gExtra = azFn; gnExtra = nFn; gnDenied = 0; gDeniedView = 0;
   if( nHost>=0 ) sqlite3_set_authorizer(gDb, functionAuth, 0);
   installHooks(1);
-  /* The statement's expressions nest at most REYLO_SQLITE_EXPR_DEPTH deep, half SQLite's own
-  ** bound: the analysis of a tree that deep is what the WebAssembly engine can afford on the
-  ** JavaScript engine's stack, as libpg_query's bound is for Postgres (src/stack.rs). The schema's
-  ** own statements keep SQLite's bound. */
+  /* The statement's expressions nest at most REYLO_SQLITE_EXPR_DEPTH deep, 350 where SQLite's own
+  ** bound is 1,000: the analysis of a tree that deep is what the WebAssembly engine can afford on
+  ** the JavaScript engine's stack beside a host that holds 45% of it, as libpg_query's bound is
+  ** for Postgres (core/src/stack.rs). At 500, a nested CASE or function call needed 55% of Node's
+  ** stack before V8 optimized the engine and 62% after on Node 24; at 350 the deepest statement
+  ** of every shape needs at most 42% (measured on Node 24 and 26, 2026-10-21). The schema's own
+  ** statements keep SQLite's bound. */
   nDepth = sqlite3_limit(gDb, SQLITE_LIMIT_EXPR_DEPTH, REYLO_SQLITE_EXPR_DEPTH);
   rc = sqlite3_prepare_v2(gDb, zSql, -1, &pStmt, &zTail);
   sqlite3_limit(gDb, SQLITE_LIMIT_EXPR_DEPTH, nDepth);
