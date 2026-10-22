@@ -324,10 +324,19 @@
 }
 
 
-/* Setup's optional step, the editor: its number is an outline rather than a filled disc, on the
-   page's background so that the rail stops at its edge. */
-#nd-page .prose .dk-steps > h3#editors::before {
-  background: var(--color-fd-background);
-  color: var(--dk-accent);
-  box-shadow: inset 0 0 0 1.5px var(--dk-accent);
+/* Setup's optional step, the editor: a chip after its name. It is drawn by the stylesheet, so the
+   table of contents, the anchor and the section's Markdown keep the name alone. */
+#nd-page .prose .dk-steps > h3#editors .dk-heading-text::after {
+  content: 'Optional';
+  display: inline-block;
+  margin-left: 0.6rem;
+  padding: 0.1rem 0.5rem;
+  vertical-align: 0.15em;
+  border: 1px solid var(--color-fd-border);
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: 0.01em;
+  color: var(--color-fd-muted-foreground);
 }
