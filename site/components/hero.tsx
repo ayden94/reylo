@@ -12,7 +12,23 @@ export function HeroTitle({ children }: { children: ReactNode }) {
   return (
     <span className="hero-title">
       <svg viewBox="0 0 400 235.47" fill="currentColor" aria-hidden="true" className="hero-mark">
-        <path d={wordmark.mark} />
+        <defs>
+          {/* The bloom: the mark's shape blurred twice, near and far, lit gold and amber (app/global.css, .hero-bloom-*). */}
+          <filter id="hero-bloom" x="-40%" y="-60%" width="180%" height="220%" colorInterpolationFilters="sRGB">
+            <feGaussianBlur in="SourceAlpha" stdDeviation="8" result="near" />
+            <feFlood className="hero-bloom-near" />
+            <feComposite in2="near" operator="in" result="nearLight" />
+            <feGaussianBlur in="SourceAlpha" stdDeviation="22" result="far" />
+            <feFlood className="hero-bloom-far" />
+            <feComposite in2="far" operator="in" result="farLight" />
+            <feMerge>
+              <feMergeNode in="farLight" />
+              <feMergeNode in="nearLight" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
+        <path d={wordmark.mark} filter="url(#hero-bloom)" />
       </svg>
       {children}
     </span>

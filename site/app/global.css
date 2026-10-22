@@ -17,10 +17,14 @@
    a colourless grey, near-black by night and white by day, so the yellow is
    the page's only colour: it marks links, the active table-of-contents entry
    and inline code. In light mode the yellow darkens to ochre wherever it
-   carries text, so it keeps its contrast on white. ─────────── */
+   carries text, so it keeps its contrast on white.
+
+   The yellow is a lightsaber's: by night a light lemon yellow, by day a warm
+   gold. By night the yellow that marks something also gives off a little
+   light (Saber light, below), and the logo blooms. ─────────── */
 
 :root {
-  --dk-accent: hsl(46, 97%, 52%);
+  --dk-accent: hsl(44, 100%, 55%);
 
   --color-fd-background: hsl(0, 0%, 100%);
   --color-fd-foreground: hsl(0, 0%, 16%);
@@ -32,13 +36,13 @@
   --color-fd-card: hsl(0, 0%, 98%);
   --color-fd-card-foreground: hsl(0, 0%, 16%);
   --color-fd-border: hsl(0, 0%, 89%);
-  --color-fd-primary: hsl(40, 92%, 31%);
+  --color-fd-primary: hsl(40, 100%, 28%);
   --color-fd-primary-foreground: hsl(0, 0%, 100%);
   --color-fd-secondary: hsl(0, 0%, 97%);
   --color-fd-secondary-foreground: hsl(0, 0%, 16%);
   --color-fd-accent: hsl(0, 0%, 94%);
   --color-fd-accent-foreground: hsl(0, 0%, 5%);
-  --color-fd-ring: hsl(46, 97%, 52%);
+  --color-fd-ring: hsl(44, 100%, 55%);
 
   --color-fd-info: hsl(212, 45%, 42%);
   --color-fd-warning: hsl(40, 92%, 36%);
@@ -47,7 +51,7 @@
 }
 
 .dark {
-  --dk-accent: hsl(48, 96%, 58%);
+  --dk-accent: hsl(47, 100%, 65%);
 
   --color-fd-background: hsl(0, 0%, 5.5%);
   --color-fd-foreground: hsl(0, 0%, 86%);
@@ -59,13 +63,13 @@
   --color-fd-card: hsl(0, 0%, 8.5%);
   --color-fd-card-foreground: hsl(0, 0%, 86%);
   --color-fd-border: hsl(0, 0%, 17%);
-  --color-fd-primary: hsl(48, 96%, 58%);
+  --color-fd-primary: hsl(47, 100%, 65%);
   --color-fd-primary-foreground: hsl(0, 0%, 5.5%);
   --color-fd-secondary: hsl(0, 0%, 9%);
   --color-fd-secondary-foreground: hsl(0, 0%, 98%);
   --color-fd-accent: hsl(0, 0%, 14%);
   --color-fd-accent-foreground: hsl(0, 0%, 98%);
-  --color-fd-ring: hsl(48, 96%, 58%);
+  --color-fd-ring: hsl(47, 100%, 65%);
 
   --color-fd-info: hsl(212, 60%, 70%);
   --color-fd-warning: hsl(46, 90%, 60%);
@@ -116,6 +120,27 @@
   width: auto;
   height: 4.5rem;
   color: var(--dk-accent);
+  overflow: visible;
+}
+
+/* The mark blooms: its own filter (components/hero.tsx) lays a near gold light and a far amber one
+   behind it. By day the light is fainter, so on white it reads as warmth, not as a smudge. */
+.hero-bloom-near {
+  flood-color: #ffc81f;
+  flood-opacity: 0.44;
+}
+
+.hero-bloom-far {
+  flood-color: #ffb800;
+  flood-opacity: 0.24;
+}
+
+.dark .hero-bloom-near {
+  flood-opacity: 0.7;
+}
+
+.dark .hero-bloom-far {
+  flood-opacity: 0.5;
 }
 
 #nd-page .prose .dk-subheader.hero {
@@ -372,4 +397,28 @@
   line-height: 1.4;
   letter-spacing: 0.01em;
   color: var(--color-fd-muted-foreground);
+}
+
+/* ── Saber light ───────────────────────────────────────────────────────────────
+   By night the yellow gives off a little light, as a lightsaber's blade does: a soft gold glow
+   under each link's rule and around the step numbers, the callout's bulb and the "Leave a star!"
+   note and its arrow. By day nothing glows; light on white reads as a smudge. */
+.dark .prose a:not(.not-prose a, .dk-anchor) {
+  box-shadow: 0 7px 9px -8px rgb(255 184 0 / 0.9);
+}
+
+.dark #nd-page .prose .dk-steps > h3::before {
+  box-shadow: 0 0 12px rgb(255 184 0 / 0.45);
+}
+
+.dark #nd-page .dk-callout-head svg {
+  filter: drop-shadow(0 0 4px rgb(255 200 31 / 0.55));
+}
+
+.dark .dk-star svg {
+  filter: drop-shadow(0 0 4px rgb(255 200 31 / 0.6));
+}
+
+.dark .dk-star span {
+  text-shadow: 0 0 10px rgb(255 184 0 / 0.55);
 }
