@@ -699,7 +699,7 @@ impl<'a> Engine<'a> {
         let mut oids: Vec<u32> = raw.params.clone();
         oids.extend(raw.columns.iter().map(|c| c.oid));
         let types = self.types(&oids);
-        let checks = self.checks(&raw, parsed, written, false);
+        let checks = self.checks(sql, &raw, parsed, written, false);
         // Nullability from provenance, then from the SQL.
         let settled = self.settle(sql, &raw, parsed, trust);
         let (Some(()), Some(mut described), Some(checks)) = (types, settled, checks) else { return None };
@@ -742,13 +742,13 @@ impl<'a> Engine<'a> {
     /// takes them only where `=` is the built-in one a CHECK resolved to), and the JSON Schema
     /// they hold it to ([`check_documents`]). The describe names a column's table and attribute
     /// only for a bare reference (through a view or a subquery too), so an expression over the
-    /// column is never one. Nothing under a set operation, whose provenance names the leftmost
-    /// arm only. With `checked_only`, only the JSON and string columns, the ones a CHECK says
-    /// something of.
-    fn checks(&self, raw: &RawDescribe, parsed: Option<&Parsed>, written: &[(u32, i32)], checked_only: bool) -> Lazy<Checks> {
-        let usable = parsed.is_some_and(|p| !p.has_set_op);
+    /// column is never one. Nothing read through a set operation, whose provenance names the
+    /// leftmost arm only ([`own_provenance`]). With `checked_only`, only the JSON and string
+    /// columns, the ones a CHECK says something of.
+    fn checks(&self, sql: &str, raw: &RawDescribe, parsed: Option<&Parsed>, written: &[(u32, i32)], checked_only: bool) -> Lazy<Checks> {
+        let own = own_provenance(sql, parsed, raw.columns.len());
         let json = |oid: u32| !checked_only || jsonshape::is_json(&self.registry.borrow(), oid) || matches!(self.registry.borrow().resolve_domain(oid), crate::pgtypes::oid::TEXT | crate::pgtypes::oid::VARCHAR);
-        let mut pairs: Vec<(u32, i32)> = raw.columns.iter().filter(|c| usable && c.table != 0 && c.attnum > 0 && json(c.oid)).map(|c| (c.table, c.attnum)).collect();
+        let mut pairs: Vec<(u32, i32)> = raw.columns.iter().zip(&own).filter(|(c, own)| **own && c.table != 0 && c.attnum > 0 && json(c.oid)).map(|(c, _)| (c.table, c.attnum)).collect();
         pairs.extend(written.iter().filter(|p| !pairs.contains(p)).copied().collect::<Vec<_>>());
         self.check_rows(&pairs)
     }
@@ -906,9 +906,9 @@ impl<'a> Engine<'a> {
             None => true,
         };
         // A set operation anywhere: provenance names the leftmost arm's column, which says
-        // nothing about the other arms. The statement's own columns stay nullable; a column read
-        // from a WITH query is settled from that query's own probe, whose arms are combined.
-        let degraded = hidden || parsed.is_some_and(|p| p.has_set_op);
+        // nothing about the other arms ([`own_provenance`]). Such a column stays nullable; one
+        // read from a WITH query is settled from that query's own probe, whose arms are combined.
+        let own = own_provenance(sql, parsed, raw.columns.len());
         // A column read straight from a WITH query, a derived table or a function in FROM is as
         // nullable as that item's own result says, whatever the catalog says of the table column
         // behind it.
@@ -918,7 +918,9 @@ impl<'a> Engine<'a> {
         let columns: Vec<DescribedColumn> = raw
             .columns
             .iter()
-            .map(|col| {
+            .zip(&own)
+            .map(|(col, own)| {
+                let degraded = hidden || !own;
                 // A whole-row reference (attribute 0) of the relation whose row type the column is.
                 let own_row = col.table != 0 && col.attnum == 0 && !degraded && registry.get(col.oid).and_then(|t| t.relid) == Some(col.table);
                 let nullable = if col.table != 0 && col.attnum > 0 && !degraded {
@@ -986,8 +988,11 @@ impl<'a> Engine<'a> {
         let mut pending = false;
         for (i, query) in queries.iter().enumerate().filter(|(i, _)| read(*i)) {
             // The query reading itself: the answer is the assumption it is being settled under,
-            // for the columns it reads by name. A `*` there finds no column list of its width.
-            if let Some(entry) = self.with_stack.borrow_mut().iter_mut().find(|(text, _, _)| *text == query.sql) {
+            // for the columns it reads by name. A `*` there finds no column list of its width. A
+            // probe binds nothing, so the statement read from may be one with NULL in place of the
+            // query's placeholders (`jsonshape::select_text`): it is the same query.
+            let same = jsonshape::without_placeholders(&query.sql);
+            if let Some(entry) = self.with_stack.borrow_mut().iter_mut().find(|(text, _, _)| *text == query.sql || jsonshape::without_placeholders(text) == same) {
                 entry.2 = true;
                 let assumed = &entry.1;
                 let named = reads.iter().filter_map(|r| match r {
@@ -1027,7 +1032,7 @@ impl<'a> Engine<'a> {
         let mut out = Vec::with_capacity(count);
         for read in reads {
             match read {
-                ItemRead::Other => out.push(None),
+                ItemRead::Other | ItemRead::Table => out.push(None),
                 ItemRead::Column { item, column } => {
                     let mut named = settled.get(&item).into_iter().flatten().filter(|(n, _)| *n == column);
                     out.push(match (named.next(), named.next()) {
@@ -1139,7 +1144,7 @@ impl<'a> Engine<'a> {
         let types = self.types(&oids);
         // A JSON column a JSON constructor reads keeps the schema its CHECKs hold it to, and a
         // string column the strings they keep it to.
-        let checks = self.checks(&raw, parsed.as_ref(), &[], true);
+        let checks = self.checks(sql, &raw, parsed.as_ref(), &[], true);
         let settled = self.settle(sql, &raw, parsed.as_ref(), trust);
         let (Some(()), Some(mut described), Some(checks)) = (types, settled, checks) else { return None };
         self.stored_sublinks(sql, &mut described);
@@ -1379,6 +1384,28 @@ struct SublinkRows {
     targets: Vec<Option<(String, String, bool)>>,
     /// Every table a FROM anywhere in the statement names.
     tables: Vec<String>,
+}
+
+/// Per result column of `sql`, whether the provenance the describe reports for it is its own. A
+/// set operation's columns trace to its leftmost arm, so where the statement holds one anywhere,
+/// only a bare reference to a column of a table in its own FROM is sure to be that column,
+/// whatever its WITH queries and subqueries hold: one read through a WITH query, a derived table
+/// or a `*` may come from any arm. A statement libpg_query cannot read owns none.
+fn own_provenance(sql: &str, parsed: Option<&Parsed>, count: usize) -> Vec<bool> {
+    match parsed {
+        Some(p) if !p.has_set_op => return vec![true; count],
+        None => return vec![false; count],
+        Some(_) => {}
+    }
+    // The reads line up with the columns only where every target is one column: a `*` among
+    // targets as many as the columns is one wide when it is the only one, but two of them may be
+    // two columns and none (a WITH query `(select)` has no columns), as [`Engine::item_columns`]
+    // refuses too.
+    let aligned = |reads: &Vec<infer::ItemRead>| reads.len() == count && reads.iter().filter(|r| matches!(r, infer::ItemRead::Star { .. })).count() <= 1;
+    match infer::target_reads(sql).filter(aligned) {
+        Some(reads) => reads.iter().map(|r| matches!(r, infer::ItemRead::Table)).collect(),
+        None => vec![false; count],
+    }
 }
 
 /// The targets of a SELECT that are a scalar or `ARRAY` subquery returning the whole rows of one
@@ -2325,5 +2352,18 @@ mod tests {
         assert!(!a.columns[0].nullable);
         let Type::Composite { fields, .. } = &a.columns[0].ty else { panic!("{:?}", a.columns[0].ty) };
         assert_eq!(fields[1].ty, Type::Enum { name: "text".into(), labels: vec!["click".into(), "key".into()] });
+    }
+
+    #[test]
+    fn own_provenance_lines_up_with_the_columns() {
+        let own = |sql: &str, count: usize| own_provenance(sql, analyze::analyze(sql).ok().as_ref(), count);
+        let with = "WITH a AS (SELECT p.title AS t, p.title AS t2 FROM posts p UNION ALL SELECT u.email, u.email FROM users u), e AS (SELECT)";
+        // A bare column of a table of the statement's own FROM is its own beside a set operation.
+        assert_eq!(own(&format!("{with} SELECT a.t, u.name FROM a, users u"), 2), vec![false, true]);
+        // One `*` among as many targets as columns is one column wide, and among more it is none.
+        assert_eq!(own(&format!("{with}, b AS (SELECT 1 AS n) SELECT b.*, u.name FROM b, users u"), 2), vec![false, true]);
+        assert_eq!(own(&format!("{with} SELECT e.*, u.name FROM e, users u"), 1), vec![false]);
+        // Two may be two columns and none, so no position says which column a target is.
+        assert_eq!(own(&format!("{with} SELECT a.*, u.name, e.* FROM a, users u, e"), 3), vec![false; 3]);
     }
 }
