@@ -54,7 +54,9 @@ create table events (
 
 ## Data types
 
-SQLite types values, not columns: a declared type gives a column an affinity, which Reylo types it by, and only a `STRICT` table holds a column to it ([Declared types and STRICT tables](#declared-types-and-strict-tables)). Reylo decodes every value of its own queries itself, on every driver:
+SQLite types values, not columns: a declared type gives a column an affinity, which Reylo types it by, and only a `STRICT` table holds a column to it ([Declared types and STRICT tables](#declared-types-and-strict-tables)).
+
+In each pair below, the SQL is a value and the JavaScript is what Reylo returns for it: `select <SQL> as v` gives the row `{ v: <JavaScript> }`. Reylo decodes every value of its own queries itself, on every driver:
 
 | Declared type, or expression | TypeScript | The value `.run()` returns |
 | --- | --- | --- |
@@ -89,21 +91,115 @@ left join orders o on o.user_id = u.id
 group by u.id
 ```
 
-- A `bigint` column stays one through a subquery, a view, `min()`, `max()`, `coalesce()` and `CASE`. What SQLite computes from it, such as `github_id + 1`, `abs(github_id)` or `sum(github_id)`, is an integer like `count(*)`, a `number`.
-- A `number` past ±(2^53 − 1), which it cannot hold, is an error that names its column, never a rounded number. Declare the column `BIGINT`, or cast the value to text in the statement: `cast(max(id) as text)`.
-- Past 2^53, what a `BIGINT` comes back as depends on the driver:
-  - The drivers `better-sqlite3`, `node:sqlite`, `bun:sqlite` and Turso's engine read the exact integer, so it comes back exact on them.
-  - The drivers `sqlite3` and `sqlite`, Cloudflare D1, and `Bun.sql` without `safeIntegers` round it before Reylo sees it, and Reylo refuses the rounded number, in a `BIGINT` column too.
-  - libSQL at its default `intMode` refuses it itself, with a `RangeError` that names no column. With `intMode: "bigint"` or `"string"` a `BIGINT` is exact.
-- A `STRICT` table takes no `BIGINT` column, so SQLite does not hold one to integers ([Declared types and STRICT tables](#declared-types-and-strict-tables)).
-- An `INTEGER` parameter takes a `number`.
+<Rules>
+
+**What stays a `bigint`**
+
+A `BIGINT` column stays a `bigint` through a subquery, a view, `min()`, `max()`, `coalesce()` and `CASE`. These pairs read `users.github_id`, which holds 9007199254740993.
+
+<Pairs>
+
+- `github_id` → `9007199254740993n`
+- `max(github_id)` → `9007199254740993n`
+- `coalesce(github_id, 0)` → `9007199254740993n`
+- `(select github_id from users)` → `9007199254740993n`
+
+</Pairs>
+
+**What SQLite computes from it**
+
+What SQLite computes from a `BIGINT`, such as `github_id + 1`, `abs(github_id)` or `sum(github_id)`, is an integer like `count(*)`, a `number`. Here `users.github_id` holds 41.
+
+<Pairs>
+
+- `github_id + 1` → `42`
+- `abs(github_id)` → `41`
+- `sum(github_id)` → `41`
+
+</Pairs>
+
+**Past what a `number` holds**
+
+A `number` past ±(2^53 − 1), which it cannot hold, is an error that names its column, never a rounded number. Declare the column `BIGINT`, or cast the value to text in the statement: `cast(max(id) as text)`.
+
+<Pairs>
+
+- `9007199254740993` → `throws DecodeError`
+- `cast(9007199254740993 as text)` → `"9007199254740993"`
+
+</Pairs>
+
+**Drivers that read it exactly**
+
+Past 2^53, what a `BIGINT` comes back as depends on the driver. The drivers `better-sqlite3`, `node:sqlite`, `bun:sqlite` and Turso's engine read the exact integer, so it comes back exact on them. The pair reads `users.github_id`, which holds 9007199254740993.
+
+<Pairs>
+
+- `github_id` → `9007199254740993n`
+
+</Pairs>
+
+**Drivers that round it**
+
+The drivers `sqlite3` and `sqlite`, Cloudflare D1, and `Bun.sql` without `safeIntegers` round an integer past 2^53 before Reylo sees it, and Reylo refuses the rounded number, in a `BIGINT` column too. The pair reads `users.github_id`, which holds 9007199254740993.
+
+<Pairs>
+
+- `github_id` → `throws DecodeError`
+
+</Pairs>
+
+**On libSQL**
+
+At its default `intMode`, libSQL refuses an integer past 2^53 itself, with a `RangeError` that names no column, as in the first pair. With `intMode: "bigint"` or `"string"` a `BIGINT` is exact, as in the second. Both read `users.github_id`, which holds 9007199254740993.
+
+<Pairs>
+
+- `github_id` → `throws RangeError`
+- `github_id` → `9007199254740993n`
+
+</Pairs>
+
+**No `BIGINT` in a `STRICT` table**
+
+A `STRICT` table takes no `BIGINT` column, so SQLite does not hold one to integers ([Declared types and STRICT tables](#declared-types-and-strict-tables)).
+
+**Integer parameters**
+
+An `INTEGER` parameter takes a `number`.
+
+</Rules>
 
 ### Decimals
 
 SQLite has no decimal type: a `NUMERIC` or `DECIMAL` column holds an integer, a real or text, whichever the row stored, so it is `number | string`. A `REAL` is a double, the same on every driver.
 
-- Keep an exact amount as an integer of its smallest unit, as `orders.total_cents` does, or as text.
-- The `sum()` of integers is an integer, and `avg()` and `total()` are reals.
+<Rules>
+
+**Exact amounts**
+
+Keep an exact amount as an integer of its smallest unit, as `orders.total_cents` does, or as text.
+
+<Pairs>
+
+- `1250` → `1250`
+- `'12.50'` → `"12.50"`
+
+</Pairs>
+
+**Sums and averages**
+
+The `sum()` of integers is an integer, and `avg()` and `total()` are reals. Here `orders.total_cents` holds 1250 and 1251.
+
+<Pairs>
+
+- `sum(total_cents)` → `2501`
+- `avg(total_cents)` → `1250.5`
+- `total(total_cents)` → `2501`
+
+</Pairs>
+
+</Rules>
 
 ### Dates and times
 
@@ -120,11 +216,55 @@ const order = await orderDates.run(db, { id: 1 });
 select placed_at, ships_on from orders where id = :id
 ```
 
-- Store an instant as ISO 8601 text in UTC with `Z`, as `strftime('%Y-%m-%dT%H:%M:%fZ', 'now')` writes it: `"2026-10-20T10:00:00.000Z"`, which `Temporal.Instant.from(…)` and `new Date(…)` read. SQLite's date functions read it too, and since every value has the same width, text order is time order.
-- SQLite's `current_timestamp` and `datetime()` write UTC with no zone, `"2026-10-20 10:00:00"`, which a reader can't tell from local time.
-- A column declared `DATE` or `DATETIME` has `NUMERIC` affinity, so it holds a number or a text, `number | string`. Declare it `TEXT`, or `INTEGER` for Unix time.
-- SQLite's date functions, `date()`, `datetime()`, `unixepoch()` and the rest, answer `NULL` for text they cannot read as a date, so keep every date in one form they read: ISO 8601 text, or Unix time in an `INTEGER`.
-- A `::date` or `::timestamp` cast is SQLite's `CAST(… AS TEXT)`, since SQLite's `CAST` to a date reads `'2026-10-12'` as 2026.
+<Rules>
+
+**Instants as ISO 8601 text**
+
+Store an instant as ISO 8601 text in UTC with `Z`, as `strftime('%Y-%m-%dT%H:%M:%fZ', 'now')` writes it, which `Temporal.Instant.from()` and `new Date()` read. SQLite's date functions read it too, and since every value has the same width, text order is time order.
+
+<Pairs>
+
+- `strftime('%Y-%m-%dT%H:%M:%fZ', '2026-10-20 10:00:00')` → `"2026-10-20T10:00:00.000Z"`
+
+</Pairs>
+
+**UTC with no zone**
+
+SQLite's `current_timestamp` and `datetime()` write UTC with no zone, which a reader can't tell from local time.
+
+<Pairs>
+
+- `datetime('2026-10-20T10:00:00.000Z')` → `"2026-10-20 10:00:00"`
+- `datetime(1792490400, 'unixepoch')` → `"2026-10-20 10:00:00"`
+
+</Pairs>
+
+**Columns declared `DATE`**
+
+A column declared `DATE` or `DATETIME` has `NUMERIC` affinity, so it holds a number or a text, `number | string`. Declare it `TEXT`, or `INTEGER` for Unix time.
+
+**Text that is no date**
+
+SQLite's date functions, `date()`, `datetime()`, `unixepoch()` and the rest, answer `NULL` for text they cannot read as a date, so keep every date in one form they read: ISO 8601 text, or Unix time in an `INTEGER`.
+
+<Pairs>
+
+- `date('20/10/2026')` → `null`
+- `date('2026-10-20T10:00:00.000Z')` → `"2026-10-20"`
+
+</Pairs>
+
+**Casting a parameter to a date**
+
+A parameter's `::date` or `::timestamp` cast is SQLite's `CAST(… AS TEXT)` ([Casts](#casts)), since SQLite's `CAST` to a date reads `'2026-10-12'` as 2026.
+
+<Pairs>
+
+- `cast('2026-10-12' as date)` → `2026`
+
+</Pairs>
+
+</Rules>
 
 ### Truth values
 
@@ -141,12 +281,60 @@ const rows = await userFlags.run(db);
 select id, active, name like 'A%' as starts_with_a from users
 ```
 
-- A truth value the statement computes is a comparison, `IN`, `BETWEEN`, `EXISTS`, `IS`, `NOT`, `AND`, `OR`, `TRUE`, `FALSE`, `like`, `glob`, `regexp` and `match`, and a `CASE`, `coalesce`, `ifnull`, `iif` or subquery whose every value is one.
-- A column declared `BOOLEAN` reads as a boolean through any subquery or view too.
-- A `STRICT` table takes no `BOOLEAN` column, so a flag there is an `INTEGER`, a `number`.
-- SQLite holds a column declared `BOOLEAN` to nothing, so it may hold 2, `'yes'` or a `BLOB`. Reylo reads 0 and 1 as `false` and `true`, and refuses any other value, naming its column. Read the stored number with `active + 0`.
-- A truth value parameter is bound as 1 or 0, since `better-sqlite3` refuses a boolean and libSQL would bind `true` as the real 1.0.
-- Inside JSON the statement builds, a truth value is the number SQLite writes, `1` or `0`.
+<Rules>
+
+**What the statement computes**
+
+A truth value the statement computes is a comparison, `IN`, `BETWEEN`, `EXISTS`, `IS`, `NOT`, `AND`, `OR`, `TRUE`, `FALSE`, `like`, `glob`, `regexp` and `match`, and a `CASE`, `coalesce`, `ifnull`, `iif` or subquery whose every value is one.
+
+<Pairs>
+
+- `1 = 1` → `true`
+- `'Ada' like 'B%'` → `false`
+- `iif(1 = 1, 0 = 1, 1 = 1)` → `false`
+
+</Pairs>
+
+**Through a subquery or a view**
+
+A column declared `BOOLEAN` reads as a boolean through any subquery or view too. The pair reads `users.active`, which holds 1.
+
+<Pairs>
+
+- `(select active from users)` → `true`
+
+</Pairs>
+
+**Flags in a `STRICT` table**
+
+A `STRICT` table takes no `BOOLEAN` column, so a flag there is an `INTEGER`, a `number`.
+
+**Values other than 0 and 1**
+
+SQLite holds a column declared `BOOLEAN` to nothing, so it may hold 2, `'yes'` or a `BLOB`. Reylo reads 0 and 1 as `false` and `true`, and refuses any other value, naming its column. Read the stored number with `active + 0`. Here `users.active` holds 2.
+
+<Pairs>
+
+- `active` → `throws DecodeError`
+- `active + 0` → `2`
+
+</Pairs>
+
+**Truth value parameters**
+
+A truth value parameter is bound as 1 or 0, since `better-sqlite3` refuses a boolean and libSQL would bind `true` as the real 1.0.
+
+**Inside JSON the statement builds**
+
+A truth value is the number SQLite writes, `1` or `0`.
+
+<Pairs>
+
+- `json_object('a', 1 = 1)` → `{ a: 1 }`
+
+</Pairs>
+
+</Rules>
 
 ### JSON
 
@@ -166,28 +354,111 @@ from orders o
 join users u on u.id = o.user_id
 ```
 
-- Built JSON nests inside other built JSON through `coalesce`, `case` and a scalar subquery. Through a subquery's or a view's column, a cast or `lag`, SQLite no longer knows it is JSON, and Reylo types it `unknown`.
-- A `json_group_array` over no rows is `[]`, never `null`.
-- What `json_extract`, `->` and `->>` return is `unknown`, since it depends on the document.
-- A `CHECK` that holds a column to a JSON Schema (sqlite-jsonschema's `jsonschema_matches`) types nothing, since `pragma ignore_check_constraints` lets any connection write past it.
-- JavaScript's `JSON.parse` rounds an integer past 2^53 inside a document.
-- A typed JSON parameter (`:events::json('…')`) is bound as its JSON text, which `json_each` reads, as in the main docs' [JSON parameters](/#typed-json).
+<Rules>
+
+**Built JSON inside built JSON**
+
+Built JSON nests inside other built JSON through `coalesce`, `case` and a scalar subquery.
+
+<Pairs>
+
+- `json_object('n', (select json_object('a', 1)))` → `{ n: { a: 1 } }`
+- `json_object('n', case when 1 then json_object('a', 1) end)` → `{ n: { a: 1 } }`
+
+</Pairs>
+
+**Where it stops being JSON**
+
+Through a subquery's or a view's column, a cast or `lag`, SQLite may no longer know it is JSON, and Reylo types it `unknown`. A column or `lag` loses it; a cast keeps it on SQLite 3.53 and loses it on Turso's engine.
+
+<Pairs>
+
+- `json_object('n', (select j from (select json_object('a', 1) as j)))` → `{ n: "{\"a\":1}" }`
+- `json_object('n', lag(json_object('a', 1), 0) over ())` → `{ n: "{\"a\":1}" }`
+
+</Pairs>
+
+**Over no rows**
+
+A `json_group_array` over no rows is `[]`, never `null`.
+
+<Pairs>
+
+- `(select json_group_array(id) from users where 0)` → `[]`
+
+</Pairs>
+
+**Reading a document**
+
+What `json_extract`, `->` and `->>` return is `unknown`, since it depends on the document.
+
+<Pairs>
+
+- `json_extract('{"a":1}', '$.a')` → `1`
+- `'{"a":[1,2]}' -> '$.a'` → `"[1,2]"`
+- `'{"a":"x"}' ->> '$.a'` → `"x"`
+
+</Pairs>
+
+**JSON Schema checks**
+
+A `CHECK` that holds a column to a JSON Schema (sqlite-jsonschema's `jsonschema_matches`) types nothing, since `pragma ignore_check_constraints` lets any connection write past it.
+
+**Integers past 2^53**
+
+JavaScript's `JSON.parse` rounds an integer past 2^53 inside a document.
+
+<Pairs>
+
+- `json_object('n', 9007199254740993)` → `{ n: 9007199254740992 }`
+
+</Pairs>
+
+**Typed JSON parameters**
+
+A typed JSON parameter (`:events::json('…')`) is bound as its JSON text, which `json_each` reads, as in the main docs' [JSON parameters](/#typed-json).
+
+</Rules>
 
 ### Binary
 
 A `BLOB` is a `Uint8Array` on every driver: `better-sqlite3`, Turso's engine, `sqlite3` and `sqlite` give a `Buffer`, which is one, libSQL an `ArrayBuffer` and Cloudflare D1 an array of numbers, which Reylo turns into one.
 
-- A `BLOB` parameter takes a `Uint8Array`, a `Buffer` or not, on every driver.
+<Rules>
+
+**Binary parameters**
+
+A `BLOB` parameter takes a `Uint8Array`, a `Buffer` or not, on every driver.
+
+</Rules>
 
 ### Declared types and STRICT tables
 
 Reylo types a column by its declared type's affinity, by the rule SQLite applies, in this order:
 
-- a type with `INT` in its name is `INTEGER`;
-- one with `CHAR`, `CLOB` or `TEXT` is `TEXT`;
-- one with `BLOB` is `BLOB`;
-- one with `REAL`, `FLOA` or `DOUB` is `REAL`;
-- any other is `NUMERIC`.
+<Rules>
+
+**Names with `INT`**
+
+A type with `INT` in its name is `INTEGER`, whatever else the name holds.
+
+**Names with `CHAR`, `CLOB` or `TEXT`**
+
+Failing that, a type with `CHAR`, `CLOB` or `TEXT` in its name is `TEXT`.
+
+**Names with `BLOB`**
+
+Failing those, a type with `BLOB` in its name is `BLOB`.
+
+**Names with `REAL`, `FLOA` or `DOUB`**
+
+Failing those, a type with `REAL`, `FLOA` or `DOUB` in its name is `REAL`.
+
+**Any other name**
+
+Any other type is `NUMERIC`.
+
+</Rules>
 
 A column declared `BIGINT`, `INT8` or `UNSIGNED BIG INT` is `INTEGER` too, and a `bigint` by its width ([Integers](#integers)). Outside a `STRICT` table, SQLite stores a value of any class in any column:
 
@@ -203,32 +474,122 @@ const rows = await loose.run(db);
 select name, nick from users
 ```
 
-- In a `STRICT` table the declared type is a promise: SQLite refuses a value of another class, and the types above are exact. Declare tables `strict` wherever you can.
-- A `STRICT` table takes only `INT`, `INTEGER`, `REAL`, `TEXT`, `BLOB` and `ANY`, so no `BOOLEAN`, `BIGINT`, `DATE` or `NUMERIC` column.
-- A column declared with no type, or `ANY` in a `STRICT` table, holds any class, so it is `unknown`.
-- A `BOOLEAN` column, which has `NUMERIC` affinity, is a `boolean` by its declared name ([Truth values](#truth-values)).
-- A `CHECK` narrows no type, since `pragma ignore_check_constraints` lets a connection write past it: `check (role in ('admin', 'member'))` leaves `role` a `string`.
+<Rules>
+
+**A `STRICT` table's promise**
+
+In a `STRICT` table the declared type is a promise: SQLite refuses a value of another class, and the types above are exact. Declare tables `strict` wherever you can.
+
+**What a `STRICT` table takes**
+
+A `STRICT` table takes only `INT`, `INTEGER`, `REAL`, `TEXT`, `BLOB` and `ANY`, so no `BOOLEAN`, `BIGINT`, `DATE` or `NUMERIC` column.
+
+**Columns of any class**
+
+A column declared with no type, or `ANY` in a `STRICT` table, holds any class, so it is `unknown`.
+
+**Columns declared `BOOLEAN`**
+
+A `BOOLEAN` column, which has `NUMERIC` affinity, is a `boolean` by its declared name ([Truth values](#truth-values)).
+
+**Check constraints**
+
+A `CHECK` narrows no type, since `pragma ignore_check_constraints` lets a connection write past it: `check (role in ('admin', 'member'))` leaves `role` a `string`.
+
+</Rules>
 
 ### Functions
 
 SQLite says nothing of a function's result, so Reylo keeps a table of SQLite's built-in functions: `count` is a non-null integer, `coalesce` takes its arguments' type, `upper` is text that is `NULL` only where its argument is.
 
-- A function that SQLite answers with `NULL` for some non-null arguments is `| null` whatever its arguments:
-  - the date and time functions return `NULL` for text they cannot read as a date and for a failing modifier, so `date(placed_at)` is `string | null`, while `date('now')` and `datetime('now', '+7 days')` are `string`;
-  - the math functions with a domain (`sqrt`, `ln`, `log`, `acos`, `pow`, …) return `NULL` outside it;
-  - the `printf` function returns `NULL` when its format writes nothing.
-- A function the table lacks is `unknown`: one your application registers (`better-sqlite3`'s `db.function()`, `node:sqlite`'s `db.function()`), or one a loadable extension adds. Cast its result to type it: `cast(slugify(name) as text)`.
-- Which functions exist is the answer of the SQLite in the Node that runs the type check, from `pragma_function_list`: a call to one it lacks is an error at the call, "no such function: soundex on this database's SQLite". Builds differ in the math functions, `soundex` and each release's additions.
-- Your app runs on its driver's SQLite, which may be older: `better-sqlite3` 12.11 carries 3.53.2, and libSQL, Cloudflare D1 and `bun:sqlite` carry their own. Turso's engine is a rewrite of SQLite, not a build of it, with functions of its own.
-- The type check knows a function by its name alone, so an argument count only a newer SQLite takes (`iif` with two arguments, before 3.48) is not caught.
-- A table whose `CHECK`, index or generated column calls a function the type check's SQLite lacks is read with that function stubbed, so it types as any other.
+<Rules>
+
+**Dates that fail**
+
+A function that SQLite answers with `NULL` for some non-null arguments is `| null` whatever its arguments. The date and time functions return `NULL` for text they cannot read as a date and for a failing modifier, so `date(placed_at)` is `string | null`, while `date('now')` and `datetime('now', '+7 days')` are `string`.
+
+<Pairs>
+
+- `date('not a date')` → `null`
+- `date('2026-10-20', '+1 fortnight')` → `null`
+- `date('2026-10-20', '+7 days')` → `"2026-10-27"`
+
+</Pairs>
+
+**Math outside its domain**
+
+The math functions with a domain (`sqrt`, `ln`, `log`, `acos`, `pow`, …) return `NULL` outside it, so they are `| null` too.
+
+<Pairs>
+
+- `sqrt(-1)` → `null`
+- `sqrt(4)` → `2`
+
+</Pairs>
+
+**Formats that write nothing**
+
+The `printf` function returns `NULL` when its format writes nothing, so it is `| null` too.
+
+<Pairs>
+
+- `printf('')` → `null`
+
+</Pairs>
+
+**Functions the table lacks**
+
+A built-in function the table lacks, such as `unhex`, is `unknown`. Cast its result to type it: `cast(unhex(hash) as blob)`.
+
+**Functions your app registers**
+
+The type check's SQLite has none of the functions your application registers (`better-sqlite3`'s `db.function()`, `node:sqlite`'s `db.function()`) or a loadable extension adds, so a call to one fails the type check, cast or not: "no such function: slugify".
+
+**Which functions exist**
+
+Which functions exist is the answer of the SQLite in the Node that runs the type check, from `pragma_function_list`: a call to one it lacks is an error at the call, "no such function: soundex on this database's SQLite". Builds differ in the math functions, `soundex` and each release's additions.
+
+**Your app's SQLite**
+
+Your app runs on its driver's SQLite, which may be older: `better-sqlite3` 12.11 carries 3.53.2, and libSQL, Cloudflare D1 and `bun:sqlite` carry their own. Turso's engine is a rewrite of SQLite, not a build of it, with functions of its own.
+
+**Argument counts**
+
+The type check knows a function by its name alone, so an argument count only a newer SQLite takes (`iif` with two arguments, before 3.48) is not caught.
+
+**Functions in the schema**
+
+A table whose `CHECK`, index or generated column calls a function the type check's SQLite lacks is read with that function stubbed, so it types as any other.
+
+</Rules>
 
 ### Values Reylo refuses
 
 Every SQLite driver hands Reylo the stored value, so two values are refused, each with an error that names its column:
 
-- **An integer past ±(2^53 − 1)** in a column typed `number`, which cannot hold it, and one the driver already rounded, in a `BIGINT` column too. Declare the column `BIGINT`, or read it with `cast(n as text)`.
-- **A truth value other than 0 or 1**, in a column declared `BOOLEAN` or `BOOL`, a `BLOB` included. Store 0 or 1 in it, or read the stored number with `active + 0`.
+<Rules>
+
+**An integer past ±(2^53 − 1)**
+
+Reylo refuses one in a column typed `number`, which cannot hold it, and one the driver already rounded, in a `BIGINT` column too. Declare the column `BIGINT`, or read it with `cast(n as text)`.
+
+<Pairs>
+
+- `9007199254740993` → `throws DecodeError`
+
+</Pairs>
+
+**A truth value other than 0 or 1**
+
+Reylo refuses one in a column declared `BOOLEAN` or `BOOL`, a `BLOB` included. Store 0 or 1 in it, or read the stored number with `active + 0`. Here `users.active` holds the `BLOB` `x'01'`.
+
+<Pairs>
+
+- `active` → `throws DecodeError`
+
+</Pairs>
+
+</Rules>
 
 ## Nullability
 
