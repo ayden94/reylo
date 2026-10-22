@@ -5,7 +5,7 @@ description: How Reylo types and runs SQL on SQLite. Every type and the value it
 
 <p className="dk-subheader">Every type, null, row count and parameter rule on SQLite</p>
 
-This page is the reference behind [the main docs](/) for SQLite: the place to look when a type, a `| null`, a row count or a parameter surprises you. [Postgres](/postgres) and [MySQL](/mysql) have the same page, with every answer in the same place.
+The reference behind [the main docs](/) for SQLite, for when a type, a `| null`, a row count or a parameter surprises you. [Postgres](/postgres) and [MySQL](/mysql) have the same sections.
 
 | | |
 | --- | --- |
@@ -54,9 +54,7 @@ create table events (
 
 ## Data types
 
-SQLite types values, not columns: a declared type gives a column an affinity, which Reylo types it by, and only a `STRICT` table holds a column to it ([Declared types and STRICT tables](#declared-types-and-strict-tables)).
-
-In each pair below, the SQL is a value and the JavaScript is what Reylo returns for it: `select <SQL> as v` gives the row `{ v: <JavaScript> }`. Reylo decodes every value of its own queries itself, on every driver:
+SQLite types values, not columns: a declared type gives a column an affinity, which Reylo types it by, and only a `STRICT` table holds a column to it ([Declared types and STRICT tables](#declared-types-and-strict-tables)). Reylo decodes every value itself, so each type has one form on every driver:
 
 | Declared type, or expression | TypeScript | The value `.run()` returns |
 | --- | --- | --- |
@@ -72,6 +70,27 @@ In each pair below, the SQL is a value and the JavaScript is what Reylo returns 
 | `count(*)`, `length(…)` | `number` | `2` |
 | `json_object(…)`, `json_group_array(…)` | the object or array it builds | `{ total: 1250 }` |
 | `json_extract(…)`, `->`, `->>` | `unknown` | `1250` |
+
+In each pair below, the SQL is a value and the JavaScript is what `.run()` returns for it: `select <SQL> as v` gives the row `{ v: <JavaScript> }`.
+
+### Declared types and STRICT tables
+
+Reylo types a column by its declared type's affinity, as [SQLite's rule](https://sqlite.org/datatype3.html#determination_of_column_affinity) gives it, which the table above follows. Outside a `STRICT` table, SQLite stores a value of any class in any column, and the type says so:
+
+```ts twoslash tab="main.ts"
+import loose from "./lite_loose.sql";
+
+const rows = await loose.run(db);
+//    ^?
+```
+
+```sql tab="lite_loose.sql" dialect="sqlite"
+-- users is not strict: name and nick may hold a BLOB
+select name, nick from users
+```
+
+- **A `STRICT` table** holds each value to its declared type, so the types above are exact: declare tables `strict` wherever you can. It takes no `BOOLEAN`, `BIGINT`, `DATE` or `NUMERIC` column, so a flag there is an `INTEGER`, a `number`.
+- **A `CHECK`** narrows no type, since `pragma ignore_check_constraints` lets a connection write past it: `check (role in ('admin', 'member'))` leaves `role` a `string`, and a JSON Schema check leaves a document a `string`.
 
 ### Integers
 
@@ -99,7 +118,6 @@ A `BIGINT` column stays a `bigint` through a subquery, a view, `min()`, `max()`,
 
 <Pairs>
 
-- `github_id` → `9007199254740993n`
 - `max(github_id)` → `9007199254740993n`
 - `coalesce(github_id, 0)` → `9007199254740993n`
 - `(select github_id from users)` → `9007199254740993n`
@@ -113,14 +131,13 @@ What SQLite computes from a `BIGINT`, such as `github_id + 1`, `abs(github_id)` 
 <Pairs>
 
 - `github_id + 1` → `42`
-- `abs(github_id)` → `41`
 - `sum(github_id)` → `41`
 
 </Pairs>
 
 **Past what a `number` holds**
 
-A `number` past ±(2^53 − 1), which it cannot hold, is an error that names its column, never a rounded number. Declare the column `BIGINT`, or cast the value to text in the statement: `cast(max(id) as text)`.
+A `number` past ±(2^53 − 1) is an error that names its column, never a rounded number. Declare the column `BIGINT`, or cast the value to text: `cast(max(id) as text)`. Some drivers round a `BIGINT` too ([Drivers](#drivers)).
 
 <Pairs>
 
@@ -129,77 +146,18 @@ A `number` past ±(2^53 − 1), which it cannot hold, is an error that names its
 
 </Pairs>
 
-**Drivers that read it exactly**
-
-Past 2^53, what a `BIGINT` comes back as depends on the driver. The drivers `better-sqlite3`, `node:sqlite`, `bun:sqlite` and Turso's engine read the exact integer, so it comes back exact on them. The pair reads `users.github_id`, which holds 9007199254740993.
-
-<Pairs>
-
-- `github_id` → `9007199254740993n`
-
-</Pairs>
-
-**Drivers that round it**
-
-The drivers `sqlite3` and `sqlite`, Cloudflare D1 and Durable Objects, and `Bun.sql` without `safeIntegers` round an integer past 2^53 before Reylo sees it, and Reylo refuses the rounded number, in a `BIGINT` column too. The pair reads `users.github_id`, which holds 9007199254740993.
-
-<Pairs>
-
-- `github_id` → `throws DecodeError`
-
-</Pairs>
-
-**On libSQL**
-
-At its default `intMode`, libSQL refuses an integer past 2^53 itself, with a `RangeError` that names no column, as in the first pair. With `intMode: "bigint"` or `"string"` a `BIGINT` is exact, as in the second. Both read `users.github_id`, which holds 9007199254740993.
-
-<Pairs>
-
-- `github_id` → `throws RangeError`
-- `github_id` → `9007199254740993n`
-
-</Pairs>
-
-**No `BIGINT` in a `STRICT` table**
-
-A `STRICT` table takes no `BIGINT` column, so SQLite does not hold one to integers ([Declared types and STRICT tables](#declared-types-and-strict-tables)).
-
-**Integer parameters**
-
-An `INTEGER` parameter takes a `number`.
-
 </Rules>
 
 ### Decimals
 
-SQLite has no decimal type: a `NUMERIC` or `DECIMAL` column holds an integer, a real or text, whichever the row stored, so it is `number | string`. A `REAL` is a double, the same on every driver.
-
-<Rules>
-
-**Exact amounts**
-
-Keep an exact amount as an integer of its smallest unit, as `orders.total_cents` does, or as text.
-
-<Pairs>
-
-- `1250` → `1250`
-- `'12.50'` → `"12.50"`
-
-</Pairs>
-
-**Sums and averages**
-
-The `sum()` of integers is an integer, and `avg()` and `total()` are reals. Here `orders.total_cents` holds 1250 and 1251.
+SQLite has no decimal type: a `NUMERIC` or `DECIMAL` column holds whatever the row stored, so it is `number | string`. Keep an exact amount as an integer of its smallest unit, as `orders.total_cents` does, which here holds 1250 and 1251:
 
 <Pairs>
 
 - `sum(total_cents)` → `2501`
 - `avg(total_cents)` → `1250.5`
-- `total(total_cents)` → `2501`
 
 </Pairs>
-
-</Rules>
 
 ### Dates and times
 
@@ -220,49 +178,18 @@ select placed_at, ships_on from orders where id = :id
 
 **Instants as ISO 8601 text**
 
-Store an instant as ISO 8601 text in UTC with `Z`, as `strftime('%Y-%m-%dT%H:%M:%fZ', 'now')` writes it, which `Temporal.Instant.from()` and `new Date()` read. SQLite's date functions read it too, and since every value has the same width, text order is time order.
+Store an instant as ISO 8601 text in UTC with `Z`, as `strftime('%Y-%m-%dT%H:%M:%fZ', 'now')` writes it, which `Temporal.Instant.from()` and `new Date()` read. SQLite's `current_timestamp` and `datetime()` write UTC with no zone, which a reader can't tell from local time.
 
 <Pairs>
 
 - `strftime('%Y-%m-%dT%H:%M:%fZ', '2026-10-20 10:00:00')` → `"2026-10-20T10:00:00.000Z"`
-
-</Pairs>
-
-**UTC with no zone**
-
-SQLite's `current_timestamp` and `datetime()` write UTC with no zone, which a reader can't tell from local time.
-
-<Pairs>
-
 - `datetime('2026-10-20T10:00:00.000Z')` → `"2026-10-20 10:00:00"`
-- `datetime(1792490400, 'unixepoch')` → `"2026-10-20 10:00:00"`
 
 </Pairs>
 
 **Columns declared `DATE`**
 
 A column declared `DATE` or `DATETIME` has `NUMERIC` affinity, so it holds a number or a text, `number | string`. Declare it `TEXT`, or `INTEGER` for Unix time.
-
-**Text that is no date**
-
-SQLite's date functions, `date()`, `datetime()`, `unixepoch()` and the rest, answer `NULL` for text they cannot read as a date, so keep every date in one form they read: ISO 8601 text, or Unix time in an `INTEGER`.
-
-<Pairs>
-
-- `date('20/10/2026')` → `null`
-- `date('2026-10-20T10:00:00.000Z')` → `"2026-10-20"`
-
-</Pairs>
-
-**Casting a parameter to a date**
-
-A parameter's `::date` or `::timestamp` cast is SQLite's `CAST(… AS TEXT)` ([Casts](#casts)), since SQLite's `CAST` to a date reads `'2026-10-12'` as 2026.
-
-<Pairs>
-
-- `cast('2026-10-12' as date)` → `2026`
-
-</Pairs>
 
 </Rules>
 
@@ -283,35 +210,20 @@ select id, active, name like 'A%' as starts_with_a from users
 
 <Rules>
 
-**What the statement computes**
+**What counts**
 
-A truth value the statement computes is a comparison, `IN`, `BETWEEN`, `EXISTS`, `IS`, `NOT`, `AND`, `OR`, `TRUE`, `FALSE`, `like`, `glob`, `regexp` and `match`, and a `CASE`, `coalesce`, `ifnull`, `iif` or subquery whose every value is one.
+A truth value the statement computes is a comparison, `IN`, `BETWEEN`, `EXISTS`, `IS`, `NOT`, `AND`, `OR`, `like`, `glob`, `regexp` and `match`, and a `CASE`, `coalesce`, `ifnull`, `iif` or subquery whose every value is one. A `BOOLEAN` column stays one through a subquery or a view.
 
 <Pairs>
 
-- `1 = 1` → `true`
-- `'Ada' like 'B%'` → `false`
 - `iif(1 = 1, 0 = 1, 1 = 1)` → `false`
-
-</Pairs>
-
-**Through a subquery or a view**
-
-A column declared `BOOLEAN` reads as a boolean through any subquery or view too. The pair reads `users.active`, which holds 1.
-
-<Pairs>
-
 - `(select active from users)` → `true`
 
 </Pairs>
 
-**Flags in a `STRICT` table**
-
-A `STRICT` table takes no `BOOLEAN` column, so a flag there is an `INTEGER`, a `number`.
-
 **Values other than 0 and 1**
 
-SQLite holds a column declared `BOOLEAN` to nothing, so it may hold 2, `'yes'` or a `BLOB`. Reylo reads 0 and 1 as `false` and `true`, and refuses any other value, naming its column. Read the stored number with `active + 0`. Here `users.active` holds 2.
+SQLite holds a `BOOLEAN` column to nothing, so it may hold 2, `'yes'` or a `BLOB`. Reylo reads 0 and 1 as `false` and `true` and refuses any other value, naming its column. Here `users.active` holds 2:
 
 <Pairs>
 
@@ -320,25 +232,11 @@ SQLite holds a column declared `BOOLEAN` to nothing, so it may hold 2, `'yes'` o
 
 </Pairs>
 
-**Truth value parameters**
-
-A truth value parameter is bound as 1 or 0, since `better-sqlite3` refuses a boolean and libSQL would bind `true` as the real 1.0.
-
-**Inside JSON the statement builds**
-
-A truth value is the number SQLite writes, `1` or `0`.
-
-<Pairs>
-
-- `json_object('a', 1 = 1)` → `{ a: 1 }`
-
-</Pairs>
-
 </Rules>
 
 ### JSON
 
-SQLite has no JSON type: a stored document is `TEXT`, a `string`. JSON the statement builds with `json_object`, `json_array`, `json_group_array` or `json_group_object` is typed from its arguments and comes back parsed, each value as SQLite writes it in JSON, a truth value as `1` or `0`:
+SQLite has no JSON type: a stored document is `TEXT`, a `string`. JSON the statement builds with `json_object`, `json_array`, `json_group_array` or `json_group_object` is typed from its arguments and comes back parsed:
 
 ```ts twoslash tab="main.ts"
 import orderSummaries from "./lite_order_summaries.sql";
@@ -356,6 +254,17 @@ join users u on u.id = o.user_id
 
 <Rules>
 
+**Values inside a document**
+
+Inside a document a value is what SQLite writes in JSON: a truth value is `1` or `0`, and an integer is a number, which `JSON.parse` rounds past 2^53.
+
+<Pairs>
+
+- `json_object('a', 1 = 1)` → `{ a: 1 }`
+- `json_object('n', 9007199254740993)` → `{ n: 9007199254740992 }`
+
+</Pairs>
+
 **Built JSON inside built JSON**
 
 Built JSON nests inside other built JSON through `coalesce`, `case` and a scalar subquery.
@@ -369,12 +278,11 @@ Built JSON nests inside other built JSON through `coalesce`, `case` and a scalar
 
 **Where it stops being JSON**
 
-Through a subquery's or a view's column, a cast or `lag`, SQLite may no longer know it is JSON, and Reylo types it `unknown`. A column or `lag` loses it; a cast keeps it on SQLite 3.53 and loses it on Turso's engine.
+Through a subquery's or a view's column, or `lag`, SQLite no longer marks a value as JSON, so Reylo types it `unknown`; a cast keeps the mark on SQLite 3.53 but not on Turso's engine. Build the JSON in the query that returns it.
 
 <Pairs>
 
 - `json_object('n', (select j from (select json_object('a', 1) as j)))` → `{ n: "{\"a\":1}" }`
-- `json_object('n', lag(json_object('a', 1), 0) over ())` → `{ n: "{\"a\":1}" }`
 
 </Pairs>
 
@@ -395,106 +303,9 @@ What `json_extract`, `->` and `->>` return is `unknown`, since it depends on the
 <Pairs>
 
 - `json_extract('{"a":1}', '$.a')` → `1`
-- `'{"a":[1,2]}' -> '$.a'` → `"[1,2]"`
 - `'{"a":"x"}' ->> '$.a'` → `"x"`
 
 </Pairs>
-
-**JSON Schema checks**
-
-A `CHECK` that holds a column to a JSON Schema (sqlite-jsonschema's `jsonschema_matches`) types nothing, since `pragma ignore_check_constraints` lets any connection write past it.
-
-**Integers past 2^53**
-
-JavaScript's `JSON.parse` rounds an integer past 2^53 inside a document.
-
-<Pairs>
-
-- `json_object('n', 9007199254740993)` → `{ n: 9007199254740992 }`
-
-</Pairs>
-
-**Typed JSON parameters**
-
-A typed JSON parameter (`:events::json('…')`) is bound as its JSON text, which `json_each` reads, as in the main docs' [JSON parameters](/#typed-json).
-
-</Rules>
-
-### Binary
-
-A `BLOB` is a `Uint8Array` on every driver: `better-sqlite3`, Turso's engine, `sqlite3` and `sqlite` give a `Buffer`, which is one, libSQL and a Durable Object an `ArrayBuffer`, and Cloudflare D1 an array of numbers, which Reylo turns into one.
-
-<Rules>
-
-**Binary parameters**
-
-A `BLOB` parameter takes a `Uint8Array`, a `Buffer` or not, on every driver.
-
-</Rules>
-
-### Declared types and STRICT tables
-
-Reylo types a column by its declared type's affinity, by the rule SQLite applies, in this order:
-
-<Rules>
-
-**Names with `INT`**
-
-A type with `INT` in its name is `INTEGER`, whatever else the name holds.
-
-**Names with `CHAR`, `CLOB` or `TEXT`**
-
-Failing that, a type with `CHAR`, `CLOB` or `TEXT` in its name is `TEXT`.
-
-**Names with `BLOB`**
-
-Failing those, a type with `BLOB` in its name is `BLOB`.
-
-**Names with `REAL`, `FLOA` or `DOUB`**
-
-Failing those, a type with `REAL`, `FLOA` or `DOUB` in its name is `REAL`.
-
-**Any other name**
-
-Any other type is `NUMERIC`.
-
-</Rules>
-
-A column declared `BIGINT`, `INT8` or `UNSIGNED BIG INT` is `INTEGER` too, and a `bigint` by its width ([Integers](#integers)). Outside a `STRICT` table, SQLite stores a value of any class in any column:
-
-```ts twoslash tab="main.ts"
-import loose from "./lite_loose.sql";
-
-const rows = await loose.run(db);
-//    ^?
-```
-
-```sql tab="lite_loose.sql" dialect="sqlite"
--- users is not strict: name and nick may hold a BLOB
-select name, nick from users
-```
-
-<Rules>
-
-**A `STRICT` table's promise**
-
-In a `STRICT` table the declared type is a promise: SQLite refuses a value of another class, and the types above are exact. Declare tables `strict` wherever you can.
-
-**What a `STRICT` table takes**
-
-A `STRICT` table takes only `INT`, `INTEGER`, `REAL`, `TEXT`, `BLOB` and `ANY`, so no `BOOLEAN`, `BIGINT`, `DATE` or `NUMERIC` column.
-
-**Columns of any class**
-
-A column declared with no type, or `ANY` in a `STRICT` table, holds any class, so it is `unknown`.
-
-**Columns declared `BOOLEAN`**
-
-A `BOOLEAN` column, which has `NUMERIC` affinity, is a `boolean` by its declared name ([Truth values](#truth-values)).
-
-**Check constraints**
-
-A `CHECK` narrows no type, since `pragma ignore_check_constraints` lets a connection write past it: `check (role in ('admin', 'member'))` leaves `role` a `string`.
 
 </Rules>
 
@@ -504,106 +315,22 @@ SQLite says nothing of a function's result, so Reylo keeps a table of SQLite's b
 
 <Rules>
 
-**Dates that fail**
+**Functions that answer `NULL`**
 
-A function that SQLite answers with `NULL` for some non-null arguments is `| null` whatever its arguments. The date and time functions return `NULL` for text they cannot read as a date and for a failing modifier, so `date(placed_at)` is `string | null`, while `date('now')` and `datetime('now', '+7 days')` are `string`.
+A function that SQLite answers with `NULL` for some non-null arguments is `| null`: the date and time functions, for text they cannot read, and the math functions with a domain (`sqrt`, `ln`, `acos`, …) outside it. So `date(placed_at)` is `string | null`, and `date('now')` a `string`.
 
 <Pairs>
 
 - `date('not a date')` → `null`
 - `date('2026-10-20', '+1 fortnight')` → `null`
-- `date('2026-10-20', '+7 days')` → `"2026-10-27"`
-
-</Pairs>
-
-**Math outside its domain**
-
-The math functions with a domain (`sqrt`, `ln`, `log`, `acos`, `pow`, …) return `NULL` outside it, so they are `| null` too.
-
-<Pairs>
-
 - `sqrt(-1)` → `null`
-- `sqrt(4)` → `2`
-
-</Pairs>
-
-**Formats that write nothing**
-
-The `printf` function returns `NULL` when its format writes nothing, so it is `| null` too.
-
-<Pairs>
-
-- `printf('')` → `null`
-
-</Pairs>
-
-**Full-text search**
-
-FTS5's `bm25` is a `number`, or `number | null` when it is given weights, since an infinite weight makes it `NULL`, and `highlight` and `snippet` are `string | null`, `NULL` where the column they read is. FTS4's `offsets` is a `string` and `matchinfo` a `Uint8Array`.
-
-<Pairs>
-
-- `highlight(docs, 1, '<b>', '</b>')` where `body` is `NULL` → `null`
-- `bm25(docs)` with no `match` → `0`
-- `bm25(docs, 1e999, 1.0)` on a row that matches → `null`
-
-</Pairs>
-
-**Functions the table lacks**
-
-A built-in function the table lacks, such as `unhex`, is `unknown`. Cast its result to type it: `cast(unhex(hash) as blob)`.
-
-**Functions your app registers**
-
-Reylo prepares the statement in its own SQLite, which has none of the functions your application registers (`better-sqlite3`'s `db.function()`, `node:sqlite`'s `db.function()`) or a loadable extension adds. A call to one fails the type check, cast or not: "no such function: slugify". Keep the call out of the `.sql` file and apply it in TypeScript.
-
-**Which functions exist**
-
-Which functions exist is the answer of the SQLite in the Node that runs the type check, from `pragma_function_list`: a call to one it lacks is an error at the call, "no such function: soundex on this database's SQLite". Builds differ in the math functions, `soundex` and each release's additions.
-
-**Your app's SQLite**
-
-Your app runs on its driver's SQLite, which may be older: libSQL carries 3.45.1, which has no `json_pretty`. So the type check prepares each statement again on every SQLite driver your `package.json` lists: `better-sqlite3`, `@libsql/client` or `libsql`, `sqlite3` and Turso's `@tursodatabase/database`. A statement one of them refuses is an error with that SQLite's message: "@libsql/client runs SQLite 3.45.1, which refuses this statement: no such function: json_pretty".
-
-The type check cannot ask `bun:sqlite`, Cloudflare D1 or a Durable Object, which run in another runtime, nor a driver it cannot load or one that cannot open your database file.
-
-**Argument counts**
-
-On those, an argument count only a newer SQLite takes (`iif` with two arguments, before 3.48) is not caught: the type check knows a function by its name alone.
-
-**Functions in the schema**
-
-A table whose `CHECK`, index or generated column calls a function the type check's SQLite lacks is read with that function stubbed, so it types as any other.
-
-</Rules>
-
-### Values Reylo refuses
-
-Every SQLite driver hands Reylo the stored value, so two values are refused, each with an error that names its column:
-
-<Rules>
-
-**An integer past ±(2^53 − 1)**
-
-Reylo refuses one in a column typed `number`, which cannot hold it, and one the driver already rounded, in a `BIGINT` column too. Declare the column `BIGINT`, or read it with `cast(n as text)`.
-
-<Pairs>
-
-- `9007199254740993` → `throws DecodeError`
-
-</Pairs>
-
-**A truth value other than 0 or 1**
-
-Reylo refuses one in a column declared `BOOLEAN` or `BOOL`, a `BLOB` included. Store 0 or 1 in it, or read the stored number with `active + 0`. Here `users.active` holds the `BLOB` `x'01'`.
-
-<Pairs>
-
-- `active` → `throws DecodeError`
 
 </Pairs>
 
 </Rules>
+
+- **A built-in function the table lacks**, such as `unhex`, is `unknown`. Cast its result to type it: `cast(unhex(hash) as blob)`.
+- **Your app's SQLite** may be older than Reylo's: libSQL carries 3.45.1, which has no `json_pretty`. So the type check prepares each statement again on each of `better-sqlite3`, `@libsql/client`, `sqlite3` and `@tursodatabase/database` your `package.json` lists, and reports what one refuses with its message. It cannot ask `bun:sqlite`, Cloudflare D1 or a Durable Object.
 
 ## Nullability
 
@@ -659,7 +386,7 @@ from orders
 
 Where you know more than Reylo can infer, say it in the statement: `coalesce(x, …)` gives a default, and a `where x is not null` test both filters and makes the column non-null.
 
-## Row counts
+## Cardinality
 
 How many rows `.run()` resolves to comes from what Reylo infers the statement can return:
 
@@ -677,21 +404,15 @@ What counts for nothing on SQLite:
 - **A key compared under another collation.** SQLite compares under the left side's collation, so a `NOCASE` column on the left of a plain key, `r.k = c.code`, meets `'x'` and `'X'`.
 - **A declared column named `rowid`**, which is no rowid.
 
-At run time a `Row` statement throws unless it gets exactly one row, and a `Row | null` statement throws when it gets more than one.
-
 ## Parameters
 
 ### Placeholders
 
-Write each parameter as `:name`, or as SQLite's own `@name` or `$name`, one prefix per statement. Reylo sends `?`, and `.run()` takes an object keyed by name, without the prefix.
-
-- A statement may use SQLite's positional `?` or `?1` instead, never beside a name, and the object's keys are then the numbers, `{ 1: 42 }`.
-- Each parameter appears once in a statement, so that one place types it. To use a value twice, select it once in a `with` and read it from there.
-- SQLite reads `$1` as a parameter named `$1`, so Reylo refuses it and says to write `?1`.
+Write each parameter as `:name`, or as SQLite's `@name` or `$name`, one prefix per statement, and `.run()` takes an object keyed by the name alone. SQLite's `?` or `?1` works too, never beside a name, keyed by number, `{ 1: 42 }`.
 
 ### What a parameter takes
 
-Every value `.run()` returns goes back in as a parameter of its type, on every driver, so a row can be passed straight to the next statement; a `null` goes back in where the parameter takes one ([Parameters that may be null](#parameters-that-may-be-null)):
+Every value `.run()` returns goes back in as a parameter of its type, on every driver, so a row can be passed straight to the next statement:
 
 | Affinity | A parameter takes |
 | --- | --- |
@@ -702,9 +423,6 @@ Every value `.run()` returns goes back in as a parameter of its type, on every d
 | `BLOB` | `Uint8Array` |
 | `NUMERIC`, a `BOOLEAN` or `DATE` column's included | `number`, `string` or `boolean` |
 | A typed JSON parameter | what its schema admits |
-
-- A `boolean` is bound as 1 or 0 on every driver.
-- The `sqlite3` and `sqlite` drivers bind a `bigint` as `NULL`, so Reylo passes them one within 2^53 as a `number` and one past it as its digits to a `BIGINT` column's parameter, and refuses one past it anywhere else.
 
 ### Parameters without a type
 
@@ -726,32 +444,30 @@ import echo, { type Params } from "./lite_echo.sql";
 select :value as value, :count::int as count
 ```
 
-By default such a parameter is an error in the type check, which asks for a cast; [`strict_params: false`](/#strict_params) in `.reylo.yaml` leaves it `unknown`, as above. An argument of a function your application registers never gets that far: the call fails the type check ([Limits](#limits)).
+By default such a parameter is an error in the type check, which asks for a cast; [`strict_params: false`](/#strict_params) in `.reylo.yaml` leaves it `unknown`, as above.
 
 ### Parameters that may be null
 
 A parameter takes `null` in two places:
 
 - as the first argument of `coalesce` or `ifnull`, with a cast or without;
-- written whole, with no cast, to a column that may hold `NULL`.
-
-A cast is the parameter's whole type, so `:email::text` never takes `null`, and a test for null (`:p is null`, `:p is col`) makes nothing nullable. A column holds `NULL` unless it is `NOT NULL` or a `check (… is not null)` holds it:
+- written whole, with no cast, to a column that may hold `NULL`, one that is not `NOT NULL` and that no `check (… is not null)` holds.
 
 ```ts twoslash tab="main.ts"
-import usersByName from "./lite_users_by_name.sql";
-
-const users = await usersByName.run(db, { name: null });
-//                                        ^?
+import addOrder, { type Params } from "./lite_add_order.sql";
+//                      ^?
 ```
 
-```sql tab="lite_users_by_name.sql" dialect="sqlite"
-select id, name from users
-where name = coalesce(:name::text, name)
+```sql tab="lite_add_order.sql" dialect="sqlite"
+insert into orders (user_id, total_cents, ships_on)
+values (:user_id, :total_cents, :ships_on)
 ```
+
+A cast is the parameter's whole type, so `:email::text` never takes `null`, and a test for null (`:p is null`, `:p is col`) makes nothing nullable.
 
 ### Casts
 
-SQLite has no `::`, so Reylo writes `:p::type` as SQLite's `CAST`, by the type's affinity, and checks the value against the type before the statement runs, since SQLite's `CAST` never fails: `CAST('abc' AS INTEGER)` is 0, and `CAST('1.9' AS INTEGER)` is 1. SQLite's own `cast(:p as …)` works too.
+SQLite has no `::`, so Reylo writes `:p::type` as SQLite's `CAST` and checks the value against the type before the statement runs, since SQLite's `CAST` never fails: `CAST('abc' AS INTEGER)` is 0. SQLite's own `cast(:p as …)` works too.
 
 | You write | SQLite runs |
 | --- | --- |
@@ -759,7 +475,7 @@ SQLite has no `::`, so Reylo writes `:p::type` as SQLite's `CAST`, by the type's
 | `::real`, `::float`, `::double precision` | `CAST(? AS REAL)` |
 | `::text`, `::varchar(20)` | `CAST(? AS TEXT)` |
 | `::numeric`, `::decimal` | `CAST(? AS NUMERIC)` |
-| `::date`, `::time`, `::timestamp`, `::uuid` | `CAST(? AS TEXT)` |
+| `::date`, `::time`, `::timestamp`, `::uuid` | `CAST(? AS TEXT)`, since SQLite's `CAST` to a date reads `'2026-10-12'` as 2026 |
 | `::blob` | `CAST(? AS BLOB)` |
 | `::json`, `::jsonb` | `json(?)`, `jsonb(?)` |
 
@@ -767,31 +483,21 @@ SQLite has no `::`, so Reylo writes `:p::type` as SQLite's `CAST`, by the type's
 - A `::boolean` cast is an error: SQLite's `CAST` to a boolean reads a value as the number it starts with. Pass 1 or 0 and write `::integer`.
 - SQLite has no arrays, so a `::text[]` cast is an error.
 
-### How the text is read
-
-Reylo reads the statement as SQLite does: a `:name`, `@name` or `$name` is a placeholder only outside single-quoted strings (with `''`), double-quoted names and comments (`--` and `/* … */`).
-
 ## Drivers
 
-Every SQLite driver turns each stored value into a JavaScript value in native code, and the drivers differ only on an integer and a `BLOB`.
+Reylo gives each value of its own query its type itself, so a setting of yours on the database neither reaches Reylo's query nor is changed by it. The drivers differ only on integers past 2^53:
 
-Reylo runs its own query on the database you pass and gives each value its type after the driver, so a setting of yours does not reach Reylo's query, and none of Reylo's reaches yours.
+| Driver | Past 2^53 |
+| --- | --- |
+| `better-sqlite3`, `node:sqlite`, `bun:sqlite`, Turso's engine | Exact |
+| libSQL | Refused by libSQL itself, with a `RangeError` that names no column, at its default `intMode`; exact with `intMode: "bigint"` or `"string"` |
+| `sqlite3`, `sqlite`, Cloudflare D1 and Durable Objects, `Bun.sql` without `safeIntegers` | Rounded by the driver, which Reylo refuses, in a `BIGINT` column too |
 
-| Driver | How Reylo reads its values | Lost before Reylo sees it |
-| --- | --- | --- |
-| `better-sqlite3`, `node:sqlite`, `bun:sqlite` | Reylo's own statement, prepared once per database, with its own integer setting, whatever the database's | |
-| libSQL | The driver's rows, each value given its type | At its default `intMode`, an integer past 2^53, which libSQL refuses; with `intMode: "string"`, a value Reylo types `unknown` that SQLite stored as an integer comes back as its digits, since libSQL gives nothing to tell it from text |
-| Turso's engine, `@tursodatabase/database` | Reylo's own statement, prepared per call, with its own integer setting, whatever the database's | |
-| `sqlite3`, `sqlite` | The driver's rows; the statement is not kept, since a statement left open makes the app's `close()` fail | An integer past 2^53, rounded |
-| Cloudflare D1 | The driver's rows; a `BLOB`'s array of numbers made a `Uint8Array` | An integer past 2^53, rounded |
-| Cloudflare Durable Objects, `ctx.storage.sql` | The rows of `exec()`'s cursor; a `BLOB`'s `ArrayBuffer` made a `Uint8Array` | An integer past 2^53, rounded |
-| `Bun.sql` | The driver's rows | An integer past 2^53, rounded, without `safeIntegers`; no rows, with no error, for a statement with a `"` inside a single-quoted string |
-
+- The `sqlite3` and `sqlite` drivers bind a `bigint` as `NULL`, and a Durable Object refuses one, so Reylo refuses a `bigint` parameter past 2^53 there unless it is written to a `BIGINT` column.
+- With libSQL's `intMode: "string"`, a value Reylo types `unknown` that SQLite stored as an integer comes back as its digits, since libSQL gives nothing to tell it from text.
 - The drivers `better-sqlite3`, `node:sqlite`, `bun:sqlite` and the `Database` of `@tursodatabase/database/compat` take `.runSync()` too, which returns the result itself, so it works inside their `db.transaction(fn)`, as a Durable Object's `ctx.storage.sql` does inside `ctx.storage.transactionSync(fn)`, and so does a Drizzle database over `better-sqlite3`, with the transaction its `.transaction()` passes.
-- The drivers `sqlite3` and `sqlite` bind a `bigint` as `NULL`, and a Durable Object refuses one, so Reylo passes them one that a `number` holds as that number, and a larger one as its digits to a `BIGINT` column, which stores them as that integer; anywhere else it refuses a larger one before the statement runs. Every other SQLite driver binds a `bigint` exactly.
 - Each driver takes its transactions too: libSQL's `.transaction()`, the handle Turso's `.transactionAsync()` passes its function, `Bun.sql`'s `.begin()` and `.savepoint()`, D1's `.withSession()` sessions, and the `.transaction()` of a Drizzle database over libSQL.
 - On Bun 1.4.3, `Bun.sql` returns no rows for a statement whose text holds a `"` inside a single-quoted string, such as `json_extract('{"a":1}', '$.a')`, so `.run()` throws "Expected exactly one row, got 0" where one row is expected. Pass the document as a parameter: `json_extract(:doc::text, '$.a')`.
-- Turso's engine 0.8 stops the process on a recursive `WITH` whose anchor and recursive member both read a CTE over `json_each`, such as one over a [JSON parameter](/#typed-json), with no Reylo involved. Write that CTE `as materialized`.
 
 The type check needs no driver: it reads the schema through `node:sqlite`, which Node has built in since 22.5.
 
@@ -800,14 +506,10 @@ The type check needs no driver: it reads the schema through `node:sqlite`, which
 The edges of what Reylo types on SQLite, each with what to write instead:
 
 - **A declared type outside a `STRICT` table**, which SQLite does not hold a value to. Declare tables `strict`.
-- **Built JSON read through a subquery's or a view's column, a cast or `lag`**, which SQLite may no longer mark as JSON, so it is `unknown`. Build it in the query that returns it ([JSON](#json)).
 - **A function your application registers, or an extension's.** Reylo prepares the statement in its own SQLite, which lacks the function, so the type check fails with "no such function: slugify", cast or not. Keep the call out of the `.sql` file and apply it in TypeScript to what `.run()` returns.
-- **A built-in function Reylo's table lacks**, such as `unhex`. Its result is `unknown`: cast it in the statement, `cast(unhex(hash) as blob)`.
 - **A table in an attached database.** The type check reads one database file, and an `ATTACH` happens on your app's connection at run time, so `select … from other.users` is an error: the database has no schema `other`. A `TEMP` table is the same.
 - **A virtual table's module.** Reylo's SQLite has FTS3, FTS4, FTS5, R-tree, Geopoly and `dbstat`, so a schema that uses one is read, and the type check does not ask whether your driver's SQLite has the module.
 - **Arithmetic on a `REAL` that has no answer.** SQLite answers `NULL` where a real's arithmetic is not a number, and Reylo types it non-null: `+`, `-` and `*` over non-null values, and `/` and `%` by a literal other than 0.
   - Such a value is `null` where the type says `number`: `1e999 * 0`, `price - price` where `price` holds `1e999`, and `5 % 0.5`, whose divisor `%` reads as the integer 0.
   - Write `coalesce(price * qty, 0)` where a `REAL` may hold an infinity. An overflow is no such case: `9e307 * 9e307` is `Infinity`.
-- **A parameter in place of a name.** A parameter is a value: `select * from :table` is SQLite's syntax error, and `order by :column` sorts by a constant. Choose a column with `case :sort when 'name' then name end`.
 - **A statement nested deeper than 350 expressions**, which is SQLite's error, "Expression tree is too large".
-- **One statement per file.** A file holds one `select`, `insert`, `update`, `delete`, `replace` or `values`. A file of several statements or of DDL, such as a migration, is an error in the type check.
