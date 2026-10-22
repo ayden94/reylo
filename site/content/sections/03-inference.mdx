@@ -353,56 +353,49 @@ create extension if not exists pg_jsonschema;
 create table events (
   id serial primary key,
   payload jsonb not null check (jsonb_matches_schema('{
-    "oneOf": [
-      {
-        "type": "object",
-        "properties": {
-          "kind": { "enum": ["click"] },
-          "x": { "type": "integer" },
-          "y": { "type": "integer" }
-        },
-        "required": ["kind", "x", "y"],
-        "additionalProperties": false
+    "type": "object",
+    "oneOf": [{
+      "properties": {
+        "kind": { "const": "click" },
+        "x": { "type": "integer" },
+        "y": { "type": "integer" }
       },
-      {
-        "type": "object",
-        "properties": {
-          "kind": { "enum": ["key"] },
-          "code": { "type": "string" }
-        },
-        "required": ["kind", "code"],
-        "additionalProperties": false
-      }
-    ]
+      "required": ["kind", "x", "y"],
+      "additionalProperties": false
+    }, {
+      "properties": {
+        "kind": { "const": "key" },
+        "code": { "type": "string" }
+      },
+      "required": ["kind", "code"],
+      "additionalProperties": false
+    }]
   }', payload))
 );
 ```
 
 ```sql schema dialect="mysql"
+-- MySQL checks JSON Schema draft 4, which has no const
 create table events (
   id int auto_increment primary key,
   payload json not null check (json_schema_valid('{
-    "oneOf": [
-      {
-        "type": "object",
-        "properties": {
-          "kind": { "enum": ["click"] },
-          "x": { "type": "integer" },
-          "y": { "type": "integer" }
-        },
-        "required": ["kind", "x", "y"],
-        "additionalProperties": false
+    "type": "object",
+    "oneOf": [{
+      "properties": {
+        "kind": { "enum": ["click"] },
+        "x": { "type": "integer" },
+        "y": { "type": "integer" }
       },
-      {
-        "type": "object",
-        "properties": {
-          "kind": { "enum": ["key"] },
-          "code": { "type": "string" }
-        },
-        "required": ["kind", "code"],
-        "additionalProperties": false
-      }
-    ]
+      "required": ["kind", "x", "y"],
+      "additionalProperties": false
+    }, {
+      "properties": {
+        "kind": { "enum": ["key"] },
+        "code": { "type": "string" }
+      },
+      "required": ["kind", "code"],
+      "additionalProperties": false
+    }]
   }', payload))
 );
 ```
