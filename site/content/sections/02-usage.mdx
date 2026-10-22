@@ -48,7 +48,15 @@ TypeScript checks both the parameters you pass and the result you get back.
 
 ### `.runSync()`
 
-To run the query synchronously on `better-sqlite3`, `node:sqlite` or the `Database` of `@tursodatabase/database/compat`:
+For databases that support synchronous operations, you can use `.runSync()`.
+
+<Callout title="Supported drivers">
+
+- `better-sqlite3`
+- `node:sqlite`
+- the `Database` of `@tursodatabase/database/compat`
+
+</Callout>
 
 ```ts twoslash dialect="sqlite"
 import Database from "better-sqlite3";
