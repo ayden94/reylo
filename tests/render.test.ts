@@ -117,9 +117,9 @@ const ROUND_TRIPS: Record<"postgres" | "mysql" | "sqlite", [column: EngineType, 
     [array({ kind: "enum", name: "mood", labels: ["ok", "sad"] }), array({ kind: "enum", name: "mood", labels: ["ok", "sad"] })],
     [array(composite), array(composite)],
     [array(scalar("record")), array(scalar("record"))],
-    // An array the statement builds from values that may be NULL (`array_agg` over a left join).
-    [{ kind: "array", of: scalar("text"), nullable_items: true }, array(scalar("text"))],
-    [{ kind: "array", of: scalar("int8"), nullable_items: true }, array(scalar("int8"))],
+    // An array the statement builds from values that may be NULL (`array_agg` over a left join)
+    // goes back into a structured member alone: a top-level array parameter takes no NULL
+    // element (the maintainer, 2026-10-21), tested below.
   ],
   mysql: [
     [scalar("int8"), scalar("int8")],
@@ -175,11 +175,11 @@ test("parameters take what every driver binds, whatever Reylo returns", () => {
 
 test("every date and time parameter takes a string: a timestamptz one the text that names its zone, which run returns, and no Date", () => {
   assert.equal(renderParamType(scalar("timestamptz"), "postgres"), "string");
-  assert.equal(renderParamType({ kind: "array", of: scalar("timestamptz") }, "postgres"), "(string | null)[]");
+  assert.equal(renderParamType({ kind: "array", of: scalar("timestamptz") }, "postgres"), "string[]");
   for (const name of ["timestamp", "date"]) {
     assert.equal(renderParamType(scalar(name), "postgres"), "string");
     assert.equal(renderParamType(scalar(name), "mysql"), "string");
-    assert.equal(renderParamType({ kind: "array", of: scalar(name) }, "postgres"), "(string | null)[]");
+    assert.equal(renderParamType({ kind: "array", of: scalar(name) }, "postgres"), "string[]");
   }
   // What MySQL answers by what is bound for a placeholder compared with a DATE and a DATETIME.
   assert.equal(renderParamType(scalar("date|timestamp"), "mysql"), "string");
@@ -194,8 +194,15 @@ test("an array's elements are nullable only where the statement builds it from a
   assert.equal(renderType(texts(true)), "(string | null)[]");
   assert.equal(renderType(texts(true), true), "(string | null)[]");
   assert.equal(renderType({ kind: "array", of: { kind: "enum", name: "mood", labels: ["ok", "sad"] }, nullable_items: true }), `("ok" | "sad" | null)[]`);
-  // A parameter's elements are the caller's to pass.
-  assert.equal(renderParamType(texts()), "(string | null)[]");
+  // A top-level array parameter's elements take no NULL, as the parameter itself takes NULL only
+  // as the first argument of `coalesce` (the maintainer, 2026-10-21: "if you put in a hard-coded
+  // cast, that should be it"): a NULL in `= any(:ids)` matches nothing. An array inside a
+  // structured parameter's member keeps NULL elements, so a built array goes back into a row.
+  assert.equal(renderParamType(texts()), "string[]");
+  assert.equal(renderParamType({ kind: "array", of: scalar("int8") }), "(number | bigint | string)[]");
+  assert.equal(renderParamType({ kind: "array", of: scalar("int4") }), "number[]");
+  const member: EngineType = { kind: "rows", one: true, fields: [{ name: "tags", type: texts(), written: "text[]", nullable: false, optional: false }] };
+  assert.equal(renderParamType(member), "{ tags: (string | null)[] }");
 });
 
 test("a JSON column a CHECK holds to a JSON Schema is the type of the values the schema admits", () => {

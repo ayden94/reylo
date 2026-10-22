@@ -178,11 +178,15 @@ export function declaredType(t: EngineType, declared: unknown): string | undefin
  * string (the maintainer, 2026-10-20: "for now, let's just keep it as strings"). A `timestamp` or a `date` (MySQL's DATETIME and TIMESTAMP are the engine's
  * `timestamp`) is a wall-clock reading with no zone, and the drivers write a `Date`'s in different
  * zones, the app's (pg, mysql2), the server's (postgres.js) or UTC (PGlite, Bun.sql), so it takes
- * the text alone (the maintainer, 2026-10-12). An array's elements take NULL, which the run time
- * binds, since an array a statement builds comes back with NULL elements (`array_agg` over a
- * left join is `(string | null)[]`).
+ * the text alone (the maintainer, 2026-10-12). An array parameter's elements take no NULL (the
+ * maintainer, 2026-10-21, beside his rule for a parameter's own nullability: "if you put in a
+ * hard-coded cast, that should be it. That should be what the type signature is"): a NULL element
+ * of `= any(:ids)` matches nothing. An array inside a structured
+ * parameter's member (`inRow`) keeps NULL elements, which `src/rows.ts` binds, so an array a
+ * statement builds with NULL elements (`array_agg` over a left join is `(string | null)[]`) goes
+ * back into a row.
  */
-export function renderParamType(t: EngineType, dialect: Dialect = "postgres"): string {
+export function renderParamType(t: EngineType, dialect: Dialect = "postgres", inRow = false): string {
   if (t.kind === "scalar" && dialect !== "sqlite") {
     if (t.name === "int8") return "number | bigint | string";
     if (t.name.split("|").every((name) => name === "timestamp" || name === "timestamptz" || name === "date")) return "string";
@@ -205,7 +209,7 @@ export function renderParamType(t: EngineType, dialect: Dialect = "postgres"): s
   // A structured parameter: each key as a parameter of its type takes it, `?` where the caller
   // may leave it out, `| null` where it may be null.
   if (t.kind === "rows") {
-    const fields = t.fields.map((f) => `${ident(f.name)}${f.optional ? "?" : ""}: ${declaredType(f.type, f.schema) ?? renderParamType(f.type, dialect)}${f.nullable ? " | null" : ""}`);
+    const fields = t.fields.map((f) => `${ident(f.name)}${f.optional ? "?" : ""}: ${declaredType(f.type, f.schema) ?? renderParamType(f.type, dialect, true)}${f.nullable ? " | null" : ""}`);
     const row = fields.length ? `{ ${fields.join("; ")} }` : "Record<never, never>";
     return t.one ? row : `readonly ${row}[]`;
   }
@@ -213,7 +217,9 @@ export function renderParamType(t: EngineType, dialect: Dialect = "postgres"): s
     // An array of row values comes back as the text Postgres prints, which the parameter takes back
     // beside an array of each row's own text.
     if ((t.of.kind === "scalar" && t.of.name === "record") || t.of.kind === "composite") return "string | string[]";
-    return `(${renderParamType(t.of, dialect)} | null)[]`;
+    if (inRow) return `(${renderParamType(t.of, dialect, inRow)} | null)[]`;
+    const inner = renderParamType(t.of, dialect);
+    return /[|&]/.test(inner) ? `(${inner})[]` : `${inner}[]`;
   }
   return renderType(t, false, dialect);
 }

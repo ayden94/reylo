@@ -278,10 +278,10 @@ import paramAny from "./param_any.sql";
 import type { Params as ParamAnyParams } from "./param_any.sql";
 const paramAny1: { id: number; name: string }[] = null! as Awaited<ReturnType<typeof paramAny.run>>;
 const paramAny2: Awaited<ReturnType<typeof paramAny.run>> = null! as { id: number; name: string }[];
-const paramAny3: { names: (string | null)[] } = null! as ParamAnyParams;
-const paramAny4: ParamAnyParams = null! as { names: (string | null)[] };
+const paramAny3: { names: string[] } = null! as ParamAnyParams;
+const paramAny4: ParamAnyParams = null! as { names: string[] };
 // Right: `= any(:names)` types the parameter as the array of the column's type, whose elements
-// take NULL, as an array a statement builds comes back with.
+// take no NULL, which would match nothing (the maintainer, 2026-10-21).
 
 import paramLimit from "./param_limit.sql";
 import type { Params as ParamLimitParams } from "./param_limit.sql";
@@ -322,9 +322,10 @@ const paramNull1: { id: number; email: string | null }[] = null! as Awaited<Retu
 const paramNull2: Awaited<ReturnType<typeof paramNull.run>> = null! as { id: number; email: string | null }[];
 const paramNull3: ParamNullParamsType = null! as ParamNullParams;
 const paramNull4: ParamNullParams = null! as ParamNullParamsType;
-// Right: a parameter may be null where the statement lets it be, and nowhere else. :email is
-// written whole to a nullable column; :role is tested for null, through the WITH that selects it
-// once so the statement can read it twice; :name fills a NOT NULL column.
+// Right: a parameter may be null where the statement lets it be, and nowhere else (the
+// maintainer, 2026-10-21). :email is written whole and bare to a nullable column; :role is
+// coalesced, through the WITH that selects it once; :name fills a NOT NULL column. A test for null
+// (`input.role is null or …`) would not make :role nullable.
 
 import paramPositional from "./param_positional.sql";
 import type { Params as ParamPositionalParams } from "./param_positional.sql";

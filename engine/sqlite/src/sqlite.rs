@@ -223,7 +223,7 @@ fn run(sql: &str, lexed: &Lexed, ddl: &[String], extras: &Extras) -> SqliteAnaly
         }
         return failed(bare(sql, lexed, Dialect::Sqlite, diagnostics));
     }
-    let a = Analyzer { tree: &t, extras, skipping: &skipping, nullable_params: guarded_params(&t, extras), level: std::cell::RefCell::new(Level::default()), shapes: std::cell::RefCell::new(HashMap::new()) };
+    let a = Analyzer { tree: &t, extras, skipping: &skipping, nullable_params: coalesced_params(&t, extras), level: std::cell::RefCell::new(Level::default()), shapes: std::cell::RefCell::new(HashMap::new()) };
     let (mut columns, kind) = a.columns();
     let booleans = a.booleans();
     // A truth value, and a column declared BOOLEAN, are booleans to the loader's run time, which
@@ -596,9 +596,10 @@ struct Analyzer<'a> {
     /// Per table (lowercase), the events (`TRIGGER_ROW_INSERT`, `_UPDATE`, `_DELETE`) a BEFORE or
     /// INSTEAD OF trigger fires on: its `SELECT RAISE(IGNORE)` skips the row.
     skipping: &'a HashMap<String, i32>,
-    /// The parameters (`?n`) the caller may pass NULL for, because the statement tests them for
-    /// NULL or coalesces them ([`guarded_params`]); every other one is a non-null value, as on
-    /// Postgres.
+    /// The parameters (`?n`) the caller may pass NULL for because the statement passes them first
+    /// to `coalesce` or `ifnull` ([`coalesced_params`]); with the bare ones written whole to a
+    /// column that may hold NULL ([`Analyzer::params`]), every other one is a non-null value, as
+    /// on Postgres and MySQL.
     nullable_params: HashSet<String>,
     /// What the WHERE and the grouping of the SELECT arm whose columns are being typed prove.
     level: std::cell::RefCell<Level>,
@@ -617,12 +618,13 @@ struct Level {
     grouped: bool,
 }
 
-/// The parameters the statement tests for NULL (`?1 IS NULL`, `?1 IS NOT NULL`) or passes first to
-/// `coalesce` or `ifnull`: the caller means to pass NULL for them. The test may be of the column of
-/// a WITH query or a subquery that selects the parameter (`with input as (select :p as p) … where
-/// input.p is null`), since each parameter appears once in a statement and a value tested and read
-/// again is selected once in a WITH.
-fn guarded_params(t: &Tree, extras: &Extras) -> HashSet<String> {
+/// The parameters the statement passes first to `coalesce` or `ifnull`, the two-argument
+/// coalesce, bare or cast: the caller means to pass NULL for them. Beside these only a bare
+/// parameter written whole to a column that may hold NULL takes NULL ([`Analyzer::params`]); a
+/// null test (`?1 IS NULL`) or `IS` lets none through (the maintainer, 2026-10-21). The argument may be the column of a WITH query or a subquery that selects the parameter (`with
+/// input as (select :p as p) … where coalesce(input.p, 0) = 0`), since each parameter appears once
+/// in a statement and a value coalesced and read again is selected once in a WITH.
+fn coalesced_params(t: &Tree, extras: &Extras) -> HashSet<String> {
     /// Every FROM item's subquery, a WITH query's too, by the item's cursor: SQLite numbers the
     /// cursors of one statement apart.
     fn subqueries<'a>(sel: &'a Sel, out: &mut HashMap<i64, &'a Sel>) {
@@ -664,13 +666,8 @@ fn guarded_params(t: &Tree, extras: &Extras) -> HashSet<String> {
         }
     }
     fn walk(n: &Node, subs: &HashMap<i64, &Sel>, extras: &Extras, out: &mut HashSet<String>) {
-        match n.op.as_str() {
-            "isnull" | "notnull" | "is" | "is not" => {
-                out.extend(variable(n.left.as_deref(), subs, extras, 0));
-                out.extend(variable(n.right.as_deref(), subs, extras, 0));
-            }
-            "function" if matches!(n.name.as_deref(), Some("coalesce" | "ifnull")) => out.extend(variable(n.args.first(), subs, extras, 0)),
-            _ => {}
+        if n.op == "function" && matches!(n.name.as_deref(), Some("coalesce" | "ifnull")) {
+            out.extend(variable(n.args.first(), subs, extras, 0));
         }
         for child in n.left.iter().chain(n.right.iter()).map(|b| b.as_ref()).chain(n.list.iter()).chain(n.args.iter()) {
             walk(child, subs, extras, out);
@@ -1610,26 +1607,18 @@ impl Analyzer<'_> {
     fn params(&self, lexed: &Lexed) -> Vec<Param> {
         let mut found: Vec<(String, Fact)> = Vec::new();
         let t = self.tree;
-        // A parameter that is the whole value written to a column, bare or under the conversions
-        // a `:name::type` cast compiles to (`CAST(? AS type)`, and `json(?)` or `jsonb(?)` for
-        // `::json`), each of which keeps NULL, may be null when that column may, and no NOT NULL
-        // column it also fills forbids it.
+        // A parameter that is, bare, with no cast, the whole value written to a column may be null
+        // where that column may hold NULL, and no column that refuses NULL it also fills forbids
+        // it (the maintainer, 2026-10-21). A cast one, `CAST(? AS type)` or the `json(?)` a
+        // `::json` compiles to, is its cast's type: "If you wanted to do type inference based on
+        // the column, you shouldn't have added the cast."
         let mut fills: HashMap<String, bool> = HashMap::new();
-        let mut fill = |v: &Node, target: &Option<Fact>| {
-            let mut v = v;
-            loop {
-                let inner = match v.op.as_str() {
-                    "cast" => v.left.as_deref(),
-                    "function" if matches!(v.name.as_deref(), Some("json" | "jsonb")) && v.args.len() == 1 && self.extras.function(v.name.as_deref().unwrap_or(""), 1).is_none() => v.args.first(),
-                    _ => break,
-                };
-                let Some(inner) = inner else { return };
-                v = inner;
-            }
+        let mut fill = |v: &Node, target: &Option<Fact>, checked: bool| {
             if let (true, Some(name), Some(target)) = (v.op == "variable", v.name.as_ref(), target) {
-                *fills.entry(name.clone()).or_insert(true) &= !target.non_null;
+                *fills.entry(name.clone()).or_insert(true) &= !target.non_null && !checked;
             }
         };
+        let checked = |c: Option<&str>| t.dml.as_ref().zip(c).is_some_and(|(dml, c)| self.checked_not_null(&dml.table, c));
         if let Some(sel) = &t.statement {
             let targets: Vec<Option<Fact>> = match &t.dml {
                 // The SELECT or the VALUES rows that feed an INSERT: their columns type from the
@@ -1637,12 +1626,12 @@ impl Analyzer<'_> {
                 Some(dml) if dml.kind == "insert" => dml.columns.iter().map(|c| c.as_deref().and_then(|c| self.table_column(&dml.table, c))).collect(),
                 _ => Vec::new(),
             };
-            // Every row of a VALUES list writes its values whole, as the one-row form below does;
-            // a SELECT's column is no such value, as on Postgres.
-            if sel.values && sel.prior.is_none() {
+            // Every row of a VALUES list writes its values whole, as the one-row form below does,
+            // and so does the one SELECT that feeds an INSERT; a compound's columns are any arm's.
+            if sel.prior.is_none() {
                 for (i, v) in sel.columns.iter().map(|c| &c.expr).enumerate().chain(sel.rows.iter().flat_map(|row| row.iter().enumerate())) {
                     if let Some(target) = targets.get(i) {
-                        fill(v, target);
+                        fill(v, target, checked(t.dml.as_ref().and_then(|d| d.columns.get(i)).and_then(|c| c.as_deref())));
                     }
                 }
             }
@@ -1653,13 +1642,13 @@ impl Analyzer<'_> {
             if let Some(values) = &dml.values {
                 for (i, v) in values.iter().enumerate() {
                     let target = dml.columns.get(i).and_then(|c| c.as_deref()).and_then(|c| self.table_column(&dml.table, c));
-                    fill(v, &target);
+                    fill(v, &target, checked(dml.columns.get(i).and_then(|c| c.as_deref())));
                     self.walk(v, Ctx::Typed(target), &scope, &mut found);
                 }
             }
             for item in dml.set.iter().chain(dml.upsert.iter().flat_map(|u| u.set.iter())) {
                 let target = item.column.as_deref().and_then(|c| self.table_column(&dml.table, c));
-                fill(&item.expr, &target);
+                fill(&item.expr, &target, checked(item.column.as_deref()));
                 self.walk(&item.expr, Ctx::Typed(target), &scope, &mut found);
             }
             if let Some(w) = &dml.where_ {
@@ -1694,6 +1683,13 @@ impl Analyzer<'_> {
                 Param { name: name.clone(), ty: fact.ty, type_name, nullable, schema: None, cast: None }
             })
             .collect()
+    }
+
+    /// Whether a CHECK of the table refuses NULL in the column (`check (col is not null)`). A view
+    /// is no table here (its INSTEAD OF trigger says what a write takes), so a parameter written
+    /// to one has no target column and takes no NULL.
+    fn checked_not_null(&self, table: &str, column: &str) -> bool {
+        self.tree.tables.get(table).and_then(|info| info.columns.iter().find(|c| c.name.eq_ignore_ascii_case(column))).is_some_and(|c| c.checked_not_null)
     }
 
     fn table_column(&self, table: &str, column: &str) -> Option<Fact> {
@@ -2801,16 +2797,23 @@ mod tests {
     #[test]
     fn the_postgres_nullability_rules_hold_on_sqlite() {
         let nullable_param = |sql: &str, name: &str| analysis(sql).params.iter().find(|p| p.name == name).is_some_and(|p| p.nullable);
-        // A parameter the statement tests for NULL or coalesces takes NULL; any other is a value.
-        // Each parameter appears once, so a value tested and read again is selected once in a
-        // WITH, and the test of its column is the test of the parameter, however it is named.
-        assert!(nullable_param("with input as (select cast(:p as integer) as p) select id from users, input where (input.p is null or score > input.p)", "p"));
-        assert!(nullable_param("with input as (select :p as p) select id from users, input i where (p is null or score > i.p)", "p"));
-        assert!(nullable_param("select id from users, (select :p as p) s where s.p is null or score > s.p", "p"));
+        // A parameter the statement passes first to `coalesce` or `ifnull` takes NULL; any other
+        // is a value, one it tests for NULL too (the maintainer, 2026-10-21). Each parameter
+        // appears once, so a value coalesced and read again is selected once in a WITH, and the
+        // coalesce of its column is the coalesce of the parameter, however it is named.
+        assert!(nullable_param("with input as (select cast(:p as integer) as p) select id from users, input where score = coalesce(input.p, score)", "p"));
+        assert!(nullable_param("with input as (select :p as p) select id from users, input i where score = ifnull(p, score) and score > i.p", "p"));
+        assert!(nullable_param("select id from users, (select :p as p) s where coalesce(s.p, score) = score", "p"));
         assert!(nullable_param("with input as (select :p as p) select id from users, input where score = coalesce(input.p, score)", "p"));
         assert!(!nullable_param("with input as (select :p as p) select id from users, input where score > input.p", "p"));
-        assert!(!nullable_param("with input as (select :p as p union all select 1) select id from users, input where input.p is null", "p"));
-        assert!(nullable_param("select id from users where cast(:p as integer) is null", "p"));
+        assert!(!nullable_param("with input as (select :p as p union all select 1) select id from users, input where coalesce(input.p, 0) = 0", "p"));
+        assert!(!nullable_param("with input as (select cast(:p as integer) as p) select id from users, input where (input.p is null or score > input.p)", "p"));
+        assert!(!nullable_param("select id from users where cast(:p as integer) is null", "p"));
+        assert!(!nullable_param("select id from users where :p is not null", "p"));
+        assert!(!nullable_param("select id from users where email is :p", "p"));
+        assert!(!nullable_param("select id from users where :p is not email", "p"));
+        assert!(!nullable_param("select id from users where :p isnull", "p"));
+        assert!(!nullable_param("select id from users where score = coalesce(score, :p)", "p"));
         let sql = "select id from users where (:p is null or score > :p)";
         let repeated = analysis(sql);
         assert_eq!(repeated.diagnostics.iter().map(|d| (d.code, d.start, d.length)).collect::<Vec<_>>(), [(3, sql.rfind(":p").unwrap(), 2)]);
@@ -2837,36 +2840,44 @@ mod tests {
     }
 
     #[test]
-    fn a_cast_parameter_is_as_nullable_as_the_bare_one() {
-        // A `:name::type` cast compiles to `CAST(? AS type)`, and `::json` to `json(?)`: each keeps
-        // NULL, so the parameter takes NULL wherever the bare one does: written whole to a nullable
-        // column (an INSERT's values, every row of a VALUES list, an UPDATE's or an upsert's SET, a
-        // row value's elements), tested for NULL, or coalesced. Into a NOT NULL column it is a value.
-        let ddl = vec!["create table users (id integer primary key, name text not null, email text unique, score real, n integer, doc text, meta text not null default '{}') strict".to_string()];
+    fn a_cast_parameter_is_its_casts_type_and_a_bare_one_its_columns() {
+        // A `:name::type` cast compiles to `CAST(? AS type)`, and `::json` to `json(?)`: the
+        // parameter is the cast's type and takes no NULL, written whole or not ("If you wanted to
+        // do type inference based on the column, you shouldn't have added the cast", the
+        // maintainer, 2026-10-21). A bare one written whole (an INSERT's values, every row of a
+        // VALUES list, an UPDATE's or an upsert's SET, a row value's elements) is as nullable as
+        // its column; a column a CHECK refuses NULL in, by a conjunct `col is not null`, is not.
+        // Both take NULL coalesced, and neither tested for NULL.
+        let ddl = vec!["create table users (id integer primary key, name text not null, email text unique, score real, n integer, doc text, meta text not null default '{}', nick text check (nick is not null), code text check (length(code) > 0 and code is not null), tag text check (tag <> '')) strict".to_string()];
         let types = |sql: &str| {
             let a = analyze_ddl(sql, &ddl, &Extras::default()).analysis;
             assert!(a.diagnostics.is_empty(), "{sql}: {:?}", a.diagnostics);
             a.params.iter().map(|p| format!("{}{}", p.name, if p.nullable { "?" } else { "" })).collect::<Vec<_>>().join(" ")
         };
-        for (bare, cast) in [
-            ("insert into users (name, email) values (:name, :email) on conflict (email) do update set name = excluded.name returning id", "insert into users (name, email) values (CAST(:name AS TEXT), CAST(:email AS TEXT)) on conflict (email) do update set name = excluded.name returning id"),
-            ("insert into users (name, email, score, n, doc, meta) values (:name, :email, :score, :n, :doc, :meta)", "insert into users (name, email, score, n, doc, meta) values (CAST(:name AS TEXT), CAST(:email AS TEXT), CAST(:score AS NUMERIC), CAST(:n AS INTEGER), json(:doc), jsonb(:meta))"),
-            ("insert into users (name, email) values (:a, :b), (:c, :d)", "insert into users (name, email) values (CAST(:a AS TEXT), CAST(:b AS TEXT)), (CAST(:c AS TEXT), CAST(:d AS TEXT))"),
-            ("update users set email = :email, name = :name, score = :score, n = :n, doc = :doc, meta = :meta where id = :id", "update users set email = CAST(:email AS TEXT), name = CAST(:name AS TEXT), score = CAST(:score AS REAL), n = CAST(:n AS INTEGER), doc = json(:doc), meta = json(:meta) where id = CAST(:id AS INTEGER)"),
-            ("update users set (name, email) = (:name, :email) where id = :id", "update users set (name, email) = (CAST(:name AS TEXT), CAST(:email AS TEXT)) where id = CAST(:id AS INTEGER)"),
-            ("insert into users (name, email) values ('a', 'b') on conflict (email) do update set email = :e, n = :n, name = :name", "insert into users (name, email) values ('a', 'b') on conflict (email) do update set email = CAST(:e AS TEXT), n = CAST(:n AS INTEGER), name = CAST(:name AS TEXT)"),
-            ("update users set n = coalesce(:n, n), doc = coalesce(:doc, doc) where id = :id", "update users set n = coalesce(CAST(:n AS INTEGER), n), doc = coalesce(json(:doc), doc) where id = CAST(:id AS INTEGER)"),
-            ("select id from users where (:doc is null or doc = :d)", "select id from users where (json(:doc) is null or doc = json(:d))"),
+        for (sql, want) in [
+            ("insert into users (name, email) values (:name, :email) on conflict (email) do update set name = excluded.name returning id", "name email?"),
+            ("insert into users (name, email) values (CAST(:name AS TEXT), CAST(:email AS TEXT)) on conflict (email) do update set name = excluded.name returning id", "name email"),
+            ("insert into users (name, email, score, n, doc, meta) values (:name, :email, :score, :n, :doc, :meta)", "name email? score? n? doc? meta"),
+            ("insert into users (name, email, score, n, doc, meta) values (CAST(:name AS TEXT), CAST(:email AS TEXT), CAST(:score AS NUMERIC), CAST(:n AS INTEGER), json(:doc), jsonb(:meta))", "name email score n doc meta"),
+            ("insert into users (name, email) values (:a, :b), (:c, CAST(:d AS TEXT))", "a b? c d"),
+            ("update users set email = :email, name = :name, score = :score, n = CAST(:n AS INTEGER), doc = json(:doc) where id = :id", "email? name score? n doc id"),
+            ("update users set (name, email) = (:name, :email) where id = :id", "name email? id"),
+            ("update users set (name, email) = (CAST(:name AS TEXT), CAST(:email AS TEXT)) where id = CAST(:id AS INTEGER)", "name email id"),
+            ("insert into users (name, email) values ('a', 'b') on conflict (email) do update set email = :e, n = CAST(:n AS INTEGER), name = :name", "e? n name"),
+            ("update users set email = CAST(CAST(:e AS INTEGER) AS TEXT), meta = json(:m) where id = 1", "e m"),
+            ("insert into users (name, nick, code, tag) values (:name, :nick, :code, :tag)", "name nick code tag?"),
+            ("update users set nick = :nick, code = :code, tag = :tag where id = :id", "nick code tag? id"),
+            ("update users set n = coalesce(CAST(:n AS INTEGER), n), doc = ifnull(json(:doc), doc), score = coalesce(:s, score) where id = CAST(:id AS INTEGER)", "n? doc? s? id"),
+            ("select id from users where (json(:doc) is null or doc = json(:d)) and :x is not null", "doc d x"),
+            ("insert into users (name, email) select CAST(:name AS TEXT), CAST(:email AS TEXT)", "name email"),
+            ("insert into users (name, email) select :name, :email", "name email?"),
         ] {
-            assert_eq!(types(cast), types(bare), "{cast}");
+            assert_eq!(types(sql), want, "{sql}");
         }
-        assert_eq!(types("insert into users (name, email) values (CAST(:name AS TEXT), CAST(:email AS TEXT)) on conflict (email) do update set name = excluded.name returning id"), "name email?");
-        assert_eq!(types("update users set email = CAST(CAST(:e AS INTEGER) AS TEXT), meta = json(:m) where id = 1"), "e? m");
-        // A SELECT's column is no value written whole, cast or not, as on Postgres.
-        assert_eq!(types("insert into users (name, email) select CAST(:name AS TEXT), CAST(:email AS TEXT)"), "name email");
-        // A host function registered over `json` may answer anything for NULL.
+        // A host function registered over `json` may answer anything for NULL: what it wraps is no
+        // parameter passed to `coalesce`.
         let host = Extras { total: vec![TotalFunction { name: "json".into(), arity: 1, returns: Affinity::Text }], host: None };
-        let a = analyze_ddl("insert into users (name, doc) values ('a', json(:doc))", &ddl, &host).analysis;
+        let a = analyze_ddl("update users set doc = coalesce(json(:doc), doc) where id = 1", &ddl, &host).analysis;
         assert_eq!(a.params.iter().map(|p| p.nullable).collect::<Vec<_>>(), [false]);
     }
 
@@ -3337,17 +3348,18 @@ mod tests {
         let typed = |types: &[&str]| types.iter().map(|t| (t.to_string(), false)).collect::<Vec<_>>();
         // A select-list parameter takes its target column's type; one the WHERE compares, the
         // column's: `bool` is a declared type of NUMERIC affinity, a number or a text.
+        // A bare one written to a column that may hold NULL takes NULL, as in a VALUES row.
         let got = a("insert into foo (name, meta) select name, ? from bar where ready = ?");
         assert_eq!((got.kind.as_str(), got.cardinality.as_str()), ("insert", "none"));
-        assert_eq!(params(&got), typed(&["text", "numeric"]));
+        assert_eq!(params(&got), [("text".to_string(), true), ("numeric".to_string(), false)]);
         assert_eq!(params(&a("select name from bar where ready = ?")), typed(&["numeric"]));
         // Without a column list, through an expression, in every arm of a compound, and under a
-        // LIMIT; a SELECT's column is not a value written whole, so it takes no NULL.
-        assert_eq!(params(&a("insert into foo select :n, :m, :k from bar")), typed(&["text", "text", "integer"]));
+        // LIMIT; only a bare column of the one SELECT is a value written whole.
+        assert_eq!(params(&a("insert into foo select :n, :m, :k from bar")), [("text".to_string(), false), ("text".to_string(), true), ("integer".to_string(), true)]);
         assert_eq!(params(&a("insert into foo (k, name) select n + :d, upper(:u) from bar limit :l")), typed(&["integer", "text", "integer"]));
         assert_eq!(params(&a("insert into foo (name, k) select name, :a from bar union all select :b, n from bar")), typed(&["integer", "text"]));
         let returning = a("insert into foo (name, meta) select name, :m from bar where n > :n returning name, meta");
-        assert_eq!((params(&returning), returning.cardinality.as_str()), (typed(&["text", "integer"]), "many"));
+        assert_eq!((params(&returning), returning.cardinality.as_str()), (vec![("text".to_string(), true), ("integer".to_string(), false)], "many"));
         // A subquery elsewhere in the statement is not the INSERT's source: one in RETURNING
         // stands in no typed place, and one in a VALUES row is the value written to its own
         // column (k, not the first target column name), as any scalar subquery takes the type of

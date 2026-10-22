@@ -458,18 +458,18 @@ A `TINYINT(1)` column that Reylo types `boolean` and that holds 2 is refused, ra
 
 ## Nullability
 
-A column is `| null` unless Reylo proves it never is. On MySQL the proof is the server's: it marks each result column `NOT NULL` or not, and Reylo reads that mark and adds what the statement's `where` and `group by` prove.
+A column is `| null` unless Reylo infers it never is. On MySQL that starts from the server: it marks each result column `NOT NULL` or not, and Reylo reads that mark and adds what the statement's `where` and `group by` rule out.
 
 - **A table's column** is non-null where the table says `NOT NULL`, exactly.
-- **An outer join** makes the joined table's columns nullable, unless a test in the `where` that fails on `NULL` proves the joined row exists, as `where p.published_at is not null` or `where p.id > 0` does, or a later inner join's `on` does.
+- **An outer join** makes the joined table's columns nullable, unless a test in the `where` that fails on `NULL` shows the joined row exists, as `where p.published_at is not null` or `where p.id > 0` does, or a later inner join's `on` does.
 - **An expression** is non-null where the server says so: `coalesce` and `ifnull` with a non-null argument, `count`, `length`, arithmetic over non-null integers, comparisons.
   - The server is cautious with string and date functions, most casts and division: `upper(name)`, `concat(name, '!')`, `date(created_at)`, `cast(id as char)` and `id / 2` are `| null` even when their input is `NOT NULL`.
-- **A test in the `where`** that fails on `NULL` proves the column it tests: `where email is not null`, `where email like '%@%'`, `where lower(email) = :email`. A test under an `or` whose other arm tests another column proves nothing, nor do `coalesce`, `ifnull` and `<=>`.
+- **A test in the `where`** that fails on `NULL` makes the column it tests non-null: `where email is not null`, `where email like '%@%'`, `where lower(email) = :email`. A test under an `or` whose other arm tests another column counts for nothing, nor do `coalesce`, `ifnull` and `<=>`.
 - **The `json_arrayagg` aggregate** is `NULL` over no rows, and never under a `group by`, where every group has a row.
 - **A `WITH ROLLUP`** adds a row per level whose grouped columns are `NULL`, and the type says so.
 - **A correlated subquery** in the select list makes the server clear `NOT NULL` on the outer table's columns. Reylo asks again without the subquery and restores it.
 
-A test in the `where` proves the joined row, so its columns are non-null:
+A test in the `where` shows the joined row exists, so its columns are non-null:
 
 ```ts twoslash tab="main.ts"
 import shipped from "./my_shipped.sql";
@@ -501,7 +501,7 @@ from users
 
 ## Row counts
 
-How many rows `.run()` resolves to comes from what Reylo proves the statement can return:
+How many rows `.run()` resolves to comes from what Reylo infers the statement can return:
 
 | Resolves to | `cardinality` | On MySQL, when the statement |
 | --- | --- | --- |
@@ -528,12 +528,12 @@ conn.release();
 select last_insert_id() as id
 ```
 
-- A joined table's key proves nothing: `posts join users on users.id = posts.user_id where posts.id = :id` is `Row[]`.
-- A `distinct` or `group by` over values the `where` pins proves nothing unless they are the key.
-- A string key compared with a number proves nothing, since MySQL compares the two as doubles: `where email = 5` is `Row[]`.
-- A `TIMESTAMP` key proves nothing: where the clocks go back an hour, two instants show as one time.
+- A joined table's key counts for nothing: `posts join users on users.id = posts.user_id where posts.id = :id` is `Row[]`.
+- A `distinct` or `group by` over values the `where` pins counts for nothing unless they are the key.
+- A string key compared with a number counts for nothing, since MySQL compares the two as doubles: `where email = 5` is `Row[]`.
+- A `TIMESTAMP` key counts for nothing: where the clocks go back an hour, two instants show as one time.
 - A `WITH ROLLUP` adds rows, and a `with` query named like a table is not the table, so neither has a key.
-- A statement the server reads otherwise than its text, under the session's `sql_mode`, proves nothing ([How the text is read](#how-the-text-is-read)).
+- A statement the server reads otherwise than its text, under the session's `sql_mode`, counts for nothing ([How the text is read](#how-the-text-is-read)).
 - A multi-table `delete` or `update` resolves to nothing, and so does a `select … from … into @variable`.
 - At run time a `Row` statement throws unless it gets exactly one row, and a `Row | null` statement throws when it gets more than one.
 
@@ -548,7 +548,7 @@ Write each parameter as `:name`. Reylo sends `?` and `.run()` takes an object ke
 
 ### What a parameter takes
 
-Every value `.run()` returns goes back in as a parameter of its type, on every driver, so a row can be passed straight to the next statement:
+Every value `.run()` returns goes back in as a parameter of its type, on every driver, so a row can be passed straight to the next statement; a `null` goes back in where the parameter takes one ([Parameters that may be null](#parameters-that-may-be-null)):
 
 | SQL type | A parameter takes |
 | --- | --- |
@@ -577,11 +577,12 @@ MySQL types every parameter from where the statement uses it, since 8.0.22. One 
 
 ### Parameters that may be null
 
-A parameter is `| null` only where the statement lets it be:
+A parameter takes `null` in two places:
 
-- where it tests it for null (`:p is null`, `:p is not null`, `isnull(:p)`, `:p <=> col`);
-- where it passes it first to `coalesce` or `ifnull`;
-- where it writes it whole to a column that may hold `NULL` (`values`, `insert … set`, `update … set`, `on duplicate key update`, `replace`), unless it also fills a `NOT NULL` column.
+- as the first argument of `coalesce` or `ifnull`, with a cast or without;
+- written whole, with no cast, to a column that may hold `NULL` (`values`, `insert … set`, `update … set`, `on duplicate key update`, `replace`), unless it also fills a `NOT NULL` column.
+
+A cast is the parameter's whole type, so `:email::text` never takes `null`, and a test for null (`:p is null`, `isnull(:p)`, `:p <=> col`) makes nothing nullable. A column holds `NULL` unless it is `NOT NULL` or a `check (… is not null)` holds it:
 
 ```ts twoslash tab="main.ts"
 import usersByRole from "./my_users_by_role.sql";
@@ -591,12 +592,9 @@ const users = await usersByRole.run(db, { role: null });
 ```
 
 ```sql tab="my_users_by_role.sql" dialect="mysql"
-with input as (select :role as role)
-select users.id, users.name from users, input
-where input.role is null or users.role = input.role
+select id, name from users
+where role = coalesce(:role::text, role)
 ```
-
-The one-line form is `where role = coalesce(:role, role)`.
 
 ### Casts
 
@@ -626,7 +624,7 @@ MySQL reads its text its own way, and Reylo reads it the same way:
 - Where `NO_BACKSLASH_ESCAPES` or `ANSI_QUOTES` would read a statement otherwise, Reylo asks for the session's `sql_mode` and reads the statement by it.
 - A `||` is `OR` unless the session sets `PIPES_AS_CONCAT`: `name || 'x'` is a number. Write `concat(name, 'x')`.
 - A built-in's name with a space before its parenthesis, `count (x)`, is a stored function's unless the session sets `IGNORE_SPACE`, as `mysql2` does.
-- Where the session reads the statement otherwise than its text, Reylo keeps the server's types and proves no row count and no JSON shape.
+- Where the session reads the statement otherwise than its text, Reylo keeps the server's types and infers no cardinality and no JSON shape.
 - A `/*! … */` comment is SQL MySQL runs, so a statement with one is an error: write it as plain SQL.
 
 ## Drivers

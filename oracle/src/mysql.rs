@@ -1023,16 +1023,21 @@ async fn check(server: &mut Server, state: &mut State<'_>, statements: &[(String
                     let Some(values) = all.get(r) else { break };
                     r += 1;
                     // Each `?` is the n-th name of `order`, and the value is that parameter's.
-                    let bound: Vec<My> = order.iter().map(|name| params.iter().position(|p| p["name"].as_str() == Some(name)).and_then(|i| values.get(i)).map_or(My::NULL, |b| b.value.clone())).collect();
-                    let shown = format!("{}{how}", values.iter().map(|b| b.shown.clone()).collect::<Vec<_>>().join(", "));
+                    let bind = |values: &[Bound]| -> Vec<My> { order.iter().map(|name| params.iter().position(|p| p["name"].as_str() == Some(name)).and_then(|i| values.get(i)).map_or(My::NULL, |b| b.value.clone())).collect() };
                     // The text with each `?` replaced, the last first so the offsets hold.
-                    let mut literal = text.clone();
-                    if *written {
-                        for (i, &(start, end)) in marks.iter().enumerate().rev() {
-                            let value = params.iter().position(|p| p["name"].as_str() == order.get(i).map(String::as_str)).and_then(|p| values.get(p));
-                            literal.replace_range(start..end, value.map_or("NULL", |b| b.literal.as_str()));
+                    let literal_of = |values: &[Bound]| -> String {
+                        let mut literal = text.clone();
+                        if *written {
+                            for (i, &(start, end)) in marks.iter().enumerate().rev() {
+                                let value = params.iter().position(|p| p["name"].as_str() == order.get(i).map(String::as_str)).and_then(|p| values.get(p));
+                                literal.replace_range(start..end, value.map_or("NULL", |b| b.literal.as_str()));
+                            }
                         }
-                    }
+                        literal
+                    };
+                    let bound = bind(values);
+                    let shown = format!("{}{how}", values.iter().map(|b| b.shown.clone()).collect::<Vec<_>>().join(", "));
+                    let literal = literal_of(values);
                     state.conn.query_drop("SAVEPOINT q").await.map_err(|e| e.to_string())?;
                     // The rows are checked as they come, so a statement that returns rows without end
                     // holds none of them.
@@ -1076,6 +1081,7 @@ async fn check(server: &mut Server, state: &mut State<'_>, statements: &[(String
                     found.sort();
                     found.dedup();
                     problems.append(&mut found);
+                    let refused = !killed && matches!(&outcome, Err(mysql_async::Error::Server(e)) if refuses_null(e.code));
                     match outcome {
                         // A run the timeout stopped says nothing of the statement, sound or not.
                         _ if killed => tally.timed_out += 1,
@@ -1097,7 +1103,74 @@ async fn check(server: &mut Server, state: &mut State<'_>, statements: &[(String
                                 }
                             }
                         }
-                        Err(mysql_async::Error::Server(e)) => tally.fail(format!("{} ({})", e.message, e.code)),
+                        Err(mysql_async::Error::Server(e)) => {
+                            tally.fail(format!("{} ({})", e.message, e.code));
+                            // A NULL the engine let a parameter take, which the server refuses
+                            // as a NOT NULL column's or a CHECK's, is a parameter typed nullable
+                            // that may not be null. The NULLs are to blame where the same run with
+                            // each of them given a value of its pool is not refused so; then each
+                            // that is refused alone, the others given values, is named.
+                            if refused {
+                                let nulls: Vec<usize> = (0..params.len()).filter(|&i| values.get(i).is_some_and(|b| b.value == My::NULL) && params[i]["nullable"].as_bool().unwrap_or(false) && pools.get(i).is_some_and(|pool| pool.iter().any(|b| b.value != My::NULL))).collect();
+                                let filled = |keep: Option<usize>| -> Vec<Bound> {
+                                    let mut other = values.clone();
+                                    for &i in nulls.iter().filter(|&&i| Some(i) != keep) {
+                                        if let Some(value) = pools[i].iter().find(|b| b.value != My::NULL) {
+                                            other[i] = value.clone();
+                                        }
+                                    }
+                                    other
+                                };
+                                // Whether the run with these values is refused so; `None` where the timeout stopped it.
+                                let mut tries: Vec<Vec<Bound>> = Vec::new();
+                                if !nulls.is_empty() {
+                                    tries.push(filled(None));
+                                    if nulls.len() > 1 {
+                                        tries.extend(nulls.iter().map(|&i| filled(Some(i))));
+                                    }
+                                }
+                                // Each try's refusal, `Some(None)` where it was not refused so; `None` where the timeout stopped it.
+                                let mut answers: Vec<Option<Option<String>>> = Vec::new();
+                                for other in &tries {
+                                    // Past the first, a try is needed only where the first was not refused.
+                                    if answers.first().is_some_and(|a| a.as_ref().is_none_or(Option::is_some)) {
+                                        break;
+                                    }
+                                    let mut none = |_: &[Returned], _: &[My]| {};
+                                    let literal = literal_of(other);
+                                    let (again, killed) = {
+                                        let mut run: std::pin::Pin<Box<dyn std::future::Future<Output = Result<(Vec<Returned>, usize), mysql_async::Error>> + '_>> = match statement {
+                                            Some(statement) => Box::pin(execute(&mut state.conn, statement, bind(other), &mut none)),
+                                            None => Box::pin(query(&mut state.conn, &literal, &mut none)),
+                                        };
+                                        match tokio::time::timeout(Duration::from_millis(timeout_ms), &mut run).await {
+                                            Ok(outcome) => (outcome, false),
+                                            Err(_) => {
+                                                server.admin.query_drop(format!("KILL QUERY {id}")).await.map_err(|e| e.to_string())?;
+                                                (run.await, true)
+                                            }
+                                        }
+                                    };
+                                    if killed {
+                                        let _ = state.conn.query_drop("DO 0").await;
+                                        answers.push(None);
+                                    } else {
+                                        answers.push(Some(match &again {
+                                            Err(mysql_async::Error::Server(e)) if refuses_null(e.code) => Some(format!("{} ({})", e.message, e.code)),
+                                            _ => None,
+                                        }));
+                                    }
+                                }
+                                if answers.first() == Some(&Some(None)) {
+                                    for (k, &i) in nulls.iter().enumerate() {
+                                        let why = if nulls.len() == 1 { Some(format!("{} ({})", e.message, e.code)) } else { answers.get(k + 1).cloned().flatten().flatten() };
+                                        if let Some(why) = why {
+                                            problems.push(format!("{file}: parameter {} typed nullable, and the database refuses its NULL: {why} with ({shown})", params[i]["name"].as_str().unwrap_or("?")));
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         Err(e) => return Err(format!("{file}: {e}")),
                     }
                     // What the run changed is undone, and where it cannot be the state is built again.
@@ -1139,6 +1212,12 @@ async fn check(server: &mut Server, state: &mut State<'_>, statements: &[(String
         dirty = !state.loose().is_empty();
     }
     Ok(report(statements, &tallies, timeout_ms, problems, notes))
+}
+
+/// Whether a server error is a NOT NULL column's refusal of NULL (1048, "Column … cannot be null")
+/// or a CHECK's (3819), which a NULL bound to a parameter may cause.
+fn refuses_null(code: u16) -> bool {
+    code == 1048 || code == 3819
 }
 
 /// A SELECT with SQL_BUFFER_RESULT, which has the server put the result in a temporary table and

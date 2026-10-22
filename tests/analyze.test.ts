@@ -149,7 +149,9 @@ test("a parameter written twice is an error at each later use, which the type ch
     const bare = await session.analyze("select id from users where id = ? or id = ?");
     assert.ok(bare.ok);
     assert.deepEqual(bare.analysis.diagnostics, []);
-    const once = "with input as (select cast(:q as text) as q) select id, name from users, input where input.q is null or name like input.q or name = input.q";
+    // Coalesced through the with, the parameter may be null; a test of it for null alone would not
+    // make it so (the maintainer, 2026-10-21).
+    const once = "with input as (select cast(:q as text) as q) select id, name from users, input where name like coalesce(input.q, '%') or name = input.q";
     const read = await session.analyze(once);
     assert.ok(read.ok);
     assert.deepEqual(read.analysis.diagnostics, []);
