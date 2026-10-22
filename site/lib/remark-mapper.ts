@@ -5,6 +5,7 @@ import { createProcessor } from '@mdx-js/mdx';
 import { remarkCodeTab } from 'fumadocs-core/mdx-plugins';
 import type { Plugin } from 'vite';
 import { pageFiles } from './page-files.ts';
+import { isErrorExample, renderErrors } from './sql-errors.ts';
 import { formatType, resultType } from './type-format.ts';
 
 export { pageFiles };
@@ -47,6 +48,9 @@ export { pageFiles };
 //   (with `dialect="all"`, or one per dialect) is a statement whose types the card shows, and its
 //   ```sql schema dialect="…"``` blocks, where it has any, are the schema that statement is analyzed
 //   against in place of the page's, its module keyed by both texts (`renderInferred`).
+// - A `sql` block whose meta says `errors` is an error example, a statement that fails, shown with
+//   the errors the content mapper gives it, captured into lib/sql-errors.json (lib/sql-errors.ts); it
+//   is no statement an import resolves to.
 // - `db` is declared unless the block declares or imports it; a block that names `Bun.` or imports
 //   `bun` or `bun:sqlite` gets Bun's types, and one that names `D1Database` without importing it
 //   gets Cloudflare's Workers types.
@@ -187,8 +191,8 @@ function cardSchema(card: MdNode, dialect: Dialect): string | undefined {
   return (schemas.find((c) => dialectOf(of(c)) === dialect) ?? schemas.find((c) => of(c) === 'all'))?.value;
 }
 
-/** A `.sql` block that a page analyzes: every SQL block named `*.sql` but the schema (a TypeScript tab named Bun.sql is not one). */
-export const isStatement = (block: Block) => (block.node.lang ?? 'sql') === 'sql' && !!block.name?.endsWith('.sql') && block.name !== SCHEMA_FILE;
+/** A `.sql` block that a page analyzes: every SQL block named `*.sql` but the schema and the error examples (a TypeScript tab named Bun.sql is not one). */
+export const isStatement = (block: Block) => (block.node.lang ?? 'sql') === 'sql' && !!block.name?.endsWith('.sql') && block.name !== SCHEMA_FILE && !isErrorExample(block.node);
 
 /** `import getUser from "./get_user.sql"`. */
 const IMPORT = /\b(?:from|import)\s+["']\.\/([^"']+\.sql)["']/g;
@@ -510,6 +514,7 @@ export function remarkMapper() {
     // after a capture, instead of keeping the error it showed while the capture was missing.
     const compiler = file.data?._compiler as { addDependency(file: string): void } | undefined;
     compiler?.addDependency(path.join(process.cwd(), 'lib', 'sql-modules.json'));
+    compiler?.addDependency(path.join(process.cwd(), 'lib', 'sql-errors.json'));
     const page = !file.path ? 'the page' : path.relative(process.cwd(), file.path).startsWith('..') ? file.path : path.relative(process.cwd(), file.path);
     let blocks: Block[];
     let plans: Plan[];
@@ -533,6 +538,7 @@ export function remarkMapper() {
       block.parent.children!.splice(index, 1, jsx('DialectTabs', [['follow', null]], panels));
     }
     mergeDialectFiles(blocks);
+    renderErrors(tree, blocks, page);
     try {
       renderInferred(tree, blocks, modules, page);
     } catch (e) {

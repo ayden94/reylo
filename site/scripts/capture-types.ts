@@ -15,6 +15,11 @@
 // renders the module exactly as src/mapper.ts does, with each typed JSON parameter's type computed
 // from its schema (scripts/schema-type.ts) where the loader still says `unknown`. An error in a
 // statement a block imports fails the run; one in a statement nothing imports is a warning.
+//
+// Each error example (a `sql` block marked `errors`, lib/sql-errors.ts) goes to the content mapper
+// itself, `src/mapper.ts` started as TypeScript starts it (scripts/mapper-diagnostics.ts), on the
+// same schema, and the errors it gives the file, where the editor and `tsc` place them, are written
+// to lib/sql-errors.json; an example the mapper finds no error in fails the run.
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -26,7 +31,9 @@ import { ident, renderParamType, renderType } from '../../src/render.ts';
 import type { Analysis } from '../../src/engine.ts';
 import { collectFiles, plan, isStatement, DIALECT_NAME, SCHEMA_FILE, type Block, type Dialect, type Modules } from '../lib/remark-mapper.ts';
 import { sitePages } from '../lib/page-files.ts';
+import { isErrorExample, type Errors } from '../lib/sql-errors.ts';
 import { schemaType } from './schema-type.ts';
+import { openMapper, positionOf } from './mapper-diagnostics.ts';
 
 const site = path.resolve(import.meta.dirname, '..');
 const URLS: Record<Exclude<Dialect, 'sqlite'>, string> = {
@@ -225,6 +232,7 @@ function project(root: string, dialect: Dialect, name: string = dialect): string
 // ---- The run ----
 
 const modules: Modules = {};
+const failures: Errors = {};
 const errors: string[] = [];
 const warnings: string[] = [];
 const root = mkdtempSync(path.join(tmpdir(), 'reylo-capture-'));
@@ -316,6 +324,32 @@ try {
       } finally {
         await session.close();
       }
+      // The page's error examples in this dialect, each sent to the content mapper as a file of the
+      // project, on the page's schema.
+      const failing = blocks.filter((b) => b.dialect === dialect && isErrorExample(b.node));
+      if (failing.length) {
+        const mapper = await openMapper(dir, { DATABASE_URL: url });
+        try {
+          for (const block of failing) {
+            if (!block.name?.endsWith('.sql')) {
+              errors.push(`${block.file ?? shown}:${block.line}: an error example needs a file name ending in .sql (tab="<name>.sql")`);
+              continue;
+            }
+            const content = `${block.node.value}\n`;
+            const found = await mapper.diagnostics(block.name, content);
+            // The project's own problems (no database, no engine, a bad .reylo.yaml) are the capture's, not the example's.
+            const setup = found.find((d) => [4, 5, 9, 11].includes(d.code));
+            if (setup || !found.length) {
+              errors.push(`${block.file ?? shown}:${block.line}: ${DIALECT_NAME[dialect]} ${block.name}: ${setup ? `the content mapper could not analyze it: ${setup.messageText}` : 'the content mapper finds no error in this error example'}\n${indent(block.node.value)}`);
+              continue;
+            }
+            ((failures[dialect] ??= {})[block.name] ??= {})[block.hash] = found.map((d) => ({ start: positionOf(content, d.start), end: positionOf(content, d.start + d.length), source: `reylo(${d.code})`, message: d.messageText }));
+            console.log(`${DIALECT_NAME[dialect].padEnd(8)} ${block.name}: ${found.map((d) => `reylo${d.code}: ${d.messageText}`).join('; ')}  (error example)`);
+          }
+        } finally {
+          await mapper.close();
+        }
+      }
       // A statement of an <Inferred> card that shows its own schema is analyzed against that schema,
       // built for it alone: in a scratch database made again for each card, beside the page's, and
       // a project of its own, so no session or cache of the page's schema answers for it.
@@ -354,7 +388,7 @@ function summary(module: string): string {
 for (const w of warnings) console.warn(`warning: ${w}`);
 if (errors.length) {
   for (const e of errors) console.error(`error: ${e}`);
-  console.error(`capture: ${errors.length} error${errors.length === 1 ? '' : 's'}; lib/sql-modules.json is unchanged.`);
+  console.error(`capture: ${errors.length} error${errors.length === 1 ? '' : 's'}; lib/sql-modules.json and lib/sql-errors.json are unchanged.`);
   process.exit(1);
 }
 
@@ -364,4 +398,7 @@ const sorted = Object.fromEntries(
 );
 const out = path.join(site, 'lib', 'sql-modules.json');
 writeFileSync(out, JSON.stringify({ $comment: 'Written by `nub run capture` (scripts/capture-types.ts); read by lib/remark-mapper.ts. Never edit by hand.', ...sorted }, null, 2) + '\n');
+const byName = <T,>(entries: Record<string, T>) => Object.fromEntries(Object.entries(entries).sort(([a], [b]) => a.localeCompare(b)));
+const failed = Object.fromEntries(ORDER.filter((d) => failures[d]).map((d) => [d, byName(Object.fromEntries(Object.entries(failures[d]!).map(([name, byHash]) => [name, byName(byHash)])))]));
+writeFileSync(path.join(site, 'lib', 'sql-errors.json'), JSON.stringify({ $comment: 'Written by `nub run capture` (scripts/capture-types.ts): the errors the content mapper gives each error example. Read by lib/sql-errors.ts. Never edit by hand.', ...failed }, null, 2) + '\n');
 console.log(`capture: ${analyzed} statement${analyzed === 1 ? '' : 's'} analyzed on ${pages.length} page${pages.length === 1 ? '' : 's'}; ${captured} module${captured === 1 ? '' : 's'} imported → ${path.relative(site, out)}`);
