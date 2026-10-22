@@ -4,8 +4,8 @@
 import { createHash } from "node:crypto";
 import { dirname } from "node:path";
 import { serve } from "./rpc.ts";
-import { anyEngine, type Analysis } from "./engine.ts";
-import { declaredType, ident, renderParamType, renderType } from "./render.ts";
+import { anyEngine, type Lexed } from "./engine.ts";
+import { moduleTypes } from "./module-types.ts";
 import { resolveProject, type Dialect } from "./project.ts";
 import { Session } from "./analyze.ts";
 
@@ -18,12 +18,6 @@ const projects = new Map<string, Project>();
 
 function diag(messageText: string, start: number, length: number, code = 1) {
   return { messageText, start, length, code };
-}
-
-/** A parameter's TypeScript type: `unknown` when nothing in the statement types it (a CAST does), with `| null` where the statement lets the caller pass null. */
-function paramType(q: Analysis["params"][number], rendered: string): string {
-  if (q.type.kind === "unknown") return "unknown";
-  return q.nullable ? `${rendered} | null` : rendered;
 }
 
 /**
@@ -99,61 +93,22 @@ serve({
     // The engine's lexer names the parameters. A statement it cannot read (a placeholder form the
     // dialect would misread, named and positional mixed) comes back from the analysis as an error
     // at its place; until then nothing is proved, so the row count is `many`.
-    let names: string[] = [];
-    let placeholders: { name: string; start: number; end: number }[] = [];
     const session = await project.session;
+    let lexed: Lexed | undefined;
     try {
-      ({ params: names, placeholders } = session.lex(sql));
+      lexed = session.lex(sql);
     } catch {}
-    const cardinality = "many";
-    // A parameter nothing in the statement types is an error at its first use, unless the project
-    // file says `strict_params: false` (the default is true since 2026-10-20).
-    // A statement the engine already refused (a parameter written twice, an error from the server)
-    // was not analysed to its end, so its parameters are untyped for that reason: its own error is
-    // the one to fix first.
-    const strictParams = (analysis: Analysis) => {
-      if (!project.strictParams || analysis.diagnostics.length) return;
-      for (const q of analysis.params) {
-        if (q.type.kind !== "unknown") continue;
-        const at = placeholders.find((h) => h.name === q.name);
-        // The engine's offsets are UTF-8 bytes, as the diagnostics' are. A MySQL placeholder's span
-        // takes in the `::type` the engine rewrote, which is no part of its name.
-        const span = at ? Buffer.from(sql, "utf8").subarray(at.start, at.end).toString("utf8") : `:${q.name}`;
-        const written = span.replace(/\s*::[\s\S]*$/, "");
-        const length = at ? Buffer.byteLength(written) : 1;
-        const message = `Nothing in the statement gives the parameter ${written} a type; cast it, as in ${written}::text, or set strict_params: false in .reylo.yaml.`;
-        diagnostics.push(diag(message, at?.start ?? 0, length, 12));
-      }
-    };
     const outcome = await session.analyze(sql);
     if (!outcome.ok) {
       diagnostics.push(diag(outcome.message, 0, 1, outcome.code));
-      return emit(undefined, "unknown", "unknown", cardinality, names);
+      return emit(undefined, "unknown", "unknown", "many", lexed?.params ?? []);
     }
     const { analysis } = outcome;
-    const dialect = project.dialect;
-    // A MySQL session reads its strings by its sql_mode, which the analysis asked for and the
-    // lexer alone does not know: the placeholders are the ones the analysis read.
-    if (dialect === "mysql") {
-      names = analysis.params.map((q) => q.name);
-      placeholders = analysis.rewritten.spans.map(([start, end], k) => ({ name: analysis.rewritten.order[k]!, start, end }));
-    }
-    diagnostics.push(...analysis.diagnostics.map((d) => diag(d.message, d.start, d.length, d.code)));
-    strictParams(analysis);
-    const inferred = analysis.cardinality;
-    // The declared names are the lexer's, in order of first use: the module's `params` at run time.
-    // Each parameter appears once in a statement; a second use is the engine's diagnostic (code 3),
-    // placed above.
-    const order = names;
-    if (analysis.diagnostics.some((d) => d.code === 6) || (dialect === "postgres" && analysis.kind === "")) return emit(analysis.rewritten.sql, "unknown", "unknown", inferred, order);
-    const columns = analysis.columns.map((c) => `${ident(c.name)}: ${renderType(c.type, false, dialect)}${c.nullable ? " | null" : ""}`);
-    // A parameter is typed from its context (a column it is compared with or written to, a CAST);
-    // one no context types is `unknown`.
-    const typed = analysis.params.map((q) => [q.name, paramType(q, declaredType(q.type, q.schema) ?? renderParamType(q.type, dialect))] as const);
-    // A typed JSON parameter whose schema has a `default` may be left out (wiki/typed-json-params.md).
-    const optional = new Set(analysis.params.filter((q) => q.schema !== null && typeof q.schema === "object" && "default" in q.schema).map((q) => q.name));
-    const paramTypes = typed.map(([name, type]) => `${ident(name)}${optional.has(name) ? "?" : ""}: ${type}`);
-    return emit(analysis.rewritten.sql, paramTypes.length ? `{ ${paramTypes.join("; ")} }` : "Record<never, never>", columns.length ? `{ ${columns.join("; ")} }` : "never", inferred, order);
+    // The types, the diagnostics the analysis gives and the untyped parameters' are one function
+    // the docs site's playground shares (src/module-types.ts).
+    const types = moduleTypes(sql, analysis, project.dialect, lexed, project.strictParams);
+    diagnostics.push(...types.diagnostics.map((d) => diag(d.message, d.start, d.length, d.code)));
+    return emit(analysis.rewritten.sql, types.params, types.row, types.cardinality, types.names);
   },
   async closeProject(params) {
     const handle = (params as { projectHandle: string }).projectHandle;
