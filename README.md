@@ -2,14 +2,18 @@
 
 Import `.sql` files into your TypeScript code with full type inference.
 
+If you have a file like this:
+
 ```sql
 -- get_author.sql
 select u.id, u.name, count(p.id)::int as post_count
 from users u
 left join posts p on p.user_id = u.id
-where u.id = :id
+where u.id = :id::int
 group by u.id
 ```
+
+You can import it directly from a TypeScript file like this:
 
 ```ts
 // main.ts
@@ -19,58 +23,39 @@ import getAuthor from "./get_author.sql";
 const db = postgres(process.env.DATABASE_URL);
 
 const author = await getAuthor.run(db, { id: 1 });
-//    ^? { id: number; name: string; post_count: number } | null
+// { id: number; name: string; post_count: number } | null
 ```
 
-Reylo is a content mapper for `.sql` files. Content mappers are new in TypeScript 7.1 ([now in beta](https://devblogs.microsoft.com/typescript/announcing-typescript-7-1-beta/)): an official way to plug other file types into TypeScript's compilation. Reylo reads each statement, asks your database what it takes and returns, and hands TypeScript a typed module.
+Reylo is powered by TypeScript [content mappers](https://github.com/microsoft/typescript-go/pull/4712), introduced in TypeScript 7.1 (currently [in beta](https://devblogs.microsoft.com/typescript/announcing-typescript-7-1-beta/)), which let you dynamically define static types for external file types and integrate them directly into TypeScript compilation.
 
-- 💪 **The full power of SQL.** Any statement your database runs, in its own dialect.
-- 🌵 **DRY.** The types come from the SQL itself: no hand-written row types, no schema file to keep in sync.
-- 🎯 **Checked against your database.** A misspelled column, a wrong parameter or a dropped table is a type error, in `tsc` and in your editor.
-- 🤖 **Agent-friendly.** Each fact lives in one place, so an agent cannot leave a stale type behind, and the type check finds every caller it missed.
-- 🧩 **Postgres, MySQL and SQLite.** Bring your own driver: `pg`, postgres.js, mysql2, better-sqlite3, Bun, Cloudflare D1 and [more](#supported-drivers).
-- ⚡ **No codegen.** The type checker asks Reylo directly: no generated files, no watcher.
+Reylo is the perfect option for the agent era:
 
-## Content mappers
+- 💪 **The full power of SQL** — any statement your database runs, in its own dialect.
+- 🌵 **DRY** — the types come from the SQL itself: no hand-written row types, no schema file to keep in sync.
+- 🎯 **Checked against your database** — a misspelled column, a wrong parameter or a dropped table is a type error, in `tsc` and in your editor.
+- 🤖 **Agent-friendly** — each fact lives in one place, so an agent cannot leave a stale type behind, and the type check finds every caller it missed.
+- 🧩 **Postgres, MySQL and SQLite** — bring your own driver: `pg`, postgres.js, `mysql2`, `better-sqlite3`, Cloudflare D1 and [more](#supported-drivers).
+- ⚡ **No codegen** — the type checker asks Reylo directly: no generated files, no watcher.
 
-Before TypeScript 7.1, a `.sql` import could only be typed by a declaration written ahead of time: a wildcard `declare module "*.sql"`, which gives every query the same loose type, or a `.d.ts` file that a code generator writes beside each query and has to keep fresh.
-
-A content mapper is a package that `tsconfig.json` names for a file extension:
-
-```jsonc
-"contentMappers": [{ "package": "reylo", "extensions": [".sql"] }]
-```
-
-Whenever the type checker meets an import of a `.sql` file, in `tsc` or in your editor, it hands the file to Reylo and checks your code against the module Reylo returns. An error Reylo finds shows at its line and column inside the `.sql` file. It is TypeScript's own mechanism, so CI and your editor see the same types.
-
-To type a statement, Reylo has your development database prepare it, without running it, and reads the catalog. SQLite statements are prepared in Reylo's own copy of SQLite, against your database file's schema. From the answer, Reylo learns:
-
-- each parameter's type
-- each column's type
-- which columns can be `null`, from `NOT NULL` and outer joins
-- how many rows the statement can return, from keys, aggregates, `limit 1` and `returning`
-
-Reylo keeps each answer in `.reylo/`, keyed by a fingerprint of the schema, so it analyzes a statement again only for a schema it has not seen. After a migration, a statement that names a dropped column fails in its `.sql` file, and code that reads a column the statement no longer returns fails in TypeScript.
-
-At run time, the same import becomes a module that runs the statement through your own driver. Node's `--import`, a Bun or nub preload, or a bundler plugin builds it.
+The full documentation is at [reylo.dev](https://reylo.dev).
 
 ## Setup
 
-Reylo needs:
+To install Reylo, you'll need:
 
-- **TypeScript 7.1 beta or later**, the first release with content mappers.
-- **Node 24 or later, Bun or nub.**
-- **A running development database**: Postgres, MySQL 8.0.22 or later, or a SQLite file. Reylo reads every type from it.
+- **TypeScript 7.1 (currently in beta).** The first release with content mappers.
+- **Node 24 or later.**
+- **A running dev database.** Postgres, MySQL 8.0.22 or later, or a SQLite file: Reylo reads your current schema from it.
+
+Install Reylo, the engine for your database and TypeScript 7.1:
 
 ```sh
 npm install reylo
-npm install -D @reylosql/postgres  # or @reylosql/mysql, @reylosql/sqlite
+npm install -D @reylosql/postgres  # or mysql, sqlite
 npm install -D typescript@beta
 ```
 
-The `reylo` package is the content mapper, the run time, the bundler plugins, the preload and the CLI. The engine that reads your database's statements is a package of its own, one per database, at Reylo's version: install the one for each database the project uses. A development dependency does, since a built module carries its analysis; a program run under the preload analyzes as it imports, and needs it installed. Without it, a `.sql` import reports what to install: `postgres statements need @reylosql/postgres: npm install -D @reylosql/postgres`.
-
-Name Reylo in `tsconfig.json`, and type-check with `--runExternalCode`, the flag that lets `tsc` run content mappers:
+Add Reylo to `tsconfig.json`:
 
 ```jsonc
 // tsconfig.json
@@ -82,6 +67,8 @@ Name Reylo in `tsconfig.json`, and type-check with `--runExternalCode`, the flag
 }
 ```
 
+Then type-check with `--runExternalCode`, which lets `tsc` run content mappers:
+
 ```jsonc
 // package.json
 {
@@ -91,253 +78,73 @@ Name Reylo in `tsconfig.json`, and type-check with `--runExternalCode`, the flag
 }
 ```
 
-Set `DATABASE_URL` to your development database, in the environment or in `.env`. The scheme names the dialect:
+Point Reylo at your dev database with `DATABASE_URL`, in your environment or in `.env`:
 
 ```sh
-# .env: postgres://…, mysql://…, or file:./app.db for SQLite
-DATABASE_URL=postgres://localhost:5432/app
+# .env
+DATABASE_URL=postgres://localhost:5432/app  # or mysql://…, or file:./app.db for SQLite
 ```
 
-Load Reylo when your code runs, so that a `.sql` import works at run time too. On Node:
+To make `.sql` imports work at run time too, load Reylo where your code runs. On Node:
 
 ```sh
 node --env-file=.env --import reylo/register main.ts
 ```
 
-| Runtime or bundler | Setup |
-| --- | --- |
-| Bun | `preload = ["reylo/register"]` in `bunfig.toml` |
-| nub | `"preload": ["reylo/register"]` in `nub.jsonc` |
-| Vite, Vitest | `import reylo from "reylo/vite"`, then `reylo()` in `plugins` |
-| esbuild, `Bun.build` | `import reylo from "reylo/esbuild"`, then `reylo()` in `plugins` |
-| webpack, Rspack | `{ test: /\.sql$/, use: "reylo/webpack" }` in `module.rules` |
-| Next.js | `import { withReylo } from "reylo/next"`, then `export default withReylo(nextConfig)`: the loader on the server for Turbopack and webpack, and the type check inside `next build` ([setup](https://reylo.dev/#setup-nextjs)) |
-| Jest | `transform: { "\\.sql$": "reylo/jest" }` ([setup](https://reylo.dev/#setup-jest)) |
-
-In VS Code or Cursor, install the **TypeScript 7** extension (`TypeScriptTeam.native-preview`) and point it at your project's TypeScript, since the extension bundles TypeScript 7.0:
-
-```jsonc
-// .vscode/settings.json
-{
-  "js/ts.experimental.useTsgo": true,
-  "js/ts.tsdk.path": "./node_modules/typescript"
-}
-```
-
-Then trust the workspace, and click **Allow** when the extension asks to use the workspace's TypeScript. Missed it? It waits under the bell in the status bar, or **Developer: Reload Window** asks again. The editor does not see your shell's environment, so keep `DATABASE_URL` in `.env`. Zed takes a few more settings: see [Editors](https://reylo.dev/#editors).
+For Bun, Nub, Vite, Next.js, esbuild, webpack, Rspack, Cloudflare Workers and Jest, add [the plugin for your setup](https://reylo.dev/#plugins), or copy its complete [example project](https://github.com/colinhacks/reylo/tree/main/examples). To see the types as you type, set up [your editor](https://reylo.dev/#editors).
 
 ## Usage
 
-Write one statement per `.sql` file, with a `:name` for each parameter, and import it. The `.run()` method takes a client from your own driver, here `db`, and the parameters.
-
-<details>
-<summary>The schema behind the examples</summary>
-
-```sql
-create type user_role as enum ('admin', 'member');
-
-create table users (
-  id serial primary key,
-  name text not null,
-  email text unique,
-  role user_role not null default 'member',
-  tags text[] not null default '{}',
-  created_at timestamptz not null default now()
-);
-
-create table posts (
-  id serial primary key,
-  user_id integer not null references users (id),
-  title text not null,
-  body text,
-  published_at timestamptz
-);
-```
-
-</details>
+Write a query in a `.sql` file, import it, and run it with your database driver:
 
 ```sql
 -- get_user.sql
-select id, name, email from users where id = :id
+select id, name, email from users where id = :id::int
 ```
 
 ```ts
 import getUser from "./get_user.sql";
 
 const user = await getUser.run(db, { id: 1 });
-//    ^? { id: number; name: string; email: string | null } | null
+// { id: number; name: string; email: string | null } | null
 ```
 
-The `id` column is the primary key, so the result is one row or `null`, and `email` is a nullable column. An insert with `returning` resolves to the row it wrote:
+Name each parameter with a colon, and give it a type with a cast where the query doesn't pin one down. Pass `.run()` your driver's client: a pool, a client, or a connection or transaction taken from one.
 
-```sql
--- create_user.sql
-insert into users (name, email) values (:name, :email)
-returning id
-```
+It resolves to the rows, shaped by how many the query can return:
 
-```ts
-import createUser from "./create_user.sql";
-
-const { id } = await createUser.run(db, { name: "Ada", email: null });
-//      ^? number
-```
-
-A statement that can match many rows resolves to an array:
-
-```sql
--- list_users.sql
-select id, name, role, created_at from users
-where role = :role
-order by created_at desc
-```
-
-```ts
-import listUsers from "./list_users.sql";
-
-const admins = await listUsers.run(db, { role: "admin" });
-//    ^? { id: number; name: string; role: "admin" | "member"; created_at: string }[]
-```
-
-What `.run()` resolves to follows from how many rows Reylo proves the statement can return, and `.run()` checks the count when it runs:
-
-| The statement | What `.run()` resolves to |
+| The query | Resolves to |
 | --- | --- |
 | A match on a primary or unique key, or `limit 1` | `Row \| null` |
-| An aggregate without `group by`, or a one-row `insert … returning` | `Row` |
+| An aggregate without `group by`, a one-row `insert … returning` | `Row` |
 | An `insert`, `update` or `delete` without `returning` | `void` |
 | Anything else | `Row[]` |
 
-### Errors
+An imported query also has `.runSync()`, `.with()`, `.sql`, `.raw`, `.inputSchema` and `.outputSchema` ([Usage](https://reylo.dev/#usage)).
 
-A mistake in a `.sql` file is a type error at its line and column:
+## What Reylo infers
 
-```text
-$ tsc --noEmit --runExternalCode
-get_user.sql:1:12 - error reylo6: column "nmae" does not exist (42703)
+To type a query, Reylo has your dev database prepare it, without running it, and reads back the type of every column and parameter. On top of that, it infers:
 
-1 select id, nmae, email from users where id = :id
-             ~~~~
+- **Nulls** — a column is nullable unless its schema, a join or a `where` test rules null out.
+- **Cardinality** — a match on a unique key is one row or `null`, and an aggregate is exactly one row.
+- **Unions** — an enum, or a column whose check constraint lists its values, is a union of them.
+- **JSON** — JSON the query builds, and a JSON column with a JSON Schema check, keep their shape.
 
-Found 1 error in get_user.sql:1
-```
-
-A wrong argument is an error where you call the query:
-
-```text
-main.ts:4:38 - error TS2322: Type 'string' is not assignable to type 'number'.
-
-4 const user = await getUser.run(db, { id: "1" });
-                                       ~~
-```
-
-### Nested JSON
-
-JSON built in the statement keeps its shape:
-
-```sql
--- user_with_posts.sql
-select u.id, u.name,
-  coalesce((
-    select jsonb_agg(jsonb_build_object(
-      'id', p.id,
-      'title', p.title,
-      'at', p.published_at
-    ))
-    from posts p where p.user_id = u.id
-  ), '[]') as posts
-from users u
-where u.id = :id
-```
-
-```ts
-import userWithPosts from "./user_with_posts.sql";
-
-const user = await userWithPosts.run(db, { id: 1 });
-// {
-//   id: number;
-//   name: string;
-//   posts: { id: number; title: string; at: string | null }[];
-// } | null
-```
-
-Inside JSON, a value is what the database wrote, so the timestamp `at` is a string there.
-
-### JSON parameters
-
-A JSON parameter carries a [JSON Schema](https://json-schema.org) in its cast. The schema types the parameter, and Reylo checks every value against it before the statement runs, so a list or a batch of rows is one parameter:
-
-```sql
--- add_users.sql
-with input as (
-  select :names::jsonb('{ "type": "array", "items": { "type": "string" } }') as names
-)
-insert into users (name)
-select jsonb_array_elements_text(input.names) from input
-```
-
-```ts
-import addUsers from "./add_users.sql";
-
-await addUsers.run(db, { names: ["Grace", "Edsger"] });
-//                       ^? names: string[]
-```
-
-### Transactions
-
-The `.run()` method takes a transaction, a savepoint or a connection from your driver as its client:
-
-```ts
-import createUser from "./create_user.sql";
-import renameUser from "./rename_user.sql"; // update users set name = :name where id = :id
-
-await db.begin(async (tx) => {
-  const { id } = await createUser.run(tx, { name: "Barbara", email: null });
-  await renameUser.run(tx, { id, name: "Barbara Liskov" });
-});
-```
-
-On better-sqlite3, `node:sqlite` and `bun:sqlite`, `.runSync()` runs a statement synchronously and returns its result, for code that cannot await, such as the function that better-sqlite3's `db.transaction` takes.
-
-### The imported query
-
-Besides `.run()`, an imported query carries its statement, as Reylo sends it to the database (`sql`) and as written (`raw`), both typed as string literals, and its schemas, and the module exports its types:
-
-```ts
-import getUser, { type Params, type Row } from "./get_user.sql";
-
-const get = getUser.with(db);  // bound to one client: await get({ id: 1 })
-getUser.sql;                   // "select id, name, email from users where id = $1\n" (? on MySQL and SQLite)
-getUser.raw;                   // "select id, name, email from users where id = :id\n"
-getUser.params;                // ["id"]
-getUser.cardinality;           // "maybeOne"
-getUser.inputSchema;           // the parameters, as JSON Schema
-getUser.outputSchema;          // the result, as JSON Schema
-```
+Each has examples in [Inference](https://reylo.dev/#inference).
 
 ## Supported drivers
 
-Reylo is bring-your-own-driver: `.run()` takes a client from any of these, or a transaction, savepoint or connection taken from one.
+Reylo is bring-your-own-driver. Pass `.run()` a client from any of these:
 
-| Database | Drivers |
-| --- | --- |
-| Postgres | `pg`, postgres.js, Bun.sql, PGlite, Neon, pg-promise, `@vercel/postgres` |
-| MySQL | mysql2, PlanetScale 1.x, Bun.sql |
-| SQLite | better-sqlite3, `node:sqlite`, `bun:sqlite`, libSQL, Turso's engine (`@tursodatabase/database`), Cloudflare D1, sqlite3, sqlite, Bun.sql |
-
-The type check reads the schema through `pg` or postgres.js on Postgres and through mysql2 on MySQL, so an app on another driver adds one of those as a dev dependency.
-
-Every driver gives Reylo's queries the same values, however your app set it up: Reylo decodes each value of its own queries itself, on your client, and leaves your other queries alone. A 64-bit integer is a `bigint`, a decimal its exact text, an instant (`timestamptz`) the ISO 8601 text of the instant in UTC (`"2026-10-20T08:00:00.123456Z"`, which `Temporal.Instant.from` reads), a date or a time without a zone the text the database wrote (`"2026-10-20"`, `"2026-10-20T10:00:00.123"`), a truth value a `boolean` (MySQL's `BOOLEAN`, which is a `TINYINT(1)`, and a comparison too), JSON is parsed and binary data is a `Uint8Array`; on SQLite a column declared `BIGINT` is a `bigint` too, and any other integer past 2^53 is an error naming its column, never a rounded number.
-
-## Configuration
-
-Reylo needs no configuration when the database is `DATABASE_URL`. Settings go in `.reylo.yaml`, beside `package.json`:
-
-```yaml
-url: ${DATABASE_URL}  # the default
-strict_params: false  # a parameter nothing in the statement types is unknown, not an error
-```
+- **Postgres** — `pg`, postgres.js, PGlite, Neon, `pg-promise`, `@vercel/postgres`
+- **MySQL** — `mysql2`, PlanetScale
+- **SQLite** — `better-sqlite3`, `node:sqlite`, libSQL, Turso, Cloudflare D1, `sqlite3`, `sqlite`
 
 ## Documentation
 
-The [full documentation](https://reylo.dev) covers every editor, runtime and bundler, parameters and casts, each setting, the data types of each dialect, and examples by task, from paging through rows to inserting related rows. The examples above use Postgres; the documentation shows every example in Postgres, MySQL and SQLite.
+[reylo.dev](https://reylo.dev) covers the rest: every plugin and editor, configuration, errors, each database's data types and edge cases, and advanced examples. Agents can read it all as Markdown at [reylo.dev/llms.txt](https://reylo.dev/llms.txt).
+
+## License
+
+[MIT](LICENSE)
