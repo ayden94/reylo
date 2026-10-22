@@ -94,8 +94,9 @@
 
 /* The main page's heading, centred, as at the top of Zod's README (components/hero.tsx): the mark
    over the name, the name in Orbitron, the wordmark's face, then the subheader, then the badges and
-   "Copy agent prompt", with 8rem under them before the opening paragraph (4rem on a phone). The
-   title loses the rule docs-kit draws under a page's title. The dialect pages keep docs-kit's. */
+   "Copy agent prompt", then the editor recording (`.hero-demo`, below) before the opening
+   paragraph. The title loses the rule docs-kit draws under a page's title. The dialect pages keep
+   docs-kit's. */
 #nd-page h1:has(.hero-title) {
   padding-top: 1rem;
   padding-bottom: 0;
@@ -154,7 +155,25 @@
   flex-direction: column;
   align-items: center;
   gap: 1.5rem;
-  margin: 1.5rem 0 8rem;
+  margin: 1.5rem 0 3.5rem;
+}
+
+/* The editor recording under the hero (components/hero.tsx): the column's width and the video's own
+   shape from the first paint, on the recording's yellow until its first frame arrives. It never
+   runs past the column's edges. A phone gets the stacked cut and its shape. */
+#nd-page .hero-demo {
+  width: 100%;
+  aspect-ratio: 2200 / 1084;
+  margin: 0 0 4.5rem;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #fbc40e;
+}
+
+#nd-page .hero-demo video {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 #nd-page .hero-badges {
@@ -185,7 +204,12 @@
   }
 
   #nd-page .hero-actions {
-    margin-bottom: 4rem;
+    margin-bottom: 2rem;
+  }
+
+  #nd-page .hero-demo {
+    aspect-ratio: 1000 / 898;
+    margin-bottom: 3rem;
   }
 }
 
