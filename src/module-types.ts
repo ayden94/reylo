@@ -3,6 +3,7 @@
 // writes these into the module it hands TypeScript; the docs site's playground shows them as they
 // are. It imports nothing from Node, so a browser can run it beside the engine.
 import type { Analysis, Dialect, Lexed } from "./engine.ts";
+import { docComment } from "./doc-comment.ts";
 import { declaredType, ident, renderParamType, renderType } from "./render.ts";
 
 /** A diagnostic of the `.sql` file: its range in UTF-8 bytes, the encoding the content mapper chose. */
@@ -12,7 +13,7 @@ export type ModuleTypes = {
   diagnostics: FileDiagnostic[];
   /** `{ id: number }`, `Record<never, never>` for none, or `unknown` where the statement failed. */
   params: string;
-  /** `{ id: number; name: string }`, `never` for no columns, or `unknown` where the statement failed. */
+  /** `{ id: number; name: string }` (a field per line, after its doc comment, where a column's comment documents one), `never` for no columns, or `unknown` where the statement failed. */
   row: string;
   cardinality: Analysis["cardinality"];
   /** The parameters' names in order of first use: the module's `params` at run time. */
@@ -23,6 +24,29 @@ export type ModuleTypes = {
 function paramType(q: Analysis["params"][number], rendered: string): string {
   if (q.type.kind === "unknown") return "unknown";
   return q.nullable ? `${rendered} | null` : rendered;
+}
+
+/**
+ * A column's comment as the doc comment of the field that reads it, for an editor's hover: on one
+ * line where the comment has one, else a block of lines after `indent` (src/doc-comment.ts), and
+ * nothing where there is none.
+ */
+export function fieldComment(comment: string | undefined, indent = ""): string {
+  const text = (comment ?? "").replace(/\r\n?/g, "\n").replace(/[ \t]+$/gm, "").trim();
+  if (!text) return "";
+  if (!text.includes("\n")) return `/** ${text.replaceAll("*/", "*\\/")} */`;
+  return docComment(text, undefined, "", indent).trim();
+}
+
+/**
+ * An object type of `fields`, each a field's text and its column's comment: on one line, or a field
+ * per line, each after its doc comment, where any has one. TypeScript reads a doc comment only where
+ * a line starts with it.
+ */
+function objectType(fields: (readonly [text: string, comment: string | undefined])[]): string {
+  const docs = fields.map(([, comment]) => fieldComment(comment, "  "));
+  if (!docs.some(Boolean)) return `{ ${fields.map(([text]) => text).join("; ")} }`;
+  return `{\n${fields.map(([text], i) => `${docs[i] ? `  ${docs[i]}\n` : ""}  ${text};`).join("\n")}\n}`;
 }
 
 const utf8 = new TextEncoder();
@@ -74,17 +98,17 @@ export function moduleTypes(sql: string, analysis: Analysis, dialect: Dialect, l
   }
   const cardinality = analysis.cardinality;
   if (analysis.diagnostics.some((d) => d.code === 6) || (dialect === "postgres" && analysis.kind === "")) return { diagnostics, params: "unknown", row: "unknown", cardinality, names };
-  const columns = analysis.columns.map((c) => `${ident(c.name)}: ${renderType(c.type, false, dialect)}${c.nullable ? " | null" : ""}`);
+  const columns = analysis.columns.map((c) => [`${ident(c.name)}: ${renderType(c.type, false, dialect)}${c.nullable ? " | null" : ""}`, c.comment] as const);
   // A parameter is typed from its context (a column it is compared with or written to, a CAST);
   // one no context types is `unknown`.
-  const typed = analysis.params.map((q) => [q.name, paramType(q, declaredType(q.type, q.schema) ?? renderParamType(q.type, dialect))] as const);
+  const typed = analysis.params.map((q) => [q.name, paramType(q, declaredType(q.type, q.schema) ?? renderParamType(q.type, dialect)), q.comment] as const);
   // A typed JSON parameter whose schema has a `default` may be left out (wiki/typed-json-params.md).
   const optional = new Set(analysis.params.filter((q) => q.schema !== null && typeof q.schema === "object" && "default" in q.schema).map((q) => q.name));
-  const paramTypes = typed.map(([name, type]) => `${ident(name)}${optional.has(name) ? "?" : ""}: ${type}`);
+  const paramTypes = typed.map(([name, type, comment]) => [`${ident(name)}${optional.has(name) ? "?" : ""}: ${type}`, comment] as const);
   return {
     diagnostics,
-    params: paramTypes.length ? `{ ${paramTypes.join("; ")} }` : "Record<never, never>",
-    row: columns.length ? `{ ${columns.join("; ")} }` : "never",
+    params: paramTypes.length ? objectType(paramTypes) : "Record<never, never>",
+    row: columns.length ? objectType(columns) : "never",
     cardinality,
     names,
   };
