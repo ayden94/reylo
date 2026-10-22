@@ -281,7 +281,7 @@ const paramAny2: Awaited<ReturnType<typeof paramAny.run>> = null! as { id: numbe
 const paramAny3: { names: string[] } = null! as ParamAnyParams;
 const paramAny4: ParamAnyParams = null! as { names: string[] };
 // Right: `= any(:names)` types the parameter as the array of the column's type, whose elements
-// take no NULL, which would match nothing (the maintainer, 2026-10-21).
+// take no NULL, which would match nothing.
 
 import paramLimit from "./param_limit.sql";
 import type { Params as ParamLimitParams } from "./param_limit.sql";
@@ -322,8 +322,8 @@ const paramNull1: { id: number; email: string | null }[] = null! as Awaited<Retu
 const paramNull2: Awaited<ReturnType<typeof paramNull.run>> = null! as { id: number; email: string | null }[];
 const paramNull3: ParamNullParamsType = null! as ParamNullParams;
 const paramNull4: ParamNullParams = null! as ParamNullParamsType;
-// Right: a parameter may be null where the statement lets it be, and nowhere else (the
-// maintainer, 2026-10-21). :email is written whole and bare to a nullable column; :role is
+// Right: a parameter may be null where the statement lets it be, and nowhere else.
+// :email is written whole and bare to a nullable column; :role is
 // coalesced, through the WITH that selects it once; :name fills a NOT NULL column. A test for null
 // (`input.role is null or …`) would not make :role nullable.
 

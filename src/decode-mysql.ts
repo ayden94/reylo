@@ -1,5 +1,5 @@
 // Reylo decodes every value of its own MySQL queries itself, on the app's own pool, connection or
-// transaction (the maintainer, 2026-10-20; the representation is src/values.ts). Each driver but
+// transaction (the representation is src/values.ts). Each driver but
 // Bun.sql takes its decoding choices per query, laid over the app's without changing them
 // (wiki/driver-decoding/spike/mysql.md):
 //

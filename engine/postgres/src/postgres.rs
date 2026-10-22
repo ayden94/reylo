@@ -584,7 +584,7 @@ impl<'a> Engine<'a> {
         Some(())
     }
 
-    /// The parameters the caller may pass null for, by number (the maintainer, 2026-10-21): each
+    /// The parameters the caller may pass null for, by number: each
     /// one the statement passes first to `coalesce` (`coalesce(:p, 50)`, `coalesce(:p::int, col)`),
     /// bare, under a cast, or through the column of a WITH query that selects it; and each one
     /// that is, bare, with no cast, the whole value written to a column that may hold null,

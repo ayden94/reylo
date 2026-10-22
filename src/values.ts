@@ -1,7 +1,7 @@
 // How Reylo represents a SQL value in JavaScript: one table, which the type renderer
 // (src/render.ts), the JSON Schema writer (src/schema.ts) and the run time's decoders
 // (src/decode.ts, src/decode-mysql.ts, src/decode-sqlite.ts) all read, so that the type a module
-// declares and the value `run` returns cannot drift apart (the maintainer, 2026-10-20). Reylo sets
+// declares and the value `run` returns cannot drift apart. Reylo sets
 // every value's type itself, on every driver, whatever the app configured its driver to return:
 // one representation per SQL type.
 //
@@ -13,8 +13,7 @@
 // Buffer is one); `text` the server's text, which every other type is (time, interval, uuid, an
 // enum's label, a range, a row value); `unknown` whatever the driver gives (a SQLite column with no
 // declared type). `k[]` is an array of `k`, a NULL element `null`, and `a|b` either (a MySQL
-// expression whose type the bound value decides). No kind is a JavaScript Date (the maintainer,
-// 2026-10-20: "I really dislike using JavaScript dates anywhere here").
+// expression whose type the bound value decides). No kind is a JavaScript Date.
 //
 // This module runs in every generated module's process, so it names no Node type: a Buffer is
 // reached through `globalThis` where one exists.
@@ -70,8 +69,8 @@ const SQL_KINDS: Readonly<Record<string, ScalarKind>> = {
 
 /**
  * SQLite's: the engine names a column by its affinity, and a column declared BIGINT, INT8 or
- * UNSIGNED BIG INT `int8`, since the declared width decides on every database (the maintainer,
- * 2026-10-20). An INTEGER is a number, exact or an error; an `int8` a BigInt on every SQLite
+ * UNSIGNED BIG INT `int8`, since the declared width decides on every database.
+ * An INTEGER is a number, exact or an error; an `int8` a BigInt on every SQLite
  * driver (src/decode-sqlite.ts reads either); a NUMERIC holds whichever storage class the row
  * stored; `bool` is a truth value or a column declared BOOLEAN; a column with no declared type,
  * or ANY in a STRICT table, is whatever the driver gives.

@@ -508,7 +508,7 @@ impl From<Repeated> for LexError {
 }
 
 /// Every use of a parameter after its first, each with the error that says so. Each parameter
-/// appears once in a statement (the maintainer's rule of 2026-10-11), so that one place types it:
+/// appears once in a statement, so that one place types it:
 /// a value read twice is selected once in a `with` and read from there. The rule holds for every
 /// form a parameter is named by: `:name` (a dotted global such as `:auth.user_id` too), SQLite's
 /// `@name` and `$name`, and the positional `$n` and `?n`, whose name is the number, so `?1` after

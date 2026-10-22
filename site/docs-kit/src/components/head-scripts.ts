@@ -39,9 +39,7 @@ export function tabsRestoreScript(groups: Record<string, readonly string[]>): st
  * It also makes a tab pressed before its group hydrates switch at once. The page hydrates late: on
  * Reylo's, 14,800 elements took 0.45s after the scripts arrived in the built site and several
  * seconds under the dev server, and a press on a tab in that time did nothing until React caught up
- * (the maintainer, 2026-10-21: "After I hard refresh the page and then I click on the
- * get_author.sql tab on the very first code block, there's a weirdly long delay before it changes
- * tabs").
+ * (a press on a tab right after a hard refresh waited for hydration).
  */
 export const TABS_PREPAINT_SCRIPT = `(() => { try {
   const q = (s) => '"' + String(s).replace(/["\\\\]/g, '\\\\$&').replace(/\\n/g, ' ') + '"';

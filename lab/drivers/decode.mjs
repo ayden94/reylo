@@ -1,5 +1,5 @@
-// Reylo decodes every value of its own Postgres queries itself (src/decode.ts, the maintainer,
-// 2026-10-20), against real drivers each set up by the app against it: pg's Client, Pool and a
+// Reylo decodes every value of its own Postgres queries itself (src/decode.ts), against real
+// drivers each set up by the app against it: pg's Client, Pool and a
 // PoolClient in a transaction, pg-promise, Neon's Pool and Client through a local stand-in for its
 // WebSocket proxy, PGlite, and postgres.js. Each runs the same statement through Reylo's `run` and
 // directly (the control, which shows the app's own decoding, its parsers and the driver's), and the

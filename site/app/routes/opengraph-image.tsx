@@ -9,8 +9,8 @@
 // dark theme: Geist and Geist Mono (assets/fonts, SIL Open Font License) on the dark page's
 // colours, with the code in the page's GitHub Dark colours. Satori lays out flex boxes only, so
 // every element with more than one child is a flex box. A card drawn entirely as a code block, with
-// the type on five lines at the code's size, replaced this one for an hour on 2026-10-20; the
-// maintainer preferred this one ("that's worse than the old card. I liked the old card").
+// the type on five lines at the code's size, replaced this one for an hour on 2026-10-20, and
+// this one came back.
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { CSSProperties, ReactNode } from 'react';

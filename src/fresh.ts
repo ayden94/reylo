@@ -1,5 +1,5 @@
-// The schema freshness check at run time (wiki/structured-params.md §6; the maintainer,
-// 2026-10-20: any change fails). A module a build step writes carries the catalog facts its
+// The schema freshness check at run time (wiki/structured-params.md §6):
+// any change fails. A module a build step writes carries the catalog facts its
 // statement relied on, the columns it names with their types, whether each is not null and whether
 // it has a default, for an insert's table the columns that need a value, and on Postgres and SQLite
 // the text of each default a structured insert copied into its statement, beside the catalog query

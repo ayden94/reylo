@@ -1,5 +1,5 @@
 -- MySQL's prepare says nothing of a parameter's nullability, so the engine reads it off the
--- statement by the rule of Postgres and SQLite (the maintainer, 2026-10-21): a parameter written
+-- statement by the rule of Postgres and SQLite: a parameter written
 -- whole and bare, with no cast, to a column that may hold NULL (a VALUES row, the SELECT that
 -- feeds an INSERT, INSERT's SET, an UPDATE's SET, ON DUPLICATE KEY UPDATE, a REPLACE) takes NULL,
 -- unless it also fills a column that refuses it, and so does one passed first to COALESCE or

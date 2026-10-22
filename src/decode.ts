@@ -1,6 +1,6 @@
 // Reylo decodes every value of its own Postgres queries itself, on the app's own client, pool,
 // connection or transaction, so that a row has the type the module declares however the app set
-// up its driver (the maintainer, 2026-10-20; the representation is src/values.ts). It never opens
+// up its driver (the representation is src/values.ts). It never opens
 // a connection, never mutates the app's object, and never changes the app's other queries. Every
 // driver but Bun.sql hands over each value as the server's text, and only the per-type choice that
 // follows is Reylo's (wiki/driver-decoding/spike/postgres.md):

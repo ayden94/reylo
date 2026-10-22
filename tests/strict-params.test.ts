@@ -9,8 +9,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // A parameter nothing in the statement types is error reylo12 in the type check unless the project
-// file says `strict_params: false` (the maintainer, 2026-10-20: "if something is not inferable. I
-// feel like we should throw an error. As opposed to just infering it as `unknown`"). The content
+// file says `strict_params: false`. The content
 // mapper runs as the type check runs it, through its own JSON-RPC process. Postgres and MySQL run
 // on throwaway servers (REYLO_TEST_PG, REYLO_TEST_MYSQL), each in a database of its own.
 const PG = process.env.REYLO_TEST_PG;

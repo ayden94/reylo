@@ -1,5 +1,5 @@
 // The engine's type model as TypeScript text. Reylo gives every value it returns its type itself,
-// on every driver (src/values.ts, the maintainer, 2026-10-20): one representation per SQL type, so
+// on every driver (src/values.ts): one representation per SQL type, so
 // a column's type is its kind's, from the same table the run time decodes with. Inside a JSON value
 // the database has already serialized it, so the same type reads as JSON writes it there.
 import type { EngineType } from "./engine.ts";
@@ -166,7 +166,7 @@ export function declaredType(t: EngineType, declared: unknown): string | undefin
 
 /**
  * The type a parameter accepts: what `run` returns for its SQL type, so that a row goes back in as
- * it came out (the round-trip rule, the maintainer, 2026-10-20), and what else every driver binds
+ * it came out (the round-trip rule), and what else every driver binds
  * the same way. Every Postgres and MySQL driver binds a number, a BigInt or a digit string for a
  * 64-bit integer, so `limit :n` takes a number. On MySQL the engine types a parameter by the
  * column it is written to or compared with (engine/mysql `column_types`), since the prepare
@@ -175,12 +175,11 @@ export function declaredType(t: EngineType, declared: unknown): string | undefin
  * a SQLite BOOLEAN column's is NUMERIC, which takes it too, and `src/execute.ts` binds it as 1 or 0. A `timestamptz` is
  * an instant, which `run` returns as its ISO 8601 text in UTC, and takes that text, or any that
  * names its zone (`src/execute.ts`), and no `Date`, which `date.toISOString()` writes as such a
- * string (the maintainer, 2026-10-20: "for now, let's just keep it as strings"). A `timestamp` or a `date` (MySQL's DATETIME and TIMESTAMP are the engine's
+ * string. A `timestamp` or a `date` (MySQL's DATETIME and TIMESTAMP are the engine's
  * `timestamp`) is a wall-clock reading with no zone, and the drivers write a `Date`'s in different
  * zones, the app's (pg, mysql2), the server's (postgres.js) or UTC (PGlite, Bun.sql), so it takes
- * the text alone (the maintainer, 2026-10-12). An array parameter's elements take no NULL (the
- * maintainer, 2026-10-21, beside his rule for a parameter's own nullability: "if you put in a
- * hard-coded cast, that should be it. That should be what the type signature is"): a NULL element
+ * the text alone. An array parameter's elements take no NULL, as a parameter with a cast is its
+ * cast's type: a NULL element
  * of `= any(:ids)` matches nothing. An array inside a structured
  * parameter's member (`inRow`) keeps NULL elements, which `src/rows.ts` binds, so an array a
  * statement builds with NULL elements (`array_agg` over a left join is `(string | null)[]`) goes

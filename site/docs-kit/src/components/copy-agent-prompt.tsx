@@ -5,9 +5,8 @@ import { AGENT_PROMPT_SELECTOR, agentPromptText } from './agent-prompt';
 import { CheckIcon, CopyIcon } from './copy-icons';
 
 /**
- * "Copy agent prompt" at the top of the page, on the title's row (`titleAside` of `DocsShell`), as
- * the maintainer asked on 2026-10-20 for Reylo's page: "the call to action with a 'Copy agent
- * prompt' button at the very top of the page. It can just be a button." It copies what the page's
+ * "Copy agent prompt" at the top of the page, on the title's row (`titleAside` of `DocsShell`): the
+ * call to action at the very top of the page, a plain button. It copies what the page's
  * agent card (`<AgentPrompt>`) copies, found in the page by its `data-agent-prompt`, so the prompt
  * is written once, in the card's code block. A page without a card shows no button.
  */

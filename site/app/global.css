@@ -17,8 +17,7 @@
    a colourless grey, near-black by night and white by day, so the yellow is
    the page's only colour: it marks links, the active table-of-contents entry
    and inline code. In light mode the yellow darkens to ochre wherever it
-   carries text, so it keeps its contrast on white. The maintainer chose this
-   on 2026-10-20 from six directions compared on the live page. ─────────── */
+   carries text, so it keeps its contrast on white. ─────────── */
 
 :root {
   --dk-accent: hsl(46, 97%, 52%);

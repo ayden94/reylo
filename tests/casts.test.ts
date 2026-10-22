@@ -11,8 +11,8 @@ import { sqlModule } from "../src/loader.ts";
 
 // A parameter's `::type` on MySQL and SQLite, which have no `::`: the build writes the dialect's
 // own cast, and the run time checks the value against the type, since both databases' casts turn
-// a value they cannot read into 0 or NULL (the maintainer, 2026-10-20: `::` everywhere, converted
-// by the compiler). MySQL runs on a throwaway server named by REYLO_TEST_MYSQL, in a database of
+// a value they cannot read into 0 or NULL (`::` everywhere,
+// converted by the compiler). MySQL runs on a throwaway server named by REYLO_TEST_MYSQL, in a database of
 // its own.
 const MYSQL = process.env.REYLO_TEST_MYSQL;
 const DRIVERS = fileURLToPath(new URL("../lab/drivers/node_modules", import.meta.url));

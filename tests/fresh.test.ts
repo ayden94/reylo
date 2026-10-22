@@ -10,8 +10,8 @@ import { Session } from "../src/analyze.ts";
 import { differences, sqliteDefault, type Fresh } from "../src/fresh.ts";
 import { sqlModule } from "../src/loader.ts";
 
-// The schema freshness check (src/fresh.ts, engine/core/src/fresh.rs; wiki/structured-params.md §6, the
-// maintainer, 2026-10-20: any change fails). Postgres and MySQL run on throwaway servers named by
+// The schema freshness check (src/fresh.ts, engine/core/src/fresh.rs; wiki/structured-params.md §6:
+// any change fails). Postgres and MySQL run on throwaway servers named by
 // REYLO_TEST_PG and REYLO_TEST_MYSQL, each test in a database of its own.
 const PG = process.env.REYLO_TEST_PG;
 const MYSQL = process.env.REYLO_TEST_MYSQL;

@@ -119,7 +119,7 @@ const ROUND_TRIPS: Record<"postgres" | "mysql" | "sqlite", [column: EngineType, 
     [array(scalar("record")), array(scalar("record"))],
     // An array the statement builds from values that may be NULL (`array_agg` over a left join)
     // goes back into a structured member alone: a top-level array parameter takes no NULL
-    // element (the maintainer, 2026-10-21), tested below.
+    // element, tested below.
   ],
   mysql: [
     [scalar("int8"), scalar("int8")],
@@ -187,7 +187,7 @@ test("every date and time parameter takes a string: a timestamptz one the text t
 
 test("an array's elements are nullable only where the statement builds it from a value that may be NULL", () => {
   // `array_agg(u.email)` over a LEFT JOIN is `{NULL}` for a team with no users; a table's array
-  // column, which the statement does not build, is `T[]` as the maintainer decided on 2026-10-03.
+  // column, which the statement does not build, is `T[]`.
   const texts = (nullable_items?: boolean): EngineType => (nullable_items === undefined ? { kind: "array", of: scalar("text") } : { kind: "array", of: scalar("text"), nullable_items });
   assert.equal(renderType(texts()), "string[]");
   assert.equal(renderType(texts(false)), "string[]");
@@ -195,8 +195,7 @@ test("an array's elements are nullable only where the statement builds it from a
   assert.equal(renderType(texts(true), true), "(string | null)[]");
   assert.equal(renderType({ kind: "array", of: { kind: "enum", name: "mood", labels: ["ok", "sad"] }, nullable_items: true }), `("ok" | "sad" | null)[]`);
   // A top-level array parameter's elements take no NULL, as the parameter itself takes NULL only
-  // as the first argument of `coalesce` (the maintainer, 2026-10-21: "if you put in a hard-coded
-  // cast, that should be it"): a NULL in `= any(:ids)` matches nothing. An array inside a
+  // as the first argument of `coalesce`: a NULL in `= any(:ids)` matches nothing. An array inside a
   // structured parameter's member keeps NULL elements, so a built array goes back into a row.
   assert.equal(renderParamType(texts()), "string[]");
   assert.equal(renderParamType({ kind: "array", of: scalar("int8") }), "(number | bigint | string)[]");

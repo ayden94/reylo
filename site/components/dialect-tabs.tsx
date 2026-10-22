@@ -35,9 +35,7 @@ export function Dialect({ value, children }: { value: DialectName; children: Rea
 export function DialectSwitch({ dialects }: { aside?: boolean; dialects?: string }) {
   // `dialects` names the group's, comma-separated, when it shows fewer than three.
   const values = dialects ? DIALECTS.filter((d) => dialects.split(',').includes(d)) : DIALECTS;
-  // One database is no choice: a light gray label says which (the maintainer, 2026-10-21: "For
-  // anything where there's only one database supported, it should just be a light gray label, and
-  // it says 'Postgres only'").
+  // One database is no choice: a light gray label says which, as "Postgres only".
   if (values.length === 1) return <span className="reylo-dialect-only">{values[0]} only</span>;
   return <VariantSwitch group="dialect" values={values} label="Database" />;
 }

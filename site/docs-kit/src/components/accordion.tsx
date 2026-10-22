@@ -11,8 +11,7 @@ import { flushSync } from 'react-dom';
  * closed item's content is in the HTML. Fumadocs renders it only once the item opens (Radix's
  * collapsible leaves it out until then), so the prerendered page had the headings of Motherload's
  * Setup accordions and nothing under them, which a coding agent that fetches the page, a search
- * engine and the browser's find-in-page all saw as empty (the maintainer, 2026-10-21: "We
- * definitely should be servicing the HTML for closed accordions. That's a huge problem").
+ * engine and the browser's find-in-page all saw as empty.
  *
  * Every item's content is rendered (`forceMount`), and a closed one is hidden in two ways:
  * 1. Until the page hydrates, by `[data-dk-accordion-panel][data-state=closed]:not([data-dk-ready])`

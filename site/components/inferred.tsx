@@ -5,8 +5,7 @@ import { DialectSwitch } from './dialect-tabs';
 /*
  * The Inference section's cards: a statement with the types Reylo infers for it, in one card of
  * labelled rows, Schema (where the example needs one), Query, Params and Returns, every row
- * visible at once (the maintainer, 2026-10-21: "it's important for it all to be visible and
- * scannable without needing to click tabs"). The page writes `<Inferred>` around a schema block
+ * visible at once, scannable without a click on a tab. The page writes `<Inferred>` around a schema block
  * and a statement; lib/remark-mapper.ts fills it with a panel per dialect, the rows read off the
  * statement's captured module, which follow the page's dialect choice, and the switch here sets it.
  */

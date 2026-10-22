@@ -20,7 +20,7 @@ pub enum StatementKind {
 #[derive(Debug, Clone, Default)]
 pub struct ParamUse {
     /// The parameter is the first argument of a `coalesce(:p, …)`, where the caller may pass it
-    /// null (the maintainer, 2026-10-21); carries the literal default when one exists.
+    /// null; carries the literal default when one exists.
     pub coalesce: bool,
     pub coalesce_default: Option<Value>,
 }
@@ -52,8 +52,7 @@ pub struct Analysis {
     /// Each parameter that is, bare, with no cast, the whole value written to a column: an
     /// INSERT's VALUES item or the column of the SELECT that feeds it, an UPDATE's or an ON
     /// CONFLICT's SET, a row value's element. Such a parameter takes the column's nullability;
-    /// a cast one is its cast's type, never null (the maintainer, 2026-10-21: "If you wanted to do
-    /// type inference based on the column, you shouldn't have added the cast").
+    /// a cast one is its cast's type, never null.
     pub bare: Vec<(i32, String, Filled)>,
     /// Whether RETURNING produces rows (for defaulting `returns`).
     pub has_returning: bool,
@@ -721,7 +720,7 @@ mod tests {
     #[test]
     fn a_null_test_marks_nothing() {
         // A null test of the parameter and `IS NOT DISTINCT FROM` let the caller pass no null
-        // (the maintainer, 2026-10-21); `coalesce` does, and a bare write to a nullable column.
+        // `coalesce` does, and a bare write to a nullable column.
         for sql in ["SELECT id FROM t WHERE $1::text IS NULL OR title = 'x'", "SELECT id FROM t WHERE $1::text IS NOT NULL", "SELECT id FROM t WHERE title IS NOT DISTINCT FROM $1", "WITH input AS (SELECT $1::int AS min) SELECT id FROM t, input i WHERE i.min IS NULL OR score > i.min"] {
             assert!(analyze(sql).unwrap().params.get(&1).is_none_or(|u| !u.coalesce), "{sql}");
         }

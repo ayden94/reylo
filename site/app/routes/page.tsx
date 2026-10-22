@@ -13,11 +13,10 @@ import { ogAlt, ogSize } from '@/lib/og';
 import { source } from '@/lib/source';
 
 /**
- * The h2s whose h3s stay out of each page's table of contents. The maintainer wants the whole table
- * to fit on one screen (a window 900px tall, at Fumadocs' spacing); the headings stay on the page,
- * with their anchors. On the main page: the examples, and Supported drivers' Postgres, MySQL and SQLite (Parameters' h3s show since 2026-10-21, as the maintainer asked); the query's members
- * under Usage and the keys of `.reylo.yaml` show, as the maintainer asked on 2026-10-20 ("All the h3s
- * underneath the usage section should show up in the sidebar"; "Same for configuration"). On each dialect page (content/docs/<dialect>.mdx, one skeleton
+ * The h2s whose h3s stay out of each page's table of contents, so that the whole table fits
+ * on one screen (a window 900px tall, at Fumadocs' spacing); the headings stay on the page,
+ * with their anchors. On the main page: the examples, and Supported drivers' Postgres, MySQL and SQLite (Parameters' h3s show since 2026-10-21); the query's members
+ * under Usage and the keys of `.reylo.yaml` show. On each dialect page (content/docs/<dialect>.mdx, one skeleton
  * for all three): the h3s of Parameters, which leaves Data types' h3s, the reason a reader lands
  * there, in the table.
  */

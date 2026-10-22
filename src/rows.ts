@@ -2,11 +2,10 @@
 // or `:user::row(…)` parameter is checked against its column list before the statement runs, and
 // written as the JSON the statement reads. A key a row leaves out takes its column's default: on
 // Postgres and SQLite the statement holds each such default, copied from the catalog, so it is one
-// text whatever keys the rows give (the maintainer, 2026-10-20: "copy the default from the catalog
-// on the databases where it can be done with high fidelity"); on MySQL an insert's column lists are
+// text whatever keys the rows give; on MySQL an insert's column lists are
 // written again without the keys a call leaves out, so every row of a call gives the same keys.
 // Nothing here changes a value: a value the database would round, truncate or read in a zone
-// nobody chose is refused (the maintainer, 2026-10-15: "Never, except defaults").
+// nobody chose is refused.
 import type { EngineType } from "./engine-type.ts";
 import { validate, withDefaults } from "./json-schema.ts";
 import { postgresYear } from "./values.ts";
@@ -191,7 +190,7 @@ function scalar(name: string, written: string, v: unknown, dialect: Dialect, fai
       if (typeof v === "string" && /^\{?[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}\}?$/i.test(v)) return v;
       return fail(`is ${written}, a UUID in hexadecimal; got ${describe(v)}.`);
     case "timestamptz":
-      // A string that names its zone, as `.run()` returns one; no Date (the maintainer, 2026-10-20).
+      // A string that names its zone, as `.run()` returns one; no Date.
       if (v instanceof Date) return fail(`is ${written}, which takes the instant as a string that names its zone, not a Date: pass date.toISOString() ("2026-10-12T19:06:48.282Z").`);
       if (typeof v === "string" && zoned.test(v.trim())) return dialect === "postgres" ? postgresYear(v) : v;
       return fail(`is ${written}, an instant: a string that names its zone ("2026-10-12T19:06:48.282Z", "2026-10-12 19:06:48+09"); got ${describe(v)}, which the server would read in the session's time zone.`);

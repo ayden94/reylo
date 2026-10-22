@@ -360,8 +360,8 @@ function statement(query: QueryModule, params: ParamsInput) {
       if (structured) bound.text = variant(bound.text, structured, type.fields, prepared.present);
       return;
     }
-    // An array parameter takes no NULL element, as its type says (`:ids::int[]` is `number[]`;
-    // the maintainer, 2026-10-21): a NULL in `= any(:ids)` matches nothing. An array inside a
+    // An array parameter takes no NULL element, as its type says (`:ids::int[]` is `number[]`):
+    // a NULL in `= any(:ids)` matches nothing. An array inside a
     // structured parameter's member keeps its NULL elements (src/rows.ts).
     if (type?.kind === "array" && Array.isArray(bound.values[i])) {
       const at = nullElement(bound.values[i] as unknown[]);
@@ -421,15 +421,15 @@ function isJsonValue(query: QueryModule, name: string, v: unknown): boolean {
   return v != null && isJson(query.inputs?.[name]?.type.kind);
 }
 
-// A date or time value's type says whether it has a zone (src/render.ts; the maintainer,
-// 2026-10-12), and a value that would be read in a zone nobody chose is refused before the
+// A date or time value's type says whether it has a zone (src/render.ts),
+// and a value that would be read in a zone nobody chose is refused before the
 // statement runs. A `timestamp` or a `date` (MySQL's DATETIME and TIMESTAMP are the engine's
 // `timestamp`) takes no Date: pg and mysql2 wrote its wall-clock time in the app's zone,
 // postgres.js in the server's, PGlite and Bun.sql in UTC, and Bun.sql's `date` failed in every
 // zone. A `timestamptz` takes a string that names its zone, which is what `run` returns for one:
 // without a zone the server reads the text in the session's TimeZone, which the driver or the
-// server sets, and a Date is refused too, as every other type's value is but a string (the
-// maintainer, 2026-10-20), with the call that writes it as one.
+// server sets, and a Date is refused too, as every other type's value is but a string,
+// with the call that writes it as one.
 
 const isTime = (type: EngineType | undefined) => type?.kind === "scalar" && type.name.split("|").every((part) => part === "timestamp" || part === "timestamptz" || part === "date");
 

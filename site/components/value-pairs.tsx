@@ -2,8 +2,7 @@ import { Children, isValidElement, type ReactElement, type ReactNode } from 'rea
 import './value-pairs.css';
 
 /*
- * A rule list with value pairs, the maintainer's pick of 2026-10-21 for the dialect pages' rule
- * lists (option F2b, labelled "SQL, JavaScript": "F2B is basically impossible to beat"). Inside
+ * A rule list with value pairs, for the dialect pages' rule lists, labelled "SQL, JavaScript". Inside
  * `<Rules>`, each rule is a bold line naming the case, then its discussion, then `<Pairs>`: a list
  * of SQL values and what `.run()` returns for each, one per line as `SQL` → `JavaScript`, which
  * `<Pairs>` draws as a card of labelled rows. The page stays Markdown, so the copy of a section

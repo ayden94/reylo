@@ -1,6 +1,6 @@
 //! Structured parameters: a named parameter cast to `rows(…)` or `row(…)`, whose column list
 //! names each key the caller passes, its database type, and whether it may be null or left out
-//! (wiki/structured-params.md, decided with the maintainer on 2026-10-20). The caller passes one
+//! (wiki/structured-params.md). The caller passes one
 //! JSON value, an array of objects for `rows` and one object for `row`, and the statement reads it
 //! as a table:
 //!
@@ -12,8 +12,7 @@
 //! The pass runs before the analysis. It finds each such parameter in the author's text, reads
 //! its column list, and writes in its place what the database reads instead, keeping the author's
 //! placeholder, so the rest of the analysis sees an ordinary statement with one JSON parameter.
-//! What it writes depends on where the parameter stands (the maintainer, 2026-10-20: "Yes,
-//! depending on position"):
+//! What it writes depends on where the parameter stands:
 //! - right after `INTO <table>`, the insert's column list and a query over the rows, in the
 //!   array's order (`wiki/bulk-insert.md`, Order);
 //! - anywhere else, a table, named by the alias written after it or else by the parameter.
@@ -25,21 +24,18 @@
 //! A key a row leaves out takes its column's default. On Postgres and SQLite the insert reads,
 //! for each member whose key may be left out, the row's value where it has the key and else the
 //! column's default copied from the catalog ([`copies`]), so one statement takes rows with any mix
-//! of keys (the maintainer, 2026-10-20: "I think we should copy the default from the catalog on
-//! the databases where it can be done with high fidelity. I don't really care about MySQL, so I
-//! think it can reject for MySQL."). On MySQL the run time writes the insert's lists again per call
+//! of keys. On MySQL the run time writes the insert's lists again per call
 //! without the keys it leaves out ([`Info`]), and refuses a call whose rows give different keys.
 //!
-//! The column list is written bare in the cast's parentheses (the maintainer, 2026-10-20: "Bare in
-//! the parentheses"). A member is `name[?] type [not null]`: `?` lets the caller leave a `not null` key out so that the column's default
+//! The column list is written bare in the cast's parentheses. A member is `name[?] type [not null]`: `?` lets the caller leave a `not null` key out so that the column's default
 //! applies, a member without `not null` may be null or left out, and `json('…')` or `jsonb('…')`
 //! types a JSON column by the JSON Schema in its string. Strings in the column list are read the
 //! standard way on every dialect, `''` for a quote and no backslash escapes, since the database
 //! never reads them.
 //!
 //! The same pass writes a parameter's `::type` cast on MySQL and SQLite, which have no `::`, as the
-//! dialect's own cast (the maintainer, 2026-10-20: `::` everywhere, beside each dialect's own cast
-//! syntax, converted by the compiler). The types are written as on Postgres, and each dialect
+//! dialect's own cast (`::` everywhere, beside each dialect's own cast syntax, converted by the
+//! compiler). The types are written as on Postgres, and each dialect
 //! takes its own spelling of one: MySQL's `CAST` takes `SIGNED` for an integer, and SQLite's
 //! reads a type by its affinity, which for a date or a boolean is NUMERIC and turns `'2026-10-12'`
 //! into 2026, so a date is cast to TEXT, as SQLite keeps one. MySQL refuses an expression in
@@ -583,8 +579,8 @@ fn schema_string(sql: &str, start: usize) -> Result<(String, usize), DescriptorE
 fn descriptor_text(sql: &str, paren: usize) -> Result<(Text, usize), DescriptorError> {
     let b = sql.as_bytes();
     let start = skip_space(b, paren + 1);
-    // The column list is written bare in the parentheses (the maintainer, 2026-10-20); a string
-    // there is the form he did not take.
+    // The column list is written bare in the parentheses; a string there is the form the syntax
+    // does not take.
     if b.get(start) == Some(&b'\'') {
         return error("A column list is written bare in the parentheses, as in `::rows(id int8 not null, name text)`, not as a string.", start, start + 1);
     }
@@ -768,7 +764,7 @@ fn members(text: &Text, whole: (usize, usize)) -> Result<Vec<Member>, Descriptor
         }
         let head = lower(type_first);
         if (head == "rows" || head == "row") && matches!(rest.get(1), Some(Token { tok: Tok::Punct('('), .. })) {
-            return error("A nested row or rows member is not built yet: nested writes wait until Reylo takes multi-statement or Postgres-only forms (the maintainer, 2026-10-20).", type_span.0, type_span.1);
+            return error("A nested row or rows member is not built yet: nested writes wait until Reylo takes multi-statement or Postgres-only forms.", type_span.0, type_span.1);
         }
         let (ty, schema) = if (head == "json" || head == "jsonb") && rest.len() > 1 {
             match (&rest.get(1).map(|t| &t.tok), rest.get(2).map(|t| &t.tok), rest.get(3).map(|t| &t.tok), rest.len()) {
@@ -1732,7 +1728,7 @@ pub fn profile(schema: &Value, at: &str) -> Option<String> {
 }
 
 /// The schema as the caller sees it: a key whose schema has a `default` may be left out, since the
-/// run time fills it before the checks (the maintainer, 2026-10-20), so it leaves `required`. The
+/// run time fills it before the checks, so it leaves `required`. The
 /// walk follows where the run time fills defaults, as ajv's `useDefaults` does: not inside
 /// `anyOf`, `oneOf`, `not`, `if`, `contains` or `propertyNames`.
 pub fn input_view(schema: &Value) -> Value {
@@ -1950,9 +1946,8 @@ fn sqlite_identifier_default(expr: &str) -> Option<String> {
 }
 
 /// Per member of an insert's column list on Postgres and SQLite, the default a row that leaves
-/// its key out takes, copied from `columns`, the catalog's columns of the table: the maintainer,
-/// 2026-10-20, "I think we should copy the default from the catalog on the databases where it can
-/// be done with high fidelity". `None` where the catalog gave no column, so that the run time
+/// its key out takes, copied from `columns`, the catalog's columns of the table, on the
+/// databases where the catalog gives it with high fidelity. `None` where the catalog gave no column, so that the run time
 /// writes the lists again per call, as on MySQL.
 pub fn copies(f: &Found, columns: &[TableColumn], dialect: Dialect) -> Option<Vec<Option<String>>> {
     if dialect == Dialect::Mysql || !f.insert || f.json.is_some() || f.plain.is_some() || columns.is_empty() {
@@ -1969,8 +1964,7 @@ fn column_of<'a>(columns: &'a [TableColumn], name: &str, dialect: Dialect) -> Op
 /// The column list against the table its insert writes: a key that may be null goes to a column
 /// that may hold NULL, a key the caller may leave out to a column with a default, every column
 /// that needs a value is in the list, and each member's type is its column's, so that the run
-/// time's checks are the column's own (the maintainer, 2026-10-20: the descriptor is explicit and
-/// checked against the table).
+/// time's checks are the column's own (the descriptor is explicit and checked against the table).
 fn check_table(f: &Found, sql: &str, fields: &[RowField], columns: &[TableColumn], dialect: Dialect) -> Vec<Diagnostic> {
     let Some((ts, te)) = f.table else { return Vec::new() };
     if columns.is_empty() {

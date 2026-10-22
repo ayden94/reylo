@@ -1,6 +1,6 @@
 //! Which MySQL parameters the caller may pass null for, by the rule of Postgres and SQLite
 //! (`postgres::nullable_params`, `sqlite::coalesced_params`), read off the `sqlparser` tree, since
-//! MySQL's prepare says nothing of a parameter's nullability (the maintainer, 2026-10-21): one the
+//! MySQL's prepare says nothing of a parameter's nullability: one the
 //! statement passes first to `coalesce` or `ifnull`, the two-argument coalesce, bare or under the
 //! conversion a `::type` cast compiles to, directly or through the column of a WITH query or a
 //! derived table that selects it (`with input as (select :p as p) … where coalesce(input.p, 0) =
@@ -83,7 +83,7 @@ fn typed_targets(statement: &Statement, names: &Names) -> Vec<(String, String, T
 /// context as BIT(64), whatever the column, so a parameter written to or compared with a BIGINT
 /// column is `int8`, one with a TINYINT(1) or BIT(1) column, which a row returns as a truth
 /// value, `bool|int4`, and one with a wider BIT column `bytea`. A row's value then goes back in
-/// as a parameter of its type (the round-trip rule, the maintainer, 2026-10-20). A parameter whose
+/// as a parameter of its type (the round-trip rule). A parameter whose
 /// columns disagree keeps the prepare's type.
 pub(crate) fn column_types(statement: &Statement, names: &Names, host: &Host) -> Lazy<HashMap<String, &'static str>> {
     let targets = typed_targets(statement, names);
@@ -1001,8 +1001,7 @@ mod tests {
     fn a_cast_parameter_is_its_casts_type_and_takes_no_null() {
         // What a `:name::type` cast compiles to: `CAST(? AS SIGNED)`, `CAST(? AS DECIMAL(…))`,
         // `CAST(? AS JSON)`, and on MariaDB `JSON_COMPACT(?)` for `::json`: written whole to a
-        // nullable column, the parameter is a value ("If you wanted to do type inference based on
-        // the column, you shouldn't have added the cast", the maintainer, 2026-10-21).
+        // nullable column, the parameter is a value: a cast parameter is its cast's type.
         for sql in [
             "insert into users (name, email, bio) values (:name, CAST(:email AS JSON), JSON_COMPACT(:bio))",
             "insert into users (name, email, bio) values (CAST(:name AS SIGNED), CAST(:email AS DECIMAL(10,2)), CAST(:bio AS UNSIGNED)), (JSON_COMPACT(:n2), cast(:e2 as char), CAST(:b2 AS DATETIME(6)))",

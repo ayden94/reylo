@@ -12,8 +12,7 @@ import { sqlModule } from "../src/loader.ts";
 import { defineQuery } from "../src/index.ts";
 
 // A query's `sql` is the statement as Reylo sends it to the database, the engine's compiled text,
-// and `raw` the file as written (the maintainer, 2026-10-20: "`.sql` should give the user back the
-// compiled query", "`.raw` can contain the actual contents"). Both are the module's exports too,
+// and `raw` the file as written. Both are the module's exports too,
 // and the content mapper declares both as string literals. Postgres and MySQL run on throwaway
 // servers (REYLO_TEST_PG, REYLO_TEST_MYSQL), each test in a database of its own.
 const PG = process.env.REYLO_TEST_PG;
@@ -140,7 +139,7 @@ test("SQLite: `sql` is the compiled statement and `raw` the file, at run time an
       `export declare const raw: "select id, name, email from users where id = :id\\n";`,
       `declare const query: Query<…> & { readonly sql: typeof sql; readonly raw: typeof raw };`,
     ]);
-    // The parameters are one object type, with no tuple beside it (the maintainer, 2026-10-20).
+    // The parameters are one object type, with no tuple beside it.
     const lines = declared["get_user.sql"]!.split("\n");
     assert.ok(lines.includes("export type Params = { id: number };"), declared["get_user.sql"]!);
     assert.ok(!lines.some((line) => line.startsWith("export type Values")), declared["get_user.sql"]!);

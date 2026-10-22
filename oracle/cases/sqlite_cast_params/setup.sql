@@ -1,6 +1,5 @@
 -- A parameter under the cast a `:name::type` compiles to on SQLite, `CAST(? AS type)` or `json(?)`
 -- for `::json`, is the cast's type and takes no NULL written whole to a nullable column, where the
--- bare one takes it (the maintainer, 2026-10-21: "If you wanted to do type inference based on the
--- column, you shouldn't have added the cast"); both take NULL coalesced, and neither tested for NULL.
+-- bare one takes it; both take NULL coalesced, and neither tested for NULL.
 create table users (id integer primary key, name text not null, email text unique, score real, n integer, doc text, meta text not null default '{}') strict;
 insert into users (name, email, score, n, doc) values ('Ada', 'ada@example.com', 1.5, 1, '{"a":1}');

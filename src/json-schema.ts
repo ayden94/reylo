@@ -1,6 +1,6 @@
 // A JSON Schema 2020-12 validator for the run time, which has no dependencies: it checks a value
 // against the schema a statement writes in a `json('…')` member of a column list or, where it is
-// built, a JSON parameter's cast (wiki/typed-json-params.md, the maintainer, 2026-10-12: JSON
+// built, a JSON parameter's cast (wiki/typed-json-params.md: JSON
 // Schema in its entirety; checks TypeScript cannot say are Reylo's to run). The engine refuses what
 // the profile leaves out before a module is written (references, `unevaluatedItems`, a schema in
 // `unevaluatedProperties`, the dynamic keywords), so none of those reach this file. A format is
@@ -23,8 +23,8 @@ export function cloneJson<T>(value: T): T {
 }
 
 /**
- * The value with the schema's defaults filled in, as ajv's `useDefaults` fills them (the
- * maintainer, 2026-10-20: a JSON parameter's default is its schema's `default`): a key `properties`
+ * The value with the schema's defaults filled in, as ajv's `useDefaults` fills them (a
+ * JSON parameter's default is its schema's `default`): a key `properties`
  * names and the value lacks takes its `default`, and so does an item `prefixItems` names past the
  * array's end. A key that is null keeps its null. Defaults are filled wherever the schema applies
  * to the value but inside `anyOf`, `oneOf`, `not`, `if`, `contains` and `propertyNames`, whose

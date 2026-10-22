@@ -1,5 +1,5 @@
-/* The rule lists with value pairs (components/value-pairs.tsx): the maintainer's pick of
-   2026-10-21, option F2b of the rule-list options, with its rows labelled SQL and JavaScript. */
+/* The rule lists with value pairs (components/value-pairs.tsx), with their rows labelled SQL and
+   JavaScript. */
 
 /* A case, the bold line that opens a rule, is a term in the headings' colour, with room above it. */
 #nd-page .prose .reylo-rules > p:has(> strong:only-child) {

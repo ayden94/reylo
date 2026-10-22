@@ -541,7 +541,7 @@ export const SCENARIOS: Scenario[] = [
       const at = "2026-01-02 03:04:05.006";
       const row = await call(ctx, q.times, client, { tz: "2026-01-02T03:04:05.006Z", named: "2026-01-02 12:04:05.006 Asia/Tokyo", at, day: "2026-01-02" });
       eq({ ...row, tz: Boolean(Number(row.tz)) }, { tz: true, at: ctx.job.dialect === "postgres" ? at : `${at}000`, day: "2026-01-02" }, "row");
-      // A Date is refused for a date and, since the maintainer's answer of 2026-10-20, for a
+      // A Date is refused for a date and, since 2026-10-20, for a
       // timestamptz too, which takes the zoned text run returns for one.
       const refusals: [Record<string, unknown>, RegExp][] = [[{ tz: "1970-01-01T00:00:00Z", named: "2026-01-02T03:04:05Z", at, day: new Date(Date.UTC(2026, 0, 2)) }, /^Parameter "day" is a date without a time zone/]];
       if (ctx.job.dialect === "postgres") refusals.push([{ tz: new Date(0), named: "2026-01-02T03:04:05Z", at, day: "2026-01-02" }, /^Parameter "tz" is a timestamptz, .*not a Date: pass date\.toISOString\(\)/]);

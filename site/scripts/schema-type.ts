@@ -3,7 +3,7 @@
 // `unknown` until typed JSON parameters are built; scripts/capture-types.ts puts this type in its
 // place, so the docs show what the build will give.
 //
-// The schema is JSON Schema 2020-12 with its own type names (the maintainer, 2026-10-19): `type` is
+// The schema is JSON Schema 2020-12 with its own type names: `type` is
 // `string`, `number`, `integer`, `boolean`, `null`, `object` or `array`, or a list of them; a key is
 // optional unless `required` lists it; every schema is an object, never a bare type name; `enum` and
 // `const` narrow a type, and `oneOf`, `anyOf` and `allOf` combine schemas. A database type name is an

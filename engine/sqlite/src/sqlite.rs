@@ -621,7 +621,7 @@ struct Level {
 /// The parameters the statement passes first to `coalesce` or `ifnull`, the two-argument
 /// coalesce, bare or cast: the caller means to pass NULL for them. Beside these only a bare
 /// parameter written whole to a column that may hold NULL takes NULL ([`Analyzer::params`]); a
-/// null test (`?1 IS NULL`) or `IS` lets none through (the maintainer, 2026-10-21). The argument may be the column of a WITH query or a subquery that selects the parameter (`with
+/// null test (`?1 IS NULL`) or `IS` lets none through. The argument may be the column of a WITH query or a subquery that selects the parameter (`with
 /// input as (select :p as p) … where coalesce(input.p, 0) = 0`), since each parameter appears once
 /// in a statement and a value coalesced and read again is selected once in a WITH.
 fn coalesced_params(t: &Tree, extras: &Extras) -> HashSet<String> {
@@ -1609,9 +1609,8 @@ impl Analyzer<'_> {
         let t = self.tree;
         // A parameter that is, bare, with no cast, the whole value written to a column may be null
         // where that column may hold NULL, and no column that refuses NULL it also fills forbids
-        // it (the maintainer, 2026-10-21). A cast one, `CAST(? AS type)` or the `json(?)` a
-        // `::json` compiles to, is its cast's type: "If you wanted to do type inference based on
-        // the column, you shouldn't have added the cast."
+        // it. A cast one, `CAST(? AS type)` or the `json(?)` a `::json` compiles to, is its cast's
+        // type, never the column's.
         let mut fills: HashMap<String, bool> = HashMap::new();
         let mut fill = |v: &Node, target: &Option<Fact>, checked: bool| {
             if let (true, Some(name), Some(target)) = (v.op == "variable", v.name.as_ref(), target) {
@@ -2798,7 +2797,7 @@ mod tests {
     fn the_postgres_nullability_rules_hold_on_sqlite() {
         let nullable_param = |sql: &str, name: &str| analysis(sql).params.iter().find(|p| p.name == name).is_some_and(|p| p.nullable);
         // A parameter the statement passes first to `coalesce` or `ifnull` takes NULL; any other
-        // is a value, one it tests for NULL too (the maintainer, 2026-10-21). Each parameter
+        // is a value, one it tests for NULL too. Each parameter
         // appears once, so a value coalesced and read again is selected once in a WITH, and the
         // coalesce of its column is the coalesce of the parameter, however it is named.
         assert!(nullable_param("with input as (select cast(:p as integer) as p) select id from users, input where score = coalesce(input.p, score)", "p"));
@@ -2842,9 +2841,7 @@ mod tests {
     #[test]
     fn a_cast_parameter_is_its_casts_type_and_a_bare_one_its_columns() {
         // A `:name::type` cast compiles to `CAST(? AS type)`, and `::json` to `json(?)`: the
-        // parameter is the cast's type and takes no NULL, written whole or not ("If you wanted to
-        // do type inference based on the column, you shouldn't have added the cast", the
-        // maintainer, 2026-10-21). A bare one written whole (an INSERT's values, every row of a
+        // parameter is the cast's type and takes no NULL, written whole or not. A bare one written whole (an INSERT's values, every row of a
         // VALUES list, an UPDATE's or an upsert's SET, a row value's elements) is as nullable as
         // its column; a column a CHECK refuses NULL in, by a conjunct `col is not null`, is not.
         // Both take NULL coalesced, and neither tested for NULL.

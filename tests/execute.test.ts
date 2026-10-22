@@ -158,12 +158,12 @@ test("a Date for any date or time parameter, and a string without its zone for a
   await refused({ at: new Date() }, /^Parameter "at" is a timestamp without a time zone, so it takes the wall-clock text/);
   await refused({ day: new Date() }, /^Parameter "day" is a date without a time zone/);
   await refused({ days: [[new Date()]] }, /^Parameter "days" is a date/);
-  // A timestamptz takes the string `.run()` returns for one, and a Date nowhere (the maintainer, 2026-10-20).
+  // A timestamptz takes the string `.run()` returns for one, and a Date nowhere.
   await refused({ tz: new Date(0) }, /^Parameter "tz" is a timestamptz, which takes the instant as a string that names its zone, as `\.run\(\)` returns one, not a Date: pass date\.toISOString\(\)/);
   await refused({ tzs: ["2026-10-12T00:00:00Z", new Date(0)] }, /^Parameter "tzs" is a timestamptz, .*not a Date/);
   for (const tz of ["2026-10-12 19:06:48", "2026-10-12T19:06:48.282", "2026-10-12"]) await refused({ tz }, /^Parameter "tz" is a timestamptz, an instant, so a string for it names its zone/);
   await refused({ tzs: ["2026-10-12T00:00:00Z", "2026-10-12 19:06"] }, /^Parameter "tzs" is a timestamptz/);
-  // An array parameter takes no null element, as its type says (the maintainer, 2026-10-21), in any dimension.
+  // An array parameter takes no null element, as its type says, in any dimension.
   await refused({ tzs: ["2026-10-12T00:00:00Z", null] }, /^Parameter "tzs" is an array whose elements may not be null, and the element at \[1\] is/);
   await refused({ days: [["2026-10-12", undefined]] }, /^Parameter "days" is an array whose elements may not be null, and the element at \[0\]\[1\] is/);
   assert.equal(seen.length, 1);
@@ -541,7 +541,7 @@ test("positional placeholders take an object keyed by number, bound by number on
   assert.deepEqual(unsafe, [["ada", 1, "ada"]]);
 });
 
-test("an array of parameters is refused before anything runs, with a TypeError that says to pass an object (the maintainer, 2026-10-20)", async () => {
+test("an array of parameters is refused before anything runs, with a TypeError that says to pass an object", async () => {
   const calls: unknown[] = [];
   const client = { unsafe: async (...args: unknown[]) => (calls.push(args), []) };
   const named = /^TypeError: The parameters must be an object keyed by parameter name, or by number for positional placeholders \(\{ 1: \.\.\., 2: \.\.\. \}\); got an array\. This statement takes \{ id: \.\.\., name: \.\.\. \}\.$/;

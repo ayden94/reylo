@@ -1,5 +1,5 @@
-// Reylo gives every value of its own SQLite queries its type itself (the maintainer, 2026-10-20;
-// the representation is src/values.ts). Every SQLite driver already turns each storage class into
+// Reylo gives every value of its own SQLite queries its type itself (the
+// representation is src/values.ts). Every SQLite driver already turns each storage class into
 // a JavaScript value in native code, and they agree but on two: an INTEGER (a number that may be
 // rounded past 2^53, an error, a BigInt, or libSQL's string) and a BLOB (a Buffer, a Uint8Array, an
 // ArrayBuffer or D1's array of numbers). And only the analysis knows that a TEXT holds JSON or that
