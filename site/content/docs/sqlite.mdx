@@ -724,15 +724,15 @@ A parameter takes `null` in two places:
 A cast is the parameter's whole type, so `:email::text` never takes `null`, and a test for null (`:p is null`, `:p is col`) makes nothing nullable. A column holds `NULL` unless it is `NOT NULL` or a `check (… is not null)` holds it:
 
 ```ts twoslash tab="main.ts"
-import usersByNick from "./lite_users_by_nick.sql";
+import usersByName from "./lite_users_by_name.sql";
 
-const users = await usersByNick.run(db, { nick: null });
+const users = await usersByName.run(db, { name: null });
 //                                        ^?
 ```
 
-```sql tab="lite_users_by_nick.sql" dialect="sqlite"
+```sql tab="lite_users_by_name.sql" dialect="sqlite"
 select id, name from users
-where nick = coalesce(:nick::text, nick)
+where name = coalesce(:name::text, name)
 ```
 
 ### Casts
