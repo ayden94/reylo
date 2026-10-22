@@ -49,6 +49,83 @@ select id, name from users
 where id in (select j.value from input, json_each(input.ids) as j)
 ```
 
+### Nest related rows
+
+Aggregate a subquery's rows into JSON, and Reylo types every field inside it:
+
+```ts twoslash tab="main.ts"
+import usersWithPosts from "./users_with_posts.sql";
+
+const users = await usersWithPosts.run(db);
+//    ^?
+```
+
+```sql tab="users_with_posts.sql (Postgres)" file="users_with_posts.sql" dialect="postgres"
+select u.id, u.name,
+  -- every post, as an array
+  (
+    select coalesce(jsonb_agg(jsonb_build_object(
+      'id', p.id,
+      'title', p.title
+    ) order by p.id), '[]')
+    from posts p
+    where p.user_id = u.id
+  ) as posts,
+  -- the latest post, or null
+  (
+    select jsonb_build_object('id', p.id, 'title', p.title)
+    from posts p
+    where p.user_id = u.id
+    order by p.published_at desc nulls last
+    limit 1
+  ) as latest_post
+from users u
+```
+
+```sql tab="users_with_posts.sql (MySQL)" file="users_with_posts.sql" dialect="mysql"
+select u.id, u.name,
+  -- every post, as an array
+  (
+    select coalesce(json_arrayagg(json_object(
+      'id', p.id,
+      'title', p.title
+    )), json_array())
+    from posts p
+    where p.user_id = u.id
+  ) as posts,
+  -- the latest post, or null
+  (
+    select json_object('id', p.id, 'title', p.title)
+    from posts p
+    where p.user_id = u.id
+    order by p.published_at desc
+    limit 1
+  ) as latest_post
+from users u
+```
+
+```sql tab="users_with_posts.sql (SQLite)" file="users_with_posts.sql" dialect="sqlite"
+select u.id, u.name,
+  -- every post, as an array
+  (
+    select json_group_array(json_object(
+      'id', p.id,
+      'title', p.title
+    ))
+    from posts p
+    where p.user_id = u.id
+  ) as posts,
+  -- the latest post, or null
+  (
+    select json_object('id', p.id, 'title', p.title)
+    from posts p
+    where p.user_id = u.id
+    order by p.published_at desc nulls last
+    limit 1
+  ) as latest_post
+from users u
+```
+
 ### Insert many rows
 
 Pass the rows as one [JSON parameter](#typed-json): the schema in its cast types them, and Reylo checks every row before the statement runs.
