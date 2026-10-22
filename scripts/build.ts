@@ -34,7 +34,9 @@ for (const db of DATABASES) {
 }
 const built = {
   ...rest,
-  bin: Object.fromEntries(Object.entries(bin as Record<string, string>).map(([name, path]) => [name, js(path)])),
+  // A bin path without its "./", as npm writes it: npm rewrites `./src/cli.js` to `src/cli.js` at
+  // publish and warns that the script "was invalid and removed", which it was not (0.0.1's stage).
+  bin: Object.fromEntries(Object.entries(bin as Record<string, string>).map(([name, path]) => [name, js(path).replace(/^\.\//, "")])),
   exports: Object.fromEntries(Object.entries(exports as Record<string, string>).map(([key, path]) => [key, { types: path.replace(/\.ts$/, ".d.ts"), default: js(path) }])),
   typescript: { ...typescript, contentMapper: { ...typescript.contentMapper, exec: (typescript.contentMapper.exec as string[]).map(js) } },
 };
