@@ -1,10 +1,10 @@
 {
   "from": "/Users/colin/Documents/docs-kit",
-  "commit": "e79b2c2",
+  "commit": "41cd378",
   "files": {
     "package.json": "e906ab744cb9136ad818ce4000c6e883721b888a494da990b7125ecdbe8fbc56",
     "README.md": "0e3d8f90d8532d45f28f0f3881b9242ac6e06ffb41fab60254563c7680614632",
-    "src/components/accordion.tsx": "6473d5e138363b6afaf7ee988003e8dee65fecab769e393289e5a6a7df6b7656",
+    "src/components/accordion.tsx": "65898714e28a656eac74f629de9973720b5f081a3ac5046d1abe2efee5f5ff3d",
     "src/components/agent-prompt.tsx": "e6d448b2ff5a2bdac09e345542ae97b15ac1a10359d2e73f220a8c115997ef01",
     "src/components/callout.tsx": "223e2aef8009dce27ea2aa33e925b81c5dae4f4297c0edc73e56701ea2f95624",
     "src/components/chrome.tsx": "3baec9fd491ad93f29219e261286c60075f098f6245f3435c93e96fa51017213",
@@ -28,7 +28,7 @@
     "src/mdx/recma-shared-popups.ts": "b12d67312b9875a469adba9ed4ca77b788f8f7958c0119451a9b4e16638ae427",
     "src/mdx/remark-sections.ts": "a81d91c95da4212fd24b15acc245206dcebf7fc0a2dfa04852d14eb4bddec0e1",
     "src/mdx/twoslash.ts": "845c73de8f06b79245ca7558b704f756919b19376bb4faaf63b1a78bbde21faa",
-    "src/style.css": "5607abafc51637c859f29c92ceabe0588ec86dfd3f9576342e1117d820cb44c2",
+    "src/style.css": "ba2d490b62f9c6e9ac9140ab7097145583fbaf80d74392890353ac8c81bf5dd3",
     "src/sync.mjs": "2a1cf5fe7ac181004dcb2859b46003dc55808054cc2711567ee3928304812626",
     "src/vite.ts": "e8f8a6a49951ec991b24872d664efdd46cbb2121802d14279e0ea917f3f6763e"
   }

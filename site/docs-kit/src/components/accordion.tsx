@@ -69,7 +69,7 @@ export function Accordions({
     : { type, value: value as string[], onValueChange: (next: string[]) => setValue(next) };
   return (
     <ItemsContext value={useMemo(() => ({ value, open }), [value, open])}>
-      <Root ref={setRef} {...props} {...(root as ComponentProps<typeof Root>)}>
+      <Root ref={setRef} {...props} className={['dk-accordions', props.className].filter(Boolean).join(' ')} {...(root as ComponentProps<typeof Root>)}>
         {children}
       </Root>
     </ItemsContext>

@@ -1131,6 +1131,52 @@ code {
   background: var(--dk-switch-on);
 }
 
+/* An accordion is a list of questions on the page itself: no box, no rules between them, each
+   question a row of its own with the chevron at its right end and its link icon in the margin to
+   its left, as a heading has it, and an open item's answer in a lighter rounded panel under it. */
+#nd-page .dk-accordions {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  overflow: visible;
+}
+#nd-page .dk-accordions > * {
+  border-top-width: 0;
+  border-bottom-width: 0;
+}
+#nd-page .dk-accordions > [data-state] {
+  margin-bottom: 0.15rem;
+}
+#nd-page .dk-accordions > [data-state] > h3 {
+  position: relative;
+}
+#nd-page .dk-accordions > [data-state] > h3 > button[aria-expanded] {
+  padding-left: 0;
+  flex-direction: row-reverse;
+  justify-content: space-between;
+}
+#nd-page .dk-accordions > [data-state] > h3 > button:not([aria-expanded]) {
+  position: absolute;
+  left: -2.1rem;
+  top: 50%;
+  translate: 0 -50%;
+  color: color-mix(in oklab, var(--color-fd-muted-foreground) 55%, transparent);
+}
+#nd-page .dk-accordions [data-dk-accordion-panel] > div {
+  margin: 0 0 1rem;
+  padding: 0.85rem 1rem;
+  border-radius: 0.6rem;
+  background: color-mix(in oklab, var(--color-fd-foreground) 4.5%, var(--color-fd-background));
+}
+/* Below md the margin is narrower than the icon: it joins the chevron at the right end. */
+@media (width < 48rem) {
+  #nd-page .dk-accordions > [data-state] > h3 > button:not([aria-expanded]) {
+    position: static;
+    translate: none;
+    order: 2;
+  }
+}
+
 /* A closed accordion item's content is in the HTML too (components/accordion.tsx), hidden until
    the page hydrates and then by `hidden="until-found"`, which find-in-page searches. */
 [data-dk-accordion-panel][data-state='closed']:not([data-dk-ready]) {
