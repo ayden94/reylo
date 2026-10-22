@@ -470,7 +470,7 @@ const rows = await loose.run(db);
 ```
 
 ```sql tab="lite_loose.sql" dialect="sqlite"
--- users is not strict: name may hold 42, and nick a BLOB
+-- users is not strict: name and nick may hold a BLOB
 select name, nick from users
 ```
 
@@ -543,7 +543,7 @@ A built-in function the table lacks, such as `unhex`, is `unknown`. Cast its res
 
 **Functions your app registers**
 
-The type check's SQLite has none of the functions your application registers (`better-sqlite3`'s `db.function()`, `node:sqlite`'s `db.function()`) or a loadable extension adds, so a call to one fails the type check, cast or not: "no such function: slugify".
+Reylo prepares the statement in its own SQLite, which has none of the functions your application registers (`better-sqlite3`'s `db.function()`, `node:sqlite`'s `db.function()`) or a loadable extension adds. A call to one fails the type check, cast or not: "no such function: slugify". Keep the call out of the `.sql` file and apply it in TypeScript.
 
 **Which functions exist**
 
@@ -701,7 +701,7 @@ SQLite types a parameter only where its own reading of the statement places one:
 - a `cast`, arithmetic, `limit` and `offset`, `in`, `between`, and a `case` arm
 - an argument of a built-in function from Reylo's table (`lower(:s)` is text, `abs(:n)` a number, `coalesce(:a, 0)` an integer)
 
-Anywhere else, such as a bare `select :x`, `:x is null`, or an argument of a function your application registers, the parameter is `unknown` until a cast types it:
+Anywhere else, such as a bare `select :x` or `:x is null`, the parameter is `unknown` until a cast types it:
 
 ```ts twoslash tab="main.ts"
 import echo, { type Params } from "./lite_echo.sql";
@@ -712,7 +712,7 @@ import echo, { type Params } from "./lite_echo.sql";
 select :value as value, :count::int as count
 ```
 
-By default such a parameter is an error in the type check, which asks for a cast; [`strict_params: false`](/#strict_params) in `.reylo.yaml` leaves it `unknown`, as above.
+By default such a parameter is an error in the type check, which asks for a cast; [`strict_params: false`](/#strict_params) in `.reylo.yaml` leaves it `unknown`, as above. An argument of a function your application registers never gets that far: the call fails the type check ([Limits](#limits)).
 
 ### Parameters that may be null
 
@@ -769,7 +769,7 @@ Reylo runs its own query on the database you pass and gives each value its type 
 | Driver | How Reylo reads its values | Lost before Reylo sees it |
 | --- | --- | --- |
 | `better-sqlite3`, `node:sqlite`, `bun:sqlite` | Reylo's own statement, prepared once per database, with its own integer setting, whatever the database's | |
-| libSQL | The driver's rows, each value given its type | At its default `intMode`, an integer past 2^53, which libSQL refuses; with `intMode: "string"`, an integer in a column with no type is its digits |
+| libSQL | The driver's rows, each value given its type | At its default `intMode`, an integer past 2^53, which libSQL refuses; with `intMode: "string"`, a value Reylo types `unknown` that SQLite stored as an integer comes back as its digits, since libSQL gives nothing to tell it from text |
 | Turso's engine, `@tursodatabase/database` | Reylo's own statement, prepared per call, with its own integer setting, whatever the database's | |
 | `sqlite3`, `sqlite` | The driver's rows; the statement is not kept, since a statement left open makes the app's `close()` fail | An integer past 2^53, rounded |
 | Cloudflare D1 | The driver's rows; a `BLOB`'s array of numbers made a `Uint8Array` | An integer past 2^53, rounded |
@@ -778,6 +778,7 @@ Reylo runs its own query on the database you pass and gives each value its type 
 - The drivers `better-sqlite3`, `node:sqlite`, `bun:sqlite` and the `Database` of `@tursodatabase/database/compat` take `.runSync()` too, which returns the result itself, so it works inside their `db.transaction(fn)`.
 - The drivers `sqlite3` and `sqlite` bind a `bigint` as `NULL`, so Reylo passes them one that a `number` holds as that number, and refuses a larger one before the statement runs. Every other SQLite driver binds a `bigint` exactly.
 - Each driver takes its transactions too: libSQL's `.transaction()`, the handle Turso's `.transactionAsync()` passes its function, `Bun.sql`'s `.begin()` and `.savepoint()`, and D1's `.withSession()` sessions.
+- On Bun 1.4.3, `Bun.sql` returns no rows for a statement whose text holds a `"` inside a single-quoted string, such as `json_extract('{"a":1}', '$.a')`, so `.run()` throws "Expected exactly one row, got 0" where one row is expected. Pass the document as a parameter: `json_extract(:doc::text, '$.a')`.
 - Turso's engine 0.8 stops the process on a recursive `WITH` whose anchor and recursive member both read a CTE over `json_each`, such as one over a [JSON parameter](/#typed-json), with no Reylo involved. Write that CTE `as materialized`.
 
 The type check needs no driver: it reads the schema through `node:sqlite`, which Node has built in since 22.5.
@@ -787,8 +788,9 @@ The type check needs no driver: it reads the schema through `node:sqlite`, which
 The edges of what Reylo types on SQLite, each with what to write instead:
 
 - **A declared type outside a `STRICT` table**, which SQLite does not hold a value to. Declare tables `strict`.
-- **Built JSON read through a subquery's or a view's column, a cast or `lag`**, which SQLite no longer marks as JSON, so it is `unknown`. Build it in the query that returns it ([JSON](#json)).
-- **A function your application registers, or an extension's.** Its result is `unknown`: cast it in the statement.
+- **Built JSON read through a subquery's or a view's column, a cast or `lag`**, which SQLite may no longer mark as JSON, so it is `unknown`. Build it in the query that returns it ([JSON](#json)).
+- **A function your application registers, or an extension's.** Reylo prepares the statement in its own SQLite, which lacks the function, so the type check fails with "no such function: slugify", cast or not. Keep the call out of the `.sql` file and apply it in TypeScript to what `.run()` returns.
+- **A built-in function Reylo's table lacks**, such as `unhex`. Its result is `unknown`: cast it in the statement, `cast(unhex(hash) as blob)`.
 - **A table in an attached database.** The type check reads one database file, and an `ATTACH` happens on your app's connection at run time, so `select … from other.users` is an error: the database has no schema `other`. A `TEMP` table is the same.
 - **A virtual table's module.** Reylo's SQLite has FTS3, FTS4, FTS5, R-tree, Geopoly and `dbstat`, so a schema that uses one is read, and the type check does not ask whether your driver's SQLite has the module.
 - **Arithmetic on a `REAL` that has no answer.** SQLite answers `NULL` where a real's arithmetic is not a number, and Reylo types it non-null: `+`, `-` and `*` over non-null values, and `/` and `%` by a literal other than 0.

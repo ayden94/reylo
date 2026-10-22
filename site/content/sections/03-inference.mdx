@@ -143,11 +143,13 @@ MySQL types every parameter: one that nothing else types, such as a bare `select
 </Dialect>
 <Dialect value="SQLite">
 
-A bare `select :x`, or an argument of a function your application registers or of a table-valued function other than `json_each` and `json_tree`, has no type until a cast gives it one:
+A bare `select :x`, or an argument of a table-valued function other than `json_each` and `json_tree`, has no type until a cast gives it one:
 
 ```sql
 select length(:text::text) as n
 ```
+
+A call to a function your application registers fails the type check, cast or not: Reylo prepares the statement in its own SQLite, which lacks it ("no such function"). Apply that function in TypeScript instead.
 
 </Dialect>
 </DialectTabs>
