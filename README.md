@@ -10,7 +10,7 @@
 <p align="center">
   <a href="https://github.com/colinhacks/reylo/actions/workflows/test.yml"><img src="https://github.com/colinhacks/reylo/actions/workflows/test.yml/badge.svg?branch=main" alt="test status" /></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/github/license/colinhacks/reylo" alt="License: MIT" /></a>
-  <a href="https://www.npmjs.com/package/reylo"><img src="https://img.shields.io/npm/v/reylo" alt="npm" /></a>
+  <a href="https://www.npmjs.com/package/reylo"><img src="https://img.shields.io/github/v/release/colinhacks/reylo?label=npm" alt="npm version" /></a>
   <a href="https://github.com/colinhacks/reylo"><img src="https://img.shields.io/github/stars/colinhacks/reylo" alt="GitHub stars" /></a>
 </p>
 
