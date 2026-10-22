@@ -4,50 +4,282 @@ title: "Inference"
 
 ## Inference
 
-Reylo lets you use the full power of SQL provided by your database. Postgres, SQLite, and MySQL are all supported.
+Reylo lets you use the full power of SQL provided by your database. Postgres, SQLite, and MySQL are all supported. To type a query, Reylo prepares it against your dev database and reads back the type of every column and parameter.
+
+### Basics
+
+Each column comes back with its type:
+
+<Inferred>
+
+```sql file="inferred_users.sql" dialect="all"
+select id, name
+from users
+```
+
+</Inferred>
+
+<span id="naming" />
 
 For convenience, there is some Reylo-specific syntax that can be used inside your `.sql` files. This syntax is transpiled into the idiomatic form for your database's dialect.
 
-### Naming
+Name a parameter with a colon, and Reylo infers its type from where it's used:
 
-Name a parameter with a colon:
+<Inferred>
 
-```sql tab="find_posts.sql" dialect="all"
-select id, title from posts
-where user_id = :user_id::int -- :user_id is a parameter
-  and title like :pattern::text
-order by id
-limit :limit::int
+```sql file="inferred_rename_user.sql" dialect="all"
+update users
+set name = :name
+where id = :id
 ```
 
-```ts twoslash tab="main.ts"
-import findPosts from "./find_posts.sql";
+</Inferred>
 
-const posts = await findPosts.run(db, {
-  user_id: 1,
-  pattern: "%SQL%",
-  limit: 10,
-});
+<span id="casts" />
+
+Where the query doesn't pin down a parameter's type, cast it. Reylo compiles the cast to each database's own:
+
+<Inferred>
+
+```sql file="inferred_search_users.sql" dialect="all"
+select id, name
+from users
+where name like concat('%', :q::text, '%')
 ```
 
-### Casts
+</Inferred>
 
-Give each parameter its type with `::type`, on any database. Reylo compiles it to MySQL's and SQLite's own `cast`, and checks each value when you call `.run()`:
+### Nulls
 
-```sql tab="find_posts.sql" dialect="all"
-select id, title from posts
-where user_id = :user_id::int -- ::int casts the parameter
-  and title like :pattern::text
-order by id
-limit :limit::int
+A left join makes the joined table's columns nullable:
+
+<Inferred>
+
+```sql file="inferred_user_titles.sql" dialect="all"
+select u.name, p.title
+from users u
+left join posts p on p.user_id = u.id
 ```
 
-```ts twoslash tab="main.ts"
-import findPosts from "./find_posts.sql";
+</Inferred>
 
-findPosts.sql; // the query your database receives
-//        ^?
+A null check on one joined column makes the whole joined row non-null:
+
+<Inferred>
+
+```sql file="inferred_published_titles.sql" dialect="all"
+select u.name, p.title
+from users u
+left join posts p on p.user_id = u.id
+where p.published_at is not null
 ```
+
+</Inferred>
+
+Reylo infers which computed columns can never be null:
+
+<Inferred>
+
+```sql file="inferred_user_flags.sql" dialect="all"
+select u.name,
+  coalesce(u.email, '') as email,
+  exists (select 1 from posts p where p.user_id = u.id) as has_posts
+from users u
+```
+
+</Inferred>
+
+To accept null, wrap a parameter in coalesce:
+
+<Inferred>
+
+```sql file="inferred_posts_by_user.sql" dialect="all"
+select id, title
+from posts
+where user_id = coalesce(:user_id::int, user_id)
+```
+
+</Inferred>
+
+### Cardinality
+
+A query that matches a unique key returns one row or null:
+
+<Inferred>
+
+```sql schema dialect="postgres"
+create table users (
+  id serial primary key,
+  name text not null,
+  email text unique
+);
+```
+
+```sql schema dialect="mysql"
+create table users (
+  id int auto_increment primary key,
+  name text not null,
+  email varchar(255) unique
+);
+```
+
+```sql schema dialect="sqlite"
+create table users (
+  id integer primary key,
+  name text not null,
+  email text unique
+) strict;
+```
+
+```sql file="inferred_user_by_email.sql" dialect="all"
+select id, name
+from users
+where email = :email::text
+```
+
+</Inferred>
+
+An aggregate without a group by returns exactly one row:
+
+<Inferred>
+
+```sql file="inferred_post_count.sql" dialect="postgres"
+select count(*)::int as posts
+from posts
+where user_id = :user_id::int
+```
+
+```sql file="inferred_post_count.sql" dialect="mysql"
+select count(*) as posts
+from posts
+where user_id = :user_id::int
+```
+
+```sql file="inferred_post_count.sql" dialect="sqlite"
+select count(*) as posts
+from posts
+where user_id = :user_id::int
+```
+
+</Inferred>
+
+An insert that returns its row resolves to exactly that row:
+
+<Inferred>
+
+```sql file="inferred_create_user.sql" dialect="postgres"
+insert into users (name)
+values (:name::text)
+returning id
+```
+
+```sql file="inferred_create_user.sql" dialect="sqlite"
+insert into users (name)
+values (:name::text)
+returning id
+```
+
+</Inferred>
+
+### Unions
+
+A text column whose check constraint lists its values is a union of them:
+
+<Inferred>
+
+```sql schema dialect="postgres"
+create table events (
+  id serial primary key,
+  kind text not null check (kind in ('click', 'key'))
+);
+```
+
+```sql file="inferred_event_kinds.sql" dialect="postgres"
+select id, kind
+from events
+```
+
+</Inferred>
+
+### JSON
+
+Type information bubbles up through JSON aggregation:
+
+<Inferred>
+
+```sql file="inferred_user_posts.sql" dialect="postgres"
+select u.name,
+  jsonb_agg(jsonb_build_object('id', p.id, 'title', p.title)) as posts
+from users u
+join posts p on p.user_id = u.id
+group by u.id
+```
+
+```sql file="inferred_user_posts.sql" dialect="mysql"
+select u.name,
+  json_arrayagg(json_object('id', p.id, 'title', p.title)) as posts
+from users u
+join posts p on p.user_id = u.id
+group by u.id
+```
+
+```sql file="inferred_user_posts.sql" dialect="sqlite"
+select u.name,
+  json_group_array(json_object('id', p.id, 'title', p.title)) as posts
+from users u
+join posts p on p.user_id = u.id
+group by u.id
+```
+
+</Inferred>
+
+A JSON column with a JSON Schema check is typed by that schema:
+
+<Inferred>
+
+```sql schema dialect="postgres"
+create extension if not exists pg_jsonschema;
+
+create table events (
+  id serial primary key,
+  payload jsonb not null check (jsonb_matches_schema('{
+    "type": "object",
+    "properties": {
+      "x": { "type": "integer" },
+      "y": { "type": "integer" }
+    },
+    "required": ["x", "y"],
+    "additionalProperties": false
+  }', payload))
+);
+```
+
+```sql schema dialect="mysql"
+create table events (
+  id int auto_increment primary key,
+  payload json not null check (json_schema_valid('{
+    "type": "object",
+    "properties": {
+      "x": { "type": "integer" },
+      "y": { "type": "integer" }
+    },
+    "required": ["x", "y"],
+    "additionalProperties": false
+  }', payload))
+);
+```
+
+```sql file="inferred_event_payloads.sql" dialect="postgres"
+select id, payload
+from events
+```
+
+```sql file="inferred_event_payloads.sql" dialect="mysql"
+select id, payload
+from events
+```
+
+</Inferred>
 
 ### Typed JSON
 
@@ -126,241 +358,7 @@ await recordOrder.run(db, {
 });
 ```
 
-The examples use JSON parameters to [insert many rows](#insert-many-rows), [insert related rows](#insert-related-rows) and [record events of several kinds](#record-events-of-several-kinds).
-
-### Cardinality from unique keys
-
-A query that matches a unique key returns one row or null.
-
-<Inferred>
-
-```sql schema dialect="postgres"
-create table users (
-  id serial primary key,
-  name text not null,
-  email text unique
-);
-```
-
-```sql schema dialect="mysql"
-create table users (
-  id int auto_increment primary key,
-  name text not null,
-  email varchar(255) unique
-);
-```
-
-```sql schema dialect="sqlite"
-create table users (
-  id integer primary key,
-  name text not null,
-  email text unique
-) strict;
-```
-
-```sql file="inferred_user_by_email.sql" dialect="all"
-select id, name
-from users
-where email = :email::text
-```
-
-</Inferred>
-
-### Cardinality of aggregates
-
-An aggregate without a group by returns exactly one row.
-
-<Inferred>
-
-```sql file="inferred_post_count.sql" dialect="postgres"
-select count(*)::int as posts
-from posts
-where user_id = :user_id::int
-```
-
-```sql file="inferred_post_count.sql" dialect="mysql"
-select count(*) as posts
-from posts
-where user_id = :user_id::int
-```
-
-```sql file="inferred_post_count.sql" dialect="sqlite"
-select count(*) as posts
-from posts
-where user_id = :user_id::int
-```
-
-</Inferred>
-
-### Cardinality of inserts
-
-An insert that returns its row resolves to exactly that row.
-
-<Inferred>
-
-```sql file="inferred_create_user.sql" dialect="postgres"
-insert into users (name)
-values (:name::text)
-returning id
-```
-
-```sql file="inferred_create_user.sql" dialect="sqlite"
-insert into users (name)
-values (:name::text)
-returning id
-```
-
-</Inferred>
-
-### Nulls ruled out by the where clause
-
-A null check on one joined column makes the whole joined row non-null.
-
-<Inferred>
-
-```sql file="inferred_published_titles.sql" dialect="all"
-select u.name, p.title
-from users u
-left join posts p on p.user_id = u.id
-where p.published_at is not null
-```
-
-</Inferred>
-
-### Non-null expressions
-
-Reylo infers which computed columns can never be null.
-
-<Inferred>
-
-```sql file="inferred_user_flags.sql" dialect="all"
-select u.name,
-  coalesce(u.email, '') as email,
-  exists (select 1 from posts p where p.user_id = u.id) as has_posts
-from users u
-```
-
-</Inferred>
-
-### Check constraints as unions
-
-A text column whose check constraint lists its values is a union of them.
-
-<Inferred>
-
-```sql schema dialect="postgres"
-create table events (
-  id serial primary key,
-  kind text not null check (kind in ('click', 'key'))
-);
-```
-
-```sql file="inferred_event_kinds.sql" dialect="postgres"
-select id, kind
-from events
-```
-
-</Inferred>
-
-### JSON columns typed by their schema
-
-A JSON column with a JSON Schema check is typed by that schema.
-
-<Inferred>
-
-```sql schema dialect="postgres"
-create extension if not exists pg_jsonschema;
-
-create table events (
-  id serial primary key,
-  payload jsonb not null check (jsonb_matches_schema('{
-    "type": "object",
-    "properties": {
-      "x": { "type": "integer" },
-      "y": { "type": "integer" }
-    },
-    "required": ["x", "y"],
-    "additionalProperties": false
-  }', payload))
-);
-```
-
-```sql schema dialect="mysql"
-create table events (
-  id int auto_increment primary key,
-  payload json not null check (json_schema_valid('{
-    "type": "object",
-    "properties": {
-      "x": { "type": "integer" },
-      "y": { "type": "integer" }
-    },
-    "required": ["x", "y"],
-    "additionalProperties": false
-  }', payload))
-);
-```
-
-```sql file="inferred_event_payloads.sql" dialect="postgres"
-select id, payload
-from events
-```
-
-```sql file="inferred_event_payloads.sql" dialect="mysql"
-select id, payload
-from events
-```
-
-</Inferred>
-
-### JSON built in the query
-
-Type information bubbles up through JSON aggregation.
-
-<Inferred>
-
-```sql file="inferred_user_posts.sql" dialect="postgres"
-select u.name,
-  jsonb_agg(jsonb_build_object('id', p.id, 'title', p.title)) as posts
-from users u
-join posts p on p.user_id = u.id
-group by u.id
-```
-
-```sql file="inferred_user_posts.sql" dialect="mysql"
-select u.name,
-  json_arrayagg(json_object('id', p.id, 'title', p.title)) as posts
-from users u
-join posts p on p.user_id = u.id
-group by u.id
-```
-
-```sql file="inferred_user_posts.sql" dialect="sqlite"
-select u.name,
-  json_group_array(json_object('id', p.id, 'title', p.title)) as posts
-from users u
-join posts p on p.user_id = u.id
-group by u.id
-```
-
-</Inferred>
-
-### Nullable parameters
-
-To accept null, wrap the parameter in coalesce.
-
-<Inferred>
-
-```sql file="inferred_posts_by_user.sql" dialect="all"
-select id, title
-from posts
-where user_id = coalesce(:user_id::int, user_id)
-```
-
-</Inferred>
-
-### JSON parameters typed by their column
-
-A JSON parameter written to a schema-checked column takes that schema as its type.
+A JSON parameter written to a schema-checked column takes that schema as its type, with no cast:
 
 <Inferred>
 
@@ -388,18 +386,4 @@ values (:payload)
 
 </Inferred>
 
-### Parameters typed by their columns
-
-A parameter without a cast takes its column's type, so a returned row passes straight back in.
-
-<Inferred>
-
-```sql file="inferred_next_page.sql" dialect="all"
-select id, name, created_at
-from users
-where (created_at, id) < (:created_at, :id)
-order by created_at desc, id desc
-limit 20
-```
-
-</Inferred>
+The [Advanced](#advanced) examples use JSON parameters to [insert many rows](#insert-many-rows), [insert related rows](#insert-related-rows) and [record events of several kinds](#record-events-of-several-kinds).

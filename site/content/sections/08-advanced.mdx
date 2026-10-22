@@ -1,199 +1,10 @@
 ---
-title: "Examples"
+title: "Advanced"
 ---
 
-## Examples
+## Advanced
 
 Each example runs against [the schema at the top of the page](#schema), and calls the client `db`.
-
-### List rows
-
-A query that can match more than one row resolves to an array.
-
-```ts twoslash tab="main.ts"
-import listUsers from "./list_users.sql";
-
-const users = await listUsers.run(db, { limit: 20 });
-//    ^?
-```
-
-```sql tab="list_users.sql" dialect="all"
-select id, name, role, tags, created_at from users
-order by created_at desc
-limit :limit::int
-```
-
-### Aggregate rows
-
-An aggregate without `group by` is exactly one row, and every aggregate but `count` is `null` over no rows.
-
-```ts twoslash tab="main.ts"
-import postStats from "./post_stats.sql";
-
-const stats = await postStats.run(db, { user_id: 1 });
-//    ^?
-```
-
-```sql tab="post_stats.sql" dialect="all"
-select count(*) as posts, max(published_at) as latest, min(id) as first_id
-from posts
-where user_id = :user_id::int
-```
-
-### Compare with the previous row
-
-A window function is typed like any other: `lag` is `null` on the first row, and `row_number` never is.
-
-```ts twoslash tab="main.ts"
-import postsInOrder from "./posts_in_order.sql";
-
-const posts = await postsInOrder.run(db);
-//    ^?
-```
-
-```sql tab="posts_in_order.sql" dialect="all"
-select id, title,
-  lag(title) over (order by id) as previous_title,
-  row_number() over (order by id) as n
-from posts
-```
-
-### Filter on an optional value
-
-A `coalesce` lets a parameter be `null`: here `null` matches every user. A parameter takes `null` only where the query allows it, such as a `coalesce` or a nullable column it is written to.
-
-```ts twoslash tab="main.ts"
-import postsByUser from "./posts_by_user.sql";
-
-const posts = await postsByUser.run(db, { user_id: null });
-//                                        ^?
-```
-
-```sql tab="posts_by_user.sql" dialect="all"
-select id, title from posts
-where user_id = coalesce(:user_id::int, user_id)
-```
-
-### Sort by a chosen column
-
-A parameter is a value, never a column name, so choose the column with `case`:
-
-```ts twoslash tab="main.ts"
-import sortedUsers from "./sorted_users.sql";
-
-const users = await sortedUsers.run(db, { sort: "name" });
-//    ^?
-```
-
-```sql tab="sorted_users.sql" dialect="all"
-select id, name, created_at from users
-order by
-  case :sort::text when 'name' then name end,
-  created_at desc
-```
-
-### Search several columns
-
-Each parameter appears once in a query. To use a value twice, select it once in a `with`:
-
-```ts twoslash tab="main.ts"
-import searchUsers from "./search_users.sql";
-
-const users = await searchUsers.run(db, { q: "ada" });
-//    ^?
-```
-
-```sql tab="search_users.sql" dialect="all"
-with input as (
-  select concat('%', :q::text, '%') as pattern
-)
-select id, name from users, input
-where name like input.pattern or email like input.pattern
-```
-
-### Join tables
-
-A column of the table a `left join` adds can be `null`, and a `coalesce` gives it a default.
-
-```ts twoslash tab="main.ts"
-import userPosts from "./user_posts.sql";
-
-const rows = await userPosts.run(db);
-//    ^?
-```
-
-```sql tab="user_posts.sql" dialect="all"
-select u.name, p.title, coalesce(p.title, '') as label
-from users u
-left join posts p on p.user_id = u.id
-```
-
-### Rule out null in a column
-
-A test in the `where` that rejects `null` makes the column non-null, and the joined row it belongs to.
-
-```ts twoslash tab="main.ts"
-import publishedPosts from "./published_posts.sql";
-
-const rows = await publishedPosts.run(db);
-//    ^?
-```
-
-```sql tab="published_posts.sql" dialect="all"
-select u.name, p.title, p.published_at
-from users u
-left join posts p on p.user_id = u.id
-where p.published_at is not null
-```
-
-### Page through rows
-
-Pass the sort key of the last row you have, here `created_at` and `id`, to get the rows after it.
-
-```ts twoslash tab="main.ts (Postgres)" dialect="postgres"
-import nextPage from "./next_page.sql";
-
-// the first page: a cursor after every row
-const page = await nextPage.run(db, {
-  created_at: "3000-01-01T00:00:00Z",
-  id: 0,
-});
-const next = await nextPage.run(db, page.at(-1)!);
-//    ^?
-```
-
-```ts twoslash tab="main.ts (MySQL)" dialect="mysql"
-import nextPage from "./next_page.sql";
-
-// the first page: a cursor after every row (a DATETIME has no
-// zone, so the schema keeps UTC in it)
-const page = await nextPage.run(db, {
-  created_at: "3000-01-01T00:00:00",
-  id: 0,
-});
-// a DATETIME is its text, which the parameter takes back
-const next = await nextPage.run(db, page.at(-1)!);
-//    ^?
-```
-
-```ts twoslash tab="main.ts (SQLite)" dialect="sqlite"
-import nextPage from "./next_page.sql";
-
-// the first page: a cursor after every row
-const page = await nextPage.run(db, {
-  created_at: "3000-01-01T00:00:00.000Z",
-  id: 0,
-});
-const next = await nextPage.run(db, page.at(-1)!);
-//    ^?
-```
-
-```sql tab="next_page.sql" dialect="all"
-select id, name, created_at from users
-where (created_at, id) < (:created_at, :id)
-order by created_at desc, id desc
-limit 20
-```
 
 ### Filter by a list
 
@@ -236,137 +47,6 @@ with input as (
 )
 select id, name from users
 where id in (select j.value from input, json_each(input.ids) as j)
-```
-
-### Keep a list's order
-
-Number the list's elements, and sort by the number.
-
-```ts twoslash tab="main.ts"
-import usersInOrder from "./users_in_order.sql";
-
-const users = await usersInOrder.run(db, { ids: [3, 1, 2] });
-//    ^?
-```
-
-```sql tab="users_in_order.sql (Postgres)" file="users_in_order.sql" dialect="postgres"
--- with ordinality numbers the elements
-select u.id, u.name
-from unnest(:ids::int[]) with ordinality as i(id, position)
-join users u on u.id = i.id
-order by i.position
-```
-
-```sql tab="users_in_order.sql (MySQL)" file="users_in_order.sql" dialect="mysql"
--- a for ordinality column numbers the elements
-with input as (
-  select :ids::json('{
-    "type": "array",
-    "items": { "type": "integer" }
-  }') as ids
-)
-select u.id, u.name
-from input, json_table(input.ids, '$[*]' columns (
-  position for ordinality,
-  id int path '$'
-)) as i
-join users u on u.id = i.id
-order by i.position
-```
-
-```sql tab="users_in_order.sql (SQLite)" file="users_in_order.sql" dialect="sqlite"
--- json_each numbers the elements as key
-with input as (
-  select :ids::json('{
-    "type": "array",
-    "items": { "type": "integer" }
-  }') as ids
-)
-select u.id, u.name
-from input, json_each(input.ids) as i
-join users u on u.id = i.value
-order by i.key
-```
-
-### Nest related rows
-
-Build the related rows as JSON in the query, as deep as you need. Reylo types every level from the arguments that build it.
-
-```ts twoslash tab="main.ts"
-import userProfile from "./user_profile.sql";
-
-const user = await userProfile.run(db, { id: 1 });
-//    ^?
-```
-
-```sql tab="user_profile.sql (Postgres)" file="user_profile.sql" dialect="postgres"
-select jsonb_build_object(
-  'user', jsonb_build_object('id', u.id, 'name', u.name, 'role', u.role),
-  'posts', coalesce(jsonb_agg(jsonb_build_object(
-    'id', p.id,
-    'title', p.title,
-    'published', p.published_at is not null
-  ) order by p.id) filter (where p.id is not null), '[]')
-) as profile
-from users u
-left join posts p on p.user_id = u.id
-where u.id = :id::int
-group by u.id
-```
-
-```sql tab="user_profile.sql (MySQL)" file="user_profile.sql" dialect="mysql"
-select json_object(
-  'user', json_object('id', u.id, 'name', u.name, 'role', u.role),
-  'posts', coalesce((
-    select json_arrayagg(json_object(
-      'id', p.id,
-      'title', p.title,
-      'published', p.published_at is not null
-    ))
-    from posts p where p.user_id = u.id
-  ), json_array())
-) as profile
-from users u
-where u.id = :id::int
-```
-
-```sql tab="user_profile.sql (SQLite)" file="user_profile.sql" dialect="sqlite"
-select json_object(
-  'user', json_object('id', u.id, 'name', u.name, 'role', u.role),
-  'posts', (
-    select json_group_array(json_object(
-      'id', p.id,
-      'title', p.title,
-      'published', p.published_at is not null
-    ))
-    from posts p where p.user_id = u.id
-  )
-) as profile
-from users u
-where u.id = :id::int
-```
-
-### Type a JSON column from its schema
-
-A JSON Schema `CHECK` on a JSON column types it, through an aggregate too: pg_jsonschema's `jsonb_matches_schema` on Postgres, `json_schema_valid` on MySQL.
-
-```ts twoslash tab="main.ts" dialect="postgres"
-import eventsByKind from "./events_by_kind.sql";
-
-const groups = await eventsByKind.run(db);
-//    ^?
-```
-
-```sql tab="events_by_kind.sql (Postgres)" file="events_by_kind.sql" dialect="postgres"
-select kind, jsonb_agg(payload order by id) as payloads
-from events
-group by kind
-```
-
-```sql tab="events_by_kind.sql (MySQL)" file="events_by_kind.sql" dialect="mysql"
-select kind, json_arrayagg(payload) as payloads
-from events
-group by kind
 ```
 
 ### Insert many rows
@@ -672,106 +352,6 @@ join json_each(u.value -> 'posts') as p
 </Dialect>
 </DialectTabs>
 
-### Run statements in a transaction
-
-A transaction, a savepoint or a connection taken from a client is a client too:
-
-```ts twoslash tab="main.ts (Postgres)" dialect="postgres"
-import postgres from "postgres";
-import getUser from "./get_user.sql";
-import renameUser from "./rename_user.sql";
-
-const db = postgres(process.env.DATABASE_URL);
-
-await db.begin(async (tx) => {
-  const user = await getUser.run(tx, { id: 1 });
-  await tx.savepoint((sp) =>
-    renameUser.run(sp, { id: user!.id, name: "Grace" }),
-  );
-});
-```
-
-```ts twoslash tab="main.ts (MySQL)" dialect="mysql"
-import mysql from "mysql2/promise";
-import renameUser from "./rename_user.sql";
-
-const db = mysql.createPool(process.env.DATABASE_URL);
-
-const conn = await db.getConnection();
-try {
-  await conn.beginTransaction();
-  await renameUser.run(conn, { id: 1, name: "Grace" });
-  await conn.commit();
-} catch (error) {
-  await conn.rollback();
-  throw error;
-} finally {
-  conn.release();
-}
-```
-
-```ts twoslash tab="main.ts (SQLite)" dialect="sqlite"
-import Database from "better-sqlite3";
-import getUser from "./get_user.sql";
-import renameUser from "./rename_user.sql";
-
-const db = new Database("app.db");
-
-// .runSync() works inside db.transaction()
-db.transaction(() => {
-  const user = getUser.runSync(db, { id: 1 });
-  renameUser.runSync(db, { id: user!.id, name: "Ada Lovelace" });
-})();
-```
-
-```sql tab="rename_user.sql" dialect="all"
-update users set name = :name::text where id = :id::int
-```
-
-### Insert or update
-
-When the email already exists, the insert updates that row instead. With `returning`, it resolves to the row's id.
-
-```ts twoslash tab="main.ts"
-import upsertUser from "./upsert_user.sql";
-
-const ada = { name: "Ada Lovelace", email: "ada@example.com" };
-const result = await upsertUser.run(db, ada);
-//    ^?
-```
-
-```sql tab="upsert_user.sql (Postgres)" file="upsert_user.sql" dialect="postgres"
-insert into users (name, email) values (:name::text, :email::text)
-on conflict (email) do update set name = excluded.name
-returning id
-```
-
-```sql tab="upsert_user.sql (MySQL)" file="upsert_user.sql" dialect="mysql"
-insert into users (name, email) values (:name::text, :email::text) as new
-on duplicate key update name = new.name
-```
-
-```sql tab="upsert_user.sql (SQLite)" file="upsert_user.sql" dialect="sqlite"
-insert into users (name, email) values (:name::text, :email::text)
-on conflict (email) do update set name = excluded.name
-returning id
-```
-
-### Delete rows
-
-A write without `returning` resolves to `void`.
-
-```ts twoslash tab="main.ts"
-import deleteUser from "./delete_user.sql";
-
-const result = await deleteUser.run(db, { id: 1 });
-//    ^?
-```
-
-```sql tab="delete_user.sql" dialect="all"
-delete from users where id = :id::int
-```
-
 ### Record events of several kinds
 
 A `oneOf` types a JSON parameter as a union. Here a `const` key tells the members apart:
@@ -885,4 +465,60 @@ with input as (
 insert into events (kind, payload)
 select e.value ->> 'kind', e.value
 from input, json_each(input.events) as e
+```
+
+### Run statements in a transaction
+
+A transaction, a savepoint or a connection taken from a client is a client too:
+
+```ts twoslash tab="main.ts (Postgres)" dialect="postgres"
+import postgres from "postgres";
+import getUser from "./get_user.sql";
+import renameUser from "./rename_user.sql";
+
+const db = postgres(process.env.DATABASE_URL);
+
+await db.begin(async (tx) => {
+  const user = await getUser.run(tx, { id: 1 });
+  await tx.savepoint((sp) =>
+    renameUser.run(sp, { id: user!.id, name: "Grace" }),
+  );
+});
+```
+
+```ts twoslash tab="main.ts (MySQL)" dialect="mysql"
+import mysql from "mysql2/promise";
+import renameUser from "./rename_user.sql";
+
+const db = mysql.createPool(process.env.DATABASE_URL);
+
+const conn = await db.getConnection();
+try {
+  await conn.beginTransaction();
+  await renameUser.run(conn, { id: 1, name: "Grace" });
+  await conn.commit();
+} catch (error) {
+  await conn.rollback();
+  throw error;
+} finally {
+  conn.release();
+}
+```
+
+```ts twoslash tab="main.ts (SQLite)" dialect="sqlite"
+import Database from "better-sqlite3";
+import getUser from "./get_user.sql";
+import renameUser from "./rename_user.sql";
+
+const db = new Database("app.db");
+
+// .runSync() works inside db.transaction()
+db.transaction(() => {
+  const user = getUser.runSync(db, { id: 1 });
+  renameUser.runSync(db, { id: user!.id, name: "Ada Lovelace" });
+})();
+```
+
+```sql tab="rename_user.sql" dialect="all"
+update users set name = :name::text where id = :id::int
 ```

@@ -22,7 +22,7 @@ import { source } from '@/lib/source';
  * there, in the table.
  */
 const FOLD: Record<string, readonly string[]> = {
-  '': ['#inference', '#supported-drivers', '#examples'],
+  '': ['#supported-drivers', '#advanced'],
   postgres: ['#parameters'],
   mysql: ['#parameters'],
   sqlite: ['#parameters'],
