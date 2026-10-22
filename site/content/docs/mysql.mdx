@@ -637,7 +637,7 @@ Each driver reads MySQL's protocol as it always does, and Reylo makes only the c
 | --- | --- | --- | --- |
 | `mysql2` | Its `.execute()`, with Reylo's options with each query, so a `BIGINT` and a date come as their exact text | | |
 | PlanetScale | Reylo's `cast` with each query | 2.0, which binds no parameters | |
-| `Bun.sql` | Bun's own values, converted | | A `DATETIME`'s microseconds, an all-zero fraction, and a `TIME`'s fraction |
+| `Bun.sql` | Bun's own values, converted | | A `DATETIME`'s microseconds, an all-zero fraction, and, in a statement with parameters, a `TIME`'s fraction |
 
 - The `mysql2` driver runs on `.execute()`, the binary protocol, and its callback API through `.promise()`, both on the app's own pool or connection.
 - On `Bun.sql`, an expression that may be a `BIGINT` or a `DECIMAL` by what is bound (`round(:x)`) reads digits without a point as a `BIGINT`, since Bun gives both as text.
