@@ -1,0 +1,37 @@
+---
+title: "FAQ"
+---
+
+## FAQ
+
+<Accordions>
+<Accordion title="Does the type check run my queries?" id="faq-run-queries">
+
+No. Reylo has your database prepare each query, which checks it and describes its parameters and columns without running it, and reads the rest from the catalog. On SQLite, Reylo prepares the query in its own copy of SQLite, from the schema in your database file.
+
+</Accordion>
+<Accordion title="How do I type-check in CI?" id="in-ci">
+
+Start the database, apply the migrations, and run `tsc --noEmit --runExternalCode` with `DATABASE_URL` set. Your tests need the database too, or a filled [`.reylo/`](#faq-reylo-directory).
+
+</Accordion>
+<Accordion title="What is the .reylo directory, and should I commit it?" id="faq-reylo-directory">
+
+Every step that loads a `.sql` file (the type check, a plugin, the preload) keeps its analysis in `.reylo/`, and a later step reads it from there:
+
+- The `.reylo/` directory is a cache with its own `.gitignore`, so git skips it.
+- When the database answers, an entry made against another schema is analyzed again. An editor or a dev server checks the schema again at most every 5 seconds.
+- When the database is out of reach, or no database URL is set, the entries are used as they are, and a statement that `.reylo/` lacks is an error.
+
+</Accordion>
+<Accordion title="Can I build without a database?" id="faq-no-database">
+
+A build that can't reach the database, such as a container build, reads the `.reylo/` a type check filled, with any database URL or none: where it has no analysis of its own for a statement, it takes the newest one, whichever database it was read from.
+
+</Accordion>
+<Accordion title="Why are dates strings, and 64-bit integers bigints?" id="faq-value-types">
+
+Reylo decodes its own queries' values itself, so every driver gives the same types. A 64-bit integer is a `bigint`, since a `number` loses precision past 2^53; a decimal is its exact text; and an instant is its ISO 8601 text in UTC. No value is a `Date`, which a driver reads in a time zone nobody chose. Every SQL type's TypeScript type is in [Inference](#data-types).
+
+</Accordion>
+</Accordions>
