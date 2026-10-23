@@ -624,30 +624,223 @@ The check rejects a non-integer for `::int`, and any value outside SQLite's 64-b
 
 Reylo decodes its query results itself, so settings on your database connection don't affect Reylo's queries, and Reylo's don't affect yours. Type checking needs no driver: it reads your schema with `node:sqlite`, built into Node since 22.5.
 
-| Driver | Transactions | `.runSync()` |
-| --- | --- | --- |
-| `better-sqlite3` | `db.transaction(fn)` | Yes |
-| `node:sqlite` | `begin` and `commit` | Yes |
-| `bun:sqlite` | `db.transaction(fn)` | Yes |
-| Turso | `.transactionAsync()`; the compat `Database`'s `db.transaction(fn)` | On the compat `Database` |
-| libSQL | `.transaction()` | No |
-| `sqlite3`, `sqlite` | `begin` and `commit` | No |
-| Cloudflare D1 | `.withSession()` | No |
-| Durable Objects | `ctx.storage.transactionSync(fn)` | Yes, on `ctx.storage.sql` |
-| `Bun.sql` | `.begin()`, `.savepoint()` | No |
-| Drizzle | `.transaction()`, over `better-sqlite3` or libSQL | Over `better-sqlite3` |
+Each example below runs this query:
 
-An integer past 2^53 comes back as follows:
+```sql file="lite_get_user.sql" dialect="sqlite"
+select id, name, email from users where id = :id
+```
 
-| Integer past 2^53 | Drivers |
-| --- | --- |
-| Exact | `better-sqlite3`, `node:sqlite`, `bun:sqlite`, Turso, and libSQL with `intMode: "bigint"` or `"string"` |
-| libSQL throws a `RangeError` | libSQL at its default `intMode` |
-| Rounded by the driver, so Reylo throws an error | `sqlite3`, `sqlite`, Cloudflare D1, Durable Objects, and `Bun.sql` without `safeIntegers` |
+### `better-sqlite3`
 
-On `sqlite3`, `sqlite` and Durable Objects, a `bigint` parameter past 2^53 is rejected unless it's written to a `BIGINT` column, since those drivers can't bind one. With libSQL's `intMode: "string"`, an integer in a column typed `unknown` comes back as a string of digits.
+Pass the database. It's synchronous, so `.runSync()` works too, inside its `db.transaction(fn)` as well:
 
-On Bun 1.4.3, `Bun.sql` returns no rows for a query containing a `"` inside a single-quoted string, such as `json_extract('{"a":1}', '$.a')`. Pass the document as a parameter instead: `json_extract(:doc::text, '$.a')`.
+```ts twoslash tab="main.ts"
+import Database from "better-sqlite3";
+import getUser from "./lite_get_user.sql";
+
+const db = new Database("app.db");
+const user = await getUser.run(db, { id: 1 });
+
+const userById = db.transaction((id: number) =>
+  getUser.runSync(db, { id }),
+);
+const sameUser = userById(1);
+```
+
+An integer past 2^53 comes back exact.
+
+### `node:sqlite`
+
+Pass a `DatabaseSync`. It's synchronous, so `.runSync()` works too, between a `begin` and a `commit`:
+
+```ts twoslash tab="main.ts"
+import { DatabaseSync } from "node:sqlite";
+import getUser from "./lite_get_user.sql";
+
+const db = new DatabaseSync("app.db");
+const user = await getUser.run(db, { id: 1 });
+
+db.exec("begin");
+const sameUser = getUser.runSync(db, { id: 1 });
+db.exec("commit");
+```
+
+An integer past 2^53 comes back exact.
+
+### `bun:sqlite`
+
+Pass the database. It's synchronous, so `.runSync()` works too, inside its `db.transaction(fn)` as well:
+
+```ts twoslash tab="main.ts"
+import { Database } from "bun:sqlite";
+import getUser from "./lite_get_user.sql";
+
+const db = new Database("app.db");
+const user = await getUser.run(db, { id: 1 });
+
+const userById = db.transaction((id: number) =>
+  getUser.runSync(db, { id }),
+);
+const sameUser = userById(1);
+```
+
+An integer past 2^53 comes back exact.
+
+### libSQL
+
+Pass the client, or a transaction taken from it:
+
+```ts twoslash tab="main.ts"
+import { createClient } from "@libsql/client";
+import getUser from "./lite_get_user.sql";
+
+const db = createClient({ url: "file:app.db", intMode: "bigint" });
+const user = await getUser.run(db, { id: 1 });
+
+const tx = await db.transaction("write");
+await getUser.run(tx, { id: 1 });
+await tx.commit();
+```
+
+An integer past 2^53 comes back exact with `intMode: "bigint"` or `"string"`; with the default `intMode`, libSQL itself throws a `RangeError`. With `intMode: "string"`, an integer in a column typed `unknown` comes back as a string of digits, since libSQL can't tell it from text.
+
+### Turso
+
+Pass the database, or the transaction `.transactionAsync()` hands its callback. The `Database` of `@tursodatabase/database/compat` is synchronous, so `.runSync()` works on it, inside its `db.transaction(fn)` as well:
+
+```ts twoslash tab="main.ts"
+import { connect } from "@tursodatabase/database";
+import { Database } from "@tursodatabase/database/compat";
+import getUser from "./lite_get_user.sql";
+
+const db = await connect("app.db");
+const user = await getUser.run(db, { id: 1 });
+
+await db.transactionAsync((tx) => getUser.run(tx, { id: 1 }))();
+
+const compat = new Database("app.db");
+const userById = compat.transaction((id: number) =>
+  getUser.runSync(compat, { id }),
+);
+const sameUser = userById(1);
+```
+
+An integer past 2^53 comes back exact.
+
+### Cloudflare D1
+
+Pass the binding, or a session from `.withSession()`:
+
+```ts twoslash tab="main.ts"
+import type { D1Database } from "@cloudflare/workers-types";
+import getUser from "./lite_get_user.sql";
+
+export default {
+  async fetch(request: Request, env: { DB: D1Database }) {
+    const user = await getUser.run(env.DB, { id: 1 });
+    const sameUser = await getUser.run(env.DB.withSession(), { id: 1 });
+    return Response.json(user);
+  },
+};
+```
+
+D1 rounds an integer past 2^53, so Reylo throws an error rather than return it, even for a `BIGINT` column.
+
+### Durable Objects
+
+Pass the object's `ctx.storage.sql`. It's synchronous, so `.runSync()` works on it, inside `ctx.storage.transactionSync(fn)` as well:
+
+```ts twoslash tab="main.ts"
+/// <reference types="@cloudflare/workers-types" />
+// ---cut---
+import { DurableObject } from "cloudflare:workers";
+import getUser from "./lite_get_user.sql";
+
+export class Board extends DurableObject {
+  user(id: number) {
+    return getUser.runSync(this.ctx.storage.sql, { id });
+  }
+
+  userInTransaction(id: number) {
+    const { storage } = this.ctx;
+    return storage.transactionSync(() =>
+      getUser.runSync(storage.sql, { id }),
+    );
+  }
+}
+```
+
+The storage rounds an integer past 2^53, so Reylo throws an error rather than return it, even for a `BIGINT` column. It can't bind a `bigint` parameter past 2^53 either, so Reylo rejects one unless it's written to a `BIGINT` column.
+
+### `sqlite3`
+
+Pass the database:
+
+```ts twoslash tab="main.ts"
+import sqlite3 from "sqlite3";
+import getUser from "./lite_get_user.sql";
+
+const db = new sqlite3.Database("app.db");
+const user = await getUser.run(db, { id: 1 });
+```
+
+The driver rounds an integer past 2^53, so Reylo throws an error rather than return it, even for a `BIGINT` column. It can't bind a `bigint` parameter past 2^53 either, so Reylo rejects one unless it's written to a `BIGINT` column.
+
+### `sqlite`
+
+Pass the database `open()` returns, which can run a transaction:
+
+```ts twoslash tab="main.ts"
+import { open } from "sqlite";
+import sqlite3 from "sqlite3";
+import getUser from "./lite_get_user.sql";
+
+const db = await open({ filename: "app.db", driver: sqlite3.Database });
+const user = await getUser.run(db, { id: 1 });
+
+await db.exec("begin");
+await getUser.run(db, { id: 1 });
+await db.exec("commit");
+```
+
+The driver rounds an integer past 2^53, so Reylo throws an error rather than return it, even for a `BIGINT` column. It can't bind a `bigint` parameter past 2^53 either, so Reylo rejects one unless it's written to a `BIGINT` column.
+
+### `Bun.sql`
+
+Pass the client, or a transaction or savepoint taken from it:
+
+```ts twoslash tab="main.ts"
+import { SQL } from "bun";
+import getUser from "./lite_get_user.sql";
+
+const db = new SQL({
+  adapter: "sqlite",
+  filename: "app.db",
+  safeIntegers: true,
+});
+const user = await getUser.run(db, { id: 1 });
+
+await db.begin(async (tx) => {
+  await getUser.run(tx, { id: 1 });
+  await tx.savepoint((sp) => getUser.run(sp, { id: 1 }));
+});
+```
+
+Without `safeIntegers`, Bun rounds an integer past 2^53, so Reylo throws an error rather than return it, even for a `BIGINT` column. On Bun 1.4.3, `Bun.sql` returns no rows for a query containing a `"` inside a single-quoted string, such as `json_extract('{"a":1}', '$.a')`: pass the document as a parameter instead, `json_extract(:doc::text, '$.a')`.
+
+### Drizzle
+
+Pass a Drizzle database over `better-sqlite3` or libSQL, or a transaction taken from it. Over `better-sqlite3`, `.runSync()` works inside its transactions:
+
+```ts twoslash tab="main.ts"
+import { drizzle } from "drizzle-orm/better-sqlite3";
+import getUser from "./lite_get_user.sql";
+
+const db = drizzle("app.db");
+const user = await getUser.run(db, { id: 1 });
+
+db.transaction((tx) => getUser.runSync(tx, { id: 1 }));
+```
 
 ## Limits
 

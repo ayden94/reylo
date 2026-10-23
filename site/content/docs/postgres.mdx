@@ -711,22 +711,163 @@ A cast sets the parameter's whole type, so `:email::text` never accepts `null`. 
 
 ## Drivers
 
-Reylo decodes its query results itself, so type parsers and options you set on your client don't affect Reylo's queries, and Reylo's don't affect yours:
+Reylo decodes its query results itself, so type parsers and options you set on your client don't affect Reylo's queries, and Reylo's don't affect yours. Type checking reads your schema through postgres.js or `pg`, so if your app uses another driver, add one of these as a dev dependency.
 
-| Driver | Transactions and connections | Not supported, or lost |
-| --- | --- | --- |
-| `pg` | `Pool`, `Client`, `PoolClient` | A client with `binary: true` |
-| postgres.js | `.begin()`, `.savepoint()`, `.reserve()` | A `transform.row` |
-| `pg-promise` | `.task()`, `.tx()` | A `receive` event that rewrites results |
-| `Bun.sql` | `.begin()`, `.savepoint()`, `.reserve()` | The microseconds of a `timestamp` or `timestamptz`, and dates before 1 AD, which Reylo rejects |
-| PGlite | `.transaction()` | |
-| Neon | `Pool`, `Client` | |
-| `@vercel/postgres` | | Deprecated on npm: type-checked, not tested |
-| Drizzle, over `pg` or postgres.js | `.transaction()` and its savepoints | |
+Each example below runs this query:
 
-On `Bun.sql`, queries with parameters are read in binary and others as text, so a `real` comes back exact (`1.100000023841858`) only with a parameter. Bun itself fails with "Failed to read data" on a `NULL` in an `int4[]` or `float4[]`, a two-dimensional `int[]` in a query with a parameter, and an array with explicit bounds in one without.
+```sql file="pg_get_user.sql"
+select id, name, email from users where id = :id
+```
 
-Type checking reads your schema through postgres.js or `pg`, so if your app uses another driver, add one of these as a dev dependency.
+### `pg`
+
+Pass a `Pool`, a connected `Client`, or a client taken from the pool, which can run a transaction:
+
+```ts twoslash tab="main.ts"
+import pg from "pg";
+import getUser from "./pg_get_user.sql";
+
+const db = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+const user = await getUser.run(db, { id: 1 });
+
+const client = await db.connect();
+await client.query("begin");
+await getUser.run(client, { id: 1 });
+await client.query("commit");
+client.release();
+```
+
+A client created with `binary: true` isn't supported.
+
+### postgres.js
+
+Pass the `sql` function, or a transaction, savepoint or reserved connection taken from it:
+
+```ts twoslash tab="main.ts"
+import postgres from "postgres";
+import getUser from "./pg_get_user.sql";
+
+const db = postgres(process.env.DATABASE_URL);
+const user = await getUser.run(db, { id: 1 });
+
+await db.begin(async (tx) => {
+  await getUser.run(tx, { id: 1 });
+  await tx.savepoint((sp) => getUser.run(sp, { id: 1 }));
+});
+
+const reserved = await db.reserve();
+await getUser.run(reserved, { id: 1 });
+reserved.release();
+```
+
+A client created with `transform.row` isn't supported.
+
+### `pg-promise`
+
+Pass the database object, or the context a task or transaction hands its callback:
+
+```ts twoslash tab="main.ts"
+import pgPromise from "pg-promise";
+import getUser from "./pg_get_user.sql";
+
+const pgp = pgPromise();
+const db = pgp(process.env.DATABASE_URL);
+const user = await getUser.run(db, { id: 1 });
+
+await db.task((t) => getUser.run(t, { id: 1 }));
+await db.tx(async (t) => {
+  await getUser.run(t, { id: 1 });
+  await t.tx((sp) => getUser.run(sp, { id: 1 }));
+});
+```
+
+A `receive` event that rewrites results isn't supported.
+
+### `Bun.sql`
+
+Pass the client, or a transaction, savepoint or reserved connection taken from it:
+
+```ts twoslash tab="main.ts"
+import { SQL } from "bun";
+import getUser from "./pg_get_user.sql";
+
+const db = new SQL(process.env.DATABASE_URL);
+const user = await getUser.run(db, { id: 1 });
+
+await db.begin(async (tx) => {
+  await getUser.run(tx, { id: 1 });
+  await tx.savepoint((sp) => getUser.run(sp, { id: 1 }));
+});
+
+const reserved = await db.reserve();
+await getUser.run(reserved, { id: 1 });
+reserved.release();
+```
+
+Bun loses the microseconds of a `timestamp` or `timestamptz` before Reylo sees them, and a date before 1 AD, which Reylo rejects. Queries with parameters are read in binary and others as text, so a `real` comes back exact (`1.100000023841858`) only with a parameter. Bun itself fails with "Failed to read data" on a `NULL` in an `int4[]` or `float4[]`, a two-dimensional `int[]` in a query with a parameter, and an array with explicit bounds in one without.
+
+### PGlite
+
+Pass the database, or the transaction it hands its callback:
+
+```ts twoslash tab="main.ts"
+import { PGlite } from "@electric-sql/pglite";
+import getUser from "./pg_get_user.sql";
+
+const db = new PGlite("./pgdata");
+const user = await getUser.run(db, { id: 1 });
+
+await db.transaction((tx) => getUser.run(tx, { id: 1 }));
+```
+
+### Neon
+
+Pass the `neon()` function, which sends each query over HTTP, or a `Pool` or `Client`, which hold a WebSocket and run transactions:
+
+```ts twoslash tab="main.ts"
+import { neon, Pool } from "@neondatabase/serverless";
+import getUser from "./pg_get_user.sql";
+
+const sql = neon(process.env.DATABASE_URL);
+const user = await getUser.run(sql, { id: 1 });
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const client = await pool.connect();
+await client.query("begin");
+await getUser.run(client, { id: 1 });
+await client.query("commit");
+client.release();
+```
+
+### `@vercel/postgres`
+
+Pass its `sql` client:
+
+```ts twoslash tab="main.ts"
+import { sql } from "@vercel/postgres";
+import getUser from "./pg_get_user.sql";
+
+const user = await getUser.run(sql, { id: 1 });
+```
+
+The package is deprecated on npm: Reylo's types accept its client, but Reylo's tests don't run it.
+
+### Drizzle
+
+Pass a Drizzle database over `pg` or postgres.js, or a transaction or savepoint taken from it:
+
+```ts twoslash tab="main.ts"
+import { drizzle } from "drizzle-orm/node-postgres";
+import getUser from "./pg_get_user.sql";
+
+const db = drizzle(process.env.DATABASE_URL);
+const user = await getUser.run(db, { id: 1 });
+
+await db.transaction(async (tx) => {
+  await getUser.run(tx, { id: 1 });
+  await tx.transaction((sp) => getUser.run(sp, { id: 1 }));
+});
+```
 
 ## Limits
 

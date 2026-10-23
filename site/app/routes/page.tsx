@@ -17,14 +17,14 @@ import { source } from '@/lib/source';
  * on one screen (a window 900px tall, at Fumadocs' spacing); the headings stay on the page,
  * with their anchors. On the main page: Supported drivers' Postgres, MySQL and SQLite (Parameters' h3s show since 2026-10-21); the query's members
  * under Usage and the keys of `.reylo.yaml` show. On each dialect page (content/docs/<dialect>.mdx, one skeleton
- * for all three): the h3s of Parameters, which leaves Data types' h3s, the reason a reader lands
- * there, in the table.
+ * for all three): the h3s of Parameters and of Drivers, one per driver, which leaves Data types'
+ * h3s, the reason a reader lands there, in the table.
  */
 const FOLD: Record<string, readonly string[]> = {
   '': ['#supported-drivers'],
-  postgres: ['#parameters'],
-  mysql: ['#parameters'],
-  sqlite: ['#parameters'],
+  postgres: ['#parameters', '#drivers'],
+  mysql: ['#parameters', '#drivers'],
+  sqlite: ['#parameters', '#drivers'],
 };
 
 /**
