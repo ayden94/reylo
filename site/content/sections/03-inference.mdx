@@ -290,6 +290,52 @@ where user_id = coalesce(:user_id::int, user_id)
 
 </Inferred>
 
+### Dynamic filtering
+
+To filter a list by whatever the page's URL holds, give each filter a nullable parameter, which matches every row when null:
+
+<Inferred>
+
+```sql file="search_posts.sql" dialect="all"
+with input as (select coalesce(:sort::text, 'newest') as sort)
+select p.id, p.title, u.name as author
+from posts p
+join users u on u.id = p.user_id
+cross join input
+where p.title like concat('%', coalesce(:q::text, ''), '%')
+  and p.user_id = coalesce(:author_id::int, p.user_id)
+  and case coalesce(:status::text, 'all')
+    when 'published' then p.published_at is not null
+    when 'draft' then p.published_at is null
+    else true
+  end
+order by
+  case when input.sort = 'title' then p.title end,
+  case when input.sort = 'oldest' then p.id end,
+  p.id desc
+```
+
+</Inferred>
+
+A search param missing from the URL is null, which turns its filter off:
+
+```ts twoslash
+declare const request: Request;
+// ---cut---
+import searchPosts from "./search_posts.sql";
+
+// /posts?q=sql&status=draft
+const url = new URL(request.url);
+const author = url.searchParams.get("author");
+
+const posts = await searchPosts.run(db, {
+  q: url.searchParams.get("q"),
+  author_id: author === null ? null : Number(author),
+  status: url.searchParams.get("status"),
+  sort: url.searchParams.get("sort"),
+});
+```
+
 ### Unique keys
 
 Reylo infers each query's cardinality, how many rows it returns. A query that matches a unique key returns one row or null:
