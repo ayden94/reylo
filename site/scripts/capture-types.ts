@@ -28,7 +28,7 @@ import postgres from 'postgres';
 import mysql from 'mysql2/promise';
 import { Session } from '../../src/analyze.ts';
 import { ident, renderParamType, renderType } from '../../src/render.ts';
-import { docComment, leadingComment, RAW_NOTE, SQL_NOTE, statementAfter } from '../../src/doc-comment.ts';
+import { docComment, leadingComment, RAW_NOTE, sqlNote, statementAfter } from '../../src/doc-comment.ts';
 import { withSqlcommenter } from '../../src/sqlcommenter.ts';
 import type { Analysis } from '../../src/engine.ts';
 import { collectFiles, plan, isStatement, DIALECT_NAME, SCHEMA_FILE, type Block, type Dialect, type Modules } from '../lib/remark-mapper.ts';
@@ -132,7 +132,7 @@ async function render(session: Session, source: string, written: string, sql: st
     const prose = leading.prose;
     const shown = statementAfter(written, leading);
     const sent = statementAfter(plain, leadingComment(plain, project.dialect));
-    const sqlDoc = (indent = '') => docComment(prose, sent, SQL_NOTE, indent);
+    const sqlDoc = (indent = '') => docComment(prose, sent, sqlNote(project.sqlcommenter), indent);
     const rawDoc = (indent = '') => docComment(prose, shown, RAW_NOTE, indent);
     return [
       `import type { Query } from "reylo";`,
@@ -171,7 +171,7 @@ async function render(session: Session, source: string, written: string, sql: st
   const columns = analysis.columns.map((c) => `${ident(c.name)}: ${renderType(c.type, false, dialect)}${c.nullable ? ' | null' : ''}`);
   const typed = analysis.params.map((q) => [q.name, paramType(q, renderParamType(q.type, dialect))] as const);
   const paramTypes = typed.map(([name, type]) => `${ident(name)}: ${type}`);
-  return { text: emit(withSqlcommenter(analysis.rewritten.sql, source), paramTypes.length ? `{ ${paramTypes.join('; ')} }` : 'Record<never, never>', columns.length ? `{ ${columns.join('; ')} }` : 'never', inferred, order, analysis.rewritten.sql), analysis };
+  return { text: emit(project.sqlcommenter ? withSqlcommenter(analysis.rewritten.sql, source) : analysis.rewritten.sql, paramTypes.length ? `{ ${paramTypes.join('; ')} }` : 'Record<never, never>', columns.length ? `{ ${columns.join('; ')} }` : 'never', inferred, order, analysis.rewritten.sql), analysis };
 }
 
 // ---- The scratch databases ----
