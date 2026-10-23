@@ -1055,7 +1055,7 @@ join json_each(u.value -> 'posts') as p
 </Dialect>
 </DialectTabs>
 
-### `oneOf` and discriminated unions [#oneof]
+### Discriminated unions with `oneOf` [#oneof]
 
 A `oneOf` in a schema is a [union](#unions). Give each member a key with one value, and it is a discriminated union, which TypeScript narrows on that key:
 
