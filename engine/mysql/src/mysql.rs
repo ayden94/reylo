@@ -231,6 +231,9 @@ impl sqlparser::dialect::Dialect for SessionDialect {
 /// turns on it.
 pub fn analyze(sql: &str, lexed: &Lexed, text: Option<MysqlText>, host: &Host) -> Lazy<Analysis> {
     let dialect = SessionDialect(text.unwrap_or_default());
+    // What the engine prints of the statement, for the probes it describes, writes its strings
+    // as the session reads them back.
+    sqlparser::ast::set_backslash_escapes(dialect.0.backslash_escapes);
     let statement = match lex::one_statement(sql, lexed, KINDS) {
         Ok(statement) => statement,
         Err(message) => return Some(crate::analysis::bare(sql, lexed, Dialect::Mysql, vec![Diagnostic { message, start: 0, length: sql.trim_end().len().max(1), code: 10 }])),
@@ -436,6 +439,8 @@ pub fn analyze(sql: &str, lexed: &Lexed, text: Option<MysqlText>, host: &Host) -
         _ => "",
     };
     let (cardinality, reason) = match &parsed {
+        // Its rows go into variables or a file: it returns none.
+        Some(Statement::Query(q)) if assigns(q) => ("none".to_string(), None),
         Some(Statement::Query(q)) => {
             let tables = tables_of(q);
             let keys = if tables.is_empty() { Keys::default() } else { unique_keys(host, &tables)? };
@@ -1149,6 +1154,15 @@ fn opens_without_result_sets(sql: &str) -> bool {
         _ => Some(None),
     });
     matches!(first, Some(Some(Keyword::DELETE | Keyword::UPDATE | Keyword::INSERT | Keyword::REPLACE | Keyword::SELECT | Keyword::WITH)))
+}
+
+/// Whether a query's rows go into variables or a file (`select … into @n`), so it returns none.
+fn assigns(q: &ast::Query) -> bool {
+    match q.body.as_ref() {
+        SetExpr::Select(s) => s.into.is_some(),
+        SetExpr::Query(q) => assigns(q),
+        _ => false,
+    }
 }
 
 /// Parse with a depth bound of a fifth of [`crate::stack::MAX_DEPTH`] in place of sqlparser's
@@ -2307,13 +2321,63 @@ mod tests {
     }
 
     #[test]
-    fn a_write_the_parser_does_not_read_returns_no_rows() {
-        // sqlparser reads neither MySQL's multi-table DELETE nor its multi-table UPDATE, nor a
-        // SELECT … INTO after its WHERE; the prepare has no columns, so none returns a row.
+    fn a_chain_of_joins_is_read_in_one_pass() {
+        // A join with no ON or USING of its own is the left operand of the joins after it, and
+        // nests them only where an ON or USING is left over for it.
+        let printed = |sql: &str| parse(&MySqlDialect {}, sql).unwrap_or_else(|e| panic!("{sql}: {e}")).pop().unwrap().to_string();
+        assert_eq!(printed("SELECT * FROM a JOIN b RIGHT JOIN c ON x"), "SELECT * FROM a JOIN b RIGHT JOIN c ON x");
+        assert_eq!(printed("SELECT * FROM a JOIN b JOIN c ON x ON y"), "SELECT * FROM a JOIN (b JOIN c ON x) ON y");
+        // The joins read after a bare one are kept, never read again, which made a chain of bare
+        // joins exponential to parse: 20 of them took a second. 61 tables are MySQL's limit.
+        let bare = |n: usize| format!("SELECT * FROM t0{}", (1..n).map(|i| format!(" JOIN t{i}")).collect::<String>());
+        let started = std::time::Instant::now();
+        assert_eq!(printed(&bare(21)), bare(21));
+        assert!(started.elapsed() < std::time::Duration::from_secs(1), "{:?}", started.elapsed());
+        for sql in [bare(61), format!("{} ON t0.id = t60.id", bare(61))] {
+            assert_eq!(crate::stack::run(|| printed(&sql)), sql);
+        }
+        // Every ON at the end: each join nests the rest.
+        let ons = (1..61).rev().map(|i| format!(" ON t{}.id = t{i}.id", i - 1)).collect::<String>();
+        let nested = (1..60).rev().fold("t60".to_string(), |inner, i| format!("(t{i} JOIN {inner} ON t{i}.id = t{}.id)", i + 1));
+        assert_eq!(crate::stack::run(|| printed(&format!("{}{ons}", bare(61)))), format!("SELECT * FROM t0 JOIN {nested} ON t0.id = t1.id"));
+    }
+
+    #[test]
+    fn bang_binds_tighter_than_any_binary_operator_but_the_arrows() {
+        // `->` and `->>` are part of `!`'s operand, as in MySQL, and every other binary operator
+        // takes `!x` as its operand.
+        let item = |sql: &str| match parse(&MySqlDialect {}, sql).unwrap_or_else(|e| panic!("{sql}: {e}")).pop() {
+            Some(Statement::Query(q)) => match *q.body {
+                SetExpr::Select(s) => match s.projection.into_iter().next() {
+                    Some(SelectItem::UnnamedExpr(e)) => e,
+                    other => panic!("{sql}: {other:?}"),
+                },
+                other => panic!("{sql}: {other:?}"),
+            },
+            other => panic!("{sql}: {other:?}"),
+        };
+        for sql in ["select !j->'$.a' from t", "select !j->>'$.a' from t"] {
+            assert!(matches!(item(sql), Expr::UnaryOp { op: ast::UnaryOperator::BangNot, expr } if matches!(*expr, Expr::BinaryOp { .. })), "{sql}");
+        }
+        for sql in ["select !0 = 1", "select !a + 1 from t", "select !a ^ 1 from t"] {
+            assert!(matches!(item(sql), Expr::BinaryOp { left, .. } if matches!(*left, Expr::UnaryOp { op: ast::UnaryOperator::BangNot, .. })), "{sql}");
+        }
+    }
+
+    #[test]
+    fn a_write_or_a_select_into_returns_no_rows() {
+        // MySQL's multi-table DELETE and UPDATE return no rows, and neither does a SELECT whose
+        // rows go into variables, its INTO after the columns or after the whole statement.
         let default = "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION";
         let none = json!({ "columns": [], "params": [{ "type": 3 }] });
-        for sql in ["delete u.*, e.* from users u join emails e on e.user_id = u.id where u.id = :id", "update users, emails set users.name = 'a', emails.email = 'b' where users.id = :id", "select id from users where id = :id into @found"] {
-            assert!(parse(&MySqlDialect {}, sql).is_err(), "{sql}");
+        for sql in [
+            "delete u.*, e.* from users u join emails e on e.user_id = u.id where u.id = :id",
+            "update users, emails set users.name = 'a', emails.email = 'b' where users.id = :id",
+            "select id from users where id = :id into @found",
+            "select id into @found from users where id = :id",
+            "select id from users where id = :id for update into @found",
+        ] {
+            assert!(parse(&MySqlDialect {}, sql).is_ok(), "{sql}");
             let analysis = analyzed(sql, none.clone(), default).0;
             assert_eq!((analysis.cardinality.as_str(), analysis.columns.len(), analysis.params.len()), ("none", 0, 1), "{sql}");
         }
@@ -2337,7 +2401,10 @@ mod tests {
             let mysql = Parser::parse_sql(&MySqlDialect {}, sql).map(|v| format!("{v:?}"));
             assert_eq!(Parser::parse_sql(&SessionDialect(MysqlText::default()), sql).map(|v| format!("{v:?}")), mysql, "{sql}");
         }
-        let one = |sql: &str, text: MysqlText| Parser::parse_sql(&SessionDialect(text), sql).unwrap().pop().unwrap().to_string();
+        let one = |sql: &str, text: MysqlText| {
+            sqlparser::ast::set_backslash_escapes(text.backslash_escapes);
+            Parser::parse_sql(&SessionDialect(text), sql).unwrap().pop().unwrap().to_string()
+        };
         let plain = MysqlText { backslash_escapes: false, ansi_quotes: false };
         let ansi = MysqlText { backslash_escapes: true, ansi_quotes: true };
         assert_eq!(one(r"select 'C:\' as p, id from t where id = ?", plain), r"SELECT 'C:\' AS p, id FROM t WHERE id = ?");
