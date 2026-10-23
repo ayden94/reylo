@@ -17,6 +17,22 @@
         }
       ]
     },
+    "list_users.sql": {
+      "fa99ecd8273b3ee7": [
+        {
+          "start": {
+            "line": 3,
+            "column": 10
+          },
+          "end": {
+            "line": 3,
+            "column": 15
+          },
+          "source": "reylo(17)",
+          "message": "order by :sort sorts every row by the same value, since a parameter is a value and not a column's name; choose the column with case :sort when 'name' then name end"
+        }
+      ]
+    },
     "post_ids.sql": {
       "1cff64606724e47e": [
         {
@@ -67,6 +83,22 @@
         }
       ]
     },
+    "list_users.sql": {
+      "fa99ecd8273b3ee7": [
+        {
+          "start": {
+            "line": 3,
+            "column": 10
+          },
+          "end": {
+            "line": 3,
+            "column": 21
+          },
+          "source": "reylo(17)",
+          "message": "order by :sort sorts every row by the same value, since a parameter is a value and not a column's name; choose the column with case :sort when 'name' then name end"
+        }
+      ]
+    },
     "post_ids.sql": {
       "1cff64606724e47e": [
         {
@@ -114,6 +146,22 @@
           },
           "source": "reylo(6)",
           "message": "no such column: nmae"
+        }
+      ]
+    },
+    "list_users.sql": {
+      "fa99ecd8273b3ee7": [
+        {
+          "start": {
+            "line": 3,
+            "column": 10
+          },
+          "end": {
+            "line": 3,
+            "column": 21
+          },
+          "source": "reylo(17)",
+          "message": "order by :sort sorts every row by the same value, since a parameter is a value and not a column's name; choose the column with case :sort when 'name' then name end"
         }
       ]
     },

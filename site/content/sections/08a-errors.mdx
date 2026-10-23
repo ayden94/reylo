@@ -43,6 +43,14 @@ from users u
 join posts p on p.user_id = u.id
 ```
 
+Sorting or grouping by a parameter is an error, since a parameter is a value and every row would sort the same. To let the caller choose the order, see [Dynamic sorting](#dynamic-sorting):
+
+```sql tab="list_users.sql" dialect="all" errors
+select id, name
+from users
+order by :sort::text
+```
+
 A [parameter whose type cannot be inferred](#a-parameter-nothing-types) is Reylo's error too, which says to cast it. When a query changes, its types change with it, and code that reads a column the query no longer selects is an error:
 
 ```ts twoslash tab="main.ts"
